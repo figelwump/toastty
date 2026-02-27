@@ -1614,3 +1614,16 @@ Chunk Y (expanded repo day-to-day workflow notes in AGENTS):
   - current project snapshot to reflect what is already working vs. what still needs manual verification.
 - rationale:
   - preserve reliable daily commands and local gotchas in one repo-local place so future changes don’t regress through missed setup details.
+
+Chunk Y review reconciliation (post-commit second opinion on `96be276`):
+- accepted:
+  - clarified Rosetta wording (`uname -m` will report `x86_64` when shell is translated).
+  - clarified Ghostty env behavior by tying it directly to `Project.swift` dual-key check and Tuist manifest reliability of `TUIST_*`.
+  - clarified Ghostty-path validation preconditions in smoke/check notes (xcframework must exist for Ghostty-linked coverage).
+  - strengthened manual scripting guidance with a single-block AppleScript sequence including explicit delays for ordering.
+  - added explicit staleness caveat to the “current snapshot” section date scope.
+- accepted with adjustment:
+  - `check.sh` scheme note now documents that `toastty-Workspace` is current and script must be updated if naming changes.
+- rejected:
+  - claim that current plan notes are too duplicative to keep.
+  - reason: this plan tracks implementation/documentation decisions and review reconciliations; retaining concise rationale here is intentional for project traceability.
