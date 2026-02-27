@@ -1242,8 +1242,33 @@ Chunk L review reconciliation (post-commit second opinion on `ba0883a`):
   - `./scripts/automation/check.sh` (57 tests passing)
   - `./scripts/automation/smoke-ui.sh` (socket actions + screenshot/state artifact generation verified).
 
+Chunk M (Ghostty runtime wiring baseline with optional framework linkage):
+- added optional `GhosttyKit.xcframework` integration in Tuist manifest:
+  - if `Dependencies/GhosttyKit.xcframework` exists at generate-time, app target links it and compiles with `TOASTTY_HAS_GHOSTTY_KIT`.
+  - if not present, app compiles/runs with fallback terminal host behavior.
+- added terminal runtime infrastructure under `Sources/App/Terminal/`:
+  - `TerminalRuntimeRegistry` for stable panel-id -> runtime controller ownership across pane/workspace mutations.
+  - `TerminalPanelHostView` (`NSViewRepresentable`) to attach/reparent persistent native terminal hosts as panel layout changes.
+  - `TerminalSurfaceController` with focus + viewport updates and per-panel lifecycle cleanup.
+  - `GhosttyRuntimeManager` (compiled only when GhosttyKit is linked) that performs:
+    - `ghostty_init`
+    - app/config creation
+    - surface creation against host NSView
+    - periodic + wakeup-driven `ghostty_app_tick`
+- replaced terminal text-only row rendering in `WorkspaceView` with native panel host embedding path for terminal panels, while keeping aux panels as placeholders.
+- added local framework bootstrap script:
+  - `scripts/ghostty/install-local-xcframework.sh` (copies GhosttyKit from local spike output into `Dependencies/`).
+- updated ignore policy:
+  - `.gitignore` now ignores `/Dependencies/GhosttyKit.xcframework/` (binary local dependency).
+- validation passed:
+  - `./scripts/automation/check.sh` with no local xcframework present (fallback build path).
+  - `./scripts/automation/smoke-ui.sh` with no local xcframework present.
+  - `./scripts/ghostty/install-local-xcframework.sh` then `./scripts/automation/check.sh` (Ghostty-enabled compile path).
+  - `./scripts/automation/smoke-ui.sh` with Ghostty-enabled compile path.
+
 Deferred work / known gaps:
-- Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
-- Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.
-- Ghostty surface attach/detach/reparent/focus lifecycle is not yet wired into toastty runtime views.
+- Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
+- Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.
+- Ghostty runtime callbacks are minimal no-op handlers; richer host integration for clipboard/actions/notifications/title updates is still pending.
+- terminal input/focus UX parity with native Ghostty app behavior is not yet validated end-to-end.
 - socket protocol + adapter wiring is still pending (session events are modeled in core services but not yet connected to live runtime transport).

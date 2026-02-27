@@ -6,5 +6,6 @@ Tuist/Derived
 DerivedData
 /Derived/
 /artifacts/
+/Dependencies/GhosttyKit.xcframework/
 *.xcodeproj
 *.xcworkspace

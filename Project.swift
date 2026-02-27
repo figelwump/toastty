@@ -1,4 +1,25 @@
 import ProjectDescription
+import Foundation
+
+let rootPath = FileManager.default.currentDirectoryPath
+let ghosttyXCFrameworkRelativePath = "Dependencies/GhosttyKit.xcframework"
+let ghosttyXCFrameworkAbsolutePath = "\(rootPath)/\(ghosttyXCFrameworkRelativePath)"
+let hasGhosttyXCFramework = FileManager.default.fileExists(atPath: ghosttyXCFrameworkAbsolutePath)
+
+var appDependencies: [TargetDependency] = [
+    .target(name: "CoreState"),
+]
+
+var appTargetSettings: Settings?
+
+if hasGhosttyXCFramework {
+    appDependencies.append(.xcframework(path: .relativeToRoot(ghosttyXCFrameworkRelativePath)))
+    appTargetSettings = .settings(
+        base: [
+            "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "$(inherited) TOASTTY_HAS_GHOSTTY_KIT",
+        ]
+    )
+}
 
 let project = Project(
     name: "toastty",
@@ -17,9 +38,8 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
             sources: ["Sources/App/**"],
-            dependencies: [
-                .target(name: "CoreState"),
-            ]
+            dependencies: appDependencies,
+            settings: appTargetSettings
         ),
         .target(
             name: "CoreState",

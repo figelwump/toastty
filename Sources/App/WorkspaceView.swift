@@ -3,6 +3,7 @@ import SwiftUI
 
 struct WorkspaceView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -10,7 +11,13 @@ struct WorkspaceView: View {
             Divider()
 
             if let workspace = store.selectedWorkspace {
-                PaneNodeView(node: workspace.paneTree, workspace: workspace)
+                PaneNodeView(
+                    node: workspace.paneTree,
+                    workspace: workspace,
+                    store: store,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    globalFontPoints: store.state.globalTerminalFontPoints
+                )
                     .padding(12)
             } else {
                 ContentUnavailableView("No workspace selected", systemImage: "rectangle.slash")
@@ -65,6 +72,9 @@ struct WorkspaceView: View {
 private struct PaneNodeView: View {
     let node: PaneNode
     let workspace: WorkspaceState
+    @ObservedObject var store: AppStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let globalFontPoints: Double
 
     var body: some View {
         switch node {
@@ -75,13 +85,17 @@ private struct PaneNodeView: View {
                     .foregroundStyle(.secondary)
 
                 ForEach(tabPanelIDs, id: \.self) { panelID in
-                    Text(panelLabel(for: panelID))
-                        .font(.body.monospaced())
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(Color.gray.opacity(0.10))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    if let panelState = workspace.panels[panelID] {
+                        PanelCardView(
+                            workspaceID: workspace.id,
+                            panelID: panelID,
+                            panelState: panelState,
+                            focusedPanelID: workspace.focusedPanelID,
+                            globalFontPoints: globalFontPoints,
+                            store: store,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry
+                        )
+                    }
                 }
             }
             .padding(8)
@@ -94,24 +108,102 @@ private struct PaneNodeView: View {
         case .split(_, let orientation, _, let first, let second):
             if orientation == .horizontal {
                 HStack(spacing: 10) {
-                    PaneNodeView(node: first, workspace: workspace)
-                    PaneNodeView(node: second, workspace: workspace)
+                    PaneNodeView(
+                        node: first,
+                        workspace: workspace,
+                        store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        globalFontPoints: globalFontPoints
+                    )
+                    PaneNodeView(
+                        node: second,
+                        workspace: workspace,
+                        store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        globalFontPoints: globalFontPoints
+                    )
                 }
             } else {
                 VStack(spacing: 10) {
-                    PaneNodeView(node: first, workspace: workspace)
-                    PaneNodeView(node: second, workspace: workspace)
+                    PaneNodeView(
+                        node: first,
+                        workspace: workspace,
+                        store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        globalFontPoints: globalFontPoints
+                    )
+                    PaneNodeView(
+                        node: second,
+                        workspace: workspace,
+                        store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        globalFontPoints: globalFontPoints
+                    )
                 }
             }
         }
     }
 
-    private func panelLabel(for panelID: UUID) -> String {
-        guard let panel = workspace.panels[panelID] else {
-            return "Unknown panel"
-        }
+    private func shortID(_ id: UUID) -> String {
+        String(id.uuidString.prefix(6))
+    }
+}
 
-        switch panel {
+private struct PanelCardView: View {
+    let workspaceID: UUID
+    let panelID: UUID
+    let panelState: PanelState
+    let focusedPanelID: UUID?
+    let globalFontPoints: Double
+    @ObservedObject var store: AppStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+
+    private var isFocused: Bool {
+        focusedPanelID == panelID
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(panelLabel)
+                .font(.body.monospaced())
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            switch panelState {
+            case .terminal(let terminalState):
+                TerminalPanelHostView(
+                    panelID: panelID,
+                    terminalState: terminalState,
+                    focused: isFocused,
+                    globalFontPoints: globalFontPoints,
+                    runtimeRegistry: terminalRuntimeRegistry
+                )
+                .frame(minHeight: 170)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            case .diff:
+                auxPanelPlaceholder(title: "Diff Panel")
+            case .markdown:
+                auxPanelPlaceholder(title: "Markdown Panel")
+            case .scratchpad:
+                auxPanelPlaceholder(title: "Scratchpad Panel")
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.gray.opacity(0.10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isFocused ? Color.accentColor : Color.gray.opacity(0.2), lineWidth: isFocused ? 1.5 : 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture {
+            store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+        }
+    }
+
+    private var panelLabel: String {
+        switch panelState {
         case .terminal(let terminal):
             return "\(terminal.title) · \(terminal.shell)"
         case .diff:
@@ -123,7 +215,11 @@ private struct PaneNodeView: View {
         }
     }
 
-    private func shortID(_ id: UUID) -> String {
-        String(id.uuidString.prefix(6))
+    @ViewBuilder
+    private func auxPanelPlaceholder(title: String) -> some View {
+        Text(title)
+            .font(.body.monospaced())
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
     }
 }

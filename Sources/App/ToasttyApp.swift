@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct ToasttyApp: App {
     @StateObject private var store: AppStore
+    @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -12,6 +13,7 @@ struct ToasttyApp: App {
         let bootstrap = AppBootstrap.make()
         let store = AppStore(state: bootstrap.state)
         _store = StateObject(wrappedValue: store)
+        _terminalRuntimeRegistry = StateObject(wrappedValue: TerminalRuntimeRegistry())
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
 
@@ -36,6 +38,7 @@ struct ToasttyApp: App {
         WindowGroup {
             AppRootView(
                 store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 disableAnimations: disableAnimations
