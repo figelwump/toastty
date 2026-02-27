@@ -29,6 +29,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
 
         for panelID in controllers.keys where !livePanelIDs.contains(panelID) {
+            controllers[panelID]?.invalidate()
             controllers.removeValue(forKey: panelID)
         }
     }
@@ -52,14 +53,6 @@ final class TerminalSurfaceController {
         hostedView = TerminalHostView()
         #else
         hostedView = fallbackView
-        #endif
-    }
-
-    deinit {
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        if let ghosttySurface {
-            ghostty_surface_free(ghosttySurface)
-        }
         #endif
     }
 
@@ -87,11 +80,13 @@ final class TerminalSurfaceController {
         #if TOASTTY_HAS_GHOSTTY_KIT
         ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
         guard let ghosttySurface else {
+            hostedView.isHidden = true
             fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "Ghostty surface unavailable")
             swapToFallbackIfNeeded()
             return
         }
 
+        hostedView.isHidden = false
         if fallbackView.superview != nil {
             fallbackView.removeFromSuperview()
         }
@@ -107,6 +102,17 @@ final class TerminalSurfaceController {
         #else
         fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "GhosttyKit not linked")
         #endif
+    }
+
+    func invalidate() {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if let ghosttySurface {
+            ghostty_surface_free(ghosttySurface)
+            self.ghosttySurface = nil
+        }
+        #endif
+        fallbackView.removeFromSuperview()
+        hostedView.removeFromSuperview()
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT

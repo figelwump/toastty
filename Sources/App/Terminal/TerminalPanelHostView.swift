@@ -18,7 +18,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
         controller.attach(into: containerView)
 
         let update = { (view: NSView) in
-            let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+            let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
             controller.update(
                 terminalState: terminalState,
                 focused: focused,

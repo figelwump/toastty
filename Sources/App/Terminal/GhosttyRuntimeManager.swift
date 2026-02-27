@@ -9,10 +9,14 @@ final class GhosttyRuntimeManager {
 
     private var app: ghostty_app_t?
     private var config: ghostty_config_t?
-    private var tickTimer: DispatchSourceTimer?
 
     private init() {
-        guard Self.initializeGhosttyRuntime() else { return }
+        guard Self.initializeGhosttyRuntime() else {
+            if let data = "toastty ghostty error: ghostty_init failed\n".data(using: .utf8) {
+                FileHandle.standardError.write(data)
+            }
+            return
+        }
 
         let config = ghostty_config_new()
         self.config = config
@@ -39,20 +43,10 @@ final class GhosttyRuntimeManager {
         )
 
         app = ghostty_app_new(&runtimeConfig, config)
-        startTicking()
-    }
-
-    deinit {
-        tickTimer?.cancel()
-        tickTimer = nil
-
-        if let app {
-            ghostty_app_free(app)
+        if app == nil, let data = "toastty ghostty error: ghostty_app_new returned nil\n".data(using: .utf8) {
+            FileHandle.standardError.write(data)
         }
-
-        if let config {
-            ghostty_config_free(config)
-        }
+        scheduleImmediateTick()
     }
 
     func makeSurface(
@@ -67,33 +61,24 @@ final class GhosttyRuntimeManager {
         surfaceConfig.platform_tag = GHOSTTY_PLATFORM_MACOS
         surfaceConfig.platform.macos.nsview = Unmanaged.passUnretained(hostView).toOpaque()
         surfaceConfig.userdata = Unmanaged.passUnretained(hostView).toOpaque()
-        surfaceConfig.scale_factor = max(Double(hostView.window?.backingScaleFactor ?? 2), 1)
+        surfaceConfig.scale_factor = max(Double(hostView.window?.backingScaleFactor ?? 1), 1)
         surfaceConfig.font_size = Float(fontPoints)
         surfaceConfig.context = GHOSTTY_SURFACE_CONTEXT_SPLIT
 
         let panelIdentifier = panelID.uuidString
-        return workingDirectory.withCString { cwdPointer in
+        let surface = workingDirectory.withCString { cwdPointer in
             panelIdentifier.withCString { inputPointer in
                 surfaceConfig.working_directory = cwdPointer
                 surfaceConfig.initial_input = inputPointer
                 return ghostty_surface_new(app, &surfaceConfig)
             }
         }
+        scheduleImmediateTick()
+        return surface
     }
 
     private static func initializeGhosttyRuntime() -> Bool {
         ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
-    }
-
-    private func startTicking() {
-        guard tickTimer == nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now(), repeating: .milliseconds(16))
-        timer.setEventHandler { [weak self] in
-            self?.tick()
-        }
-        timer.resume()
-        tickTimer = timer
     }
 
     private func scheduleImmediateTick() {

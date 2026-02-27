@@ -1254,7 +1254,7 @@ Chunk M (Ghostty runtime wiring baseline with optional framework linkage):
     - `ghostty_init`
     - app/config creation
     - surface creation against host NSView
-    - periodic + wakeup-driven `ghostty_app_tick`
+    - wakeup-driven `ghostty_app_tick`
 - replaced terminal text-only row rendering in `WorkspaceView` with native panel host embedding path for terminal panels, while keeping aux panels as placeholders.
 - added local framework bootstrap script:
   - `scripts/ghostty/install-local-xcframework.sh` (copies GhosttyKit from local spike output into `Dependencies/`).
@@ -1265,6 +1265,19 @@ Chunk M (Ghostty runtime wiring baseline with optional framework linkage):
   - `./scripts/automation/smoke-ui.sh` with no local xcframework present.
   - `./scripts/ghostty/install-local-xcframework.sh` then `./scripts/automation/check.sh` (Ghostty-enabled compile path).
   - `./scripts/automation/smoke-ui.sh` with Ghostty-enabled compile path.
+
+Chunk M review reconciliation (post-commit second opinion on `68018c5`):
+- accepted: remove deinit-based Ghostty surface teardown and switch to explicit `invalidate()` cleanup from `TerminalRuntimeRegistry.synchronize` (main-actor deterministic teardown).
+- accepted: when Ghostty surface creation fails, hide host view and show fallback status view explicitly.
+- accepted: switch scale-factor fallback from `2` to `1` when no window/screen scale can be resolved.
+- accepted: remove always-on 60Hz Ghostty tick loop and rely on wakeup-triggered ticks with immediate tick after app/surface creation.
+- accepted: emit stderr diagnostics when Ghostty runtime bootstrap or app creation fails.
+- rejected: `withCString` lifetime concern for `working_directory`/`initial_input`; Ghostty's own Swift embedding layer uses the same immediate-call pattern for `ghostty_surface_new`, and local source inspection shows consumption during init path.
+- rejected: dead-code claim for `shortID`; it is still used in pane header labels.
+- rejected: retain-cycle claim in `TerminalPanelHostView.onLayout`; `superview` references are non-owning and stale controllers are explicitly invalidated/evicted by registry synchronization.
+- follow-up validation passed after fixes:
+  - `./scripts/automation/check.sh` (Ghostty-enabled compile path)
+  - `./scripts/automation/smoke-ui.sh` (Ghostty-enabled runtime smoke path)
 
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
