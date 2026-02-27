@@ -1668,3 +1668,23 @@ Chunk Z (W-1 follow-up: automation terminal input + viewport assertion hooks):
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass; terminal viewport marker check + screenshot artifact generated).
   - artifact example:
     - `artifacts/automation/ui/smoke-20260227-132250/split-workspace/terminal-viewport-smoke.png`
+
+Chunk Z review reconciliation (post-commit second opinion on `2094316`):
+- accepted:
+  - added `waitForSurfaceMs` support to `automation.terminal_send_text` with bounded polling on main run loop to avoid startup races before terminal surface attachment.
+  - switched Ghostty automation text-send path to `utf8CString` byte handling to keep byte-count and pointer representation aligned.
+  - adjusted visible-text read path so `ghostty_surface_free_text(...)` always runs after successful `ghostty_surface_read_text(...)`, even when payload text pointer is unexpectedly missing.
+  - removed hard-coded newline byte length by routing submit behavior through shared text-send helper.
+- rejected:
+  - actor-isolation race claim on terminal registry access.
+  - reason: automation command execution path is `@MainActor`, registry/controller types are `@MainActor`, and surface access remains on main-thread AppKit/SwiftUI context.
+  - viewport selection coordinate misuse claim.
+  - reason: `GHOSTTY_POINT_VIEWPORT` with `TOP_LEFT`/`BOTTOM_RIGHT` coord enums and zeroed x/y mirrors Ghostty’s own AppKit usage.
+  - shell-JSON injection concern in smoke marker command.
+  - reason: marker is sanitized to alphanumeric/underscore and command payload does not include user-provided quotes/backslashes in this flow.
+- testing gap acknowledged:
+  - no direct XCTest coverage added for new automation terminal commands because current test target is `CoreState`-only; command behavior remains covered by smoke automation and artifact checks.
+- follow-up validation passed:
+  - `./scripts/automation/check.sh` (67 tests).
+  - `./scripts/automation/smoke-ui.sh` (baseline path).
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (Ghostty path, terminal marker + viewport screenshot).

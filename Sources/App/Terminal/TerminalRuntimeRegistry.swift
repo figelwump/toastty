@@ -50,6 +50,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
         return controller.automationReadVisibleText()
     }
+
+    func automationHasSurface(panelID: UUID) -> Bool {
+        guard let controller = controllers[panelID] else {
+            return false
+        }
+        return controller.automationHasSurface
+    }
 }
 
 @MainActor
@@ -63,6 +70,14 @@ final class TerminalSurfaceController {
     #endif
 
     private let fallbackView = TerminalFallbackView()
+
+    var automationHasSurface: Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        return ghosttySurface != nil
+        #else
+        return false
+        #endif
+    }
 
     init(panelID: UUID) {
         self.panelID = panelID
@@ -150,15 +165,11 @@ final class TerminalSurfaceController {
         }
 
         if text.isEmpty == false {
-            text.withCString { pointer in
-                ghostty_surface_text(ghosttySurface, pointer, uintptr_t(text.utf8.count))
-            }
+            sendSurfaceText(text, to: ghosttySurface)
         }
 
         if submit {
-            "\n".withCString { pointer in
-                ghostty_surface_text(ghosttySurface, pointer, 1)
-            }
+            sendSurfaceText("\n", to: ghosttySurface)
         }
 
         return true
@@ -190,12 +201,14 @@ final class TerminalSurfaceController {
             rectangle: false
         )
 
-        guard ghostty_surface_read_text(ghosttySurface, selection, &textPayload),
-              let textPointer = textPayload.text else {
+        guard ghostty_surface_read_text(ghosttySurface, selection, &textPayload) else {
             return nil
         }
         defer {
             ghostty_surface_free_text(ghosttySurface, &textPayload)
+        }
+        guard let textPointer = textPayload.text else {
+            return nil
         }
 
         let bytePointer = UnsafeRawPointer(textPointer).assumingMemoryBound(to: UInt8.self)
@@ -205,6 +218,18 @@ final class TerminalSurfaceController {
         return nil
         #endif
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    private func sendSurfaceText(_ text: String, to surface: ghostty_surface_t) {
+        let cString = text.utf8CString
+        cString.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            let byteCount = max(buffer.count - 1, 0) // drop C-string null terminator
+            guard byteCount > 0 else { return }
+            ghostty_surface_text(surface, baseAddress, uintptr_t(byteCount))
+        }
+    }
+    #endif
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private func ensureGhosttySurface(terminalState: TerminalPanelState, fontPoints: Double) {
