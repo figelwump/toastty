@@ -1058,6 +1058,23 @@ Chunk F review reconciliation (post-commit second opinion on `58f0f2e`):
 - rejected: prune-session active-map corruption concern; current two-pass prune preserves active sessions and removes only stopped records older than cutoff.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 42 passing tests.
 
+Chunk G (phase 3 diff-service foundation):
+- added `GitDiffService` core utility with typed outputs:
+  - `DiffComputationResult`
+  - `FileDiff`
+  - `GitDiffError`
+- implemented file normalization and repo partitioning:
+  - in-repo file diff computation
+  - explicit outside-repo file classification
+- implemented staged/unstaged git diff support with:
+  - per-file numstat parsing (additions/deletions)
+  - per-file unified diff capture
+- added integration-style tests using temporary git repositories for:
+  - unstaged tracked-file diffs
+  - staged diffs
+  - outside-repo separation behavior
+- validation passed: `./scripts/automation/check.sh` with 45 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.
