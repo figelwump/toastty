@@ -429,6 +429,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let text = payload.string("text"), text.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("text is required")
             }
+            if payload["waitForSurfaceMs"] != nil {
+                throw AutomationSocketError.invalidPayload("waitForSurfaceMs is deprecated; use allowUnavailable=true with client-side retry")
+            }
             let submit = payload.bool("submit") ?? false
             let allowUnavailable = payload.bool("allowUnavailable") ?? false
             let resolved = try resolveTerminalTarget(payload: payload)

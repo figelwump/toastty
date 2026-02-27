@@ -1704,3 +1704,14 @@ Chunk Z review reconciliation B (post-commit second opinion on `cb2779c`):
   - `./scripts/automation/check.sh` (67 tests).
   - `./scripts/automation/smoke-ui.sh` (baseline path).
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (Ghostty path with send-text availability retry + viewport marker assertion).
+
+Chunk Z review reconciliation C (post-commit second opinion on `e5df811`):
+- accepted:
+  - made deprecated behavior explicit: `automation.terminal_send_text` now rejects legacy `waitForSurfaceMs` payloads with actionable error text instead of silently ignoring them.
+  - hardened smoke retry parsing by extracting `available` as a dedicated boolean field (instead of loose grep matching).
+  - made terminal surface retry loop tunable via env:
+    - `TERMINAL_READY_ATTEMPTS`
+    - `TERMINAL_READY_INTERVAL_SEC`
+- rejected:
+  - duplicate-send race claim during unavailable retries.
+  - reason: send path gates on captured non-nil surface handle before any write; unavailable responses perform no write.

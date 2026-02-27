@@ -97,6 +97,12 @@ extract_string_field() {
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*\"([^\"]+)\".*/\\1/p" | sed 's#\\/#/#g'
 }
 
+extract_bool_field() {
+  local json="$1"
+  local field="$2"
+  echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(true|false).*/\\1/p"
+}
+
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
 
@@ -111,13 +117,15 @@ if [[ "${TUIST_ENABLE_GHOSTTY:-${TOASTTY_ENABLE_GHOSTTY:-0}}" == "1" ]]; then
   TERMINAL_COMMAND="find /usr/bin -maxdepth 1 | head -n 120; echo ${TERMINAL_MARKER}"
   TERMINAL_SEND_RESPONSE=""
   TERMINAL_SEND_READY=0
-  for _ in $(seq 1 40); do
+  TERMINAL_READY_ATTEMPTS="${TERMINAL_READY_ATTEMPTS:-40}"
+  TERMINAL_READY_INTERVAL_SEC="${TERMINAL_READY_INTERVAL_SEC:-0.1}"
+  for _ in $(seq 1 "$TERMINAL_READY_ATTEMPTS"); do
     TERMINAL_SEND_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"${TERMINAL_COMMAND}\",\"submit\":true,\"allowUnavailable\":true}")"
-    if echo "$TERMINAL_SEND_RESPONSE" | grep -qE '"available"[[:space:]]*:[[:space:]]*true'; then
+    if [[ "$(extract_bool_field "$TERMINAL_SEND_RESPONSE" "available")" == "true" ]]; then
       TERMINAL_SEND_READY=1
       break
     fi
-    sleep 0.1
+    sleep "$TERMINAL_READY_INTERVAL_SEC"
   done
   if [[ "$TERMINAL_SEND_READY" -ne 1 ]]; then
     echo "error: terminal surface did not become available for send_text" >&2
