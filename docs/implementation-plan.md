@@ -1089,17 +1089,20 @@ Chunk G review reconciliation (post-commit second opinion on `243c37f`):
 - rejected: notification to alter outside-repo test expectation; current service intentionally returns one in-repo entry per requested in-repo file even if diff body is empty.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 47 passing tests.
 
-Chunk H (phase 0 step 1 prerequisite unblocking: Ghostty build tooling):
+Chunk H (phase 0 step 1 prerequisite unblocking: Ghostty build tooling, commit `0a162b8`):
 - installed `zig` (`0.15.2`) and validated local availability.
 - cloned Ghostty source for spike execution under `/tmp/toastty-ghostty-spike/ghostty`.
 - confirmed build options and executed native xcframework build command:
   - `zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=native`
 - confirmed `GhosttyKit.xcframework` artifact generation:
   - `/tmp/toastty-ghostty-spike/ghostty/macos/GhosttyKit.xcframework`
+- spike artifact caveat: current build output is `macos-x86_64` only (arm64/universal still pending validation).
+- spike artifact caveat: output currently lives in `/tmp` and must be copied to managed cache/path to persist.
 - documented concrete artifact metadata and remaining integration steps in `docs/ghostty-integration.md`.
-- noted one non-fatal libtool duplicate-object warning during xcframework assembly.
+- recorded libtool duplicate-object warning as unresolved integration risk to verify during toastty link step.
 
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
-- no automation launch profile (`--automation`) or fixture/socket command surface yet.
-- no panel mobility across workspaces/windows yet (state actions currently baseline only).
+- Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.
+- Ghostty surface attach/detach/reparent/focus lifecycle is not yet wired into toastty runtime views.
+- socket protocol + adapter wiring is still pending (session events are modeled in core services but not yet connected to live runtime transport).
