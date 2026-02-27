@@ -1128,6 +1128,17 @@ Chunk I review reconciliation (post-commit second opinion on `e0cdb96`):
 - rejected: sendable/thread-safety concern as code defect; coalescer remains value-type state intended for serialized ownership by caller.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 52 passing tests.
 
+Chunk J (aux panel layout: one aux panel per pane):
+- changed aux panel insertion behavior:
+  - first aux toggle from single-leaf workspace still creates a right column (`horizontal` split).
+  - additional aux toggles now split the right column pane (`vertical` split) instead of appending tabs to the same pane.
+- adjusted right-column target resolution for nested vertical splits so additional aux panes append toward the bottom of the right column.
+- expanded reducer coverage:
+  - verify aux panel added from existing split creates a new pane (not a tab in prior right pane).
+  - verify diff + markdown toggles result in separate pane hosts.
+- updated pane-node behavior test to match bottom-pane preference in nested right-column vertical splits.
+- validation passed: `./scripts/automation/check.sh` with 53 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.

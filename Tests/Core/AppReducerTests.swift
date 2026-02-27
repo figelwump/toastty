@@ -324,7 +324,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func toggleAuxPanelAddsToRightColumnInExistingSplit() throws {
+    func toggleAuxPanelAddsSeparatePaneInRightColumn() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -334,11 +334,39 @@ struct AppReducerTests {
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfter.paneTree.allLeafInfos.count == 2)
+        #expect(workspaceAfter.paneTree.allLeafInfos.count == 3)
         let rightPaneAfter = try #require(workspaceAfter.paneTree.allLeafInfos.first(where: { $0.paneID == rightPaneIDBefore }))
         let markdownPanelIDs = workspaceAfter.panels.filter { $0.value.kind == .markdown }.map(\.key)
         #expect(markdownPanelIDs.count == 1)
-        #expect(rightPaneAfter.tabPanelIDs.contains(markdownPanelIDs[0]))
+        #expect(rightPaneAfter.tabPanelIDs.contains(markdownPanelIDs[0]) == false)
+        let markdownPane = try #require(
+            workspaceAfter.paneTree.allLeafInfos.first(where: { $0.tabPanelIDs.contains(markdownPanelIDs[0]) })
+        )
+        #expect(markdownPane.tabPanelIDs.count == 1)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func toggleAuxPanelsUseSeparatePanesInsteadOfTabs() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.paneTree.allLeafInfos.count == 3)
+
+        let diffPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .diff })?.key)
+        let markdownPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .markdown })?.key)
+        let diffPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.tabPanelIDs.contains(diffPanelID) }))
+        let markdownPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.tabPanelIDs.contains(markdownPanelID) }))
+
+        #expect(diffPane.paneID != markdownPane.paneID)
+        #expect(diffPane.tabPanelIDs.count == 1)
+        #expect(markdownPane.tabPanelIDs.count == 1)
 
         try StateValidator.validate(state)
     }

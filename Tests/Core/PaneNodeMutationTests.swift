@@ -36,7 +36,7 @@ struct PaneNodeMutationTests {
     }
 
     @Test
-    func rightColumnPanePrefersTopPaneWithinVerticalRightColumn() throws {
+    func rightColumnPanePrefersBottomPaneWithinVerticalRightColumn() throws {
         let leftPaneID = UUID()
         let topRightPaneID = UUID()
         let bottomRightPaneID = UUID()
@@ -55,6 +55,6 @@ struct PaneNodeMutationTests {
             )
         )
 
-        #expect(tree.rightColumnPaneID() == topRightPaneID)
+        #expect(tree.rightColumnPaneID() == bottomRightPaneID)
     }
 }

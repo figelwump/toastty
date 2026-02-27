@@ -283,7 +283,30 @@ public struct AppReducer {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
-                guard workspace.paneTree.insertPanel(panelID, toPane: rightColumnPaneID, at: nil, select: false) else {
+                guard let rightColumnLeaf = workspace.paneTree.allLeafInfos.first(where: { $0.paneID == rightColumnPaneID }) else {
+                    workspace.panels.removeValue(forKey: panelID)
+                    return false
+                }
+
+                let existingRightLeaf = PaneNode.leaf(
+                    paneID: rightColumnLeaf.paneID,
+                    tabPanelIDs: rightColumnLeaf.tabPanelIDs,
+                    selectedIndex: rightColumnLeaf.selectedIndex
+                )
+                let auxLeaf = PaneNode.leaf(
+                    paneID: UUID(),
+                    tabPanelIDs: [panelID],
+                    selectedIndex: 0
+                )
+                let splitRightColumn = PaneNode.split(
+                    nodeID: UUID(),
+                    orientation: .vertical,
+                    ratio: 0.55,
+                    first: existingRightLeaf,
+                    second: auxLeaf
+                )
+
+                guard workspace.paneTree.replaceLeaf(paneID: rightColumnPaneID, with: splitRightColumn) else {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
