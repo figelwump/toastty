@@ -597,6 +597,42 @@ struct AppReducerTests {
     }
 
     @Test
+    func globalFontActionsAdjustAndResetFontSize() {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == 14)
+
+        #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == 13)
+
+        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
+        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == 15)
+
+        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == 13)
+    }
+
+    @Test
+    func globalFontActionsClampAtBounds() {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        state.globalTerminalFontPoints = 24
+        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state) == false)
+        #expect(state.globalTerminalFontPoints == 24)
+
+        state.globalTerminalFontPoints = 9
+        #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state) == false)
+        #expect(state.globalTerminalFontPoints == 9)
+
+        state.globalTerminalFontPoints = 13
+        #expect(reducer.send(.resetGlobalTerminalFont, state: &state) == false)
+    }
+
+    @Test
     func toggleFocusedPanelModeRoundTripPreservesLayoutAndFocus() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()

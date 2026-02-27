@@ -99,6 +99,9 @@ extract_string_field() {
 
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
+send_request "automation.perform_action" '{"action":"app.font.increase"}'
+FONT_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"font-hud-smoke"}')"
+send_request "automation.perform_action" '{"action":"app.font.reset"}'
 send_request "automation.perform_action" '{"action":"workspace.split.vertical"}'
 send_request "automation.perform_action" '{"action":"topbar.toggle.diff"}'
 send_request "automation.perform_action" '{"action":"topbar.toggle.markdown"}'
@@ -110,6 +113,7 @@ send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel
 SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"aux-column-smoke"}')"
 STATE_RESPONSE="$(send_request "automation.dump_state" '{}')"
 
+FONT_SCREENSHOT_PATH="$(extract_string_field "$FONT_SCREENSHOT_RESPONSE" "path")"
 FOCUSED_SCREENSHOT_PATH="$(extract_string_field "$FOCUSED_SCREENSHOT_RESPONSE" "path")"
 SCREENSHOT_PATH="$(extract_string_field "$SCREENSHOT_RESPONSE" "path")"
 STATE_PATH="$(extract_string_field "$STATE_RESPONSE" "path")"
@@ -117,6 +121,7 @@ STATE_HASH="$(extract_string_field "$STATE_RESPONSE" "hash")"
 
 echo "ready file: $READY_FILE"
 echo "socket path: $SOCKET_PATH"
+echo "font hud screenshot: ${FONT_SCREENSHOT_PATH:-unknown}"
 echo "focused screenshot: ${FOCUSED_SCREENSHOT_PATH:-unknown}"
 echo "screenshot: ${SCREENSHOT_PATH:-unknown}"
 echo "state dump: ${STATE_PATH:-unknown}"

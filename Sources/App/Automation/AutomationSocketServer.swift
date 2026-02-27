@@ -670,6 +670,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "topbar.toggle.focused-panel":
             didMutate = store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
 
+        case "app.font.increase":
+            didMutate = store.send(.increaseGlobalTerminalFont)
+
+        case "app.font.decrease":
+            didMutate = store.send(.decreaseGlobalTerminalFont)
+
+        case "app.font.reset":
+            didMutate = store.send(.resetGlobalTerminalFont)
+
         case "sidebar.workspaces.new":
             guard let windowID = resolveWindowID(args: args) else {
                 throw AutomationSocketError.invalidPayload("windowID not found")

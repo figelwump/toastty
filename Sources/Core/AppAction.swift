@@ -13,6 +13,9 @@ public enum AppAction: Equatable, Sendable {
     case reopenLastClosedPanel(workspaceID: UUID)
     case toggleAuxPanel(workspaceID: UUID, kind: PanelKind)
     case toggleFocusedPanelMode(workspaceID: UUID)
+    case increaseGlobalTerminalFont
+    case decreaseGlobalTerminalFont
+    case resetGlobalTerminalFont
     case splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation)
     case createTerminalPanel(workspaceID: UUID, paneID: UUID)
 }

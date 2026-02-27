@@ -45,5 +45,23 @@ struct ToasttyApp: App {
             )
                 .frame(minWidth: 980, minHeight: 620)
         }
+        .commands {
+            CommandMenu("View") {
+                Button("Increase Terminal Font") {
+                    store.send(.increaseGlobalTerminalFont)
+                }
+                .keyboardShortcut("=", modifiers: [.command])
+
+                Button("Decrease Terminal Font") {
+                    store.send(.decreaseGlobalTerminalFont)
+                }
+                .keyboardShortcut("-", modifiers: [.command])
+
+                Button("Reset Terminal Font") {
+                    store.send(.resetGlobalTerminalFont)
+                }
+                .keyboardShortcut("0", modifiers: [.command])
+            }
+        }
     }
 }

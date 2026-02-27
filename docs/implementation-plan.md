@@ -1372,6 +1372,37 @@ Chunk P review reconciliation (post-commit second opinion on `ea2f83e`):
   - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (64 tests passing)
   - `./scripts/automation/smoke-ui.sh`
 
+Chunk Q (global terminal font controls + transient HUD):
+- added global terminal font reducer actions:
+  - `increaseGlobalTerminalFont`
+  - `decreaseGlobalTerminalFont`
+  - `resetGlobalTerminalFont`
+- implemented bounded global font behavior in reducer:
+  - min: `9`
+  - max: `24`
+  - step: `1`
+  - reset default: `13`
+- wired app-level keyboard commands:
+  - `⌘=` increase terminal font
+  - `⌘-` decrease terminal font
+  - `⌘0` reset terminal font
+- added transient font HUD in app shell:
+  - displays `Terminal Font <size>` near top center on font changes.
+  - auto-hides after ~1.2s.
+- extended automation action support:
+  - `app.font.increase`
+  - `app.font.decrease`
+  - `app.font.reset`
+- expanded smoke automation flow:
+  - exercises font increase/reset.
+  - captures `font-hud-smoke.png` artifact.
+- added reducer tests:
+  - font increase/decrease/reset behavior.
+  - bound-clamp behavior at min/max and reset no-op behavior.
+- validation passed:
+  - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (67 tests passing)
+  - `./scripts/automation/smoke-ui.sh` (font HUD + focused panel + aux-column smoke artifacts)
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.
