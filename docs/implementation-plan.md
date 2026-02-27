@@ -1309,6 +1309,19 @@ Chunk N (socket protocol event ingestion + session/notification runtime wiring):
     - sent `session.start`/`session.update_files`/`session.needs_input` over unix socket.
     - verified runtime dump output contains emitted session + normalized touched files.
 
+Chunk N review reconciliation (post-commit second opinion on `85c2b9b`):
+- accepted: make `AutomationCommandExecutor.execute(envelope:)` explicitly `@MainActor` to align actor isolation with request/event handlers.
+- accepted: replace static `"event"` response request-id fallback with per-response UUID fallback for uncorrelated event envelopes.
+- accepted: remove machine-specific absolute path from `SocketEventNormalizerTests` (use generic `/tmp/...` fixture path).
+- rejected: coalescer pre-flush concern on `session.update_files`; current `flushReady` contract is window-based (`>= window`) so same-timestamp bursts do not flush immediately.
+- rejected: `session.needs_input` should store `sessionID` in notification entries; V1 notification model is intentionally panel/workspace-scoped and currently has no session-id field.
+- rejected: `isPanelVisible` semantic strictness as blocker; current suppression behavior intentionally treats selected-workspace presence as visible for v1.
+- rejected: per-event date formatter allocation as correctness issue; current implementation prioritizes Swift concurrency safety and keeps overhead acceptable for current local event volumes.
+- follow-up validation passed after fixes:
+  - `./scripts/automation/check.sh` (60 tests passing)
+  - `./scripts/automation/smoke-ui.sh`
+  - manual live event smoke re-run (`session.start`, `session.update_files`, `session.needs_input`, `automation.dump_state includeRuntime`)
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.

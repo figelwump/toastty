@@ -14,15 +14,16 @@ struct SocketEventNormalizerTests {
     @Test
     func normalizeFilesResolvesRelativePathsAgainstCWD() throws {
         let files = ["docs/implementation-plan.md", "./Project.swift"]
+        let cwd = "/tmp/toastty-test-project"
         let normalized = try SocketEventNormalizer.normalizeFiles(
             files,
-            cwd: "/Users/vishal/GiantThings/repos/toastty"
+            cwd: cwd
         )
 
         #expect(
             normalized == [
-                "/Users/vishal/GiantThings/repos/toastty/docs/implementation-plan.md",
-                "/Users/vishal/GiantThings/repos/toastty/Project.swift",
+                "\(cwd)/docs/implementation-plan.md",
+                "\(cwd)/Project.swift",
             ]
         )
     }

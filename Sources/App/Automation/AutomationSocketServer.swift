@@ -328,44 +328,36 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         self.currentFixtureName = config.fixtureName ?? "default"
     }
 
-    func execute(envelope: AutomationIncomingEnvelope) async -> AutomationResponseEnvelope {
+    @MainActor
+    func execute(envelope: AutomationIncomingEnvelope) -> AutomationResponseEnvelope {
+        let responseRequestID = envelope.requestID ?? UUID().uuidString
+
         do {
-            let requestID: String
             let result: [String: AutomationJSONValue]?
 
             switch envelope {
             case .request(let request):
-                requestID = request.requestID
-                result = try await executeCommand(named: request.command, payload: request.payload)
+                result = try executeCommand(named: request.command, payload: request.payload)
             case .event(let event):
-                requestID = event.requestID ?? "event"
-                result = try await executeEvent(event)
+                result = try executeEvent(event)
             }
 
             return AutomationResponseEnvelope(
-                requestID: requestID,
+                requestID: responseRequestID,
                 ok: true,
                 result: result,
                 error: nil
             )
         } catch let socketError as AutomationSocketError {
-            let requestID: String = switch envelope {
-            case .request(let request): request.requestID
-            case .event(let event): event.requestID ?? "event"
-            }
             return AutomationResponseEnvelope(
-                requestID: requestID,
+                requestID: responseRequestID,
                 ok: false,
                 result: nil,
                 error: socketError.errorBody
             )
         } catch {
-            let requestID: String = switch envelope {
-            case .request(let request): request.requestID
-            case .event(let event): event.requestID ?? "event"
-            }
             return AutomationResponseEnvelope(
-                requestID: requestID,
+                requestID: responseRequestID,
                 ok: false,
                 result: nil,
                 error: AutomationResponseError(
@@ -857,6 +849,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 private enum AutomationIncomingEnvelope: Sendable {
     case request(AutomationRequestEnvelope)
     case event(AutomationEventEnvelope)
+
+    var requestID: String? {
+        switch self {
+        case .request(let request):
+            return request.requestID
+        case .event(let event):
+            return event.requestID
+        }
+    }
 }
 
 private struct AutomationEnvelopeHeader: Decodable, Sendable {
