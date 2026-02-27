@@ -256,17 +256,14 @@ public struct AppReducer {
             }
 
             guard let auxPanelState = makeAuxPanelState(for: kind) else { return false }
+            let existingAuxPanelIDs = auxPanelIDs(in: workspace)
             let panelID = UUID()
             workspace.panels[panelID] = auxPanelState
 
-            if workspace.paneTree.allLeafInfos.count == 1,
-               let sourceLeaf = workspace.paneTree.allLeafInfos.first {
-                let leftLeaf = PaneNode.leaf(
-                    paneID: sourceLeaf.paneID,
-                    tabPanelIDs: sourceLeaf.tabPanelIDs,
-                    selectedIndex: sourceLeaf.selectedIndex
-                )
-                let rightLeaf = PaneNode.leaf(
+            if existingAuxPanelIDs.isEmpty {
+                // First aux panel always gets a dedicated right column regardless of terminal pane layout.
+                let terminalTree = workspace.paneTree
+                let auxLeaf = PaneNode.leaf(
                     paneID: UUID(),
                     tabPanelIDs: [panelID],
                     selectedIndex: 0
@@ -274,16 +271,16 @@ public struct AppReducer {
                 workspace.paneTree = .split(
                     nodeID: UUID(),
                     orientation: .horizontal,
-                    ratio: 0.65,
-                    first: leftLeaf,
-                    second: rightLeaf
+                    ratio: 0.7,
+                    first: terminalTree,
+                    second: auxLeaf
                 )
             } else {
-                guard let rightColumnPaneID = workspace.paneTree.rightColumnPaneID() else {
+                guard let auxColumnPaneID = resolveAuxColumnPaneID(in: workspace, auxPanelIDs: existingAuxPanelIDs) else {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
-                guard let existingRightLeaf = workspace.paneTree.leafNode(paneID: rightColumnPaneID) else {
+                guard let existingAuxLeaf = workspace.paneTree.leafNode(paneID: auxColumnPaneID) else {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
@@ -297,11 +294,11 @@ public struct AppReducer {
                     nodeID: UUID(),
                     orientation: .vertical,
                     ratio: 0.5,
-                    first: existingRightLeaf,
+                    first: existingAuxLeaf,
                     second: auxLeaf
                 )
 
-                guard workspace.paneTree.replaceLeaf(paneID: rightColumnPaneID, with: splitRightColumn) else {
+                guard workspace.paneTree.replaceLeaf(paneID: auxColumnPaneID, with: splitRightColumn) else {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
@@ -451,6 +448,28 @@ public struct AppReducer {
             return focusedLeaf.paneID
         }
         return workspace.paneTree.allLeafInfos.first?.paneID
+    }
+
+    private static func auxPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
+        Set(
+            workspace.panels.compactMap { panelID, panelState in
+                panelState.kind == .terminal ? nil : panelID
+            }
+        )
+    }
+
+    private static func resolveAuxColumnPaneID(in workspace: WorkspaceState, auxPanelIDs: Set<UUID>) -> UUID? {
+        guard auxPanelIDs.isEmpty == false else { return nil }
+
+        if let rightColumnPaneID = workspace.paneTree.rightColumnPaneID(),
+           let rightLeaf = workspace.paneTree.allLeafInfos.first(where: { $0.paneID == rightColumnPaneID }),
+           rightLeaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) }) {
+            return rightColumnPaneID
+        }
+
+        return workspace.paneTree.allLeafInfos.first(where: { leaf in
+            leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
+        })?.paneID
     }
 
     private static func removeWorkspace(_ workspaceID: UUID, windowID: UUID, state: inout AppState) {

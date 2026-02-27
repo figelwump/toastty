@@ -393,6 +393,46 @@ struct AppReducerTests {
     }
 
     @Test
+    func toggleAuxPanelsOnComplexTerminalLayoutDoNotSharePanesWithTerminals() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
+
+        let workspaceBeforeAux = try #require(state.workspacesByID[workspaceID])
+        let terminalPanelIDs = Set(workspaceBeforeAux.panels.compactMap { panelID, panelState in
+            panelState.kind == .terminal ? panelID : nil
+        })
+        let leafCountBeforeAux = workspaceBeforeAux.paneTree.allLeafInfos.count
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+
+        let workspaceAfterAux = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterAux.paneTree.allLeafInfos.count == leafCountBeforeAux + 2)
+
+        let auxPanelIDs = Set(workspaceAfterAux.panels.compactMap { panelID, panelState in
+            panelState.kind == .terminal ? nil : panelID
+        })
+        #expect(auxPanelIDs.count == 2)
+
+        let auxLeaves = workspaceAfterAux.paneTree.allLeafInfos.filter { leaf in
+            leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
+        }
+        #expect(auxLeaves.count == 2)
+
+        for leaf in auxLeaves {
+            #expect(leaf.tabPanelIDs.count == 1)
+            #expect(leaf.tabPanelIDs.contains(where: { terminalPanelIDs.contains($0) }) == false)
+        }
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func togglingSameAuxPanelOnOffOnKeepsSingleInstance() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

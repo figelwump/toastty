@@ -1148,6 +1148,18 @@ Chunk J review reconciliation (post-commit second opinion on `e6a6ffa`):
 - rejected: pane-ID tracking concern; pane identity is represented solely by `PaneNode` structure in current model.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 54 passing tests.
 
+Chunk K (aux-column heuristic simplification for mixed terminal layouts):
+- revised aux-toggle insertion policy to remove terminal-mixing ambiguity:
+  - first aux panel now always creates a dedicated right aux column by wrapping the existing workspace pane tree in a horizontal split.
+  - subsequent aux panels always split within the existing aux column subtree (vertical stacking), never into terminal-only panes.
+- added reducer helpers:
+  - `auxPanelIDs(in:)` to derive currently active aux panel identities.
+  - `resolveAuxColumnPaneID(in:auxPanelIDs:)` to target the existing aux subtree deterministically.
+- design decision:
+  - keep behavior intentionally simple for now: aux panels are anchored to a dedicated right column until explicit user panel move preferences are implemented.
+- added regression coverage for a complex terminal-only layout (multiple terminal splits) to ensure diff/markdown panes do not share leaves with terminal panels.
+- validation passed: `./scripts/automation/check.sh` with 55 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.
