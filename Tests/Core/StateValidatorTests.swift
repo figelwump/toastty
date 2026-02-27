@@ -122,4 +122,19 @@ struct StateValidatorTests {
             try StateValidator.validate(state)
         }
     }
+
+    @Test
+    func orphanWorkspaceFailsValidation() throws {
+        let workspace = WorkspaceState.bootstrap(title: "Orphan")
+        let state = AppState(
+            windows: [],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: nil,
+            globalTerminalFontPoints: 13
+        )
+
+        #expect(throws: StateInvariantViolation.workspaceWithoutWindow(workspaceID: workspace.id)) {
+            try StateValidator.validate(state)
+        }
+    }
 }

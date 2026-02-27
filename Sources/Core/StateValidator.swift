@@ -4,6 +4,7 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case missingWorkspace(windowID: UUID, workspaceID: UUID)
     case selectedWorkspaceMissing(windowID: UUID, workspaceID: UUID)
     case workspaceInMultipleWindows(workspaceID: UUID)
+    case workspaceWithoutWindow(workspaceID: UUID)
     case splitRatioOutOfBounds(workspaceID: UUID, nodeID: UUID, ratio: Double)
     case emptyPaneLeaf(workspaceID: UUID, paneID: UUID)
     case selectedIndexOutOfBounds(workspaceID: UUID, paneID: UUID, selectedIndex: Int, tabCount: Int)
@@ -35,6 +36,10 @@ public enum StateValidator {
                window.workspaceIDs.contains(selectedWorkspaceID) == false {
                 throw StateInvariantViolation.selectedWorkspaceMissing(windowID: window.id, workspaceID: selectedWorkspaceID)
             }
+        }
+
+        for workspaceID in state.workspacesByID.keys where windowMembership[workspaceID] == nil {
+            throw StateInvariantViolation.workspaceWithoutWindow(workspaceID: workspaceID)
         }
 
         for workspace in state.workspacesByID.values {

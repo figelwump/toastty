@@ -964,6 +964,22 @@ Chunk B review reconciliation (post-commit second opinion on `dfd617e`):
 - rejected: broad state-title uniqueness across non-window-linked workspaces; invariant contract keeps `window.workspaceIDs` as source of truth.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 16 passing tests.
 
+Chunk C (phase 1 state-layer panel mobility foundation):
+- added reducer actions for panel mobility:
+  - `reorderPanel`
+  - `movePanelToPane`
+  - `movePanelToWorkspace`
+  - `detachPanelToNewWindow`
+- extended pane-tree mutation primitives with:
+  - indexed insert into pane tabs
+  - in-pane reorder
+  - panel removal with automatic empty-leaf collapse
+- implemented workspace/window lifecycle updates during panel moves:
+  - remove empty source workspace when its last panel moves out
+  - remove empty source window when its last workspace is removed
+- strengthened invariant validation with `workspaceWithoutWindow` guard.
+- validation passed: `./scripts/automation/check.sh` with expanded reducer/invariant coverage (21 passing tests).
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

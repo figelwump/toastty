@@ -149,4 +149,109 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func reorderPanelRepositionsTabWithinPane() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let paneID = try #require(workspace.paneTree.allLeafInfos.first?.paneID)
+
+        let panelA = UUID()
+        let panelB = UUID()
+        let panelC = UUID()
+        workspace.panels = [
+            panelA: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
+            panelB: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
+            panelC: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
+        ]
+        workspace.paneTree = .leaf(paneID: paneID, tabPanelIDs: [panelA, panelB, panelC], selectedIndex: 1)
+        workspace.focusedPanelID = panelB
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.reorderPanel(panelID: panelA, toIndex: 2, inPaneID: paneID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let updatedLeaf = try #require(updatedWorkspace.paneTree.allLeafInfos.first)
+        #expect(updatedLeaf.tabPanelIDs == [panelB, panelC, panelA])
+        #expect(updatedLeaf.selectedIndex == 0)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func movePanelToPaneCollapsesEmptySourceLeaf() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let leaves = workspace.paneTree.allLeafInfos
+        let sourceLeaf = try #require(leaves.first)
+        let targetLeaf = try #require(leaves.last)
+        let panelToMove = try #require(sourceLeaf.tabPanelIDs.first)
+
+        #expect(reducer.send(.movePanelToPane(panelID: panelToMove, targetPaneID: targetLeaf.paneID, index: nil), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let updatedLeaves = updatedWorkspace.paneTree.allLeafInfos
+        #expect(updatedLeaves.count == 1)
+        #expect(updatedLeaves[0].paneID == targetLeaf.paneID)
+        #expect(updatedLeaves[0].tabPanelIDs.contains(panelToMove))
+        #expect(updatedWorkspace.focusedPanelID == panelToMove)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func movePanelToWorkspaceRemovesEmptySourceWorkspace() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
+        let reducer = AppReducer()
+
+        let windowID = try #require(state.windows.first?.id)
+        let sourceWorkspaceID = try #require(state.windows.first?.workspaceIDs.first)
+        let targetWorkspaceID = try #require(state.windows.first?.workspaceIDs.last)
+        let sourceWorkspace = try #require(state.workspacesByID[sourceWorkspaceID])
+        let panelID = try #require(sourceWorkspace.focusedPanelID)
+
+        #expect(reducer.send(.movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspaceID, targetPaneID: nil), state: &state))
+
+        #expect(state.workspacesByID[sourceWorkspaceID] == nil)
+        let window = try #require(state.windows.first(where: { $0.id == windowID }))
+        #expect(window.workspaceIDs.count == 1)
+        #expect(window.workspaceIDs.first == targetWorkspaceID)
+
+        let targetWorkspace = try #require(state.workspacesByID[targetWorkspaceID])
+        #expect(targetWorkspace.panels[panelID] != nil)
+        #expect(targetWorkspace.focusedPanelID == panelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func detachPanelToNewWindowCreatesDetachedWorkspace() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        let panelToDetach = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.detachPanelToNewWindow(panelID: panelToDetach), state: &state))
+
+        #expect(state.windows.count == 2)
+        let detachedWindowID = try #require(state.selectedWindowID)
+        let detachedWindow = try #require(state.windows.first(where: { $0.id == detachedWindowID }))
+        let detachedWorkspaceID = try #require(detachedWindow.selectedWorkspaceID)
+        let detachedWorkspace = try #require(state.workspacesByID[detachedWorkspaceID])
+        #expect(detachedWorkspace.panels[panelToDetach] != nil)
+        #expect(detachedWorkspace.focusedPanelID == panelToDetach)
+
+        let sourceWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(sourceWorkspace.panels[panelToDetach] == nil)
+
+        try StateValidator.validate(state)
+    }
 }

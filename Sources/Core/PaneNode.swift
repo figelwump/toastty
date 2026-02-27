@@ -156,28 +156,120 @@ public extension PaneNode {
     }
 
     mutating func appendPanel(_ panelID: UUID, toPane paneID: UUID, select: Bool) -> Bool {
+        insertPanel(panelID, toPane: paneID, at: nil, select: select)
+    }
+
+    mutating func insertPanel(_ panelID: UUID, toPane paneID: UUID, at index: Int?, select: Bool) -> Bool {
         switch self {
         case .leaf(let currentPaneID, let tabPanelIDs, let selectedIndex):
             guard currentPaneID == paneID else { return false }
             var tabs = tabPanelIDs
-            tabs.append(panelID)
-            let nextSelectedIndex = select ? tabs.count - 1 : selectedIndex
+            let insertionIndex = clampedInsertionIndex(index, count: tabs.count)
+            tabs.insert(panelID, at: insertionIndex)
+            let nextSelectedIndex = select ? insertionIndex : selectedIndex
             self = .leaf(paneID: currentPaneID, tabPanelIDs: tabs, selectedIndex: nextSelectedIndex)
             return true
         case .split(let nodeID, let orientation, let ratio, let first, let second):
             var updatedFirst = first
-            if updatedFirst.appendPanel(panelID, toPane: paneID, select: select) {
+            if updatedFirst.insertPanel(panelID, toPane: paneID, at: index, select: select) {
                 self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second)
                 return true
             }
 
             var updatedSecond = second
-            if updatedSecond.appendPanel(panelID, toPane: paneID, select: select) {
+            if updatedSecond.insertPanel(panelID, toPane: paneID, at: index, select: select) {
                 self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond)
                 return true
             }
 
             return false
         }
+    }
+
+    mutating func reorderPanel(_ panelID: UUID, inPane paneID: UUID, toIndex: Int) -> Bool {
+        switch self {
+        case .leaf(let currentPaneID, let tabPanelIDs, let selectedIndex):
+            guard currentPaneID == paneID else { return false }
+            guard let currentIndex = tabPanelIDs.firstIndex(of: panelID) else { return false }
+
+            var tabs = tabPanelIDs
+            tabs.remove(at: currentIndex)
+            let insertionIndex = clampedInsertionIndex(toIndex, count: tabs.count)
+            tabs.insert(panelID, at: insertionIndex)
+
+            let focusedIndex: Int
+            if selectedIndex == currentIndex {
+                focusedIndex = insertionIndex
+            } else if selectedIndex > currentIndex && selectedIndex <= insertionIndex {
+                focusedIndex = selectedIndex - 1
+            } else if selectedIndex < currentIndex && selectedIndex >= insertionIndex {
+                focusedIndex = selectedIndex + 1
+            } else {
+                focusedIndex = selectedIndex
+            }
+
+            self = .leaf(paneID: currentPaneID, tabPanelIDs: tabs, selectedIndex: focusedIndex)
+            return true
+
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            var updatedFirst = first
+            if updatedFirst.reorderPanel(panelID, inPane: paneID, toIndex: toIndex) {
+                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second)
+                return true
+            }
+
+            var updatedSecond = second
+            if updatedSecond.reorderPanel(panelID, inPane: paneID, toIndex: toIndex) {
+                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond)
+                return true
+            }
+
+            return false
+        }
+    }
+
+    func removingPanel(_ panelID: UUID) -> (node: PaneNode?, removed: Bool) {
+        switch self {
+        case .leaf(let paneID, let tabPanelIDs, let selectedIndex):
+            guard let index = tabPanelIDs.firstIndex(of: panelID) else {
+                return (self, false)
+            }
+
+            var tabs = tabPanelIDs
+            tabs.remove(at: index)
+
+            guard tabs.isEmpty == false else {
+                return (nil, true)
+            }
+
+            let nextSelectedIndex = min(selectedIndex, tabs.count - 1)
+            return (.leaf(paneID: paneID, tabPanelIDs: tabs, selectedIndex: nextSelectedIndex), true)
+
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            let firstResult = first.removingPanel(panelID)
+            if firstResult.removed {
+                guard let updatedFirst = firstResult.node else {
+                    return (second, true)
+                }
+                return (.split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second), true)
+            }
+
+            let secondResult = second.removingPanel(panelID)
+            if secondResult.removed {
+                guard let updatedSecond = secondResult.node else {
+                    return (first, true)
+                }
+                return (.split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond), true)
+            }
+
+            return (self, false)
+        }
+    }
+
+    private func clampedInsertionIndex(_ requestedIndex: Int?, count: Int) -> Int {
+        guard let requestedIndex else { return count }
+        if requestedIndex < 0 { return 0 }
+        if requestedIndex > count { return count }
+        return requestedIndex
     }
 }
