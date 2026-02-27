@@ -4,5 +4,6 @@
 Tuist/.build
 Tuist/Derived
 DerivedData
+/Derived/
 *.xcodeproj
 *.xcworkspace
