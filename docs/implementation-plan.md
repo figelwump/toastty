@@ -1483,3 +1483,24 @@ Deferred work / known gaps:
 - terminal input/focus UX parity with native Ghostty app behavior is not yet validated end-to-end.
 - adapter/wrapper process integration is still pending (local socket now accepts protocol events, but claude/codex wrappers are not yet connected).
 - session/notification runtime state is not yet surfaced in app UI (sidebar dots, badges, system notifications still pending UI wiring).
+
+Chunk T (Ghostty startup crash on renderer thread callback isolation):
+- investigated user-reported startup crash (`EXC_BREAKPOINT` in `libdispatch._dispatch_assert_queue_fail`) when launching Ghostty-enabled runtime.
+- LLDB backtrace root cause:
+  - `wakeup_cb` callback frame landed in `GhosttyRuntimeManager.init` callback closure.
+  - Swift concurrency isolation check (`_swift_task_checkIsolatedSwift`) asserted on Ghostty renderer thread before callback body ran.
+  - callback closures were constructed inside `@MainActor` initializer, making them actor-isolated even though Ghostty invokes them from non-main threads.
+- implementation update (`Sources/App/Terminal/GhosttyRuntimeManager.swift`):
+  - extracted runtime callback configuration into file-scope helper `makeGhosttyRuntimeConfig(...)` so callback closures are created in nonisolated context.
+  - kept renderer-thread-safe wakeup bridge in file-scope `ghosttyWakeupCallback(...)`, explicitly dispatching tick scheduling to main queue.
+  - preserved manager lifetime behavior (singleton `shared`) and existing tick scheduling semantics.
+- validation:
+  - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+  - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
+    - passed with readiness file, automation ping/action responses, and screenshot/state artifacts generated.
+    - no startup crash in app log for that run.
+- design decision:
+  - kept `GhosttyRuntimeManager` as `@MainActor` for UI-facing lifecycle safety, but ensured C callback entrypoints are nonisolated at definition site.
+- follow-up testing gap:
+  - callback threading model is now safe for current callback set, but richer callbacks (clipboard/action handling) should be added with explicit thread-handoff rules as they are implemented.

@@ -3,6 +3,35 @@ import AppKit
 import Foundation
 import GhosttyKit
 
+private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
+    guard let userdata else { return }
+    // Store as an integer handle to satisfy strict Sendable checks across dispatch hops.
+    let managerHandle = UInt(bitPattern: userdata)
+    DispatchQueue.main.async {
+        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else { return }
+        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
+        manager.scheduleImmediateTick()
+    }
+}
+
+private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghostty_runtime_config_s {
+    ghostty_runtime_config_s(
+        userdata: userdata,
+        supports_selection_clipboard: false,
+        wakeup_cb: { userdata in
+            // Ghostty may invoke wakeup from a renderer thread; all app ticks must return to main.
+            ghosttyWakeupCallback(userdata)
+        },
+        action_cb: { _, _, _ in
+            true
+        },
+        read_clipboard_cb: { _, _, _ in },
+        confirm_read_clipboard_cb: { _, _, _, _ in },
+        write_clipboard_cb: { _, _, _, _, _ in },
+        close_surface_cb: { _, _ in }
+    )
+}
+
 @MainActor
 final class GhosttyRuntimeManager {
     static let shared = GhosttyRuntimeManager()
@@ -25,21 +54,8 @@ final class GhosttyRuntimeManager {
         ghostty_config_load_default_files(config)
         ghostty_config_finalize(config)
 
-        var runtimeConfig = ghostty_runtime_config_s(
-            userdata: Unmanaged.passUnretained(self).toOpaque(),
-            supports_selection_clipboard: false,
-            wakeup_cb: { userdata in
-                guard let userdata else { return }
-                let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(userdata).takeUnretainedValue()
-                manager.scheduleImmediateTick()
-            },
-            action_cb: { _, _, _ in
-                true
-            },
-            read_clipboard_cb: { _, _, _ in },
-            confirm_read_clipboard_cb: { _, _, _, _ in },
-            write_clipboard_cb: { _, _, _, _, _ in },
-            close_surface_cb: { _, _ in }
+        var runtimeConfig = makeGhosttyRuntimeConfig(
+            userdata: Unmanaged.passUnretained(self).toOpaque()
         )
 
         app = ghostty_app_new(&runtimeConfig, config)
@@ -81,7 +97,7 @@ final class GhosttyRuntimeManager {
         ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
     }
 
-    private func scheduleImmediateTick() {
+    fileprivate func scheduleImmediateTick() {
         DispatchQueue.main.async { [weak self] in
             self?.tick()
         }
