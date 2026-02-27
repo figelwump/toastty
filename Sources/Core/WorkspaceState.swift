@@ -19,6 +19,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var panels: [UUID: PanelState]
     public var focusedPanelID: UUID?
     public var auxPanelVisibility: Set<PanelKind>
+    public var focusedPanelModeActive: Bool
     public var unreadNotificationCount: Int
     public var recentlyClosedPanels: [ClosedPanelRecord]
 
@@ -29,6 +30,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         panels: [UUID: PanelState],
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind> = [],
+        focusedPanelModeActive: Bool = false,
         unreadNotificationCount: Int = 0,
         recentlyClosedPanels: [ClosedPanelRecord] = []
     ) {
@@ -38,6 +40,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.panels = panels
         self.focusedPanelID = focusedPanelID
         self.auxPanelVisibility = auxPanelVisibility
+        self.focusedPanelModeActive = focusedPanelModeActive
         self.unreadNotificationCount = unreadNotificationCount
         self.recentlyClosedPanels = recentlyClosedPanels
     }

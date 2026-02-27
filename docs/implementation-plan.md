@@ -1336,6 +1336,30 @@ Chunk O (manual-run feedback: Ghostty fallback messaging + safer enablement gate
   - `./scripts/automation/smoke-ui.sh` (fallback path)
   - direct test pass: `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived`
 
+Chunk P (focused panel mode v1: maximize/restore with shortcut + automation coverage):
+- added focused panel mode action/state wiring:
+  - new reducer action `toggleFocusedPanelMode(workspaceID:)`.
+  - workspace state now tracks `focusedPanelModeActive` (per-workspace mode flag).
+  - reducer now blocks pane split + aux-panel toggle actions while focused mode is active.
+- implementation simplification decision:
+  - use non-destructive focused-mode rendering (hide non-focused panes at render-time) rather than mutating `paneTree` into a temporary single-leaf snapshot.
+  - this keeps restore semantics lossless and avoids snapshot merge logic for close/reopen mutations.
+- updated workspace UI behavior:
+  - added top-bar toggle button (`Focus Panel` / `Restore Layout`) with `⌘⇧F`.
+  - when focused mode is active, workspace content renders only the focused panel expanded to fill the available workspace area.
+  - split + aux top-bar controls are disabled while focused mode is active.
+- automation integration:
+  - extended automation action surface with `topbar.toggle.focused-panel`.
+  - expanded `scripts/automation/smoke-ui.sh` to exercise focused mode roundtrip and capture `focused-panel-smoke.png`.
+- added reducer coverage:
+  - focused mode roundtrip preserves layout/focus.
+  - stale-focused-panel recovery on focused-mode entry.
+  - split/aux actions are blocked in focused mode.
+  - close panel behavior continues to operate while focused mode remains active.
+- validation passed:
+  - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (64 tests passing)
+  - `./scripts/automation/smoke-ui.sh` (focused mode screenshot + restore screenshot generated)
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.

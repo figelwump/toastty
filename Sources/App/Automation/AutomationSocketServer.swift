@@ -667,6 +667,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "topbar.toggle.scratchpad":
             didMutate = store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .scratchpad))
 
+        case "topbar.toggle.focused-panel":
+            didMutate = store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+
         case "sidebar.workspaces.new":
             guard let windowID = resolveWindowID(args: args) else {
                 throw AutomationSocketError.invalidPayload("windowID not found")

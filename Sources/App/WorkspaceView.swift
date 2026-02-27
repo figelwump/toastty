@@ -11,13 +11,7 @@ struct WorkspaceView: View {
             Divider()
 
             if let workspace = store.selectedWorkspace {
-                PaneNodeView(
-                    node: workspace.paneTree,
-                    workspace: workspace,
-                    store: store,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    globalFontPoints: store.state.globalTerminalFontPoints
-                )
+                workspaceContent(for: workspace)
                     .padding(12)
             } else {
                 ContentUnavailableView("No workspace selected", systemImage: "rectangle.slash")
@@ -36,14 +30,17 @@ struct WorkspaceView: View {
 
             auxToggle(title: "Diff", kind: .diff, identifier: "topbar.toggle.diff")
             auxToggle(title: "Markdown", kind: .markdown, identifier: "topbar.toggle.markdown")
+            focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
             Button("Split Horizontal") {
                 split(orientation: .horizontal)
             }
+            .disabled(isFocusedPanelModeActive)
             .accessibilityIdentifier("workspace.split.horizontal")
             Button("Split Vertical") {
                 split(orientation: .vertical)
             }
+            .disabled(isFocusedPanelModeActive)
             .accessibilityIdentifier("workspace.split.vertical")
         }
         .padding(.horizontal, 12)
@@ -57,6 +54,32 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
+    private func workspaceContent(for workspace: WorkspaceState) -> some View {
+        if workspace.focusedPanelModeActive,
+           let (panelID, panelState) = resolvedFocusedPanel(in: workspace) {
+            PanelCardView(
+                workspaceID: workspace.id,
+                panelID: panelID,
+                panelState: panelState,
+                focusedPanelID: panelID,
+                globalFontPoints: store.state.globalTerminalFontPoints,
+                store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                expanded: true
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            PaneNodeView(
+                node: workspace.paneTree,
+                workspace: workspace,
+                store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                globalFontPoints: store.state.globalTerminalFontPoints
+            )
+        }
+    }
+
+    @ViewBuilder
     private func auxToggle(title: String, kind: PanelKind, identifier: String) -> some View {
         let isOn = store.selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
         Button(title) {
@@ -65,7 +88,41 @@ struct WorkspaceView: View {
         }
         .buttonStyle(.bordered)
         .tint(isOn ? .accentColor : .gray)
+        .disabled(isFocusedPanelModeActive)
         .accessibilityIdentifier(identifier)
+    }
+
+    @ViewBuilder
+    private func focusedPanelToggle(identifier: String) -> some View {
+        let isOn = isFocusedPanelModeActive
+        Button(isOn ? "Restore Layout" : "Focus Panel") {
+            guard let workspaceID = store.selectedWorkspace?.id else { return }
+            store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+        }
+        .buttonStyle(.bordered)
+        .tint(isOn ? .accentColor : .gray)
+        .keyboardShortcut("f", modifiers: [.command, .shift])
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var isFocusedPanelModeActive: Bool {
+        store.selectedWorkspace?.focusedPanelModeActive ?? false
+    }
+
+    private func resolvedFocusedPanel(in workspace: WorkspaceState) -> (UUID, PanelState)? {
+        if let focusedPanelID = workspace.focusedPanelID,
+           let focusedPanelState = workspace.panels[focusedPanelID] {
+            return (focusedPanelID, focusedPanelState)
+        }
+
+        for leaf in workspace.paneTree.allLeafInfos {
+            for panelID in leaf.tabPanelIDs {
+                if let panelState = workspace.panels[panelID] {
+                    return (panelID, panelState)
+                }
+            }
+        }
+        return nil
     }
 }
 
@@ -93,7 +150,8 @@ private struct PaneNodeView: View {
                             focusedPanelID: workspace.focusedPanelID,
                             globalFontPoints: globalFontPoints,
                             store: store,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            expanded: false
                         )
                     }
                 }
@@ -157,6 +215,7 @@ private struct PanelCardView: View {
     let globalFontPoints: Double
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let expanded: Bool
 
     private var isFocused: Bool {
         focusedPanelID == panelID
@@ -177,7 +236,12 @@ private struct PanelCardView: View {
                     globalFontPoints: globalFontPoints,
                     runtimeRegistry: terminalRuntimeRegistry
                 )
-                .frame(minHeight: 170)
+                .frame(
+                    maxWidth: .infinity,
+                    minHeight: expanded ? 0 : 170,
+                    maxHeight: expanded ? .infinity : nil,
+                    alignment: .topLeading
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 6))
 
             case .diff:
@@ -196,6 +260,7 @@ private struct PanelCardView: View {
                 .stroke(isFocused ? Color.accentColor : Color.gray.opacity(0.2), lineWidth: isFocused ? 1.5 : 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .frame(maxWidth: .infinity, maxHeight: expanded ? .infinity : nil, alignment: .topLeading)
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture {
             store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
@@ -220,6 +285,11 @@ private struct PanelCardView: View {
         Text(title)
             .font(.body.monospaced())
             .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, minHeight: 80, alignment: .leading)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: expanded ? 0 : 80,
+                maxHeight: expanded ? .infinity : nil,
+                alignment: .leading
+            )
     }
 }

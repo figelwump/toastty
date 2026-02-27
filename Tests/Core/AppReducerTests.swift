@@ -595,4 +595,86 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func toggleFocusedPanelModeRoundTripPreservesLayoutAndFocus() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let focusedModeWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(focusedModeWorkspace.focusedPanelModeActive)
+        #expect(focusedModeWorkspace.paneTree == workspaceBefore.paneTree)
+        #expect(focusedModeWorkspace.focusedPanelID == workspaceBefore.focusedPanelID)
+
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let restoredWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(restoredWorkspace.focusedPanelModeActive == false)
+        #expect(restoredWorkspace.paneTree == workspaceBefore.paneTree)
+        #expect(restoredWorkspace.focusedPanelID == workspaceBefore.focusedPanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func toggleFocusedPanelModeRecoversFromStaleFocusedPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        workspace.focusedPanelID = UUID()
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(updatedWorkspace.focusedPanelID)
+        #expect(updatedWorkspace.focusedPanelModeActive)
+        #expect(updatedWorkspace.panels[focusedPanelID] != nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func splitAndAuxToggleAreBlockedWhileFocusedModeActive() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+        let workspaceInFocusMode = try #require(state.workspacesByID[workspaceID])
+
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state) == false)
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state) == false)
+
+        let workspaceAfterBlockedActions = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterBlockedActions == workspaceInFocusMode)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closePanelKeepsFocusedModeActive() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+
+        let panelToClose = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.focusedPanelModeActive)
+        #expect(updatedWorkspace.panels.count == 1)
+        let resolvedFocusedPanelID = try #require(updatedWorkspace.focusedPanelID)
+        #expect(updatedWorkspace.panels[resolvedFocusedPanelID] != nil)
+
+        try StateValidator.validate(state)
+    }
 }

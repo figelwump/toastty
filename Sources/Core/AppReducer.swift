@@ -235,6 +235,7 @@ public struct AppReducer {
         case .toggleAuxPanel(let workspaceID, let kind):
             guard kind != .terminal else { return false }
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard workspace.focusedPanelModeActive == false else { return false }
 
             if let existingPanelID = workspace.panels.first(where: { $0.value.kind == kind })?.key {
                 let removal = workspace.paneTree.removingPanel(existingPanelID)
@@ -308,8 +309,20 @@ public struct AppReducer {
             state.workspacesByID[workspaceID] = workspace
             return true
 
+        case .toggleFocusedPanelMode(let workspaceID):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+                return false
+            }
+
+            workspace.focusedPanelID = focusResolution.panelID
+            workspace.focusedPanelModeActive.toggle()
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
         case .splitFocusedPane(let workspaceID, let orientation):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard workspace.focusedPanelModeActive == false else { return false }
             guard let focusResolution = resolveFocusedPanel(in: workspace) else {
                 return false
             }
