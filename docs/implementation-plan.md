@@ -1139,6 +1139,15 @@ Chunk J (aux panel layout: one aux panel per pane):
 - updated pane-node behavior test to match bottom-pane preference in nested right-column vertical splits.
 - validation passed: `./scripts/automation/check.sh` with 53 passing tests.
 
+Chunk J review reconciliation (post-commit second opinion on `e6a6ffa`):
+- accepted: avoid reconstructing right-column leaf nodes from `PaneLeafInfo`; use direct pane-tree node lookup (`leafNode(paneID:)`) before replacement.
+- accepted: add explicit regression coverage for multi-aux close behavior (closing one aux panel collapses only its pane and preserves remaining aux pane state).
+- accepted: simplify nested right-column split ratio from `0.55` to `0.5` to reduce compounding size bias during repeated aux-pane splits.
+- rejected: unbounded re-toggle pane growth concern; existing early-return branch removes an already-open aux panel before any split insertion path.
+- rejected: focus-steal suggestion for new aux pane; current UX intentionally preserves focused terminal panel on aux toggles.
+- rejected: pane-ID tracking concern; pane identity is represented solely by `PaneNode` structure in current model.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 54 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.

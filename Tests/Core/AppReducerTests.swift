@@ -372,6 +372,27 @@ struct AppReducerTests {
     }
 
     @Test
+    func toggleAuxPanelOffWithMultipleAuxPanesCollapsesOnlyTargetPane() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.paneTree.allLeafInfos.count == 2)
+        #expect(workspace.auxPanelVisibility.contains(.diff))
+        #expect(workspace.auxPanelVisibility.contains(.markdown) == false)
+        #expect(workspace.panels.values.contains(where: { $0.kind == .diff }))
+        #expect(workspace.panels.values.contains(where: { $0.kind == .markdown }) == false)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func togglingSameAuxPanelOnOffOnKeepsSingleInstance() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

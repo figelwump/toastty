@@ -283,16 +283,11 @@ public struct AppReducer {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
-                guard let rightColumnLeaf = workspace.paneTree.allLeafInfos.first(where: { $0.paneID == rightColumnPaneID }) else {
+                guard let existingRightLeaf = workspace.paneTree.leafNode(paneID: rightColumnPaneID) else {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
 
-                let existingRightLeaf = PaneNode.leaf(
-                    paneID: rightColumnLeaf.paneID,
-                    tabPanelIDs: rightColumnLeaf.tabPanelIDs,
-                    selectedIndex: rightColumnLeaf.selectedIndex
-                )
                 let auxLeaf = PaneNode.leaf(
                     paneID: UUID(),
                     tabPanelIDs: [panelID],
@@ -301,7 +296,7 @@ public struct AppReducer {
                 let splitRightColumn = PaneNode.split(
                     nodeID: UUID(),
                     orientation: .vertical,
-                    ratio: 0.55,
+                    ratio: 0.5,
                     first: existingRightLeaf,
                     second: auxLeaf
                 )

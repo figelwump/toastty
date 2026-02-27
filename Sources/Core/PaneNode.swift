@@ -132,6 +132,16 @@ public extension PaneNode {
         }
     }
 
+    func leafNode(paneID: UUID) -> PaneNode? {
+        switch self {
+        case .leaf(let currentPaneID, _, _):
+            guard currentPaneID == paneID else { return nil }
+            return self
+        case .split(_, _, _, let first, let second):
+            return first.leafNode(paneID: paneID) ?? second.leafNode(paneID: paneID)
+        }
+    }
+
     func rightColumnPaneID() -> UUID? {
         switch self {
         case .leaf(let paneID, _, _):
