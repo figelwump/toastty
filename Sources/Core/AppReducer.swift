@@ -198,7 +198,15 @@ public struct AppReducer {
 
         case .reopenLastClosedPanel(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let closedRecord = workspace.recentlyClosedPanels.popLast() else { return false }
+            guard let closedRecord = workspace.recentlyClosedPanels.last else { return false }
+
+            if closedRecord.panelState.kind != .terminal,
+               let existingAuxPanelID = workspace.panels.first(where: { $0.value.kind == closedRecord.panelState.kind })?.key {
+                workspace.focusedPanelID = existingAuxPanelID
+                workspace.recentlyClosedPanels.removeLast()
+                state.workspacesByID[workspaceID] = workspace
+                return true
+            }
 
             guard let targetPaneID = resolveReopenPaneID(
                 in: workspace,
@@ -212,7 +220,6 @@ public struct AppReducer {
 
             guard workspace.paneTree.insertPanel(panelID, toPane: targetPaneID, at: nil, select: true) else {
                 workspace.panels.removeValue(forKey: panelID)
-                workspace.recentlyClosedPanels.append(closedRecord)
                 return false
             }
 
@@ -220,6 +227,7 @@ public struct AppReducer {
             if closedRecord.panelState.kind != .terminal {
                 workspace.auxPanelVisibility.insert(closedRecord.panelState.kind)
             }
+            workspace.recentlyClosedPanels.removeLast()
 
             state.workspacesByID[workspaceID] = workspace
             return true

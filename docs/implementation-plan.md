@@ -1021,6 +1021,14 @@ Chunk E (phase 1 close/reopen panel behavior):
 - added regression tests for close/reopen roundtrip, aux visibility restore, and missing-pane fallback reinsertion.
 - validation passed: `./scripts/automation/check.sh` with 32 passing tests.
 
+Chunk E review reconciliation (post-commit second opinion on `c917d07`):
+- accepted: prevent duplicate aux-panel reopen by focusing existing same-kind aux panel instead of creating a duplicate.
+- accepted: refactor reopen flow to "peek then commit" semantics for `recentlyClosedPanels` to keep history mutation explicit and success-driven.
+- rejected: claimed history-loss on reopen insert failure; state dictionary is not mutated on failed insert path, so history remains unchanged.
+- rejected: claimed workspace leak on close empty-tree path; `removeWorkspace` removes the workspace entry from `workspacesByID`.
+- rejected: preserving original panel UUID on reopen; reopened panel identity is intentionally new in this state model.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 33 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

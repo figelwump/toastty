@@ -431,4 +431,33 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func reopenAuxPanelDoesNotDuplicateWhenSameKindAlreadyVisible() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        let originalDiffID = try #require(
+            state.workspacesByID[workspaceID]?.panels.first(where: { $0.value.kind == .diff })?.key
+        )
+
+        #expect(reducer.send(.closePanel(panelID: originalDiffID), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        let reopenedDiffID = try #require(
+            state.workspacesByID[workspaceID]?.panels.first(where: { $0.value.kind == .diff })?.key
+        )
+
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let diffPanelIDs = workspace.panels.filter { $0.value.kind == .diff }.map(\.key)
+        #expect(diffPanelIDs.count == 1)
+        #expect(diffPanelIDs[0] == reopenedDiffID)
+        #expect(workspace.focusedPanelID == reopenedDiffID)
+        #expect(workspace.recentlyClosedPanels.isEmpty)
+
+        try StateValidator.validate(state)
+    }
 }
