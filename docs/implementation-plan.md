@@ -1075,6 +1075,20 @@ Chunk G (phase 3 diff-service foundation):
   - outside-repo separation behavior
 - validation passed: `./scripts/automation/check.sh` with 45 passing tests.
 
+Chunk G review reconciliation (post-commit second opinion on `243c37f`):
+- accepted: add explicit binary-file stat representation (`FileDiff.isBinary`) when git numstat reports `-`.
+- accepted: replace fragile string slicing with path-component-based relative path derivation.
+- accepted: use shared output pipe handling in git process execution and consume output before `waitUntilExit` to reduce IO deadlock risk.
+- accepted: move in/out-of-repo dedup checks from O(n^2) array scans to set-backed dedup while preserving order.
+- accepted: harden git-diff tests:
+  - explicit invalid repo-root error test
+  - binary diff behavior test
+  - temporary repository/file cleanup
+  - non-optional UTF-8 write helper
+- rejected: single-command diff parsing rewrite for this chunk; retained per-file unified diff calls for simpler correctness-first implementation.
+- rejected: notification to alter outside-repo test expectation; current service intentionally returns one in-repo entry per requested in-repo file even if diff body is empty.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 47 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

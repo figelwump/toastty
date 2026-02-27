@@ -6,6 +6,7 @@ struct GitDiffServiceTests {
     @Test
     func computesUnstagedDiffForTrackedFile() throws {
         let repo = try makeTempRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
         try write("line-one\nline-two\n", to: repo.appendingPathComponent("note.md"))
         try runGit(repo: repo, args: ["add", "note.md"])
         try runGit(repo: repo, args: ["commit", "-m", "initial"])
@@ -26,6 +27,7 @@ struct GitDiffServiceTests {
     @Test
     func computesStagedDiffWhenRequested() throws {
         let repo = try makeTempRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
         try write("a\n", to: repo.appendingPathComponent("a.txt"))
         try runGit(repo: repo, args: ["add", "a.txt"])
         try runGit(repo: repo, args: ["commit", "-m", "initial"])
@@ -45,8 +47,10 @@ struct GitDiffServiceTests {
     @Test
     func separatesOutsideRepoFiles() throws {
         let repo = try makeTempRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
         try write("root\n", to: repo.appendingPathComponent("inside.txt"))
         let outside = FileManager.default.temporaryDirectory.appendingPathComponent("outside-\(UUID().uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: outside) }
         try write("outside\n", to: outside)
 
         let service = GitDiffService()
@@ -58,6 +62,34 @@ struct GitDiffServiceTests {
 
         #expect(result.inRepoFiles.count == 1)
         #expect(result.outsideRepoFiles == [outside.standardizedFileURL.path])
+    }
+
+    @Test
+    func reportsInvalidRepoRootForMissingDirectory() {
+        let service = GitDiffService()
+        #expect(throws: GitDiffError.invalidRepoRoot("/definitely/not/real")) {
+            _ = try service.computeDiff(repoRoot: "/definitely/not/real", files: ["a.swift"], staged: false)
+        }
+    }
+
+    @Test
+    func marksBinaryDiffEntriesFromNumstat() throws {
+        let repo = try makeTempRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+
+        let binaryURL = repo.appendingPathComponent("blob.bin")
+        try Data([0x00, 0x01, 0x02, 0x03]).write(to: binaryURL, options: [.atomic])
+        try runGit(repo: repo, args: ["add", "blob.bin"])
+        try runGit(repo: repo, args: ["commit", "-m", "initial"])
+
+        try Data([0x10, 0x20, 0x30, 0x40]).write(to: binaryURL, options: [.atomic])
+
+        let service = GitDiffService()
+        let result = try service.computeDiff(repoRoot: repo.path, files: ["blob.bin"], staged: false)
+
+        let fileDiff = try #require(result.inRepoFiles.first)
+        #expect(fileDiff.path == "blob.bin")
+        #expect(fileDiff.isBinary == true)
     }
 
     private func makeTempRepo() throws -> URL {
@@ -73,7 +105,7 @@ struct GitDiffServiceTests {
     }
 
     private func write(_ string: String, to fileURL: URL) throws {
-        try string.data(using: .utf8)?.write(to: fileURL, options: [.atomic])
+        try Data(string.utf8).write(to: fileURL, options: [.atomic])
     }
 
     private func runGit(repo: URL, args: [String]) throws {
