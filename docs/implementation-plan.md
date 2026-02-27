@@ -1433,6 +1433,17 @@ Chunk R (Ghostty manifest env-gate diagnostics + enablement fix):
 - documentation update:
   - `docs/ghostty-integration.md` now includes manifest env behavior and verification steps.
 
+Chunk R review reconciliation (post-commit second opinion on `e337620`):
+- accepted: restore explicit xcframework presence gating so Ghostty opt-in does not force missing-path project breakage.
+  - `Project.swift` now enables Ghostty only when:
+    - env gate is enabled (`TUIST_ENABLE_GHOSTTY=1` or compatibility `TOASTTY_ENABLE_GHOSTTY=1`)
+    - and xcframework exists in one of the manifest/cwd candidate roots.
+- accepted: clarify env alias behavior in code comment (Tuist-reliable `TUIST_*`, `TOASTTY_*` best-effort compatibility only).
+- rejected: docs target naming concern; `ToasttyApp` is the actual app target name in current manifests/project.
+- follow-up validation passed after fixes:
+  - default path: `tuist generate` + `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (`67` tests passing)
+  - Ghostty-enabled path check: `TUIST_ENABLE_GHOSTTY=1 tuist generate` emits `TOASTTY_HAS_GHOSTTY_KIT`; build still fails at known unresolved `libghostty.a` link symbols (`___cxa_*`, `___gxx_personality_v0`, `kTISProperty*`).
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.
