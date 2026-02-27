@@ -1582,3 +1582,15 @@ Chunk W (Ghostty viewport sizing fix for terminal scroll behavior):
     - launched built app, clicked terminal panel, sent `ls -l` + repeated return via System Events, captured screenshot:
       - `artifacts/manual/ghostty-scroll-validation-click-20260227-124214.png`
     - screenshot shows command output scrolled and prompt visible at buffer bottom.
+
+Chunk W review reconciliation (post-commit second opinion on `2f5cbec`):
+- rejected: “API contract unverified” as a blocker.
+  - follow-up deep dive checked Ghostty upstream embedding source (`macos/Sources/Ghostty/Surface View/SurfaceView_AppKit.swift` + `src/apprt/embedded.zig`) and then performed local A/B behavior checks against our host path.
+  - in this app’s current embedding flow, returning to framebuffer-style size inputs reproduced the stuck-viewport behavior (end marker/prompt not reaching visible region), while the committed logical-size path restored expected cursor-follow/scroll behavior.
+- rejected: “scale/size inconsistency” issue.
+  - current behavior is intentionally tuned to observed runtime behavior in this host integration; `ghostty_surface_set_content_scale(...)` remains active while size is kept in logical units to avoid over-provisioned grid geometry in our panel host.
+- rejected: “validation artifact not reviewable” issue.
+  - screenshot artifacts are generated in ignored local artifact paths by design (`artifacts/manual/...`) and are referenced for reproducibility, not committed to source.
+- accepted (deferred follow-up): improve automated coverage for terminal viewport/input behavior.
+  - current XCTest suites do not directly exercise Ghostty C-surface geometry or terminal keystroke I/O.
+  - follow-up candidate: extend automation socket actions with terminal text input primitives, then assert viewport progression via deterministic screenshot/state checks.
