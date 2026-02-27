@@ -58,4 +58,41 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             focusedPanelID: panelID
         )
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case paneTree
+        case panels
+        case focusedPanelID
+        case auxPanelVisibility
+        case unreadNotificationCount
+        case recentlyClosedPanels
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        paneTree = try container.decode(PaneNode.self, forKey: .paneTree)
+        panels = try container.decode([UUID: PanelState].self, forKey: .panels)
+        focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
+        auxPanelVisibility = try container.decodeIfPresent(Set<PanelKind>.self, forKey: .auxPanelVisibility) ?? []
+        unreadNotificationCount = try container.decodeIfPresent(Int.self, forKey: .unreadNotificationCount) ?? 0
+        recentlyClosedPanels = try container.decodeIfPresent([ClosedPanelRecord].self, forKey: .recentlyClosedPanels) ?? []
+        // Focus mode is a transient UI/runtime flag and should never persist across decode boundaries.
+        focusedPanelModeActive = false
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(paneTree, forKey: .paneTree)
+        try container.encode(panels, forKey: .panels)
+        try container.encodeIfPresent(focusedPanelID, forKey: .focusedPanelID)
+        try container.encode(auxPanelVisibility, forKey: .auxPanelVisibility)
+        try container.encode(unreadNotificationCount, forKey: .unreadNotificationCount)
+        try container.encode(recentlyClosedPanels, forKey: .recentlyClosedPanels)
+    }
 }

@@ -56,7 +56,8 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState) -> some View {
         if workspace.focusedPanelModeActive,
-           let (panelID, panelState) = resolvedFocusedPanel(in: workspace) {
+           let panelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[panelID] {
             PanelCardView(
                 workspaceID: workspace.id,
                 panelID: panelID,
@@ -107,22 +108,6 @@ struct WorkspaceView: View {
 
     private var isFocusedPanelModeActive: Bool {
         store.selectedWorkspace?.focusedPanelModeActive ?? false
-    }
-
-    private func resolvedFocusedPanel(in workspace: WorkspaceState) -> (UUID, PanelState)? {
-        if let focusedPanelID = workspace.focusedPanelID,
-           let focusedPanelState = workspace.panels[focusedPanelID] {
-            return (focusedPanelID, focusedPanelState)
-        }
-
-        for leaf in workspace.paneTree.allLeafInfos {
-            for panelID in leaf.tabPanelIDs {
-                if let panelState = workspace.panels[panelID] {
-                    return (panelID, panelState)
-                }
-            }
-        }
-        return nil
     }
 }
 

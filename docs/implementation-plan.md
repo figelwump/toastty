@@ -1360,6 +1360,18 @@ Chunk P (focused panel mode v1: maximize/restore with shortcut + automation cove
   - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (64 tests passing)
   - `./scripts/automation/smoke-ui.sh` (focused mode screenshot + restore screenshot generated)
 
+Chunk P review reconciliation (post-commit second opinion on `ea2f83e`):
+- accepted: remove duplicated focused-panel fallback resolution in `WorkspaceView` and rely on reducer-managed `focusedPanelID` when focused mode is active.
+- accepted: make `focusedPanelModeActive` runtime-transient across codable boundaries by excluding it from `WorkspaceState` encode/decode and defaulting it to `false` on decode.
+- accepted: add codable regression coverage to verify focused mode does not persist through `AppState` encode/decode.
+- rejected: toggle-off focus clobber concern in `toggleFocusedPanelMode`; current implementation re-resolves to a valid current focused panel, and assignment does not regress focus after in-mode close operations.
+- rejected: close-last-panel focused-mode stuck state concern; closing the last panel removes the workspace/window via existing lifecycle cascade so no empty focused-mode workspace persists.
+- rejected: shortcut conflict concern as a blocker; no conflicting `⌘⇧F` binding exists in current app command surface.
+- rejected: empty-workspace toggle error-path concern; workspace invariants/lifecycle prevent persistent empty workspaces in current model.
+- follow-up validation passed after fixes:
+  - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (64 tests passing)
+  - `./scripts/automation/smoke-ui.sh`
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.
