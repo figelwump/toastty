@@ -907,3 +907,29 @@ smoke script exit-code contract:
 - `12`: ui test execution failure
 - `13`: screenshot baseline mismatch
 - `14`: automation readiness/protocol timeout
+
+## 12) execution log
+
+### 2026-02-27
+
+Execution mode:
+- implementing the plan in validated chunk commits with post-commit second-opinion review.
+
+Plan adjustments:
+- repository started as docs-only; bootstrapping scaffold and core state first to enable test-driven implementation.
+- Ghostty spike is tracked as blocked until build prerequisites are available (`zig` missing, no local `GhosttyKit.xcframework` cache found).
+- see `docs/ghostty-integration.md` for blocker details and next actions.
+
+Chunk A (phase 0 step 2 + step 3 foundation):
+- added Tuist manifests (`Project.swift`, `Workspace.swift`) and project `.gitignore`.
+- added initial source layout under `Sources/App` and `Sources/Core`.
+- implemented core data model and reducer baseline for windows/workspaces/panes/panels.
+- implemented state invariant validator + baseline unit tests.
+- added scripted smoke command `scripts/automation/check.sh` with exit-code mapping (`10` generate/build, `11` tests).
+- validation passed: `./scripts/automation/check.sh` (runs `tuist generate`, `tuist build`, `tuist test`).
+- technical note: Tuist 4.68 uses `.target(... product: .unitTests ...)` instead of `.testTarget(...)` in `Project.swift`.
+
+Deferred work / known gaps:
+- Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
+- no automation launch profile (`--automation`) or fixture/socket command surface yet.
+- no panel mobility across workspaces/windows yet (state actions currently baseline only).
