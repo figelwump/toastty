@@ -98,13 +98,14 @@ public struct AppReducer {
             let sourceRemoval = sourceWorkspace.paneTree.removingPanel(panelID)
             guard sourceRemoval.removed else { return false }
 
+            var updatedSourceWorkspace: WorkspaceState?
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.paneTree = updatedSourceTree
                 sourceWorkspace.focusedPanelID = resolveFocusedPanel(in: sourceWorkspace)?.panelID
-                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
+                updatedSourceWorkspace = sourceWorkspace
             } else {
-                removeWorkspace(sourceLocation.workspaceID, windowIndex: sourceLocation.windowIndex, state: &state)
+                updatedSourceWorkspace = nil
             }
 
             targetWorkspace.panels[panelID] = panelState
@@ -114,6 +115,12 @@ public struct AppReducer {
             }
             targetWorkspace.paneTree = targetTree
             targetWorkspace.focusedPanelID = panelID
+
+            if let updatedSourceWorkspace {
+                state.workspacesByID[sourceLocation.workspaceID] = updatedSourceWorkspace
+            } else {
+                removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
+            }
             state.workspacesByID[targetWorkspaceID] = targetWorkspace
             return true
 
@@ -131,7 +138,7 @@ public struct AppReducer {
                 sourceWorkspace.focusedPanelID = resolveFocusedPanel(in: sourceWorkspace)?.panelID
                 state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
             } else {
-                removeWorkspace(sourceLocation.workspaceID, windowIndex: sourceLocation.windowIndex, state: &state)
+                removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
             }
 
             let detachedWorkspaceID = UUID()
@@ -240,13 +247,13 @@ public struct AppReducer {
     }
 
     private static func locatePanel(_ panelID: UUID, in state: AppState) -> PanelLocation? {
-        for (windowIndex, window) in state.windows.enumerated() {
+        for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
                 guard let sourceLeaf = workspace.paneTree.leafContaining(panelID: panelID) else { continue }
 
                 return PanelLocation(
-                    windowIndex: windowIndex,
+                    windowID: window.id,
                     workspaceID: workspaceID,
                     paneID: sourceLeaf.paneID
                 )
@@ -269,8 +276,10 @@ public struct AppReducer {
     }
 
     private static func resolveInsertionPaneID(in workspace: WorkspaceState, preferredPaneID: UUID?) -> UUID? {
-        if let preferredPaneID,
-           workspace.paneTree.allLeafInfos.contains(where: { $0.paneID == preferredPaneID }) {
+        if let preferredPaneID {
+            guard workspace.paneTree.allLeafInfos.contains(where: { $0.paneID == preferredPaneID }) else {
+                return nil
+            }
             return preferredPaneID
         }
 
@@ -282,8 +291,8 @@ public struct AppReducer {
         return workspace.paneTree.allLeafInfos.first?.paneID
     }
 
-    private static func removeWorkspace(_ workspaceID: UUID, windowIndex: Int, state: inout AppState) {
-        guard state.windows.indices.contains(windowIndex) else { return }
+    private static func removeWorkspace(_ workspaceID: UUID, windowID: UUID, state: inout AppState) {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return }
         var window = state.windows[windowIndex]
         guard let workspaceIndex = window.workspaceIDs.firstIndex(of: workspaceID) else { return }
 
@@ -336,7 +345,7 @@ public struct AppReducer {
 }
 
 private struct PanelLocation {
-    let windowIndex: Int
+    let windowID: UUID
     let workspaceID: UUID
     let paneID: UUID
 }

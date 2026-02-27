@@ -980,6 +980,16 @@ Chunk C (phase 1 state-layer panel mobility foundation):
 - strengthened invariant validation with `workspaceWithoutWindow` guard.
 - validation passed: `./scripts/automation/check.sh` with expanded reducer/invariant coverage (21 passing tests).
 
+Chunk C review reconciliation (post-commit second opinion on `77b18df`):
+- accepted: avoid panel-loss risk in cross-workspace moves by completing both source/target mutations in local copies before writing state.
+- accepted: correct tab selection index updates for non-selecting insert operations.
+- accepted: correct tab selection index updates when removing a tab before the selected tab.
+- accepted: switch workspace-removal lookup from cached `windowIndex` to `windowID` lookup at mutation time to avoid stale-index hazards.
+- accepted: explicit failure when caller supplies an unknown target pane for cross-workspace moves.
+- rejected: changing detach-to-window focus behavior; current UX intentionally focuses newly detached window.
+- rejected: dynamic detached-window frame cascade for now; fixed frame remains acceptable in current scaffold stage.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 24 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

@@ -254,4 +254,30 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func movePanelToWorkspaceWithUnknownTargetPaneDoesNotMutateSource() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
+        let reducer = AppReducer()
+
+        let sourceWorkspaceID = try #require(state.windows.first?.workspaceIDs.first)
+        let targetWorkspaceID = try #require(state.windows.first?.workspaceIDs.last)
+        let panelID = try #require(state.workspacesByID[sourceWorkspaceID]?.focusedPanelID)
+
+        let sourceWorkspaceBefore = try #require(state.workspacesByID[sourceWorkspaceID])
+        let sourcePanelCountBefore = sourceWorkspaceBefore.panels.count
+        let targetWorkspaceBefore = try #require(state.workspacesByID[targetWorkspaceID])
+        let targetPanelCountBefore = targetWorkspaceBefore.panels.count
+
+        #expect(reducer.send(.movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspaceID, targetPaneID: UUID()), state: &state) == false)
+
+        let sourceWorkspaceAfter = try #require(state.workspacesByID[sourceWorkspaceID])
+        let targetWorkspaceAfter = try #require(state.workspacesByID[targetWorkspaceID])
+        #expect(sourceWorkspaceAfter.panels.count == sourcePanelCountBefore)
+        #expect(sourceWorkspaceAfter.panels[panelID] != nil)
+        #expect(targetWorkspaceAfter.panels.count == targetPanelCountBefore)
+        #expect(targetWorkspaceAfter.panels[panelID] == nil)
+
+        try StateValidator.validate(state)
+    }
 }

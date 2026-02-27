@@ -166,7 +166,14 @@ public extension PaneNode {
             var tabs = tabPanelIDs
             let insertionIndex = clampedInsertionIndex(index, count: tabs.count)
             tabs.insert(panelID, at: insertionIndex)
-            let nextSelectedIndex = select ? insertionIndex : selectedIndex
+            let nextSelectedIndex: Int
+            if select {
+                nextSelectedIndex = insertionIndex
+            } else if insertionIndex <= selectedIndex {
+                nextSelectedIndex = selectedIndex + 1
+            } else {
+                nextSelectedIndex = selectedIndex
+            }
             self = .leaf(paneID: currentPaneID, tabPanelIDs: tabs, selectedIndex: nextSelectedIndex)
             return true
         case .split(let nodeID, let orientation, let ratio, let first, let second):
@@ -242,7 +249,14 @@ public extension PaneNode {
                 return (nil, true)
             }
 
-            let nextSelectedIndex = min(selectedIndex, tabs.count - 1)
+            let nextSelectedIndex: Int
+            if selectedIndex >= tabs.count {
+                nextSelectedIndex = tabs.count - 1
+            } else if index < selectedIndex {
+                nextSelectedIndex = selectedIndex - 1
+            } else {
+                nextSelectedIndex = selectedIndex
+            }
             return (.leaf(paneID: paneID, tabPanelIDs: tabs, selectedIndex: nextSelectedIndex), true)
 
         case .split(let nodeID, let orientation, let ratio, let first, let second):
