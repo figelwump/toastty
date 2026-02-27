@@ -68,5 +68,10 @@ Next actions:
   - after generate, verify `TOASTTY_HAS_GHOSTTY_KIT` appears in `SWIFT_ACTIVE_COMPILATION_CONDITIONS` for `ToasttyApp`.
 - Current local integration status:
   - generated project correctly links `Dependencies/GhosttyKit.xcframework` when enabled.
-  - app link still fails due unresolved symbols from `libghostty.a` (e.g. `___cxa_*`, `___gxx_personality_v0`, `kTISProperty*`) in current local artifact.
+  - app target must add Ghostty transitive linker flags:
+    - `-lc++`
+    - `-framework Carbon`
+  - with those flags in `Project.swift`, Ghostty-enabled app builds now succeed via:
+    - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+    - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
   - default generate path remains fallback (no Ghostty compile condition) to keep day-to-day app runs stable.

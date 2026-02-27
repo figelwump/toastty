@@ -1444,6 +1444,35 @@ Chunk R review reconciliation (post-commit second opinion on `e337620`):
   - default path: `tuist generate` + `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (`67` tests passing)
   - Ghostty-enabled path check: `TUIST_ENABLE_GHOSTTY=1 tuist generate` emits `TOASTTY_HAS_GHOSTTY_KIT`; build still fails at known unresolved `libghostty.a` link symbols (`___cxa_*`, `___gxx_personality_v0`, `kTISProperty*`).
 
+Chunk S (Ghostty link dependency resolution for app target):
+- investigated unresolved symbol failures from Ghostty-enabled app links (`___cxa_*`, `___gxx_personality_v0`, `kTISProperty*`).
+- root cause: Ghostty static archive requires transitive link dependencies not declared automatically in current app target link settings.
+- implementation update (`Project.swift`):
+  - when Ghostty integration is enabled, app target now adds:
+    - `OTHER_LDFLAGS = ["$(inherited)", "-lc++", "-framework", "Carbon"]`
+  - retained existing env and xcframework presence gating logic.
+- validation:
+  - default path: `tuist generate` + `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (`67` tests passing).
+  - Ghostty-enabled path:
+    - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+    - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived build`
+    - build succeeds without ad-hoc command-line linker overrides.
+
+Chunk S review reconciliation (post-implementation second opinion):
+- accepted: express Ghostty linker flags as explicit array tokens (instead of a space-delimited scalar) to ensure stable `$(inherited)` expansion semantics in generated project settings.
+  - `Project.swift` now sets:
+    - `OTHER_LDFLAGS = ["$(inherited)", "-lc++", "-framework", "Carbon"]`
+- accepted: add explicit Release-path validation for Ghostty-enabled links.
+  - validated:
+    - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+    - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived build`
+    - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Release -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived build`
+    - all passed.
+- rejected: add dedicated manifest-setting unit tests in this chunk.
+  - reason: current test harness does not execute Tuist manifest evaluation; adding a new manifest-test harness is out of scope for this targeted linker fix.
+- rejected: classify `-framework Carbon` use as immediate blocker.
+  - reason: current unresolved symbol set is directly tied to Text Input Source APIs exported through Carbon on macOS; this is a known explicit dependency rather than accidental usage.
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.

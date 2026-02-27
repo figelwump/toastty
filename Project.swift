@@ -31,6 +31,13 @@ if hasGhosttyXCFramework {
     appTargetSettings = .settings(
         base: [
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "$(inherited) TOASTTY_HAS_GHOSTTY_KIT",
+            // Ghostty's static archive includes C++ objects and macOS text-input symbols.
+            "OTHER_LDFLAGS": .array([
+                "$(inherited)",
+                "-lc++",
+                "-framework",
+                "Carbon",
+            ]),
         ]
     )
 }
