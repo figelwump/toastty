@@ -137,9 +137,9 @@ final class AutomationSocketServer: @unchecked Sendable {
 
     private func handleRequestLine(_ line: Data, completion: @escaping @Sendable (Data) -> Void) {
         do {
-            let envelope = try parseRequestEnvelope(from: line)
+            let envelope = try parseIncomingEnvelope(from: line)
             Task {
-                let response = await self.commandExecutor.execute(request: envelope)
+                let response = await self.commandExecutor.execute(envelope: envelope)
                 completion(self.makeResponseData(for: response))
             }
         } catch let socketError as AutomationSocketError {
@@ -149,22 +149,34 @@ final class AutomationSocketServer: @unchecked Sendable {
         }
     }
 
-    private func parseRequestEnvelope(from line: Data) throws -> AutomationRequestEnvelope {
+    private func parseIncomingEnvelope(from line: Data) throws -> AutomationIncomingEnvelope {
         do {
-            let envelope = try JSONDecoder().decode(AutomationRequestEnvelope.self, from: line)
-            guard envelope.protocolVersion.hasPrefix("1.") else {
+            let header = try JSONDecoder().decode(AutomationEnvelopeHeader.self, from: line)
+            guard header.protocolVersion.hasPrefix("1.") else {
                 throw AutomationSocketError.incompatibleProtocol
             }
-            guard envelope.kind == "request" else {
-                throw AutomationSocketError.invalidEnvelope("kind must be request")
+
+            switch header.kind {
+            case "request":
+                let request = try JSONDecoder().decode(AutomationRequestEnvelope.self, from: line)
+                guard request.requestID.isEmpty == false else {
+                    throw AutomationSocketError.invalidEnvelope("missing requestID")
+                }
+                guard request.command.isEmpty == false else {
+                    throw AutomationSocketError.invalidEnvelope("missing command")
+                }
+                return .request(request)
+
+            case "event":
+                let event = try JSONDecoder().decode(AutomationEventEnvelope.self, from: line)
+                guard event.eventType.isEmpty == false else {
+                    throw AutomationSocketError.invalidEnvelope("missing eventType")
+                }
+                return .event(event)
+
+            default:
+                throw AutomationSocketError.invalidEnvelope("kind must be request or event")
             }
-            guard envelope.requestID.isEmpty == false else {
-                throw AutomationSocketError.invalidEnvelope("missing requestID")
-            }
-            guard envelope.command.isEmpty == false else {
-                throw AutomationSocketError.invalidEnvelope("missing command")
-            }
-            return envelope
         } catch {
             if error is DecodingError {
                 throw AutomationSocketError.invalidJSON
@@ -304,6 +316,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
     private var stateVersion = 0
     private var currentFixtureName: String
+    private var sessionRegistry = SessionRegistry()
+    private var notificationStore = NotificationStore()
+    private var sessionUpdateCoalescer = SessionUpdateCoalescer()
+    private var progressBySessionID: [String: String] = [:]
+    private var errorsBySessionID: [String: String] = [:]
 
     init(store: AppStore, config: AutomationConfig) {
         self.store = store
@@ -311,25 +328,44 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         self.currentFixtureName = config.fixtureName ?? "default"
     }
 
-    func execute(request: AutomationRequestEnvelope) async -> AutomationResponseEnvelope {
+    func execute(envelope: AutomationIncomingEnvelope) async -> AutomationResponseEnvelope {
         do {
-            let result = try await executeCommand(named: request.command, payload: request.payload)
+            let requestID: String
+            let result: [String: AutomationJSONValue]?
+
+            switch envelope {
+            case .request(let request):
+                requestID = request.requestID
+                result = try await executeCommand(named: request.command, payload: request.payload)
+            case .event(let event):
+                requestID = event.requestID ?? "event"
+                result = try await executeEvent(event)
+            }
+
             return AutomationResponseEnvelope(
-                requestID: request.requestID,
+                requestID: requestID,
                 ok: true,
                 result: result,
                 error: nil
             )
         } catch let socketError as AutomationSocketError {
+            let requestID: String = switch envelope {
+            case .request(let request): request.requestID
+            case .event(let event): event.requestID ?? "event"
+            }
             return AutomationResponseEnvelope(
-                requestID: request.requestID,
+                requestID: requestID,
                 ok: false,
                 result: nil,
                 error: socketError.errorBody
             )
         } catch {
+            let requestID: String = switch envelope {
+            case .request(let request): request.requestID
+            case .event(let event): event.requestID ?? "event"
+            }
             return AutomationResponseEnvelope(
-                requestID: request.requestID,
+                requestID: requestID,
                 ok: false,
                 result: nil,
                 error: AutomationResponseError(
@@ -357,6 +393,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "automation.reset":
             store.replaceState(.bootstrap())
             currentFixtureName = "default"
+            sessionRegistry = SessionRegistry()
+            notificationStore = NotificationStore()
+            sessionUpdateCoalescer = SessionUpdateCoalescer()
+            progressBySessionID.removeAll(keepingCapacity: false)
+            errorsBySessionID.removeAll(keepingCapacity: false)
             stateVersion += 1
             return [
                 "stateVersion": .int(stateVersion),
@@ -387,7 +428,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             ]
 
         case "automation.dump_state":
-            let stateData = try encodedStateData()
+            flushCoalescedUpdates(at: Date())
+            let includeRuntime = payload.bool("includeRuntime") ?? false
+            let stateData = try encodedStateData(includeRuntime: includeRuntime)
             let stateHash = SHA256.hash(data: stateData).map { String(format: "%02x", $0) }.joined()
             let stateDirectory = try ensureStateArtifactDirectory()
             let outputURL = stateDirectory.appendingPathComponent("state-\(stateVersion).json")
@@ -415,6 +458,199 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         default:
             throw AutomationSocketError.unknownCommand
+        }
+    }
+
+    @MainActor
+    private func executeEvent(_ event: AutomationEventEnvelope) throws -> [String: AutomationJSONValue]? {
+        let now = event.parsedTimestamp ?? Date()
+        flushCoalescedUpdates(at: now)
+
+        switch event.eventType {
+        case "session.start":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let panelID = try event.requiredPanelID()
+            guard let agentRaw = event.payload.string("agent"),
+                  let agent = AgentKind(rawValue: agentRaw) else {
+                throw AutomationSocketError.invalidPayload("agent must be one of: claude, codex")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+
+            sessionRegistry.startSession(
+                sessionID: sessionID,
+                agent: agent,
+                panelID: panelID,
+                windowID: location.windowID,
+                workspaceID: location.workspaceID,
+                cwd: event.payload.string("cwd"),
+                repoRoot: event.payload.string("repoRoot"),
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.update_files":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let panelID = try event.requiredPanelID()
+            guard locatePanel(panelID) != nil else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+
+            let files = event.payload.stringArray("files")
+            guard files.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("files must be a non-empty string array")
+            }
+
+            let normalized = try normalizeFiles(files, cwd: event.payload.string("cwd"))
+            sessionUpdateCoalescer.ingest(
+                SessionFileUpdate(
+                    sessionID: sessionID,
+                    files: normalized,
+                    cwd: event.payload.string("cwd"),
+                    repoRoot: event.payload.string("repoRoot")
+                ),
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "queuedFiles": .int(normalized.count),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.needs_input":
+            guard event.sessionID?.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let panelID = try event.requiredPanelID()
+            guard let title = event.payload.string("title"), title.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("title is required")
+            }
+            guard let body = event.payload.string("body"), body.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("body is required")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+
+            let decision = notificationStore.record(
+                workspaceID: location.workspaceID,
+                panelID: panelID,
+                title: title,
+                body: body,
+                appIsFocused: NSApplication.shared.isActive,
+                sourcePanelIsVisible: isPanelVisible(panelID),
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "notificationStored": .bool(decision.stored),
+                "sendSystemNotification": .bool(decision.shouldSendSystemNotification),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.progress":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let _ = try event.requiredPanelID()
+            guard let message = event.payload.string("message"), message.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("message is required")
+            }
+            progressBySessionID[sessionID] = message
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.error":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let _ = try event.requiredPanelID()
+            guard let message = event.payload.string("message"), message.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("message is required")
+            }
+            errorsBySessionID[sessionID] = message
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.stop":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let _ = try event.requiredPanelID()
+            flushAllCoalescedUpdates()
+            sessionRegistry.stopSession(sessionID: sessionID, at: now)
+            progressBySessionID.removeValue(forKey: sessionID)
+            errorsBySessionID.removeValue(forKey: sessionID)
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "notification.emit":
+            guard let title = event.payload.string("title"), title.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("title is required")
+            }
+            guard let body = event.payload.string("body"), body.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("body is required")
+            }
+
+            let payloadWorkspaceID = event.payload.uuid("workspaceID")
+            let payloadPanelID = event.payload.uuid("panelID")
+
+            let resolvedWorkspaceID: UUID
+            if let payloadWorkspaceID {
+                guard store.state.workspacesByID[payloadWorkspaceID] != nil else {
+                    throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+                }
+                resolvedWorkspaceID = payloadWorkspaceID
+            } else if let payloadPanelID {
+                guard let location = locatePanel(payloadPanelID) else {
+                    throw AutomationSocketError.invalidPayload("panelID does not exist")
+                }
+                resolvedWorkspaceID = location.workspaceID
+            } else if let selectedWorkspaceID = store.selectedWorkspace?.id {
+                resolvedWorkspaceID = selectedWorkspaceID
+            } else {
+                throw AutomationSocketError.invalidPayload("unable to resolve workspace")
+            }
+
+            let decision = notificationStore.record(
+                workspaceID: resolvedWorkspaceID,
+                panelID: payloadPanelID,
+                title: title,
+                body: body,
+                appIsFocused: NSApplication.shared.isActive,
+                sourcePanelIsVisible: payloadPanelID.map(isPanelVisible) ?? false,
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "notificationStored": .bool(decision.stored),
+                "sendSystemNotification": .bool(decision.shouldSendSystemNotification),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        default:
+            throw AutomationSocketError.unknownEventType
         }
     }
 
@@ -481,9 +717,20 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func encodedStateData() throws -> Data {
+    private func encodedStateData(includeRuntime: Bool) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
+        if includeRuntime {
+            flushAllCoalescedUpdates()
+            let snapshot = AutomationRuntimeStateDump(
+                appState: store.state,
+                sessionRegistry: sessionRegistry,
+                notifications: notificationStore.notifications,
+                progressBySessionID: progressBySessionID,
+                errorsBySessionID: errorsBySessionID
+            )
+            return try encoder.encode(snapshot)
+        }
         return try encoder.encode(store.state)
     }
 
@@ -541,6 +788,120 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         }.joined()
         return transformed.isEmpty ? "value" : transformed
     }
+
+    @MainActor
+    private func locatePanel(_ panelID: UUID) -> (windowID: UUID, workspaceID: UUID)? {
+        for window in store.state.windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
+                if workspace.panels[panelID] != nil {
+                    return (window.id, workspaceID)
+                }
+            }
+        }
+        return nil
+    }
+
+    @MainActor
+    private func isPanelVisible(_ panelID: UUID) -> Bool {
+        guard let selectedWorkspaceID = store.selectedWorkspace?.id,
+              let selectedWorkspace = store.state.workspacesByID[selectedWorkspaceID] else {
+            return false
+        }
+        return selectedWorkspace.panels[panelID] != nil
+    }
+
+    private func normalizeFiles(_ files: [String], cwd: String?) throws -> [String] {
+        do {
+            return try SocketEventNormalizer.normalizeFiles(files, cwd: cwd)
+        } catch let error as SocketEventNormalizationError {
+            switch error {
+            case .missingCWDForRelativePath:
+                throw AutomationSocketError.invalidPayload("cwd is required when files include relative paths")
+            }
+        } catch {
+            throw AutomationSocketError.internalError("file normalization failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func flushCoalescedUpdates(at now: Date) {
+        let updates = sessionUpdateCoalescer.flushReady(at: now)
+        for update in updates {
+            sessionRegistry.updateFiles(
+                sessionID: update.sessionID,
+                files: update.files,
+                cwd: update.cwd,
+                repoRoot: update.repoRoot,
+                at: now
+            )
+        }
+    }
+
+    @MainActor
+    private func flushAllCoalescedUpdates() {
+        let now = Date()
+        let updates = sessionUpdateCoalescer.flushAll()
+        for update in updates {
+            sessionRegistry.updateFiles(
+                sessionID: update.sessionID,
+                files: update.files,
+                cwd: update.cwd,
+                repoRoot: update.repoRoot,
+                at: now
+            )
+        }
+    }
+}
+
+private enum AutomationIncomingEnvelope: Sendable {
+    case request(AutomationRequestEnvelope)
+    case event(AutomationEventEnvelope)
+}
+
+private struct AutomationEnvelopeHeader: Decodable, Sendable {
+    let protocolVersion: String
+    let kind: String
+}
+
+private struct AutomationEventEnvelope: Decodable, Sendable {
+    let protocolVersion: String
+    let kind: String
+    let requestID: String?
+    let eventType: String
+    let sessionID: String?
+    let panelID: String?
+    let timestamp: String?
+    let payload: [String: AutomationJSONValue]
+
+    func requiredPanelID() throws -> UUID {
+        guard let panelID,
+              let uuid = UUID(uuidString: panelID) else {
+            throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+        }
+        return uuid
+    }
+
+    var parsedTimestamp: Date? {
+        guard let timestamp else { return nil }
+        let withFractional = ISO8601DateFormatter()
+        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = withFractional.date(from: timestamp) {
+            return parsed
+        }
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: timestamp)
+    }
+}
+
+private struct AutomationRuntimeStateDump: Encodable, Sendable {
+    let appState: AppState
+    let sessionRegistry: SessionRegistry
+    let notifications: [ToasttyNotification]
+    let progressBySessionID: [String: String]
+    let errorsBySessionID: [String: String]
 }
 
 private struct AutomationRequestEnvelope: Decodable, Sendable {
@@ -655,6 +1016,28 @@ private extension Dictionary where Key == String, Value == AutomationJSONValue {
         return value
     }
 
+    func bool(_ key: String) -> Bool? {
+        guard case .bool(let value)? = self[key] else {
+            return nil
+        }
+        return value
+    }
+
+    func uuid(_ key: String) -> UUID? {
+        guard let value = string(key) else { return nil }
+        return UUID(uuidString: value)
+    }
+
+    func stringArray(_ key: String) -> [String] {
+        guard case .array(let values)? = self[key] else {
+            return []
+        }
+        return values.compactMap {
+            guard case .string(let value) = $0 else { return nil }
+            return value
+        }
+    }
+
     func object(_ key: String) -> [String: AutomationJSONValue]? {
         guard case .object(let value)? = self[key] else {
             return nil
@@ -667,6 +1050,7 @@ private enum AutomationSocketError: Error {
     case invalidJSON
     case invalidEnvelope(String)
     case incompatibleProtocol
+    case unknownEventType
     case unknownCommand
     case invalidPayload(String)
     case internalError(String)
@@ -688,6 +1072,8 @@ private enum AutomationSocketError: Error {
             return AutomationResponseError(code: "INVALID_ENVELOPE", message: message)
         case .incompatibleProtocol:
             return AutomationResponseError(code: "INCOMPATIBLE_PROTOCOL", message: "unsupported protocolVersion")
+        case .unknownEventType:
+            return AutomationResponseError(code: "UNKNOWN_EVENT_TYPE", message: "eventType is not supported")
         case .unknownCommand:
             return AutomationResponseError(code: "UNKNOWN_COMMAND", message: "command is not supported")
         case .invalidPayload(let message):

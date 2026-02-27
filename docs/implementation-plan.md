@@ -1279,9 +1279,40 @@ Chunk M review reconciliation (post-commit second opinion on `68018c5`):
   - `./scripts/automation/check.sh` (Ghostty-enabled compile path)
   - `./scripts/automation/smoke-ui.sh` (Ghostty-enabled runtime smoke path)
 
+Chunk N (socket protocol event ingestion + session/notification runtime wiring):
+- extended socket envelope parsing to support both:
+  - request envelopes (`kind: "request"`) for `automation.*`
+  - event envelopes (`kind: "event"`) for protocol events (`session.*`, `notification.emit`)
+- added event handling in `AutomationCommandExecutor` for:
+  - `session.start`
+  - `session.update_files`
+  - `session.needs_input`
+  - `session.progress`
+  - `session.error`
+  - `session.stop`
+  - `notification.emit`
+- wired live runtime services into the command executor:
+  - `SessionRegistry`
+  - `SessionUpdateCoalescer` (flush on ready/stop/dump)
+  - `NotificationStore`
+  - transient progress/error maps
+- added runtime-aware automation state dumps:
+  - `automation.dump_state` now supports `{"includeRuntime": true}` and writes app state + session/notification runtime metadata.
+- extracted event file normalization into shared Core utility:
+  - `SocketEventNormalizer` with typed error (`missingCWDForRelativePath`).
+- added targeted unit coverage:
+  - `SocketEventNormalizerTests` (absolute path normalization, relative path resolution, missing-cwd failure).
+- validation passed:
+  - `./scripts/automation/check.sh` (60 tests passing).
+  - `./scripts/automation/smoke-ui.sh`.
+  - manual live running-app event smoke:
+    - sent `session.start`/`session.update_files`/`session.needs_input` over unix socket.
+    - verified runtime dump output contains emitted session + normalized touched files.
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.
 - Ghostty runtime callbacks are minimal no-op handlers; richer host integration for clipboard/actions/notifications/title updates is still pending.
 - terminal input/focus UX parity with native Ghostty app behavior is not yet validated end-to-end.
-- socket protocol + adapter wiring is still pending (session events are modeled in core services but not yet connected to live runtime transport).
+- adapter/wrapper process integration is still pending (local socket now accepts protocol events, but claude/codex wrappers are not yet connected).
+- session/notification runtime state is not yet surfaced in app UI (sidebar dots, badges, system notifications still pending UI wiring).
