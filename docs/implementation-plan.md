@@ -1089,6 +1089,16 @@ Chunk G review reconciliation (post-commit second opinion on `243c37f`):
 - rejected: notification to alter outside-repo test expectation; current service intentionally returns one in-repo entry per requested in-repo file even if diff body is empty.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 47 passing tests.
 
+Chunk H (phase 0 step 1 prerequisite unblocking: Ghostty build tooling):
+- installed `zig` (`0.15.2`) and validated local availability.
+- cloned Ghostty source for spike execution under `/tmp/toastty-ghostty-spike/ghostty`.
+- confirmed build options and executed native xcframework build command:
+  - `zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=native`
+- confirmed `GhosttyKit.xcframework` artifact generation:
+  - `/tmp/toastty-ghostty-spike/ghostty/macos/GhosttyKit.xcframework`
+- documented concrete artifact metadata and remaining integration steps in `docs/ghostty-integration.md`.
+- noted one non-fatal libtool duplicate-object warning during xcframework assembly.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.
