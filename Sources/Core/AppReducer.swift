@@ -164,6 +164,66 @@ public struct AppReducer {
             state.selectedWindowID = detachedWindowID
             return true
 
+        case .closePanel(let panelID):
+            guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
+            guard var workspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
+            guard let panelState = workspace.panels[panelID] else { return false }
+
+            workspace.recentlyClosedPanels.append(
+                ClosedPanelRecord(
+                    panelState: panelState,
+                    closedAt: Date(),
+                    sourceLeafPaneID: sourceLocation.paneID
+                )
+            )
+            if workspace.recentlyClosedPanels.count > 10 {
+                workspace.recentlyClosedPanels.removeFirst(workspace.recentlyClosedPanels.count - 10)
+            }
+
+            let removal = workspace.paneTree.removingPanel(panelID)
+            guard removal.removed else { return false }
+
+            workspace.panels.removeValue(forKey: panelID)
+            workspace.auxPanelVisibility.remove(panelState.kind)
+
+            if let updatedTree = removal.node {
+                workspace.paneTree = updatedTree
+                workspace.focusedPanelID = resolveFocusedPanel(in: workspace)?.panelID
+                state.workspacesByID[sourceLocation.workspaceID] = workspace
+            } else {
+                state.workspacesByID[sourceLocation.workspaceID] = workspace
+                removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
+            }
+            return true
+
+        case .reopenLastClosedPanel(let workspaceID):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard let closedRecord = workspace.recentlyClosedPanels.popLast() else { return false }
+
+            guard let targetPaneID = resolveReopenPaneID(
+                in: workspace,
+                preferredPaneID: closedRecord.sourceLeafPaneID
+            ) else {
+                return false
+            }
+
+            let panelID = UUID()
+            workspace.panels[panelID] = closedRecord.panelState
+
+            guard workspace.paneTree.insertPanel(panelID, toPane: targetPaneID, at: nil, select: true) else {
+                workspace.panels.removeValue(forKey: panelID)
+                workspace.recentlyClosedPanels.append(closedRecord)
+                return false
+            }
+
+            workspace.focusedPanelID = panelID
+            if closedRecord.panelState.kind != .terminal {
+                workspace.auxPanelVisibility.insert(closedRecord.panelState.kind)
+            }
+
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
         case .toggleAuxPanel(let workspaceID, let kind):
             guard kind != .terminal else { return false }
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -353,6 +413,17 @@ public struct AppReducer {
             return focusedLeaf.paneID
         }
 
+        return workspace.paneTree.allLeafInfos.first?.paneID
+    }
+
+    private static func resolveReopenPaneID(in workspace: WorkspaceState, preferredPaneID: UUID) -> UUID? {
+        if workspace.paneTree.allLeafInfos.contains(where: { $0.paneID == preferredPaneID }) {
+            return preferredPaneID
+        }
+        if let focusedPanelID = workspace.focusedPanelID,
+           let focusedLeaf = workspace.paneTree.leafContaining(panelID: focusedPanelID) {
+            return focusedLeaf.paneID
+        }
         return workspace.paneTree.allLeafInfos.first?.paneID
     }
 

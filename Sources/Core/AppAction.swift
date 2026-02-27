@@ -9,6 +9,8 @@ public enum AppAction: Equatable, Sendable {
     case movePanelToPane(panelID: UUID, targetPaneID: UUID, index: Int?)
     case movePanelToWorkspace(panelID: UUID, targetWorkspaceID: UUID, targetPaneID: UUID?)
     case detachPanelToNewWindow(panelID: UUID)
+    case closePanel(panelID: UUID)
+    case reopenLastClosedPanel(workspaceID: UUID)
     case toggleAuxPanel(workspaceID: UUID, kind: PanelKind)
     case splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation)
     case createTerminalPanel(workspaceID: UUID, paneID: UUID)

@@ -1008,6 +1008,19 @@ Chunk D review reconciliation (post-commit second opinion on `757ff30`):
 - rejected: changing detach/new-window focus behavior in this chunk; still intentional for current UX.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 29 passing tests.
 
+Chunk E (phase 1 close/reopen panel behavior):
+- added reducer actions:
+  - `closePanel`
+  - `reopenLastClosedPanel`
+- implemented bounded per-workspace closed-panel stack (`max 10`) population on close.
+- implemented reopen behavior:
+  - restore panel state into original pane when still present
+  - fallback to focused/first pane when original pane no longer exists
+  - restore aux visibility for reopened aux panels
+- integrated close behavior with existing lifecycle collapse rules (empty leaf/workspace/window handling).
+- added regression tests for close/reopen roundtrip, aux visibility restore, and missing-pane fallback reinsertion.
+- validation passed: `./scripts/automation/check.sh` with 32 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

@@ -360,4 +360,75 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func closeAndReopenPanelRestoresPanelState() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        let panelToClose = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        let panelStateBeforeClose = try #require(state.workspacesByID[workspaceID]?.panels[panelToClose])
+
+        #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
+        let afterCloseWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(afterCloseWorkspace.panels[panelToClose] == nil)
+        #expect(afterCloseWorkspace.recentlyClosedPanels.count == 1)
+
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+        let reopenedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(reopenedWorkspace.recentlyClosedPanels.isEmpty)
+        let reopenedPanelID = try #require(reopenedWorkspace.focusedPanelID)
+        let reopenedPanelState = try #require(reopenedWorkspace.panels[reopenedPanelID])
+        #expect(reopenedPanelState == panelStateBeforeClose)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeAuxPanelClearsVisibilityAndReopenRestoresIt() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        let diffPanelID = try #require(
+            state.workspacesByID[workspaceID]?.panels.first(where: { $0.value.kind == .diff })?.key
+        )
+
+        #expect(reducer.send(.closePanel(panelID: diffPanelID), state: &state))
+        let afterClose = try #require(state.workspacesByID[workspaceID])
+        #expect(afterClose.auxPanelVisibility.contains(.diff) == false)
+        #expect(afterClose.recentlyClosedPanels.count == 1)
+
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+        let afterReopen = try #require(state.workspacesByID[workspaceID])
+        #expect(afterReopen.auxPanelVisibility.contains(.diff))
+        #expect(afterReopen.panels.values.contains(where: { $0.kind == .diff }))
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func reopenFallsBackToFocusedPaneWhenOriginalPaneWasRemoved() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let sourcePane = try #require(workspace.paneTree.allLeafInfos.first)
+        let panelToClose = try #require(sourcePane.tabPanelIDs.first)
+
+        #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
+        let collapsedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(collapsedWorkspace.paneTree.allLeafInfos.count == 1)
+
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+        let reopenedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let onlyLeaf = try #require(reopenedWorkspace.paneTree.allLeafInfos.first)
+        #expect(onlyLeaf.tabPanelIDs.count == 2)
+
+        try StateValidator.validate(state)
+    }
 }
