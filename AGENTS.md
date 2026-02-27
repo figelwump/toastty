@@ -23,6 +23,7 @@
 - Ghostty integration is opt-in at `tuist generate` time.
 - Enable with: `TUIST_ENABLE_GHOSTTY=1 tuist generate`
 - `Project.swift` checks both `TUIST_ENABLE_GHOSTTY` and `TOASTTY_ENABLE_GHOSTTY`, but for `tuist generate` flows rely on `TUIST_ENABLE_GHOSTTY=1`.
+- Treat `TOASTTY_ENABLE_GHOSTTY` as compatibility-only behavior; do not depend on it for deterministic Tuist generation results.
 - Ghostty is linked only when both conditions are true: gate env var is set and `Dependencies/GhosttyKit.xcframework` exists.
 - When linked, app target adds `TOASTTY_HAS_GHOSTTY_KIT` and Ghostty transitive linker flags from `Project.swift` (`-lc++`, `-framework Carbon`).
 - Default generate path (without Ghostty gate) stays on fallback terminal runtime for stability.
@@ -40,6 +41,7 @@
 
 ## Manual Interaction Scripting Tips
 - Activation alone is often insufficient; click into the target terminal panel before typing.
+- `System Events` UI scripting requires macOS Accessibility permission for the calling terminal/process.
 - Coordinate clicks are machine/layout specific; adjust coordinates per active display/window layout.
 - Example robust sequence (single AppleScript block with explicit ordering/delay):
 ```bash
@@ -55,7 +57,9 @@ end tell
 OSA
 ```
 - Delay values are machine/load dependent; tune upward if activation/focus races still occur.
+- `click at {x, y}` uses absolute screen coordinates, not window-relative coordinates.
 - For non-US keyboard layouts, clipboard paste is usually more reliable than literal `keystroke`.
+- `key code 36` in the example is used only for Return.
 - Clipboard-based examples overwrite the system clipboard; account for that side effect.
 
 ## Current Project Snapshot (as of 2026-02-27; verify against current code when in doubt)
