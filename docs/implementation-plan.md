@@ -1049,6 +1049,15 @@ Chunk F (phase 2 session + notification service foundations):
 - added dedicated unit tests for session lifecycle and notification dedup/suppression behavior.
 - validation passed: `./scripts/automation/check.sh` with 39 passing tests.
 
+Chunk F review reconciliation (post-commit second opinion on `58f0f2e`):
+- accepted: guard `updateFiles` to ignore stopped sessions.
+- accepted: harden duplicate `sessionID` handling by clearing stale active-panel mapping before rebinding session ownership.
+- accepted: add explicit panel-scoped mark-read test coverage in `NotificationStoreTests`.
+- rejected: system-notification decision logic change (`!appIsFocused` only); current behavior intentionally follows spec ("notify when app is unfocused OR source panel is not visible").
+- rejected: panel/workspace-scoped dedup change in notification store; panel IDs are treated as globally unique in this state model.
+- rejected: prune-session active-map corruption concern; current two-pass prune preserves active sessions and removes only stopped records older than cutoff.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 42 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

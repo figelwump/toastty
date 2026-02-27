@@ -110,4 +110,72 @@ struct SessionRegistryTests {
         #expect(registry.sessionsByID["old"] == nil)
         #expect(registry.sessionsByID["new"] != nil)
     }
+
+    @Test
+    func startSessionWithDuplicateSessionIDRebindsActivePanelMapping() throws {
+        var registry = SessionRegistry()
+        let panelA = UUID()
+        let panelB = UUID()
+        let now = Date(timeIntervalSince1970: 500)
+
+        registry.startSession(
+            sessionID: "dup",
+            agent: .claude,
+            panelID: panelA,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+
+        registry.startSession(
+            sessionID: "dup",
+            agent: .codex,
+            panelID: panelB,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(1)
+        )
+
+        #expect(registry.activeSession(for: panelA) == nil)
+        let activeForPanelB = try #require(registry.activeSession(for: panelB))
+        #expect(activeForPanelB.sessionID == "dup")
+        #expect(activeForPanelB.panelID == panelB)
+    }
+
+    @Test
+    func updateFilesIgnoresStoppedSession() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 600)
+
+        registry.startSession(
+            sessionID: "stopped",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.stopSession(sessionID: "stopped", at: now.addingTimeInterval(1))
+
+        let before = try #require(registry.sessionsByID["stopped"])
+        registry.updateFiles(
+            sessionID: "stopped",
+            files: ["/repo/new.swift"],
+            cwd: "/repo/changed",
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        let after = try #require(registry.sessionsByID["stopped"])
+
+        #expect(after.touchedFiles == before.touchedFiles)
+        #expect(after.cwd == before.cwd)
+        #expect(after.updatedAt == before.updatedAt)
+    }
 }

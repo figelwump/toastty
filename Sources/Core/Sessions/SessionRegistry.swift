@@ -22,6 +22,11 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         repoRoot: String?,
         at now: Date
     ) {
+        if let existingRecord = sessionsByID[sessionID],
+           activeSessionIDByPanelID[existingRecord.panelID] == sessionID {
+            activeSessionIDByPanelID.removeValue(forKey: existingRecord.panelID)
+        }
+
         if let existingActiveSessionID = activeSessionIDByPanelID[panelID],
            var existingRecord = sessionsByID[existingActiveSessionID],
            existingRecord.isActive {
@@ -53,7 +58,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         repoRoot: String?,
         at now: Date
     ) {
-        guard var record = sessionsByID[sessionID] else { return }
+        guard var record = sessionsByID[sessionID], record.isActive else { return }
 
         if let cwd {
             record.cwd = cwd
