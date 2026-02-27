@@ -1203,6 +1203,33 @@ Chunk K review reconciliation (post-commit second opinion on `55542de`):
 Plan adjustment note:
 - added feature planning for focused panel mode (maximize/restore current panel, `⌘⇧F`, top-bar toggle) in section 6.9 and scheduled it in phase 4.
 
+Chunk L (automation socket baseline for real running-app interaction):
+- added in-app unix socket automation server (`Sources/App/Automation/AutomationSocketServer.swift`) with newline-delimited JSON request/response handling.
+- wired automation server startup in app bootstrap path when automation mode is enabled:
+  - `ToasttyApp` now starts socket server using parsed `AutomationConfig`.
+  - startup failures are surfaced in automation readiness payload/error channel.
+- expanded automation config and readiness metadata:
+  - `AutomationConfig` now resolves/stores `socketPath` (arg/env/default path support).
+  - readiness payload now includes `protocolVersion`, `ready` boolean, and `socketPath`.
+- implemented minimal command set for automation-driven UI validation:
+  - `automation.ping`
+  - `automation.reset`
+  - `automation.load_fixture`
+  - `automation.perform_action` (split/toggle/new-workspace action IDs)
+  - `automation.dump_state` (sorted JSON + SHA256 hash)
+  - `automation.capture_screenshot` (window capture to PNG)
+- added smoke driver script:
+  - `scripts/automation/smoke-ui.sh` builds + launches app in automation mode, dispatches socket commands, captures screenshot/state artifacts, and prints output paths.
+- validation infrastructure update:
+  - `scripts/automation/check.sh` now runs `xcodebuild test` directly because `tuist test` intermittently returned false-success "There are no tests to run".
+- expanded automation unit coverage for socket path parsing in `AutomationTests`.
+- validation passed:
+  - `./scripts/automation/check.sh` (xcodebuild-backed, 57 tests passing)
+  - `./scripts/automation/smoke-ui.sh` (verified live socket actions + screenshot/state artifact generation against running app)
+
+Technical note:
+- the implemented socket surface is intentionally automation-focused (request commands only); adapter event ingestion via socket remains pending.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.

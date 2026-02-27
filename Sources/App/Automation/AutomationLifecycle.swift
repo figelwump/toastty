@@ -12,21 +12,29 @@ final class AutomationLifecycle {
         self.startupError = startupError
     }
 
-    func markReady() {
+    func markReady(runtimeError: String? = nil) {
         let shouldSignal = claimReadySignal()
         guard shouldSignal else { return }
         guard let artifactsDirectory = config.artifactsDirectory else { return }
 
         let fileManager = FileManager.default
         let artifactsURL = URL(fileURLWithPath: artifactsDirectory, isDirectory: true)
+        let combinedError = [startupError, runtimeError]
+            .compactMap { $0 }
+            .joined(separator: " | ")
+        let finalError = combinedError.isEmpty ? nil : combinedError
+
         do {
             try fileManager.createDirectory(at: artifactsURL, withIntermediateDirectories: true)
 
             let readyPayload = AutomationReadyPayload(
+                protocolVersion: "1.0",
+                ready: finalError == nil,
                 runID: config.runID,
                 fixture: config.fixtureName,
-                status: startupError == nil ? "ready" : "error",
-                error: startupError,
+                socketPath: config.socketPath,
+                status: finalError == nil ? "ready" : "error",
+                error: finalError,
                 timestamp: ISO8601DateFormatter().string(from: Date())
             )
             let readyData = try JSONEncoder().encode(readyPayload)
@@ -52,8 +60,11 @@ final class AutomationLifecycle {
 }
 
 private struct AutomationReadyPayload: Codable {
+    let protocolVersion: String
+    let ready: Bool
     let runID: String
     let fixture: String?
+    let socketPath: String
     let status: String
     let error: String?
     let timestamp: String

@@ -3,6 +3,7 @@ import Foundation
 
 struct AppBootstrapResult {
     let state: AppState
+    let automationConfig: AutomationConfig?
     let automationLifecycle: AutomationLifecycle?
     let disableAnimations: Bool
 }
@@ -15,6 +16,7 @@ enum AppBootstrap {
         ) else {
             return AppBootstrapResult(
                 state: .bootstrap(),
+                automationConfig: nil,
                 automationLifecycle: nil,
                 disableAnimations: false
             )
@@ -39,6 +41,7 @@ enum AppBootstrap {
 
         return AppBootstrapResult(
             state: state,
+            automationConfig: automationConfig,
             automationLifecycle: AutomationLifecycle(config: automationConfig, startupError: startupError),
             disableAnimations: automationConfig.disableAnimations
         )

@@ -3,6 +3,7 @@ import SwiftUI
 struct AppRootView: View {
     @ObservedObject var store: AppStore
     let automationLifecycle: AutomationLifecycle?
+    let automationStartupError: String?
     let disableAnimations: Bool
 
     var body: some View {
@@ -14,7 +15,7 @@ struct AppRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
-            automationLifecycle?.markReady()
+            automationLifecycle?.markReady(runtimeError: automationStartupError)
         }
         .transaction { transaction in
             if disableAnimations {

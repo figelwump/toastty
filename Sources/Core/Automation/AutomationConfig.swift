@@ -1,9 +1,11 @@
 import Foundation
+import Darwin
 
 public struct AutomationConfig: Equatable, Sendable {
     public let runID: String
     public let fixtureName: String?
     public let artifactsDirectory: String?
+    public let socketPath: String
     public let disableAnimations: Bool
     public let fixedLocaleIdentifier: String?
     public let fixedTimeZoneIdentifier: String?
@@ -12,6 +14,7 @@ public struct AutomationConfig: Equatable, Sendable {
         runID: String,
         fixtureName: String?,
         artifactsDirectory: String?,
+        socketPath: String,
         disableAnimations: Bool,
         fixedLocaleIdentifier: String?,
         fixedTimeZoneIdentifier: String?
@@ -19,6 +22,7 @@ public struct AutomationConfig: Equatable, Sendable {
         self.runID = runID
         self.fixtureName = fixtureName
         self.artifactsDirectory = artifactsDirectory
+        self.socketPath = socketPath
         self.disableAnimations = disableAnimations
         self.fixedLocaleIdentifier = fixedLocaleIdentifier
         self.fixedTimeZoneIdentifier = fixedTimeZoneIdentifier
@@ -41,11 +45,15 @@ public struct AutomationConfig: Equatable, Sendable {
             ?? FileManager.default.temporaryDirectory
                 .appendingPathComponent("toastty-automation-\(runID)")
                 .path
+        let socketPath = argumentValue(after: "--socket-path", in: arguments)
+            ?? environment["TOASTTY_SOCKET_PATH"]
+            ?? defaultSocketPath(environment: environment)
 
         return AutomationConfig(
             runID: runID,
             fixtureName: fixtureName,
             artifactsDirectory: artifactsDirectory,
+            socketPath: socketPath,
             disableAnimations: arguments.contains("--disable-animations") || environment["TOASTTY_DISABLE_ANIMATIONS"] == "1",
             fixedLocaleIdentifier: environment["TOASTTY_FIXED_LOCALE"],
             fixedTimeZoneIdentifier: environment["TOASTTY_FIXED_TIMEZONE"]
@@ -59,5 +67,12 @@ public struct AutomationConfig: Equatable, Sendable {
 
         let value = arguments[index + 1]
         return value.hasPrefix("--") ? nil : value
+    }
+
+    private static func defaultSocketPath(environment: [String: String]) -> String {
+        let tempDirectory = environment["TMPDIR"] ?? NSTemporaryDirectory()
+        let directoryURL = URL(fileURLWithPath: tempDirectory, isDirectory: true)
+            .appendingPathComponent("toastty-\(getuid())", isDirectory: true)
+        return directoryURL.appendingPathComponent("events-v1.sock", isDirectory: false).path
     }
 }

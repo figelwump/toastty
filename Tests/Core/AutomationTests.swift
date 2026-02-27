@@ -25,6 +25,7 @@ struct AutomationTests {
         #expect(config.runID == "chunk-b")
         #expect(config.fixtureName == "two-workspaces")
         #expect(config.artifactsDirectory == "/tmp/toastty-artifacts")
+        #expect(config.socketPath.hasSuffix("events-v1.sock"))
         #expect(config.disableAnimations == true)
         #expect(config.fixedLocaleIdentifier == "en_US_POSIX")
         #expect(config.fixedTimeZoneIdentifier == "UTC")
@@ -55,6 +56,23 @@ struct AutomationTests {
         #expect(config.fixtureName == "split-workspace")
         #expect(config.disableAnimations == true)
         #expect(config.artifactsDirectory != nil)
+        #expect(config.socketPath.hasSuffix("events-v1.sock"))
+    }
+
+    @Test
+    func parseAutomationConfigSupportsExplicitSocketPath() throws {
+        let config = try #require(
+            AutomationConfig.parse(
+                arguments: [
+                    "toastty",
+                    "--automation",
+                    "--socket-path", "/tmp/custom-toastty.sock",
+                ],
+                environment: [:]
+            )
+        )
+
+        #expect(config.socketPath == "/tmp/custom-toastty.sock")
     }
 
     @Test

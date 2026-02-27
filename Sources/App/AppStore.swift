@@ -11,10 +11,16 @@ final class AppStore: ObservableObject {
         self.state = state
     }
 
-    func send(_ action: AppAction) {
+    @discardableResult
+    func send(_ action: AppAction) -> Bool {
         var next = state
-        guard reducer.send(action, state: &next) else { return }
+        guard reducer.send(action, state: &next) else { return false }
         state = next
+        return true
+    }
+
+    func replaceState(_ state: AppState) {
+        self.state = state
     }
 
     var selectedWindow: WindowState? {

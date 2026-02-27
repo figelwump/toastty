@@ -9,6 +9,9 @@ if ! tuist build; then
   exit 10
 fi
 
-if ! tuist test; then
+if ! xcodebuild test \
+  -workspace toastty.xcworkspace \
+  -scheme toastty-Workspace \
+  -destination 'platform=macOS,arch=arm64'; then
   exit 11
 fi
