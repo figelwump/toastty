@@ -1094,9 +1094,11 @@ Chunk H (phase 0 step 1 prerequisite unblocking: Ghostty build tooling, commit `
 - cloned Ghostty source for spike execution under `/tmp/toastty-ghostty-spike/ghostty`.
 - confirmed build options and executed native xcframework build command:
   - `zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=native`
+- executed universal xcframework build command:
+  - `zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal`
 - confirmed `GhosttyKit.xcframework` artifact generation:
   - `/tmp/toastty-ghostty-spike/ghostty/macos/GhosttyKit.xcframework`
-- spike artifact caveat: current build output is `macos-x86_64` only (arm64/universal still pending validation).
+- confirmed macOS universal slice output in xcframework (`macos-arm64_x86_64`).
 - spike artifact caveat: output currently lives in `/tmp` and must be copied to managed cache/path to persist.
 - documented concrete artifact metadata and remaining integration steps in `docs/ghostty-integration.md`.
 - recorded libtool duplicate-object warning as unresolved integration risk to verify during toastty link step.
