@@ -939,6 +939,20 @@ Chunk A review reconciliation (post-commit second opinion on `99363fa`):
 - rejected: splitting leaf/split node id namespaces at this stage; current invariant intentionally enforces uniqueness across both id categories.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` and expanded tests (9 passing).
 
+Chunk B (phase 0 step 3 automation baseline + workspace UX baseline):
+- added automation configuration parsing (`AutomationConfig`) with launch args/env support for:
+  - `--automation`
+  - `--run-id`
+  - `--fixture`
+  - `--artifacts-dir`
+  - env flags (`TOASTTY_DISABLE_ANIMATIONS`, `TOASTTY_FIXED_LOCALE`, `TOASTTY_FIXED_TIMEZONE`)
+- added deterministic fixture loader (`AutomationFixtureLoader`) with `single-workspace`, `two-workspaces`, and `split-workspace` fixtures.
+- added app bootstrap path that initializes state from automation fixture when automation mode is active.
+- added automation readiness signaling (`automation-ready-<run-id>.json`) to artifacts directory after first app render.
+- added sidebar `New workspace` action and reducer support (`createWorkspace`) to enable workspace switching flows in scaffold UI.
+- added baseline accessibility identifiers for sidebar/topbar/split controls/workspace rows.
+- validation passed: `./scripts/automation/check.sh` with 13 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

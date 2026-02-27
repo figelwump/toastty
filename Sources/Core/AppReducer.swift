@@ -23,6 +23,18 @@ public struct AppReducer {
             state.windows[index].selectedWorkspaceID = workspaceID
             return true
 
+        case .createWorkspace(let windowID, let title):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+
+            let resolvedTitle = title ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state)
+            let workspace = WorkspaceState.bootstrap(title: resolvedTitle)
+
+            state.workspacesByID[workspace.id] = workspace
+            state.windows[windowIndex].workspaceIDs.append(workspace.id)
+            state.windows[windowIndex].selectedWorkspaceID = workspace.id
+            state.selectedWindowID = windowID
+            return true
+
         case .focusPanel(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.panels[panelID] != nil else { return false }
@@ -122,5 +134,17 @@ public struct AppReducer {
         }.max() ?? 0
 
         return "Terminal \(currentMax + 1)"
+    }
+
+    private static func nextWorkspaceTitle(in window: WindowState, state: AppState) -> String {
+        let prefix = "Workspace "
+        let currentMax = window.workspaceIDs.compactMap { workspaceID -> Int? in
+            guard let workspace = state.workspacesByID[workspaceID] else { return nil }
+            guard workspace.title.hasPrefix(prefix) else { return nil }
+            let suffix = workspace.title.dropFirst(prefix.count)
+            return Int(suffix)
+        }.max() ?? 0
+
+        return "Workspace \(currentMax + 1)"
     }
 }

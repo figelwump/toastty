@@ -2,6 +2,8 @@ import SwiftUI
 
 struct AppRootView: View {
     @ObservedObject var store: AppStore
+    let automationLifecycle: AutomationLifecycle?
+    let disableAnimations: Bool
 
     var body: some View {
         HStack(spacing: 0) {
@@ -11,5 +13,14 @@ struct AppRootView: View {
             WorkspaceView(store: store)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            automationLifecycle?.markReady()
+        }
+        .transaction { transaction in
+            if disableAnimations {
+                transaction.disablesAnimations = true
+                transaction.animation = nil
+            }
+        }
     }
 }

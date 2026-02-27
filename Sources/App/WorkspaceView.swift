@@ -23,18 +23,22 @@ struct WorkspaceView: View {
             Text(store.selectedWorkspace?.title ?? "")
                 .font(.title3)
                 .fontWeight(.semibold)
+                .accessibilityIdentifier("topbar.workspace.title")
 
             Spacer()
 
             Button("Split Horizontal") {
                 split(orientation: .horizontal)
             }
+            .accessibilityIdentifier("workspace.split.horizontal")
             Button("Split Vertical") {
                 split(orientation: .vertical)
             }
+            .accessibilityIdentifier("workspace.split.vertical")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .accessibilityIdentifier("topbar.container")
     }
 
     private func split(orientation: SplitOrientation) {

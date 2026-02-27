@@ -97,4 +97,24 @@ struct AppReducerTests {
         #expect(terminalState.title == "Terminal 4")
         try StateValidator.validate(state)
     }
+
+    @Test
+    func createWorkspaceAppendsWorkspaceAndSelectsIt() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let windowID = try #require(state.windows.first?.id)
+        let originalWorkspaceCount = state.windows.first?.workspaceIDs.count ?? 0
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: nil), state: &state))
+
+        let window = try #require(state.windows.first(where: { $0.id == windowID }))
+        #expect(window.workspaceIDs.count == originalWorkspaceCount + 1)
+
+        let selectedWorkspaceID = try #require(window.selectedWorkspaceID)
+        let selectedWorkspace = try #require(state.workspacesByID[selectedWorkspaceID])
+        #expect(selectedWorkspace.title == "Workspace 2")
+
+        try StateValidator.validate(state)
+    }
 }
