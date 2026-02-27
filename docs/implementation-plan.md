@@ -1604,3 +1604,13 @@ Chunk X (repo-level agent workflow notes for live app validation):
 - second-opinion follow-up refinement:
   - clarified architecture selection guidance for `xcodebuild` destination (`ARCH="$(uname -m)"`) and Rosetta caveat.
   - clarified that scripted click coordinates are example values and must be adapted per machine/window layout.
+
+Chunk Y (expanded repo day-to-day workflow notes in AGENTS):
+- expanded `AGENTS.md` from focused validation notes into a broader development playbook:
+  - Tuist daily loop (where settings live, when to regenerate, deterministic local build invocation).
+  - Ghostty configuration model (manifest gate, local dependency requirement, compile-condition/linker behavior).
+  - automation nuts and bolts (smoke/check scripts, key env overrides, artifact/readiness/log locations).
+  - manual scripting caveats (focus requirements, coordinate dependence, keyboard-layout and clipboard side effects).
+  - current project snapshot to reflect what is already working vs. what still needs manual verification.
+- rationale:
+  - preserve reliable daily commands and local gotchas in one repo-local place so future changes don’t regress through missed setup details.
