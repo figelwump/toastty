@@ -7,6 +7,10 @@ FIXTURE="${FIXTURE:-split-workspace}"
 DERIVED_PATH="${DERIVED_PATH:-$ROOT_DIR/Derived}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts/automation}"
 SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock}"
+ARCH="${ARCH:-$(uname -m)}"
+if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
+  ARCH="arm64"
+fi
 
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
 APP_BINARY="$DERIVED_PATH/Build/Products/Debug/ToasttyApp.app/Contents/MacOS/ToasttyApp"
@@ -35,7 +39,7 @@ xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \
   -configuration Debug \
-  -destination 'platform=macOS,arch=arm64' \
+  -destination "platform=macOS,arch=${ARCH}" \
   -derivedDataPath "$DERIVED_PATH" \
   build >/dev/null
 
@@ -80,7 +84,7 @@ send_request() {
     echo "error: no response for command ${command}" >&2
     exit 1
   fi
-  if ! echo "$response" | rg -q '"ok"[[:space:]]*:[[:space:]]*true'; then
+  if ! echo "$response" | grep -qE '"ok"[[:space:]]*:[[:space:]]*true'; then
     echo "error: command failed (${command}): $response" >&2
     exit 1
   fi

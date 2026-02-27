@@ -1230,6 +1230,18 @@ Chunk L (automation socket baseline for real running-app interaction):
 Technical note:
 - the implemented socket surface is intentionally automation-focused (request commands only); adapter event ingestion via socket remains pending.
 
+Chunk L review reconciliation (post-commit second opinion on `ba0883a`):
+- accepted: cap socket client buffer size at protocol-aligned 256 KiB to prevent unbounded growth when newline framing is missing/malformed.
+- accepted: remove `rg` dependency from smoke script response checks (`grep -E` now used for baseline macOS compatibility).
+- accepted: tighten screenshot capture to only visible app windows (drop key-window fallback that could capture hidden/non-visible content).
+- accepted: remove arm64-only assumption in scripts by detecting host architecture (`arm64`/`x86_64`) for `xcodebuild` destinations in both check and smoke scripts.
+- rejected: FD double-close/UAF claim; `AutomationSocketClient.close()` is idempotent and dispatch source cancel handler runs once per client lifecycle.
+- rejected: `@unchecked Sendable` race claim on command executor state; mutable command state is only read/written inside `@MainActor` command execution path.
+- rejected: shared queue write-path contention as a v1 blocker; current automation protocol uses small single-response messages and single-client smoke flow.
+- follow-up validation passed after fixes:
+  - `./scripts/automation/check.sh` (57 tests passing)
+  - `./scripts/automation/smoke-ui.sh` (socket actions + screenshot/state artifact generation verified).
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.

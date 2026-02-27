@@ -192,6 +192,8 @@ final class AutomationSocketServer: @unchecked Sendable {
 }
 
 private final class AutomationSocketClient: @unchecked Sendable {
+    private let maxBufferedBytes = 256 * 1024
+
     private let fileDescriptor: Int32
     private let queue: DispatchQueue
     private let requestHandler: (Data, @escaping @Sendable (Data) -> Void) -> Void
@@ -243,6 +245,10 @@ private final class AutomationSocketClient: @unchecked Sendable {
             let bytesRead = Darwin.read(fileDescriptor, &chunk, chunk.count)
             if bytesRead > 0 {
                 buffer.append(chunk, count: bytesRead)
+                if buffer.count > maxBufferedBytes {
+                    close()
+                    return
+                }
                 if let newlineIndex = buffer.firstIndex(of: 0x0A) {
                     let line = buffer.prefix(upTo: newlineIndex)
                     didHandleRequest = true
@@ -505,7 +511,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
     @MainActor
     private func captureScreenshotPNG() throws -> Data {
-        guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }) ?? NSApplication.shared.keyWindow else {
+        guard let window = NSApplication.shared.windows.first(where: { $0.isVisible }) else {
             throw AutomationSocketError.internalError("no visible app window")
         }
         window.displayIfNeeded()
