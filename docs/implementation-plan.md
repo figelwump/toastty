@@ -1029,6 +1029,26 @@ Chunk E review reconciliation (post-commit second opinion on `c917d07`):
 - rejected: preserving original panel UUID on reopen; reopened panel identity is intentionally new in this state model.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 33 passing tests.
 
+Chunk F (phase 2 session + notification service foundations):
+- added typed session domain model:
+  - `AgentKind`
+  - `SessionRecord`
+  - `HunkRef`
+- added `SessionRegistry` with lifecycle/update operations:
+  - start/replace active session per panel
+  - file attribution updates with deduplicated touched-file accumulation
+  - location updates (`windowID`/`workspaceID`) for moved panels
+  - stop by session or panel
+  - stopped-session pruning by cutoff timestamp
+- added notification domain/store:
+  - `ToasttyNotification`
+  - `NotificationStore`
+  - per-panel unread deduplication
+  - suppression when app is focused and source panel visible
+  - mark-read and unread count helpers
+- added dedicated unit tests for session lifecycle and notification dedup/suppression behavior.
+- validation passed: `./scripts/automation/check.sh` with 39 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.
