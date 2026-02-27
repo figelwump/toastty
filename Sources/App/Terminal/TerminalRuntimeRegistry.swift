@@ -158,6 +158,7 @@ final class TerminalSurfaceController {
     private func ensureFirstResponderIfNeeded(focused: Bool) {
         guard focused else { return }
         guard let window = hostedView.window else { return }
+        guard window.isKeyWindow else { return }
         guard window.firstResponder !== hostedView else { return }
         window.makeFirstResponder(hostedView)
     }
@@ -216,11 +217,11 @@ final class TerminalHostView: NSView {
             composing: false
         )
 
-        if let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first {
+        if let scalar = event.characters(byApplyingModifiers: [])?.unicodeScalars.first {
             keyEvent.unshifted_codepoint = scalar.value
         }
 
-        if let text = event.characters, let firstByte = text.utf8.first, firstByte >= 0x20 {
+        if let text = Self.ghosttyText(for: event), !text.isEmpty {
             return text.withCString { pointer in
                 keyEvent.text = pointer
                 return ghostty_surface_key(ghosttySurface, keyEvent)
@@ -239,6 +240,22 @@ final class TerminalHostView: NSView {
         if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
         if flags.contains(.numericPad) { raw |= GHOSTTY_MODS_NUM.rawValue }
         return ghostty_input_mods_e(rawValue: raw) ?? GHOSTTY_MODS_NONE
+    }
+
+    private static func ghosttyText(for event: NSEvent) -> String? {
+        guard let characters = event.characters else { return nil }
+
+        if characters.count == 1, let scalar = characters.unicodeScalars.first {
+            if scalar.value < 0x20 {
+                return event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.control))
+            }
+
+            if scalar.value >= 0xF700 && scalar.value <= 0xF8FF {
+                return nil
+            }
+        }
+
+        return characters
     }
     #endif
 }

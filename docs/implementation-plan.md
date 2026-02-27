@@ -1544,3 +1544,21 @@ Chunk V (explicit AppKit key-event bridge into Ghostty surface):
   - manual app exercise via scripted keystroke:
     - launched built app binary, sent `echo bridged_input_check` + return through System Events, captured `/tmp/toastty-manual-input3.png`.
     - screenshot confirms command + output rendered in terminal panel (interactive input path functioning).
+
+Chunk V review reconciliation (post-implementation second opinion):
+- accepted: tighten first-responder handoff guard by requiring `window.isKeyWindow` before calling `makeFirstResponder(...)`.
+- accepted: align key event payload shaping with Ghostty's own macOS approach:
+  - derive `unshifted_codepoint` via `characters(byApplyingModifiers: [])` rather than `charactersIgnoringModifiers`.
+  - add dedicated text payload filtering helper to avoid sending private-use function-key scalars and to normalize control-character handling.
+- rejected: consumed-modifier argument mismatch claim for `ghostty_surface_key_translation_mods(...)`.
+  - reason: API signature expects `ghostty_input_mods_e`; passing mapped Ghostty modifier bits is correct for this helper.
+- rejected: keycode translation claim.
+  - reason: `ghostty_input_key_s.keycode` is a raw `uint32_t` keycode slot in the embedding API; passing `NSEvent.keyCode` is the intended path used by Ghostty's own AppKit bridge.
+- rejected: threading race claim around `setGhosttySurface`/free path.
+  - reason: `TerminalRuntimeRegistry` and `TerminalSurfaceController` are `@MainActor`, and `TerminalHostView` key event handling is AppKit main-thread-only.
+- follow-up validation after accepted fixes:
+  - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+  - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination "platform=macOS,arch=arm64" -derivedDataPath Derived` (`67` tests passing)
+  - manual scripted input check repeated: `/tmp/toastty-manual-input4.png` confirms command text + output roundtrip in terminal.
