@@ -99,6 +99,39 @@ extract_string_field() {
 
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
+
+TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
+if [[ "${TUIST_ENABLE_GHOSTTY:-${TOASTTY_ENABLE_GHOSTTY:-0}}" == "1" ]]; then
+  if [[ ! -d "$ROOT_DIR/Dependencies/GhosttyKit.xcframework" ]]; then
+    echo "error: Ghostty smoke requested but Dependencies/GhosttyKit.xcframework is missing" >&2
+    exit 1
+  fi
+
+  TERMINAL_MARKER="TOASTTY_VIEWPORT_END_${RUN_ID//[^A-Za-z0-9_]/_}"
+  TERMINAL_COMMAND="find /usr/bin -maxdepth 1 | head -n 120; echo ${TERMINAL_MARKER}"
+  send_request "automation.terminal_send_text" "{\"text\":\"${TERMINAL_COMMAND}\",\"submit\":true}"
+
+  TERMINAL_FOUND=0
+  TERMINAL_VISIBLE_RESPONSE=""
+  for _ in $(seq 1 40); do
+    TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${TERMINAL_MARKER}\"}")"
+    if echo "$TERMINAL_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
+      TERMINAL_FOUND=1
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ "$TERMINAL_FOUND" -ne 1 ]]; then
+    echo "error: terminal viewport did not contain marker: ${TERMINAL_MARKER}" >&2
+    echo "last terminal response: ${TERMINAL_VISIBLE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  TERMINAL_VIEWPORT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"terminal-viewport-smoke"}')"
+  TERMINAL_VIEWPORT_SCREENSHOT_PATH="$(extract_string_field "$TERMINAL_VIEWPORT_RESPONSE" "path")"
+fi
+
 send_request "automation.perform_action" '{"action":"app.font.increase"}'
 FONT_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"font-hud-smoke"}')"
 send_request "automation.perform_action" '{"action":"app.font.reset"}'
@@ -122,6 +155,7 @@ STATE_HASH="$(extract_string_field "$STATE_RESPONSE" "hash")"
 echo "ready file: $READY_FILE"
 echo "socket path: $SOCKET_PATH"
 echo "font hud screenshot: ${FONT_SCREENSHOT_PATH:-unknown}"
+echo "terminal viewport screenshot: ${TERMINAL_VIEWPORT_SCREENSHOT_PATH:-skipped}"
 echo "focused screenshot: ${FOCUSED_SCREENSHOT_PATH:-unknown}"
 echo "screenshot: ${SCREENSHOT_PATH:-unknown}"
 echo "state dump: ${STATE_PATH:-unknown}"

@@ -36,6 +36,20 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers.removeValue(forKey: panelID)
         }
     }
+
+    func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
+        guard let controller = controllers[panelID] else {
+            return false
+        }
+        return controller.automationSendText(text, submit: submit)
+    }
+
+    func automationReadVisibleText(panelID: UUID) -> String? {
+        guard let controller = controllers[panelID] else {
+            return nil
+        }
+        return controller.automationReadVisibleText()
+    }
 }
 
 @MainActor
@@ -127,6 +141,69 @@ final class TerminalSurfaceController {
         #endif
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
+    }
+
+    func automationSendText(_ text: String, submit: Bool) -> Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else {
+            return false
+        }
+
+        if text.isEmpty == false {
+            text.withCString { pointer in
+                ghostty_surface_text(ghosttySurface, pointer, uintptr_t(text.utf8.count))
+            }
+        }
+
+        if submit {
+            "\n".withCString { pointer in
+                ghostty_surface_text(ghosttySurface, pointer, 1)
+            }
+        }
+
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    func automationReadVisibleText() -> String? {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else {
+            return nil
+        }
+
+        var textPayload = ghostty_text_s()
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ),
+            bottom_right: ghostty_point_s(
+                tag: GHOSTTY_POINT_VIEWPORT,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        )
+
+        guard ghostty_surface_read_text(ghosttySurface, selection, &textPayload),
+              let textPointer = textPayload.text else {
+            return nil
+        }
+        defer {
+            ghostty_surface_free_text(ghosttySurface, &textPayload)
+        }
+
+        let bytePointer = UnsafeRawPointer(textPointer).assumingMemoryBound(to: UInt8.self)
+        let buffer = UnsafeBufferPointer(start: bytePointer, count: Int(textPayload.text_len))
+        return String(decoding: buffer, as: UTF8.self)
+        #else
+        return nil
+        #endif
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT

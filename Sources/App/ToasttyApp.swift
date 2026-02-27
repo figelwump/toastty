@@ -12,14 +12,19 @@ struct ToasttyApp: App {
     init() {
         let bootstrap = AppBootstrap.make()
         let store = AppStore(state: bootstrap.state)
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         _store = StateObject(wrappedValue: store)
-        _terminalRuntimeRegistry = StateObject(wrappedValue: TerminalRuntimeRegistry())
+        _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
 
         if let automationConfig = bootstrap.automationConfig {
             do {
-                automationSocketServer = try AutomationSocketServer(config: automationConfig, store: store)
+                automationSocketServer = try AutomationSocketServer(
+                    config: automationConfig,
+                    store: store,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                )
                 automationStartupError = nil
             } catch {
                 automationSocketServer = nil

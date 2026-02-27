@@ -13,9 +13,13 @@ final class AutomationSocketServer: @unchecked Sendable {
     private var acceptSource: DispatchSourceRead?
     private var clients: [Int32: AutomationSocketClient] = [:]
 
-    init(config: AutomationConfig, store: AppStore) throws {
+    init(config: AutomationConfig, store: AppStore, terminalRuntimeRegistry: TerminalRuntimeRegistry) throws {
         self.config = config
-        self.commandExecutor = AutomationCommandExecutor(store: store, config: config)
+        self.commandExecutor = AutomationCommandExecutor(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            config: config
+        )
         try startListening()
     }
 
@@ -311,6 +315,7 @@ private final class AutomationSocketClient: @unchecked Sendable {
 
 private final class AutomationCommandExecutor: @unchecked Sendable {
     private let store: AppStore
+    private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let config: AutomationConfig
     private let startedAt = Date()
 
@@ -322,8 +327,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private var progressBySessionID: [String: String] = [:]
     private var errorsBySessionID: [String: String] = [:]
 
-    init(store: AppStore, config: AutomationConfig) {
+    init(store: AppStore, terminalRuntimeRegistry: TerminalRuntimeRegistry, config: AutomationConfig) {
         self.store = store
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.config = config
         self.currentFixtureName = config.fixtureName ?? "default"
     }
@@ -418,6 +424,39 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return [
                 "stateVersion": .int(stateVersion),
             ]
+
+        case "automation.terminal_send_text":
+            guard let text = payload.string("text"), text.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("text is required")
+            }
+            let submit = payload.bool("submit") ?? false
+            let resolved = try resolveTerminalTarget(payload: payload)
+            guard terminalRuntimeRegistry.automationSendText(text, submit: submit, panelID: resolved.panelID) else {
+                throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
+            }
+            return [
+                "workspaceID": .string(resolved.workspaceID.uuidString),
+                "panelID": .string(resolved.panelID.uuidString),
+                "submitted": .bool(submit),
+            ]
+
+        case "automation.terminal_visible_text":
+            let resolved = try resolveTerminalTarget(payload: payload)
+            guard let text = terminalRuntimeRegistry.automationReadVisibleText(panelID: resolved.panelID) else {
+                throw AutomationSocketError.invalidPayload("terminal visible text unavailable for panelID \(resolved.panelID.uuidString)")
+            }
+
+            var result: [String: AutomationJSONValue] = [
+                "workspaceID": .string(resolved.workspaceID.uuidString),
+                "panelID": .string(resolved.panelID.uuidString),
+                "text": .string(text),
+            ]
+
+            if let needle = payload.string("contains"), needle.isEmpty == false {
+                result["contains"] = .bool(text.contains(needle))
+            }
+
+            return result
 
         case "automation.dump_state":
             flushCoalescedUpdates(at: Date())
@@ -718,6 +757,45 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return windowID
         }
         return store.selectedWindow?.id
+    }
+
+    @MainActor
+    private func resolveTerminalTarget(payload: [String: AutomationJSONValue]) throws -> (workspaceID: UUID, panelID: UUID) {
+        if let rawPanelID = payload.string("panelID") {
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let workspace = store.state.workspacesByID[location.workspaceID],
+                  let panelState = workspace.panels[panelID],
+                  case .terminal = panelState else {
+                throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
+            }
+            return (location.workspaceID, panelID)
+        }
+
+        let workspaceID = try resolveWorkspaceID(args: payload)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[focusedPanelID],
+           case .terminal = panelState {
+            return (workspaceID, focusedPanelID)
+        }
+
+        for leaf in workspace.paneTree.allLeafInfos {
+            for panelID in leaf.tabPanelIDs {
+                if let panelState = workspace.panels[panelID], case .terminal = panelState {
+                    return (workspaceID, panelID)
+                }
+            }
+        }
+
+        throw AutomationSocketError.invalidPayload("workspace has no terminal panel to target")
     }
 
     @MainActor

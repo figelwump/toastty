@@ -1639,3 +1639,32 @@ Chunk Y review reconciliation B (post-commit second opinion on `b0efc74`):
 - rejected:
   - claim that referencing prior reviewed commit (`96be276`) was inconsistent.
   - reason: section A intentionally records reconciliation for that specific earlier commit; section B now records the follow-up review for `b0efc74`.
+
+Chunk Z (W-1 follow-up: automation terminal input + viewport assertion hooks):
+- implemented new automation commands in `AutomationSocketServer`:
+  - `automation.terminal_send_text`
+    - sends text to a resolved terminal panel surface.
+    - optional `submit` appends newline submit behavior.
+  - `automation.terminal_visible_text`
+    - returns visible viewport text for a resolved terminal panel.
+    - optional `contains` marker check returns boolean for deterministic polling/assertion.
+- panel-targeting behavior:
+  - explicit `panelID` targeting is supported.
+  - otherwise resolves workspace (`workspaceID` or selected workspace) and targets focused terminal panel with fallback to first terminal in pane-tree order.
+- runtime wiring:
+  - `AutomationSocketServer` now receives `TerminalRuntimeRegistry` from app bootstrap/wiring.
+  - `TerminalRuntimeRegistry` + `TerminalSurfaceController` now expose automation-only helpers:
+    - send text to Ghostty surface via `ghostty_surface_text(...)`
+    - read viewport text via `ghostty_surface_read_text(...)` with `GHOSTTY_POINT_VIEWPORT` selection.
+- smoke automation enhancements (`scripts/automation/smoke-ui.sh`):
+  - added Ghostty-conditional terminal viewport validation path when Ghostty gate is requested.
+  - sends deterministic long-output command + unique end marker.
+  - polls `automation.terminal_visible_text` until marker appears.
+  - captures `terminal-viewport-smoke.png` artifact and prints path in script output.
+  - baseline (non-Ghostty) smoke path remains unchanged and reports terminal viewport screenshot as skipped.
+- validation:
+  - `./scripts/automation/check.sh` (pass; 67 tests).
+  - `./scripts/automation/smoke-ui.sh` (pass; baseline path, terminal viewport check skipped).
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass; terminal viewport marker check + screenshot artifact generated).
+  - artifact example:
+    - `artifacts/automation/ui/smoke-20260227-132250/split-workspace/terminal-viewport-smoke.png`
