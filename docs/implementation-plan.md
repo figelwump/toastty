@@ -1326,7 +1326,7 @@ Chunk O (manual-run feedback: Ghostty fallback messaging + safer enablement gate
 - validated user-reported manual-run behavior where terminal panel displayed fallback messaging.
 - found `GhosttyKit` presence alone is not sufficient for stable linkage in current state (linker dependencies unresolved for direct app link path).
 - adjusted project enablement policy:
-  - Ghostty compile/link path is now explicit opt-in via `TOASTTY_ENABLE_GHOSTTY=1` at manifest generation time.
+  - Ghostty compile/link path is now explicit opt-in at manifest generation time (see chunk R for Tuist env nuance).
   - default local builds stay on stable fallback path to avoid accidental linker breakage when a local xcframework artifact exists.
 - updated fallback UX text from hard error-style phrasing:
   - `GhosttyKit not linked`
@@ -1414,6 +1414,24 @@ Chunk Q review reconciliation (post-commit second opinion on `6d7a466`):
 - follow-up validation passed after fixes:
   - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (67 tests passing)
   - `./scripts/automation/smoke-ui.sh`
+
+Chunk R (Ghostty manifest env-gate diagnostics + enablement fix):
+- investigated user report: running `TOASTTY_ENABLE_GHOSTTY=1 tuist generate` still produced fallback runtime (`TOASTTY_HAS_GHOSTTY_KIT` absent in generated build settings).
+- root cause:
+  - Tuist manifest evaluation does not expose arbitrary shell env vars like `TOASTTY_ENABLE_GHOSTTY` to `Project.swift` (`ProcessInfo` saw it as `nil`).
+- implementation update:
+  - `Project.swift` now accepts either:
+    - `TUIST_ENABLE_GHOSTTY=1` (manifest-visible, recommended)
+    - `TOASTTY_ENABLE_GHOSTTY=1` (kept as compatibility alias for non-Tuist contexts)
+  - explicit file-existence gating was removed from manifest path resolution to avoid false negatives from Tuist manifest execution context.
+- validation:
+  - default `tuist generate` -> no Ghostty linkage (`SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG`).
+  - `TUIST_ENABLE_GHOSTTY=1 tuist generate` -> Ghostty linkage emitted:
+    - `GhosttyKit.xcframework` appears in generated project.
+    - `TOASTTY_HAS_GHOSTTY_KIT` appears in `SWIFT_ACTIVE_COMPILATION_CONDITIONS`.
+  - `xcodebuild` with Ghostty enabled still fails link with unresolved symbols from `libghostty.a` (`___cxa_*`, `___gxx_personality_v0`, `kTISProperty*`), confirming fallback mode is still expected for stable local runs.
+- documentation update:
+  - `docs/ghostty-integration.md` now includes manifest env behavior and verification steps.
 
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.

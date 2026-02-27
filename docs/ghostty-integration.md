@@ -59,3 +59,14 @@ Next actions:
    - focus handoff
    - resize behavior
    - reparent behavior across pane moves
+
+## Toastty manifest wiring notes
+
+- Ghostty linking in `Project.swift` is explicitly opt-in at manifest generation time.
+- Important nuance: Tuist manifest evaluation does not expose arbitrary shell env variables like `TOASTTY_ENABLE_GHOSTTY`.
+  - use `TUIST_ENABLE_GHOSTTY=1 tuist generate` to enable Ghostty linkage in generated Xcode project settings.
+  - after generate, verify `TOASTTY_HAS_GHOSTTY_KIT` appears in `SWIFT_ACTIVE_COMPILATION_CONDITIONS` for `ToasttyApp`.
+- Current local integration status:
+  - generated project correctly links `Dependencies/GhosttyKit.xcframework` when enabled.
+  - app link still fails due unresolved symbols from `libghostty.a` (e.g. `___cxa_*`, `___gxx_personality_v0`, `kTISProperty*`) in current local artifact.
+  - default generate path remains fallback (no Ghostty compile condition) to keep day-to-day app runs stable.
