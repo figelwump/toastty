@@ -1615,7 +1615,7 @@ Chunk Y (expanded repo day-to-day workflow notes in AGENTS):
 - rationale:
   - preserve reliable daily commands and local gotchas in one repo-local place so future changes don’t regress through missed setup details.
 
-Chunk Y review reconciliation (post-commit second opinion on `96be276`):
+Chunk Y review reconciliation A (post-commit second opinion on `96be276`):
 - accepted:
   - clarified Rosetta wording (`uname -m` will report `x86_64` when shell is translated).
   - clarified Ghostty env behavior by tying it directly to `Project.swift` dual-key check and Tuist manifest reliability of `TUIST_*`.
@@ -1627,3 +1627,15 @@ Chunk Y review reconciliation (post-commit second opinion on `96be276`):
 - rejected:
   - claim that current plan notes are too duplicative to keep.
   - reason: this plan tracks implementation/documentation decisions and review reconciliations; retaining concise rationale here is intentional for project traceability.
+
+Chunk Y review reconciliation B (post-commit second opinion on `b0efc74`):
+- accepted:
+  - clarified that Ghostty-related runtime work requires both baseline and Ghostty-path smoke validation.
+  - converted multi-line AppleScript example into a copy/paste-safe fenced code block.
+  - added explicit caveat that delay values are machine/load dependent.
+  - tightened Ghostty env guidance to prefer `TUIST_ENABLE_GHOSTTY=1` for `tuist generate` flows.
+  - reduced Rosetta wording from absolute to practical (`typically reports x86_64`).
+  - removed uncertainty phrasing around `artifacts/` ignore status.
+- rejected:
+  - claim that referencing prior reviewed commit (`96be276`) was inconsistent.
+  - reason: section A intentionally records reconciliation for that specific earlier commit; section B now records the follow-up review for `b0efc74`.

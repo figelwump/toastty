@@ -5,8 +5,9 @@
 - Use both paths whenever possible: automation (`./scripts/automation/smoke-ui.sh`) and manual live interaction (launch app, interact, inspect screenshots).
 - Primary baseline smoke run: `./scripts/automation/smoke-ui.sh`
 - Ghostty-path smoke run: `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (effective only when `Dependencies/GhosttyKit.xcframework` exists).
+- For Ghostty-related runtime changes, run both baseline smoke and Ghostty-path smoke before considering validation complete.
 - Full build/test gate: `./scripts/automation/check.sh`
-- Store manual validation captures in `artifacts/manual/`; `artifacts/` is currently gitignored and should stay uncommitted.
+- Store manual validation captures in `artifacts/manual/`; `artifacts/` is gitignored and should stay uncommitted.
 - After scripted interaction, inspect screenshot artifacts to confirm focus, prompt position, scrolling, and layout behavior.
 
 ## Tuist Day-to-Day (Generate, Build, Settings)
@@ -15,13 +16,13 @@
 - Regenerate after project/dependency/build-setting changes: `tuist generate`
 - Generated workspace path: `toastty.xcworkspace`
 - Deterministic app build command: `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
-- If the shell process runs under Rosetta, `uname -m` will report `x86_64`; set `ARCH` explicitly when needed.
+- If the shell process runs under Rosetta, `uname -m` typically reports `x86_64`; set `ARCH` explicitly when needed.
 - If scheme settings constrain architectures, prefer invocation-scoped overrides (for example `ARCHS="${ARCH}"` and `ONLY_ACTIVE_ARCH=YES`) instead of mutating project settings.
 
 ## Ghostty Configuration Nuts and Bolts
 - Ghostty integration is opt-in at `tuist generate` time.
 - Enable with: `TUIST_ENABLE_GHOSTTY=1 tuist generate`
-- `Project.swift` checks both `TUIST_ENABLE_GHOSTTY` and `TOASTTY_ENABLE_GHOSTTY`, but Tuist manifest evaluation reliably exposes the `TUIST_*` variable.
+- `Project.swift` checks both `TUIST_ENABLE_GHOSTTY` and `TOASTTY_ENABLE_GHOSTTY`, but for `tuist generate` flows rely on `TUIST_ENABLE_GHOSTTY=1`.
 - Ghostty is linked only when both conditions are true: gate env var is set and `Dependencies/GhosttyKit.xcframework` exists.
 - When linked, app target adds `TOASTTY_HAS_GHOSTTY_KIT` and Ghostty transitive linker flags from `Project.swift` (`-lc++`, `-framework Carbon`).
 - Default generate path (without Ghostty gate) stays on fallback terminal runtime for stability.
@@ -40,17 +41,20 @@
 ## Manual Interaction Scripting Tips
 - Activation alone is often insufficient; click into the target terminal panel before typing.
 - Coordinate clicks are machine/layout specific; adjust coordinates per active display/window layout.
-- Example robust sequence (single AppleScript block with ordering/delay):
-  - `osascript <<'OSA'`
-  - `tell application "ToasttyApp" to activate`
-  - `delay 0.5`
-  - `tell application "System Events"`
-  - `  click at {720, 360}`
-  - `  delay 0.2`
-  - `  keystroke "ls -l"`
-  - `  key code 36`
-  - `end tell`
-  - `OSA`
+- Example robust sequence (single AppleScript block with explicit ordering/delay):
+```bash
+osascript <<'OSA'
+tell application "ToasttyApp" to activate
+delay 0.5
+tell application "System Events"
+  click at {720, 360}
+  delay 0.2
+  keystroke "ls -l"
+  key code 36
+end tell
+OSA
+```
+- Delay values are machine/load dependent; tune upward if activation/focus races still occur.
 - For non-US keyboard layouts, clipboard paste is usually more reliable than literal `keystroke`.
 - Clipboard-based examples overwrite the system clipboard; account for that side effect.
 
