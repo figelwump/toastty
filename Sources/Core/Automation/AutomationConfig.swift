@@ -34,14 +34,19 @@ public struct AutomationConfig: Equatable, Sendable {
             ?? "default"
 
         let fixtureName = argumentValue(after: "--fixture", in: arguments)
+            ?? environment["TOASTTY_FIXTURE"]
+
         let artifactsDirectory = argumentValue(after: "--artifacts-dir", in: arguments)
             ?? environment["TOASTTY_ARTIFACTS_DIR"]
+            ?? FileManager.default.temporaryDirectory
+                .appendingPathComponent("toastty-automation-\(runID)")
+                .path
 
         return AutomationConfig(
             runID: runID,
             fixtureName: fixtureName,
             artifactsDirectory: artifactsDirectory,
-            disableAnimations: environment["TOASTTY_DISABLE_ANIMATIONS"] == "1",
+            disableAnimations: arguments.contains("--disable-animations") || environment["TOASTTY_DISABLE_ANIMATIONS"] == "1",
             fixedLocaleIdentifier: environment["TOASTTY_FIXED_LOCALE"],
             fixedTimeZoneIdentifier: environment["TOASTTY_FIXED_TIMEZONE"]
         )

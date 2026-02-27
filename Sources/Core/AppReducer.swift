@@ -32,7 +32,6 @@ public struct AppReducer {
             state.workspacesByID[workspace.id] = workspace
             state.windows[windowIndex].workspaceIDs.append(workspace.id)
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
-            state.selectedWindowID = windowID
             return true
 
         case .focusPanel(let workspaceID, let panelID):

@@ -21,16 +21,25 @@ enum AppBootstrap {
         }
 
         let state: AppState
-        if let fixtureName = automationConfig.fixtureName,
-           let fixtureState = AutomationFixtureLoader.load(named: fixtureName) {
-            state = fixtureState
+        var startupError: String?
+
+        if let fixtureName = automationConfig.fixtureName {
+            do {
+                state = try AutomationFixtureLoader.loadRequired(named: fixtureName)
+            } catch {
+                state = .bootstrap()
+                startupError = "Unknown automation fixture: \(fixtureName)"
+                if let data = ("toastty automation error: \(startupError ?? "unknown")\n").data(using: .utf8) {
+                    FileHandle.standardError.write(data)
+                }
+            }
         } else {
             state = .bootstrap()
         }
 
         return AppBootstrapResult(
             state: state,
-            automationLifecycle: AutomationLifecycle(config: automationConfig),
+            automationLifecycle: AutomationLifecycle(config: automationConfig, startupError: startupError),
             disableAnimations: automationConfig.disableAnimations
         )
     }

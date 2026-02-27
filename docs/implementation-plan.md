@@ -953,6 +953,17 @@ Chunk B (phase 0 step 3 automation baseline + workspace UX baseline):
 - added baseline accessibility identifiers for sidebar/topbar/split controls/workspace rows.
 - validation passed: `./scripts/automation/check.sh` with 13 passing tests.
 
+Chunk B review reconciliation (post-commit second opinion on `dfd617e`):
+- accepted: harden ready-signal write path with lock-protected single-fire semantics in `AutomationLifecycle`.
+- accepted: `createWorkspace` no longer mutates `selectedWindowID`; avoids unintended focus stealing in multi-window scenarios.
+- accepted: remove silent automation fixture fallback by surfacing unknown fixture as explicit bootstrap error (`loadRequired`) and recording error state in readiness payload.
+- accepted: support `TOASTTY_FIXTURE` environment fallback and `--disable-animations` argument parsing.
+- accepted: ensure automation readiness artifacts always have a directory fallback when `--artifacts-dir` is omitted.
+- accepted: make run-id artifact file naming less collision-prone via percent-encoding.
+- rejected: renaming/splitting fixture UUID patterns; deterministic fixtures already use globally unique IDs and current shape is sufficient.
+- rejected: broad state-title uniqueness across non-window-linked workspaces; invariant contract keeps `window.workspaceIDs` as source of truth.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 16 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

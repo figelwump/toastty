@@ -117,4 +117,36 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func createWorkspaceDoesNotStealSelectedWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let firstWindowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let secondWindowID = UUID()
+        let secondWindow = WindowState(
+            id: secondWindowID,
+            frame: CGRectCodable(x: 450, y: 120, width: 900, height: 640),
+            workspaceIDs: [secondWorkspace.id],
+            selectedWorkspaceID: secondWorkspace.id
+        )
+        state.windows.append(secondWindow)
+        state.workspacesByID[secondWorkspace.id] = secondWorkspace
+        state.selectedWindowID = firstWindowID
+
+        #expect(reducer.send(.createWorkspace(windowID: secondWindowID, title: nil), state: &state))
+
+        #expect(state.selectedWindowID == firstWindowID)
+        let updatedFirstWindow = try #require(state.windows.first(where: { $0.id == firstWindowID }))
+        #expect(updatedFirstWindow.selectedWorkspaceID == firstWorkspaceID)
+
+        let updatedSecondWindow = try #require(state.windows.first(where: { $0.id == secondWindowID }))
+        #expect(updatedSecondWindow.workspaceIDs.count == 2)
+
+        try StateValidator.validate(state)
+    }
 }

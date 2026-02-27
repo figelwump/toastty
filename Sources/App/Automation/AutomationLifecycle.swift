@@ -3,16 +3,18 @@ import Foundation
 
 final class AutomationLifecycle {
     private let config: AutomationConfig
+    private let startupError: String?
+    private let readySignalLock = NSLock()
     private var didSignalReady = false
 
-    init(config: AutomationConfig) {
+    init(config: AutomationConfig, startupError: String? = nil) {
         self.config = config
+        self.startupError = startupError
     }
 
     func markReady() {
-        guard didSignalReady == false else { return }
-        didSignalReady = true
-
+        let shouldSignal = claimReadySignal()
+        guard shouldSignal else { return }
         guard let artifactsDirectory = config.artifactsDirectory else { return }
 
         let fileManager = FileManager.default
@@ -23,7 +25,8 @@ final class AutomationLifecycle {
             let readyPayload = AutomationReadyPayload(
                 runID: config.runID,
                 fixture: config.fixtureName,
-                status: "ready",
+                status: startupError == nil ? "ready" : "error",
+                error: startupError,
                 timestamp: ISO8601DateFormatter().string(from: Date())
             )
             let readyData = try JSONEncoder().encode(readyPayload)
@@ -35,8 +38,16 @@ final class AutomationLifecycle {
     }
 
     private func sanitizedRunID(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics
-        return String(value.unicodeScalars.map { allowed.contains($0) ? Character($0) : Character("-") })
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_.~"))
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? "run"
+    }
+
+    private func claimReadySignal() -> Bool {
+        readySignalLock.lock()
+        defer { readySignalLock.unlock() }
+        guard didSignalReady == false else { return false }
+        didSignalReady = true
+        return true
     }
 }
 
@@ -44,5 +55,6 @@ private struct AutomationReadyPayload: Codable {
     let runID: String
     let fixture: String?
     let status: String
+    let error: String?
     let timestamp: String
 }

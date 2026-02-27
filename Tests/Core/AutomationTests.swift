@@ -38,6 +38,26 @@ struct AutomationTests {
     }
 
     @Test
+    func parseAutomationConfigSupportsFixtureFromEnvironmentAndDisableAnimationsArgument() throws {
+        let config = try #require(
+            AutomationConfig.parse(
+                arguments: [
+                    "toastty",
+                    "--automation",
+                    "--disable-animations",
+                ],
+                environment: [
+                    "TOASTTY_FIXTURE": "split-workspace",
+                ]
+            )
+        )
+
+        #expect(config.fixtureName == "split-workspace")
+        #expect(config.disableAnimations == true)
+        #expect(config.artifactsDirectory != nil)
+    }
+
+    @Test
     func twoWorkspaceFixtureLoadsExpectedShape() throws {
         let fixture = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
 
@@ -51,5 +71,12 @@ struct AutomationTests {
         }
 
         try StateValidator.validate(fixture)
+    }
+
+    @Test
+    func loadRequiredFixtureThrowsForUnknownFixture() {
+        #expect(throws: AutomationFixtureError.unknownFixture("not-real")) {
+            _ = try AutomationFixtureLoader.loadRequired(named: "not-real")
+        }
     }
 }

@@ -1,5 +1,9 @@
 import Foundation
 
+public enum AutomationFixtureError: Error, Equatable, Sendable {
+    case unknownFixture(String)
+}
+
 public enum AutomationFixtureLoader {
     public static func load(named fixtureName: String) -> AppState? {
         switch fixtureName {
@@ -12,6 +16,13 @@ public enum AutomationFixtureLoader {
         default:
             return nil
         }
+    }
+
+    public static func loadRequired(named fixtureName: String) throws -> AppState {
+        guard let fixture = load(named: fixtureName) else {
+            throw AutomationFixtureError.unknownFixture(fixtureName)
+        }
+        return fixture
     }
 
     private static func makeTwoWorkspaceFixture() -> AppState {
