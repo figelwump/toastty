@@ -423,10 +423,56 @@ struct AppReducerTests {
             leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
         }
         #expect(auxLeaves.count == 2)
+        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspaceAfterAux.paneTree {
+            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
+            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
+            #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
+            #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
+        } else {
+            Issue.record("expected root horizontal split with dedicated aux subtree")
+        }
 
         for leaf in auxLeaves {
             #expect(leaf.tabPanelIDs.count == 1)
             #expect(leaf.tabPanelIDs.contains(where: { terminalPanelIDs.contains($0) }) == false)
+        }
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func toggleThirdAuxPanelStacksInsideDedicatedAuxColumn() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .scratchpad), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.paneTree.allLeafInfos.count == 4)
+
+        let auxPanelIDs = Set(workspace.panels.compactMap { panelID, panelState in
+            panelState.kind == .terminal ? nil : panelID
+        })
+        #expect(auxPanelIDs.count == 3)
+
+        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspace.paneTree {
+            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
+            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
+            #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
+            #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
+        } else {
+            Issue.record("expected root horizontal split with dedicated aux subtree")
+        }
+
+        let auxLeaves = workspace.paneTree.allLeafInfos.filter { leaf in
+            leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
+        }
+        #expect(auxLeaves.count == 3)
+        for leaf in auxLeaves {
+            #expect(leaf.tabPanelIDs.count == 1)
         }
 
         try StateValidator.validate(state)

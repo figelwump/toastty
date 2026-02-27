@@ -1156,9 +1156,18 @@ Chunk K (aux-column heuristic simplification for mixed terminal layouts):
   - `auxPanelIDs(in:)` to derive currently active aux panel identities.
   - `resolveAuxColumnPaneID(in:auxPanelIDs:)` to target the existing aux subtree deterministically.
 - design decision:
-  - keep behavior intentionally simple for now: aux panels are anchored to a dedicated right column until explicit user panel move preferences are implemented.
+- keep behavior intentionally simple for now: aux panels are anchored to a dedicated right column until explicit user panel move preferences are implemented.
 - added regression coverage for a complex terminal-only layout (multiple terminal splits) to ensure diff/markdown panes do not share leaves with terminal panels.
 - validation passed: `./scripts/automation/check.sh` with 55 passing tests.
+
+Chunk K review reconciliation (post-commit second opinion on `55542de`):
+- accepted: make aux-pane targeting deterministic for 3+ aux panels by selecting the last aux-containing leaf in traversal order (`resolveAuxColumnPaneID` now uses `last(where:)` over aux-host leaves).
+- accepted: strengthen aux-type selection to explicit auxiliary kinds (`.diff`, `.markdown`, `.scratchpad`) rather than broad non-terminal negation.
+- accepted: add stronger structural assertions in complex-layout test to verify aux panels reside in the root right subtree and stay disjoint from terminal subtree panel IDs.
+- accepted: add third-aux regression coverage (`.scratchpad`) to validate continued vertical stacking within the dedicated aux column.
+- rejected: concern that first aux wrap fails to discover aux leaf on second toggle; current tree mutation + aux panel ID scan makes that path deterministic.
+- rejected: replace-leaf leak claim; failed replacement path reverts panel dictionary mutation and does not insert transient split nodes into `paneTree`.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 56 passing tests.
 
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.

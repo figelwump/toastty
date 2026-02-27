@@ -453,21 +453,14 @@ public struct AppReducer {
     private static func auxPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
         Set(
             workspace.panels.compactMap { panelID, panelState in
-                panelState.kind == .terminal ? nil : panelID
+                auxiliaryPanelKinds.contains(panelState.kind) ? panelID : nil
             }
         )
     }
 
     private static func resolveAuxColumnPaneID(in workspace: WorkspaceState, auxPanelIDs: Set<UUID>) -> UUID? {
         guard auxPanelIDs.isEmpty == false else { return nil }
-
-        if let rightColumnPaneID = workspace.paneTree.rightColumnPaneID(),
-           let rightLeaf = workspace.paneTree.allLeafInfos.first(where: { $0.paneID == rightColumnPaneID }),
-           rightLeaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) }) {
-            return rightColumnPaneID
-        }
-
-        return workspace.paneTree.allLeafInfos.first(where: { leaf in
+        return workspace.paneTree.allLeafInfos.last(where: { leaf in
             leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
         })?.paneID
     }
@@ -536,6 +529,8 @@ public struct AppReducer {
             return .scratchpad(ScratchpadPanelState())
         }
     }
+
+    private static let auxiliaryPanelKinds: Set<PanelKind> = [.diff, .markdown, .scratchpad]
 }
 
 private struct PanelLocation {
