@@ -44,7 +44,7 @@ For each workspace:
 - Empty leaves are not allowed after reducer actions.
 - Leaf `selectedIndex` must satisfy `0 <= selectedIndex < tabPanelIDs.count`.
 - Split `ratio` must satisfy `0.05 <= ratio <= 0.95`.
-- `paneID` values must be unique within a workspace tree.
+- `paneID` values (on leaves) and `nodeID` values (on splits) must all be unique within a workspace tree. No ID may appear on both a leaf and a split node.
 
 ## 4) panel-kind and toggle invariants
 
@@ -88,8 +88,20 @@ Every reducer action that mutates layout/panels must be atomic with respect to r
 - close panel:
   - remove id from leaf tab list
   - remove from `WorkspaceState.panels`
+  - push `ClosedPanelRecord` onto `recentlyClosedPanels` (bounded stack, max 10)
   - clear/adjust focus and selected index if needed
   - if a leaf becomes empty, collapse the split tree so no empty leaf remains
+- close last panel in workspace (lifecycle cascade):
+  - close the workspace: remove from `AppState.workspacesByID`
+  - remove workspace id from owning window's `workspaceIDs`
+  - if workspace was `selectedWorkspaceID`, select nearest sibling
+  - if window's `workspaceIDs` is now empty, close the window (remove from `AppState.windows`)
+  - if no windows remain, app stays running with no windows (macOS dock persists; re-activate creates default window)
+- reopen panel:
+  - pop from `recentlyClosedPanels`
+  - re-insert panel state into `WorkspaceState.panels`
+  - insert panel id into original source leaf if it still exists, otherwise into focused leaf
+  - runtime is re-created (terminal process is not recoverable; new shell session starts)
 - move panel:
   - remove id from source leaf
   - insert id into destination leaf
@@ -118,7 +130,7 @@ enum StateInvariantError: Error, Equatable {
     case duplicateWorkspaceReference(UUID)
     case panelMissingFromWorkspace(panelID: UUID, workspaceID: UUID)
     case panelUnreachableInPaneTree(panelID: UUID, workspaceID: UUID)
-    case duplicatePaneID(UUID)
+    case duplicateNodeID(UUID) // covers both leaf paneID and split nodeID
     case invalidSelectedIndex(paneID: UUID, selectedIndex: Int, tabCount: Int)
     case invalidSplitRatio(Double)
     case invalidFocusPanel(workspaceID: UUID, panelID: UUID)

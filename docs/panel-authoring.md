@@ -22,8 +22,7 @@ Use this checklist whenever adding a new panel kind (e.g. browser, notepad, whit
 ## 3) register the panel
 
 1. Register panel runtime factory in `PanelRuntimeRegistry`.
-2. Register panel descriptor/capabilities (`PanelDescriptor`, `PanelCapabilities`).
-3. Wire panel renderer routing in workspace panel host.
+2. Wire panel renderer routing in workspace panel host.
 
 ## 4) mobility compatibility (required)
 

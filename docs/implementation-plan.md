@@ -36,21 +36,23 @@ Core outcomes:
   - move panel to another workspace (vertical tab target)
   - drag panel out to create new window
   - move panel to existing window/workspace targets
+  - keyboard-driven panel movement (move panel left/right/up/down, move to workspace N)
 - global terminal font size control
 - session registry + session->surface binding
 - session-scoped diff panel (file-level first; hunk-level later)
-- layout profiles (auto-save per display, manual apply, revert)
 - top bar panel toggle buttons (show/hide aux panels)
 - notification/attention system (workspace indicators + macOS notifications)
 - agent adapters for claude + codex (lifecycle + file attribution + attention events)
+- reopen last closed panel (per-workspace undo stack, terminal process not recoverable but panel state is)
 
 ### V1.5
+- layout profiles (auto-save per display, auto-restore on display change, revert)
 - markdown preview panel with session-aware file suggestions
 - command palette (⌘K) for panel management, workspace switching, font control
 - codex + claude adapters with stronger touched-file attribution
 
 ### V2
-- scratchpad canvas panel (html/css/js runtime + API)
+- scratchpad canvas panel (see `docs/scratchpad.md`)
 - richer diff semantics (hunk ownership/conflict views)
 
 ## 4) architecture
@@ -87,7 +89,7 @@ enum PanelKind: String, Codable {
     case terminal
     case diff
     case markdown
-    case scratchpad
+    case scratchpad // V2 — declared now for forward-compatible serialization
 }
 
 struct AppState: Codable {
@@ -112,20 +114,29 @@ struct WorkspaceState: Codable, Identifiable {
     var focusedPanelID: UUID?
     var auxPanelVisibility: Set<PanelKind> // per-workspace aux panel toggles
     var unreadNotificationCount: Int
+    var recentlyClosedPanels: [ClosedPanelRecord] // bounded stack for reopen
 }
 
 indirect enum PaneNode: Codable {
     case leaf(paneID: UUID, tabPanelIDs: [UUID], selectedIndex: Int)
-    case split(orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
+    case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
 }
 
 enum PanelState: Codable {
     case terminal(TerminalPanelState)
     case diff(DiffPanelState)
     case markdown(MarkdownPanelState)
-    case scratchpad(ScratchpadPanelState)
+    case scratchpad(ScratchpadPanelState) // V2
+}
+
+struct ClosedPanelRecord: Codable {
+    let panelState: PanelState
+    let closedAt: Date
+    let sourceLeafPaneID: UUID // where to re-insert if possible
 }
 ```
+
+Note: `PaneNode.split` has a `nodeID` so that interior nodes can be addressed as drag-drop targets. Without this, there is no way to identify which split edge the user is dropping onto. All node IDs (leaf `paneID` and split `nodeID`) must be unique within a workspace tree.
 
 state invariants:
 - `WindowState.workspaceIDs` is ordered and is the source of truth for workspace ordering in that window
@@ -136,6 +147,7 @@ state invariants:
 - every key in `WorkspaceState.panels` must appear exactly once in `PaneNode.leaf.tabPanelIDs` in that workspace
 - empty pane leaves are not allowed after reducer actions
 - `PaneNode.leaf.selectedIndex` must be in-bounds (`0 <= selectedIndex < tabPanelIDs.count`) after every reducer action
+- all node IDs (leaf `paneID` and split `nodeID`) must be unique within a workspace tree
 
 Detailed invariant contract: `docs/state-invariants.md`.
 
@@ -182,6 +194,8 @@ Target workflow for new panel types:
 
 This keeps future panels (browser/notepad/whiteboard/etc.) low-friction.
 
+Note: we intentionally do not have a `PanelCapabilities` or `PanelDescriptor` abstraction in V1. Each panel kind is a concrete enum case with a factory. If we later need a plugin/dynamic panel system, we can introduce capabilities then. Avoid premature abstraction.
+
 See also: `docs/panel-authoring.md` for the concrete implementation checklist.
 
 ## 4.5 UI chrome and interaction model
@@ -198,8 +212,8 @@ Visual spec: see Paper designs in "Toastty — All Panels Active" and "Toastty �
 ### top bar
 - window controls (close/min/max) live in sidebar top-left, not top bar
 - top bar contains: workspace name, path, panel toggle buttons, git branch + status
-- panel toggle buttons: Diff, Markdown, Scratchpad — multi-select, each independently shows/hides its panel
-- toggled-on panels appear in the right column, stacked vertically
+- panel toggle buttons: Diff, Markdown — multi-select, each independently shows/hides its panel (Scratchpad toggle added in V2)
+- toggled-on panels appear in the right column by default, stacked vertically
 - panels can be dragged from their default position to any split target
 
 ### panel headers
@@ -208,18 +222,37 @@ Visual spec: see Paper designs in "Toastty — All Panels Active" and "Toastty �
 - terminal headers: pane number + shell name + cwd
 - diff header: session attribution label ("Claude Code · Terminal 2 · abc1234") + unstaged/staged toggle
 - markdown header: file dropdown selector (shows current file name + chevron; click opens picker menu with session-touched .md files + fallback candidates)
-- scratchpad header: Edit/Preview toggle
 
 ### aux panel focus-follow behavior
 - when focused terminal changes, aux panels update to reflect the new terminal's session context
 - diff panel: shows diffs for the newly focused session
 - markdown panel: shows markdown files touched by the newly focused session
-- scratchpad panel: shows scratchpad content for the newly focused session
 
-### layout adaptation
-- layout profiles auto-save per display signature and auto-restore on display change
-- no auto-collapsing or responsive breakpoints in V1 — user controls layout via profiles
-- "revert last profile apply" available as escape hatch
+### aux panel placement algorithm ("right column")
+
+When an aux panel toggle is turned on and no instance exists:
+
+1. If the pane tree is a single leaf: create a vertical split (orientation: `.horizontal`, ratio: `0.65`) with the existing leaf on the left and a new leaf containing the aux panel on the right.
+2. If the pane tree already has a rightmost leaf (traverse `split.second` recursively): insert the aux panel as a new tab in that rightmost leaf, or stack it vertically within the right column if multiple aux panels are visible.
+3. If the user has previously moved the panel to a custom position, re-toggling on creates it in the right column (not the old custom position).
+
+The "right column" is defined structurally: the rightmost leaf reachable by always following `split.second` in horizontal splits. This is a heuristic, not a reserved slot — the user can freely rearrange after creation.
+
+### keyboard-driven panel movement
+
+V1 keyboard shortcuts for panel mobility (exact bindings configurable):
+- `⌘⇧←/→/↑/↓`: move focused panel to adjacent pane in that direction
+- `⌘⌃1–N`: move focused panel to workspace N
+- `⌘⇧D`: detach focused panel to new window
+- `⌘⇧T`: reopen last closed panel in current workspace
+
+These supplement drag-drop and menu-initiated moves. Command palette integration in V1.5.
+
+### lifecycle cascade rules
+
+- **Close last panel in a leaf**: collapse the leaf out of the split tree (parent split replaced by sibling node).
+- **Close last panel in a workspace**: close the workspace. Remove workspace from its window's `workspaceIDs`. If it was `selectedWorkspaceID`, select the nearest sibling.
+- **Close last workspace in a window**: close the window. Remove from `AppState.windows`. If it was the last window, the app remains running with no windows (macOS dock icon persists; re-activate creates a fresh default window).
 
 ## 5) session attribution design (codex + claude)
 
@@ -249,6 +282,14 @@ struct SessionRecord: Codable {
 }
 ```
 
+### session lifecycle and cleanup
+
+- **Active session**: `stoppedAt == nil`. One active session per panel at a time.
+- **Stopped session**: `stoppedAt != nil`. Retained for history/diff review until pruned.
+- **Panel close**: if the panel's session is active, emit implicit `session.stop`. The session record transitions to stopped.
+- **Pruning**: stopped sessions older than 24 hours are pruned from the in-memory registry on app launch. Persisted session history (for forensics/review) is a separate concern and not required for V1.
+- **No reopen binding**: reopening a closed panel does not rebind to the old session. A new session starts if a new agent is launched in the restored panel.
+
 ## 5.3 attribution pipeline
 
 priority order:
@@ -257,10 +298,7 @@ priority order:
 3. explicit active query to CLI for "files changed in this session"
 4. git reconciliation against actual working tree/index
 
-confidence labels:
-- `exact` (explicit hook/tool event)
-- `verified` (agent report + git verify)
-- `heuristic` (fallback inference)
+V1 does not track attribution confidence labels. The pipeline sources above are tried in priority order; whichever source provides data is used directly. Confidence labels (`exact` / `verified` / `heuristic`) can be added in a later release if the diff panel UI needs to distinguish attribution quality — but only when there's a concrete consumer for that metadata.
 
 ## 5.4 agent integration strategy
 
@@ -290,6 +328,14 @@ confidence labels:
   - ignore unknown event types, reject incompatible major protocol versions
 
 Detailed protocol contract: `docs/socket-protocol.md`.
+
+### event debounce and coalescing
+
+Agents can emit `session.update_files` at high frequency (e.g., fast-moving agent touching many files). The app must coalesce rapid file updates to avoid diff panel thrashing:
+
+- **Coalesce window**: batch `session.update_files` events within a 500ms window per session. Merge file lists, keep latest `cwd` and `repoRoot`.
+- **Diff recompute debounce**: after the coalesce window closes, trigger a single diff recompute. If another update arrives during diff computation, cancel the in-progress computation and restart after the next coalesce window.
+- **Progress events**: `session.progress` events are not debounced (they update a status label, which is cheap).
 
 event envelope shape:
 ```json
@@ -330,7 +376,7 @@ requirements:
 - keep terminal process alive when moving terminal panels (no recreate)
 - preserve session binding/history/metadata on move
 - move must not create a new session; only session location metadata changes
-- support pointer + menu-initiated moves (command palette in V1.5)
+- support pointer, keyboard, and menu-initiated moves (command palette in V1.5)
 
 approach:
 - core actions:
@@ -339,6 +385,7 @@ approach:
   - `movePanelToWorkspace(panelID, targetWorkspaceID, targetPaneID?, splitHint?)`
   - `movePanelToWindow(panelID, targetWindowID, targetWorkspaceID, targetPaneID?)`
   - `detachPanelToNewWindow(panelID, targetDisplayID?)`
+  - `movePanelInDirection(panelID, direction: up|down|left|right)` — keyboard-driven, resolves target pane from tree adjacency
 - runtime transfer: detach runtime from source host, attach to destination host
 - focus sync: destination becomes key only when user intent implies focus
 - default drop policy when target workspace has no compatible pane: create pane and insert panel
@@ -351,7 +398,7 @@ approach:
 
 drag/drop targets:
 - pane tab strip: reorder in-pane or move cross-pane
-- pane body edges: move panel as split target (left/right/up/down)
+- pane body edges: move panel as split target (left/right/up/down) — addressed via `PaneNode.split.nodeID` + edge direction
 - vertical workspace tab row: move panel to workspace
 - outside window bounds: create new window and attach panel
 
@@ -365,6 +412,7 @@ notes:
 `DiffPanelState`:
 - `showStaged: Bool`
 - `mode: DiffBindingMode` (`followFocusedTerminal` in v1)
+- `loadingState: DiffLoadingState` (`.idle`, `.computing`, `.error(String)`)
 
 behavior:
 - always session-scoped — shows diffs for the focused terminal's active session
@@ -374,17 +422,26 @@ behavior:
 - unstaged/staged toggle in header
 - refresh triggers:
   - focused terminal change (re-bind to new session)
-  - session touched-files update
+  - session touched-files update (after coalesce window)
   - git head/index/worktree change
 
-repo/path resolution policy (v1):
+### loading and async states
+
+Git diff operations can be slow on large repos. The diff panel must handle async computation gracefully:
+
+- **Loading state**: show a non-blocking loading indicator (spinner or shimmer) while computing diffs. Do not flash the indicator for fast completions (<200ms) — use a brief delay before showing.
+- **Stale cancellation**: when focus changes while a diff is computing, cancel the in-progress computation and start a new one for the new session. Never show stale results from a previous session.
+- **Error state**: if git operations fail (corrupt index, permission error, etc.), show an explicit error message in the diff panel body. Do not silently show an empty diff.
+
+### repo/path resolution policy (v1)
+
 - attribution source of truth is session events (`session.update_files`)
 - git is used to render actual diff hunks for the attributed files
 - session is anchored to one `repoRoot` at `session.start` (resolved from adapter payload or first valid file path + cwd fallback)
 - relative file paths from adapters are normalized using the event cwd
-- if a session touches files outside `repoRoot`, show explicit "outside tracked repo" state in diff panel (no silent merge across repos in v1)
+- if a session touches files outside `repoRoot`, those files appear in a separate "Outside repo" section in the file list — visible but visually distinct from in-repo diffs
 - if `repoRoot` is missing/incorrect at start, allow one correction window before first diff render using first valid attributed file path
-- if later events imply conflicting roots, keep current root and surface explicit "conflicting repo roots" warning state
+- multi-repo is out of scope for V1. If later events send a different `repoRoot`, keep the original root. Files from the new root appear in the "Outside repo" section. No warning dialogs or special states — just let the file list show what's happening.
 
 ## 6.3 global terminal font size
 
@@ -394,7 +451,7 @@ repo/path resolution policy (v1):
 - support `zoomIn`, `zoomOut`, `reset` actions
 - transient HUD overlay showing current size on change (auto-dismiss after ~1s)
 
-## 6.4 layout profiles
+## 6.4 layout profiles (V1.5)
 
 ```swift
 struct DisplayLayoutState: Codable {
@@ -422,9 +479,11 @@ flow:
 - if no saved layout exists for a display, keep current layout
 - "revert last layout change" action available as escape hatch
 - no named profiles, no suggestion dialogs — just automatic per-display memory
-- display signature inputs (v1): stable display id, resolution, scale factor, relative arrangement
-- revert scope (v1): per-display-signature undo of last applied/restored snapshot
+- display signature inputs: stable display id, resolution, scale factor, relative arrangement
+- revert scope: per-display-signature undo of last applied/restored snapshot
 - if stable display id changes unexpectedly (dock/hub churn), try fuzzy fallback match on resolution + arrangement before treating as unknown display topology
+
+Note: V1 ships without layout profiles. Windows remember their own frame on quit/relaunch (standard macOS `NSWindow` restoration), but there is no display-signature-based auto-switching. This is sufficient for single-display and simple multi-display setups.
 
 ## 6.5 notification and attention system
 
@@ -475,14 +534,14 @@ notify = ["bash", "-c", "toastty notify --title Codex --body \"$(echo $1 | jq -r
 
 ## 6.6 top bar panel toggles
 
-- toggle buttons for each aux panel kind: Diff, Markdown, Scratchpad
+- toggle buttons for each aux panel kind: Diff, Markdown (Scratchpad added in V2)
 - multi-select: each button independently shows/hides its panel
-- toggled-on panels appear in the right column by default, stacked vertically
+- toggled-on panels appear in the right column by default, stacked vertically (see aux panel placement algorithm in §4.5)
 - panels can be dragged from the right column to any other split position
 - toggle state persists per workspace (different workspaces can have different panels visible)
 - icon + label for each toggle, highlighted when active, dimmed when inactive
 - each workspace has at most one instance per aux panel kind in v1
-- toggle on: ensure panel instance exists (create in right column if absent)
+- toggle on: ensure panel instance exists (create in right column if absent, using placement algorithm)
 - toggle off: close that aux panel instance regardless of its current pane position
 
 ## 6.7 markdown preview panel
@@ -511,33 +570,14 @@ rendering:
 - sanitize markdown-rendered html before load
 - disable javascript execution at webview configuration level for markdown preview
 
-## 6.8 scratchpad canvas (v2)
+## 6.8 reopen closed panel
 
-goal:
-- interactive HTML/CSS/JS canvas for agent-human communication
-- machine-readable + machine-writable
-
-initial API:
-- `canvas.set_html(panelID, html)`
-- `canvas.get_html(panelID)`
-- `canvas.eval_js(panelID, script)`
-- `canvas.snapshot(panelID)`
-
-behavior:
-- follows focused terminal — each terminal session can have associated scratchpad content
-- Edit/Preview toggle in panel header
-- default no outbound network from scratchpad runtime
-- if local dev-server bridging is needed, only allow loopback (`127.0.0.1` / `localhost`) and block remote hosts
-
-`ScratchpadPanelState` (v2 draft):
-- `sourcePanelID?`
-- `activeSessionID?`
-- `contentBySessionID: [String: String]` // sessionID -> html string
-
-implementation path:
-- build panel host in toastty
-- keep canvas runtime as separable package boundary so it can move to dedicated repo later
-- run a dedicated scratchpad threat-model review before enabling `canvas.eval_js` in stable builds
+- each workspace maintains a bounded stack of recently closed panels (`recentlyClosedPanels`, max 10 entries)
+- `⌘⇧T` reopens the most recently closed panel in the current workspace
+- the panel is re-inserted into its original pane if that pane still exists, otherwise into the focused pane
+- terminal panels: the terminal process is gone after close (not recoverable), but the panel state (title, cwd, session history reference) is restored. A new shell session starts in the restored panel.
+- aux panels: fully restored (diff rebinds to current focused session, markdown restores file selection)
+- entries older than the current app session are not preserved (reopen stack is transient, not persisted)
 
 ## 7) initial file layout
 
@@ -554,10 +594,6 @@ Sources/
       WorkspaceState.swift
       PanelState.swift
       PaneNode.swift
-    PanelSystem/
-      PanelKind.swift
-      PanelCapabilities.swift
-      PanelDescriptor.swift
     Actions/
       AppAction.swift
       AppReducer.swift
@@ -565,11 +601,9 @@ Sources/
     Panels/
       PanelRuntime.swift
       PanelRuntimeRegistry.swift
-      PanelScaffold.md
       TerminalPanelRuntime.swift
       DiffPanelRuntime.swift
       MarkdownPanelRuntime.swift
-      ScratchpadPanelRuntime.swift
     Ghostty/
       GhosttySurfaceController.swift
       GhosttySurfaceHostView.swift
@@ -604,7 +638,6 @@ Sources/
       PanelHeaderView.swift
       DiffPanelView.swift
       MarkdownPanelView.swift
-      ScratchpadPanelView.swift
 Tests/
   Core/
   Services/
@@ -624,9 +657,29 @@ Scripts/
     export-ui-artifacts.sh
 ```
 
+Note: `PanelSystem/` directory (PanelCapabilities, PanelDescriptor) removed from V1 layout. Panel extensibility is handled by `PanelKind` enum + `PanelRuntimeRegistry` factory registration. Add a capabilities/descriptor abstraction only if/when a dynamic plugin system is needed.
+
+Note: Scratchpad files (ScratchpadPanelRuntime, ScratchpadPanelView) are not in the V1 layout. Add them when V2 work begins.
+
 ## 8) implementation phases
 
-## phase 0 - bootstrap (3-5 days)
+## phase 0 - Ghostty spike + bootstrap
+
+Priority order within this phase matters. Ghostty integration is the highest-risk item and the foundation everything else depends on. Do the spike first before investing in app shell polish or automation infra.
+
+### step 1: Ghostty integration spike
+- build GhosttyKit.xcframework (reference cmux's `setup.sh` and zig build pipeline)
+- render a single Ghostty terminal surface in a bare-bones macOS window
+- validate: surface creates, accepts keyboard input, renders output, resizes
+- document the concrete `GhosttySurfaceController` API surface discovered during the spike (expected methods for create, attach to NSView, detach, reparent, resize, focus, destroy)
+- document the build pipeline (zig version requirements, xcframework cache strategy, Xcode linking)
+- this step should produce a standalone spike project or branch — not yet integrated into the full app scaffold
+
+If the spike reveals blockers (zig build issues, surface API limitations, reparenting constraints), those must be resolved before proceeding. This is the make-or-break step.
+
+See also: `docs/ghostty-integration.md` (to be created during the spike with findings).
+
+### step 2: app scaffold
 - create macOS app scaffold (SwiftUI app lifecycle) with Tuist as the project source of truth
   - check in `Project.swift` / `Workspace.swift` manifests (and `Tuist/` helpers as needed)
   - generated `.xcodeproj`/`.xcworkspace` are derived artifacts, not hand-edited
@@ -634,85 +687,92 @@ Scripts/
     - `tuist generate`
     - `tuist build` (or `xcodebuild` when needed for edge cases/tooling gaps)
     - `tuist test`
-- integrate Ghostty runtime wrapper baseline
-  - reference cmux's `setup.sh` and GhosttyKit.xcframework build pipeline
-  - get a single Ghostty surface rendering in a window as the first milestone
-  - note: Ghostty build (zig → xcframework → Xcode linking) is the highest-risk step; prototype as standalone spike if needed
+- integrate Ghostty surface from spike into app scaffold
 - implement minimal pane tree + terminal panel
 - implement sidebar with workspace list
-- establish agent-autonomous validation harness:
-  - launch-time automation mode contract:
-    - launch args: `--automation --run-id <id> --fixture <name> --artifacts-dir <path>`
-    - env: `TOASTTY_AUTOMATION=1`, `TOASTTY_DISABLE_ANIMATIONS=1`, `TOASTTY_FIXED_LOCALE=en_US_POSIX`, `TOASTTY_FIXED_TIMEZONE=UTC`
-    - behavior: use fake runtimes/adapters/clock, load fixture before first frame, then emit readiness signal
-  - stable accessibility identifiers for all major UI controls and panel headers
-  - scripted smoke loop (`scripts/automation/check.sh`) that runs generate/build/test and exports UI artifacts
-  - readiness/sync protocol:
-    - app writes `artifacts/ui/<run-id>/ready.json` after fixture load + automation socket bind
-    - script blocks until ready file exists (with timeout) before issuing automation commands
-  - screenshot capture mechanism:
-    - UI tests capture via `XCUIScreen.main.screenshot()` + `XCTAttachment`
-    - `export-ui-artifacts.sh` exports attachments to `artifacts/ui/<run-id>/screenshots/`
-  - artifact naming policy:
-    - runtime artifacts: `artifacts/ui/<run-id>/<fixture>/<step>.png`
-    - golden baselines: `Automation/Baselines/UI/<fixture>/<step>.png`
-    - visual diffs: `artifacts/ui/<run-id>/diffs/<fixture>/<step>.png`
+
+### step 3: automation harness (lightweight)
+- launch-time automation mode contract:
+  - launch args: `--automation --run-id <id> --fixture <name> --artifacts-dir <path>`
+  - env: `TOASTTY_AUTOMATION=1`, `TOASTTY_DISABLE_ANIMATIONS=1`, `TOASTTY_FIXED_LOCALE=en_US_POSIX`, `TOASTTY_FIXED_TIMEZONE=UTC`
+  - behavior: use fake runtimes/adapters/clock, load fixture before first frame, then emit readiness signal
+- stable accessibility identifiers for all major UI controls and panel headers
+- scripted smoke loop (`scripts/automation/check.sh`) that runs generate/build/test
+
+Note: the full screenshot baseline system (golden images, visual diffs, artifact export) can be layered in later once the app UI is stable enough for meaningful screenshots. Don't invest in screenshot infra before the core UI exists.
 
 acceptance:
+- Ghostty surface renders and accepts input
 - open app, split panes, focus moves correctly
 - sidebar shows workspaces, clicking switches between them
 
-## phase 1 - multi-window + panel transfer (4-7 days)
+## phase 1 - multi-window + panel transfer
 - window/workspace core state
 - full panel mobility actions (reorder/move pane/workspace/window)
+- keyboard shortcuts for panel movement
 - drag/drop behaviors:
   - within pane
   - cross-pane
   - onto workspace tab
   - out-of-window -> new window
 - top bar with panel toggle buttons (wired to show/hide placeholder panels)
+- lifecycle cascade (close last panel → close workspace → close window)
+- reopen closed panel action (`⌘⇧T`)
 
 acceptance:
 - live terminal panel moves across panes/workspaces/windows without process restart
 - moving to another workspace preserves panel id + session binding
 - panel toggles show/hide right column
+- keyboard shortcuts move panels between panes
+- closing last panel in workspace closes the workspace
 
-## phase 2 - session registry + adapters + notifications (5-8 days)
+## phase 2 - session registry + adapters + notifications
 - session store and bindings
 - claude adapter (lifecycle events + needs_input + file attribution)
 - codex adapter (lifecycle events + needs_input + file attribution)
 - notification service with deduplication and suppression
 - workspace notification indicators in sidebar
 - macOS system notifications for backgrounded sessions
+- session cleanup on panel close
 
 acceptance:
 - focused panel resolves active session id reliably
 - notification dot appears when agent needs input in unfocused workspace
 - macOS notification fires when app is not focused
 
-## phase 3 - diff panel v1 (4-6 days)
+## phase 3 - diff panel v1
 - diff panel runtime + ui
 - session attribution label in diff header
 - focus-follow behavior (diff re-binds when focused terminal changes)
-- attribution pipeline + confidence labels
+- loading/async states (spinner, stale cancellation, error display)
+- event coalescing for rapid `session.update_files`
+- "Outside repo" section for out-of-scope files
 
 acceptance:
 - session-scoped diff works for concurrent agents in same repo
 - switching focus between terminals updates diff panel content
 - diff header shows which session/terminal is being diffed
+- rapid file updates don't cause thrashing
 
-## phase 4 - global font + layout profiles (3-5 days)
+## phase 4 - global font + polish
 - global font actions + propagation + transient HUD
+- screenshot baseline system (golden images, visual diffs, artifact export)
+- automation harness refinements based on real usage from phases 0-3
+
+acceptance:
+- Cmd+=/- adjusts all terminals at once, HUD shows current size
+- automated smoke tests produce stable screenshots
+
+## phase 5 - layout profiles (V1.5)
 - auto-save layout per display signature
 - auto-restore on display topology change
 - "revert last layout change" action
 
 acceptance:
-- Cmd+=/- adjusts all terminals at once, HUD shows current size
 - unplug external monitor → layout restores to saved laptop state
 - plug back in → layout restores to saved external state
 
-## phase 5 - markdown panel (3-4 days)
+## phase 6 - markdown panel (V1.5)
 - markdown panel runtime + webview render
 - focus-follow behavior (re-binds to new session's touched markdown files)
 - smart file suggestion from session touched files
@@ -720,15 +780,6 @@ acceptance:
 acceptance:
 - auto-pick single touched markdown file, picker for multiple
 - switching terminal focus updates markdown panel
-
-## phase 6 - scratchpad v1 (7-12 days)
-- web canvas panel
-- read/write/eval api
-- focus-follow behavior (per-session scratchpad content)
-- Edit/Preview toggle
-
-acceptance:
-- agent can render/update/read structured canvas content
 
 ## 9) testing strategy
 
@@ -768,10 +819,10 @@ unit tests:
 - reducers/state transitions
 - session registry conflict resolution
 - diff attribution reconciliation
-- layout profile save/restore
 - notification deduplication and suppression logic
 - panel tree invariants (`panels` map <-> `PaneNode` references + selected index bounds)
 - codable migration roundtrip tests for `PanelState` and snapshot schema versions
+- lifecycle cascade (close panel → empty leaf collapse → workspace close → window close)
 
 test harness/fakes:
 - `FakePanelRuntime` for integration tests that do not require Ghostty surfaces
@@ -789,15 +840,17 @@ integration tests:
 - session metadata update after panel move (same `sessionID`, new workspace/window location)
 - focus-follow: aux panels rebind on terminal focus change
 - notification flow: adapter event → notification store → sidebar indicator
-- diff correctness for attributed files (expected hunks/counts, head/index updates, outside-tracked-repo states)
+- diff correctness for attributed files (expected hunks/counts, head/index updates, outside-repo states)
+- event coalescing: rapid file updates produce single diff recompute
 
 ui tests:
 - drag panel within pane to reorder
 - drag panel to another workspace tab
 - drag panel out to new window
-- layout profile save/restore across display changes
 - diff panel follow-focused-session behavior
 - panel toggle buttons show/hide aux panels
+- keyboard panel movement
+- reopen closed panel
 - deterministic screenshot capture for key fixtures and compare against approved baselines
 - accessibility contract tests assert required identifiers from `Automation/Fixtures/Accessibility/required_ids.json`
 
@@ -807,49 +860,45 @@ performance checks:
 
 ## 10) key risks and mitigations
 
-1. Ghostty surface reparenting/focus race conditions
-- mitigate with single-threaded `GhosttySurfaceController` and deterministic attach/focus sequencing
+1. **Ghostty surface API unknowns and reparenting races**
+- The Ghostty surface API contract is not fully known before the spike. The spike (phase 0 step 1) must document: surface create/destroy, attach/detach from NSView, reparent between views, focus management, resize behavior.
+- Reparenting race conditions mitigated with single-threaded `GhosttySurfaceController` and deterministic attach/focus sequencing.
+- If reparenting is not supported by Ghostty, the fallback is surface destroy+recreate with shell session restore (significant complexity increase — flag early).
 
-2. Ghostty build pipeline complexity
+2. **Ghostty build pipeline complexity**
 - reference cmux's `setup.sh`, `scripts/reload.sh`, and GhosttyKit.xcframework caching strategy
-- prototype Ghostty integration as standalone spike before committing to full scaffold
 - cmux caches built frameworks in `$HOME/.cache/cmux/ghosttykit/` by SHA — adopt similar approach
+- document zig version requirements and build steps during spike
 
-3. session attribution drift
-- persist confidence + source metadata; expose "why this file is attributed" in UI
+3. **Session attribution drift**
+- persist source metadata; expose "why this file is attributed" in UI when needed
+- V1 trusts adapter events directly without confidence scoring
 
-4. layout profile surprise
-- auto-save is non-destructive (just remembers layout per display)
-- explicit revert action available
-
-5. scratchpad scope creep
-- keep v1 api intentionally small; isolate runtime boundary early
-- treat `eval_js` as gated by explicit security review before production enablement
-
-6. notification fatigue
+4. **Notification fatigue**
 - deduplication (one per panel) and suppression (no alert when already focused) prevent spam
 - quality depends on agent hook configuration — ship good defaults for claude + codex
 
-7. local socket abuse or schema drift
+5. **Local socket abuse or schema drift**
 - unix socket only, strict file permissions, protocol version checks, and typed event decoding
 
-8. project config drift / non-automatable Xcode changes
+6. **Project config drift / non-automatable Xcode changes**
 - use Tuist manifests as canonical project definition and keep build/test flows scriptable for agent execution
 
-9. flaky/non-deterministic UI validation
+7. **Flaky/non-deterministic UI validation**
 - add automation mode + fixture seeding + stable screenshot artifacts so agents can iterate without manual visual verification
 - enforce readiness protocol and deterministic screenshot comparison in smoke scripts
+- but: invest in screenshot baselines only after UI is stable enough for meaningful comparisons
 
 ## 11) immediate next steps
 
-1. lock state invariants + event socket protocol docs (`docs/state-invariants.md`, `docs/socket-protocol.md`) before scaffolding
+1. **Ghostty spike** — build GhosttyKit.xcframework, render first surface, document API surface and build pipeline. This is blocking for everything else.
 2. scaffold Tuist manifests + bootstrap scripts (`generate`, `build`, `test`) and create core state models/reducer
-3. add automation harness (`--automation`, fixtures, accessibility ids, scripted smoke run + artifact export)
-4. spike Ghostty integration: build GhosttyKit.xcframework, render first surface (reference cmux)
-5. implement terminal runtime + split pane baseline + sidebar
-6. implement multi-window panel transfer before adding new panel types
-7. build session registry + claude/codex adapter contracts + notification service
-8. start diff panel on top of session registry (not before)
+3. integrate Ghostty surface into app scaffold, implement terminal runtime + split pane baseline + sidebar
+4. add lightweight automation harness (`--automation`, fixtures, accessibility ids, scripted smoke run)
+5. implement multi-window panel transfer + keyboard shortcuts before adding new panel types
+6. build session registry + claude/codex adapter contracts + notification service
+7. start diff panel on top of session registry (not before)
+8. lock state invariants + event socket protocol docs (`docs/state-invariants.md`, `docs/socket-protocol.md`) — these are already drafted, finalize alongside implementation
 
 smoke script exit-code contract:
 - `0`: success

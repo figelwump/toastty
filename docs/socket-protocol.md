@@ -339,7 +339,17 @@ Result:
 - Never execute shell commands from socket payloads.
 - `panelID` is stable for the lifetime of a session; panel/window/workspace moves do not rewrite it in protocol messages.
 
-## 10) observability
+## 10) event coalescing guidance
+
+Agents may emit `session.update_files` at high frequency. The app is responsible for coalescing these events to avoid downstream thrashing (e.g., rapid diff recomputes):
+
+- **Recommended coalesce window**: 500ms per session. Merge file lists from events within the window. Keep latest `cwd` and `repoRoot`.
+- **Diff recompute**: trigger once after the coalesce window closes. If new events arrive during computation, cancel and restart after the next window.
+- **Other event types**: `session.progress` and `session.needs_input` are not coalesced (they update lightweight UI elements).
+
+This coalescing happens in the app's event processing layer, not in the protocol itself. The protocol delivers events as-is.
+
+## 11) observability
 
 Every processed message should emit structured logs with:
 
@@ -351,7 +361,7 @@ Every processed message should emit structured logs with:
 - `error.code` (when failed)
 - `latencyMs`
 
-## 11) examples
+## 12) examples
 
 ### adapter file update event
 
