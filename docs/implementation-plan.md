@@ -579,6 +579,35 @@ rendering:
 - aux panels: fully restored (diff rebinds to current focused session, markdown restores file selection)
 - entries older than the current app session are not preserved (reopen stack is transient, not persisted)
 
+## 6.9 focused panel mode (maximize / restore)
+
+goal:
+- temporarily focus a single panel and let it fill the workspace content area.
+- restore prior multi-pane layout with one action.
+
+v1 behavior:
+- action `toggleFocusedPanelMode` on current workspace:
+  - if not in focused-panel mode:
+    - capture current workspace layout snapshot (`paneTree`, `focusedPanelID`).
+    - show only the currently focused panel in a single leaf that fills the workspace view.
+  - if already in focused-panel mode:
+    - restore the captured layout snapshot.
+- keyboard shortcut: `⌘⇧F` toggles focused-panel mode for the selected workspace.
+- toolbar affordance: add a top-bar "Focus Panel" toggle button reflecting active state.
+- while in focused-panel mode:
+  - panel close/reopen continues to function and update underlying state.
+  - split and aux-toggle actions are disabled (or no-op) until mode is exited to avoid ambiguous merge semantics in v1.
+
+state model note:
+- add a per-workspace transient snapshot field for focused-panel mode restore:
+  - `focusedPanelModeSnapshot? { paneTree, focusedPanelID }`
+- this snapshot is runtime/session-local and not persisted across app relaunch for v1.
+
+acceptance:
+- entering mode from any mixed layout (terminals + aux) shows only the focused panel.
+- exiting mode restores exact prior layout and focus target.
+- repeated toggle cycles are lossless under reducer/state invariant tests.
+
 ## 7) initial file layout
 
 ```text
@@ -756,11 +785,13 @@ acceptance:
 
 ## phase 4 - global font + polish
 - global font actions + propagation + transient HUD
+- focused panel mode (maximize/restore current panel) with keyboard shortcut and top-bar toggle
 - screenshot baseline system (golden images, visual diffs, artifact export)
 - automation harness refinements based on real usage from phases 0-3
 
 acceptance:
 - Cmd+=/- adjusts all terminals at once, HUD shows current size
+- focused panel mode roundtrip preserves prior layout and panel focus
 - automated smoke tests produce stable screenshots
 
 ## phase 5 - layout profiles (V1.5)
@@ -1168,6 +1199,9 @@ Chunk K review reconciliation (post-commit second opinion on `55542de`):
 - rejected: concern that first aux wrap fails to discover aux leaf on second toggle; current tree mutation + aux panel ID scan makes that path deterministic.
 - rejected: replace-leaf leak claim; failed replacement path reverts panel dictionary mutation and does not insert transient split nodes into `paneTree`.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 56 passing tests.
+
+Plan adjustment note:
+- added feature planning for focused panel mode (maximize/restore current panel, `⌘⇧F`, top-bar toggle) in section 6.9 and scheduled it in phase 4.
 
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
