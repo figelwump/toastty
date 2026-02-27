@@ -1634,7 +1634,7 @@ Chunk Y review reconciliation B (post-commit second opinion on `b0efc74`):
   - converted multi-line AppleScript example into a copy/paste-safe fenced code block.
   - added explicit caveat that delay values are machine/load dependent.
   - tightened Ghostty env guidance to prefer `TUIST_ENABLE_GHOSTTY=1` for `tuist generate` flows.
-  - reduced Rosetta wording from absolute to practical (`typically reports x86_64`) after follow-up review pressure-testing.
+  - reduced Rosetta wording from absolute to practical (`typically reports x86_64`).
   - removed uncertainty phrasing around `artifacts/` ignore status.
 - rejected:
   - claim that referencing prior reviewed commit (`96be276`) was inconsistent.
