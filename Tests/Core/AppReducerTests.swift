@@ -280,4 +280,66 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func toggleAuxPanelCreatesRightColumnFromSingleLeaf() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let originalFocusedPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.auxPanelVisibility.contains(.diff))
+
+        let diffPanels = workspace.panels.filter { $0.value.kind == .diff }
+        #expect(diffPanels.count == 1)
+        #expect(workspace.focusedPanelID == originalFocusedPanelID)
+
+        if case .split(_, .horizontal, _, _, _) = workspace.paneTree {
+            // expected
+        } else {
+            Issue.record("expected horizontal split for first aux panel")
+        }
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func toggleAuxPanelOffRemovesPanelAndVisibility() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.auxPanelVisibility.contains(.markdown) == false)
+        #expect(workspace.panels.values.contains(where: { $0.kind == .markdown }) == false)
+        #expect(workspace.paneTree.allLeafInfos.count == 1)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func toggleAuxPanelAddsToRightColumnInExistingSplit() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let rightPaneIDBefore = try #require(workspaceBefore.paneTree.rightColumnPaneID())
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.paneTree.allLeafInfos.count == 2)
+        let rightPaneAfter = try #require(workspaceAfter.paneTree.allLeafInfos.first(where: { $0.paneID == rightPaneIDBefore }))
+        let markdownPanelIDs = workspaceAfter.panels.filter { $0.value.kind == .markdown }.map(\.key)
+        #expect(markdownPanelIDs.count == 1)
+        #expect(rightPaneAfter.tabPanelIDs.contains(markdownPanelIDs[0]))
+
+        try StateValidator.validate(state)
+    }
 }

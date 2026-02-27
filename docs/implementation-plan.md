@@ -990,6 +990,16 @@ Chunk C review reconciliation (post-commit second opinion on `77b18df`):
 - rejected: dynamic detached-window frame cascade for now; fixed frame remains acceptable in current scaffold stage.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 24 passing tests.
 
+Chunk D (phase 1 top-bar panel toggles + aux panel state behavior):
+- added `toggleAuxPanel` reducer action and wired top-bar toggle controls for Diff and Markdown.
+- implemented per-workspace aux panel visibility updates and single-instance enforcement per aux panel kind.
+- implemented right-column placement behavior:
+  - single-leaf workspace -> create horizontal split and place aux panel in right leaf
+  - existing split layout -> insert aux panel into right-column pane heuristic
+- added aux panel close-on-toggle-off behavior with pane-tree collapse handling.
+- added reducer/tree regression tests for aux toggle creation, placement, and removal.
+- validation passed: `./scripts/automation/check.sh` with 27 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

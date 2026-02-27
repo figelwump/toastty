@@ -27,6 +27,9 @@ struct WorkspaceView: View {
 
             Spacer()
 
+            auxToggle(title: "Diff", kind: .diff, identifier: "topbar.toggle.diff")
+            auxToggle(title: "Markdown", kind: .markdown, identifier: "topbar.toggle.markdown")
+
             Button("Split Horizontal") {
                 split(orientation: .horizontal)
             }
@@ -44,6 +47,18 @@ struct WorkspaceView: View {
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
         store.send(.splitFocusedPane(workspaceID: workspaceID, orientation: orientation))
+    }
+
+    @ViewBuilder
+    private func auxToggle(title: String, kind: PanelKind, identifier: String) -> some View {
+        let isOn = store.selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
+        Button(title) {
+            guard let workspaceID = store.selectedWorkspace?.id else { return }
+            store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: kind))
+        }
+        .buttonStyle(.bordered)
+        .tint(isOn ? .accentColor : .gray)
+        .accessibilityIdentifier(identifier)
     }
 }
 

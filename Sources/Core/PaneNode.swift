@@ -132,6 +132,18 @@ public extension PaneNode {
         }
     }
 
+    func rightColumnPaneID() -> UUID? {
+        switch self {
+        case .leaf(let paneID, _, _):
+            return paneID
+        case .split(_, let orientation, _, let first, let second):
+            if orientation == .horizontal {
+                return second.rightColumnPaneID()
+            }
+            return second.rightColumnPaneID() ?? first.rightColumnPaneID()
+        }
+    }
+
     mutating func replaceLeaf(paneID: UUID, with replacement: PaneNode) -> Bool {
         switch self {
         case .leaf(let currentPaneID, _, _):

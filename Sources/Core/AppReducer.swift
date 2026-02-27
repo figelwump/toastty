@@ -164,6 +164,67 @@ public struct AppReducer {
             state.selectedWindowID = detachedWindowID
             return true
 
+        case .toggleAuxPanel(let workspaceID, let kind):
+            guard kind != .terminal else { return false }
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+
+            if let existingPanelID = workspace.panels.first(where: { $0.value.kind == kind })?.key {
+                let removal = workspace.paneTree.removingPanel(existingPanelID)
+                guard removal.removed else { return false }
+
+                workspace.panels.removeValue(forKey: existingPanelID)
+                workspace.auxPanelVisibility.remove(kind)
+
+                if let updatedTree = removal.node {
+                    workspace.paneTree = updatedTree
+                    if workspace.focusedPanelID == existingPanelID {
+                        workspace.focusedPanelID = resolveFocusedPanel(in: workspace)?.panelID
+                    }
+                    state.workspacesByID[workspaceID] = workspace
+                } else if let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) {
+                    removeWorkspace(workspaceID, windowID: windowID, state: &state)
+                }
+                return true
+            }
+
+            guard let auxPanelState = makeAuxPanelState(for: kind) else { return false }
+            let panelID = UUID()
+            workspace.panels[panelID] = auxPanelState
+
+            if workspace.paneTree.allLeafInfos.count == 1,
+               let sourceLeaf = workspace.paneTree.allLeafInfos.first {
+                let leftLeaf = PaneNode.leaf(
+                    paneID: sourceLeaf.paneID,
+                    tabPanelIDs: sourceLeaf.tabPanelIDs,
+                    selectedIndex: sourceLeaf.selectedIndex
+                )
+                let rightLeaf = PaneNode.leaf(
+                    paneID: UUID(),
+                    tabPanelIDs: [panelID],
+                    selectedIndex: 0
+                )
+                workspace.paneTree = .split(
+                    nodeID: UUID(),
+                    orientation: .horizontal,
+                    ratio: 0.65,
+                    first: leftLeaf,
+                    second: rightLeaf
+                )
+            } else {
+                guard let rightColumnPaneID = workspace.paneTree.rightColumnPaneID() else {
+                    workspace.panels.removeValue(forKey: panelID)
+                    return false
+                }
+                guard workspace.paneTree.insertPanel(panelID, toPane: rightColumnPaneID, at: nil, select: false) else {
+                    workspace.panels.removeValue(forKey: panelID)
+                    return false
+                }
+            }
+
+            workspace.auxPanelVisibility.insert(kind)
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
         case .splitFocusedPane(let workspaceID, let orientation):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard let focusResolution = resolveFocusedPanel(in: workspace) else {
@@ -275,6 +336,10 @@ public struct AppReducer {
         return nil
     }
 
+    private static func locateWindowID(containingWorkspaceID workspaceID: UUID, in state: AppState) -> UUID? {
+        state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id
+    }
+
     private static func resolveInsertionPaneID(in workspace: WorkspaceState, preferredPaneID: UUID?) -> UUID? {
         if let preferredPaneID {
             guard workspace.paneTree.allLeafInfos.contains(where: { $0.paneID == preferredPaneID }) else {
@@ -341,6 +406,19 @@ public struct AppReducer {
         }.max() ?? 0
 
         return "Workspace \(currentMax + 1)"
+    }
+
+    private static func makeAuxPanelState(for kind: PanelKind) -> PanelState? {
+        switch kind {
+        case .terminal:
+            return nil
+        case .diff:
+            return .diff(DiffPanelState())
+        case .markdown:
+            return .markdown(MarkdownPanelState())
+        case .scratchpad:
+            return .scratchpad(ScratchpadPanelState())
+        }
     }
 }
 
