@@ -39,6 +39,26 @@ struct SessionUpdateCoalescerTests {
     }
 
     @Test
+    func firstIngestDeduplicatesDuplicateFiles() {
+        var coalescer = SessionUpdateCoalescer(window: 0.5)
+        let t0 = Date(timeIntervalSince1970: 120)
+
+        coalescer.ingest(
+            SessionFileUpdate(
+                sessionID: "s1",
+                files: ["a.swift", "a.swift", "b.swift"],
+                cwd: nil,
+                repoRoot: nil
+            ),
+            at: t0
+        )
+
+        let flushed = coalescer.flushReady(at: t0.addingTimeInterval(1))
+        #expect(flushed.count == 1)
+        #expect(flushed[0].files == ["a.swift", "b.swift"])
+    }
+
+    @Test
     func flushReadyHandlesSessionsIndependently() {
         var coalescer = SessionUpdateCoalescer(window: 0.5)
         let t0 = Date(timeIntervalSince1970: 200)
@@ -59,6 +79,20 @@ struct SessionUpdateCoalescerTests {
         let secondFlush = coalescer.flushReady(at: t0.addingTimeInterval(1.0))
         #expect(secondFlush.count == 1)
         #expect(secondFlush[0].sessionID == "s2")
+    }
+
+    @Test
+    func flushReadyIncludesEventsAtExactWindowBoundary() {
+        var coalescer = SessionUpdateCoalescer(window: 0.5)
+        let t0 = Date(timeIntervalSince1970: 250)
+        coalescer.ingest(
+            SessionFileUpdate(sessionID: "s1", files: ["x.swift"], cwd: nil, repoRoot: nil),
+            at: t0
+        )
+
+        let flushed = coalescer.flushReady(at: t0.addingTimeInterval(0.5))
+        #expect(flushed.count == 1)
+        #expect(flushed[0].sessionID == "s1")
     }
 
     @Test

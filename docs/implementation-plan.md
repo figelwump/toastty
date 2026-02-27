@@ -1116,6 +1116,15 @@ Chunk I (phase 2/3 event coalescing foundation):
 - added deterministic unit tests for merge behavior, per-session independence, and drain semantics.
 - validation passed: `./scripts/automation/check.sh` with 50 passing tests.
 
+Chunk I review reconciliation (post-commit second opinion on `e0cdb96`):
+- accepted: deduplicate files on first ingest to avoid duplicate seed entries.
+- accepted: tighten merge dedup performance using set-backed tracking while preserving first-seen order.
+- accepted: deterministic tie-break sorting for equal timestamps (`sessionID` secondary sort key) in `flushReady` and `flushAll`.
+- accepted: explicit boundary/duplicate regression tests (`exact-window flush` and `duplicate first ingest`).
+- rejected: nil-clearing semantics change for `cwd`/`repoRoot`; current behavior intentionally treats nil as \"no update\" and preserves prior non-nil context.
+- rejected: sendable/thread-safety concern as code defect; coalescer remains value-type state intended for serialized ownership by caller.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 52 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.

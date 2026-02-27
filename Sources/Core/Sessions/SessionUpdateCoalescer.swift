@@ -50,9 +50,12 @@ public struct SessionUpdateCoalescer: Equatable, Sendable {
 
     public mutating func ingest(_ update: SessionFileUpdate, at now: Date) {
         if var pending = pendingBySessionID[update.sessionID] {
-            for file in update.files where pending.files.contains(file) == false {
+            var seen = Set(pending.files)
+            for file in update.files where seen.insert(file).inserted {
                 pending.files.append(file)
             }
+
+            // Nil values mean "no update" so previously known non-nil context is preserved.
             if let cwd = update.cwd {
                 pending.cwd = cwd
             }
@@ -66,7 +69,7 @@ public struct SessionUpdateCoalescer: Equatable, Sendable {
 
         pendingBySessionID[update.sessionID] = CoalescedSessionUpdate(
             sessionID: update.sessionID,
-            files: update.files,
+            files: deduplicatePreservingOrder(update.files),
             cwd: update.cwd,
             repoRoot: update.repoRoot,
             firstEventAt: now,
@@ -80,7 +83,12 @@ public struct SessionUpdateCoalescer: Equatable, Sendable {
             ready.append(update)
         }
 
-        ready.sort { $0.lastEventAt < $1.lastEventAt }
+        ready.sort {
+            if $0.lastEventAt == $1.lastEventAt {
+                return $0.sessionID < $1.sessionID
+            }
+            return $0.lastEventAt < $1.lastEventAt
+        }
         for update in ready {
             pendingBySessionID.removeValue(forKey: update.sessionID)
         }
@@ -89,8 +97,23 @@ public struct SessionUpdateCoalescer: Equatable, Sendable {
 
     public mutating func flushAll() -> [CoalescedSessionUpdate] {
         var updates = Array(pendingBySessionID.values)
-        updates.sort { $0.lastEventAt < $1.lastEventAt }
+        updates.sort {
+            if $0.lastEventAt == $1.lastEventAt {
+                return $0.sessionID < $1.sessionID
+            }
+            return $0.lastEventAt < $1.lastEventAt
+        }
         pendingBySessionID.removeAll(keepingCapacity: true)
         return updates
+    }
+
+    private func deduplicatePreservingOrder(_ files: [String]) -> [String] {
+        var seen: Set<String> = []
+        var ordered: [String] = []
+        ordered.reserveCapacity(files.count)
+        for file in files where seen.insert(file).inserted {
+            ordered.append(file)
+        }
+        return ordered
     }
 }
