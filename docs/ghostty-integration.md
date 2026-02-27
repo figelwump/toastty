@@ -22,9 +22,11 @@ Result:
 - command completed successfully (exit code `0`)
 - generated artifact:
   - `/tmp/toastty-ghostty-spike/ghostty/macos/GhosttyKit.xcframework`
+  - note: native and universal builds write to the same output path; the later universal build output is the artifact currently present.
 
 Observed warning (non-fatal):
 - `libtool: warning duplicate member name 'ext.o' ...` while producing `libghostty-fat.a`
+  - warning reproduced in both native and universal builds.
   - status: unresolved; build succeeded, but warning impact on downstream link behavior has not yet been validated.
 
 Artifact details observed:
@@ -32,11 +34,15 @@ Artifact details observed:
   - `macos-arm64_x86_64`
   - `ios-arm64`
   - `ios-arm64-simulator`
+  - iOS slices appear as part of Ghostty's universal xcframework output; toastty's macOS integration path currently only needs the macOS slice.
 - files present:
   - `Info.plist`
-  - per-slice `Headers/ghostty.h`
-  - per-slice `Headers/module.modulemap`
-  - per-slice `libghostty-fat.a` or `libghostty.a`
+  - `macos-arm64_x86_64/libghostty.a`
+  - `ios-arm64/libghostty-fat.a`
+  - `ios-arm64-simulator/libghostty-fat.a`
+  - per-slice headers:
+    - `Headers/ghostty.h`
+    - `Headers/module.modulemap`
 
 Impact:
 - Ghostty build pipeline is now executable on this machine for the native xcframework target.

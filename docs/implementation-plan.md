@@ -1098,10 +1098,11 @@ Chunk H (phase 0 step 1 prerequisite unblocking: Ghostty build tooling, commit `
   - `zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal`
 - confirmed `GhosttyKit.xcframework` artifact generation:
   - `/tmp/toastty-ghostty-spike/ghostty/macos/GhosttyKit.xcframework`
+  - note: universal build writes to the same path as native build and overwrites prior output.
 - confirmed macOS universal slice output in xcframework (`macos-arm64_x86_64`).
 - spike artifact caveat: output currently lives in `/tmp` and must be copied to managed cache/path to persist.
 - documented concrete artifact metadata and remaining integration steps in `docs/ghostty-integration.md`.
-- recorded libtool duplicate-object warning as unresolved integration risk to verify during toastty link step.
+- recorded libtool duplicate-object warning as unresolved integration risk (warning reproduced in both native and universal builds).
 
 Chunk I (phase 2/3 event coalescing foundation):
 - added `SessionUpdateCoalescer` with explicit 500ms-style coalesce window support.
