@@ -1101,6 +1101,21 @@ Chunk H (phase 0 step 1 prerequisite unblocking: Ghostty build tooling, commit `
 - documented concrete artifact metadata and remaining integration steps in `docs/ghostty-integration.md`.
 - recorded libtool duplicate-object warning as unresolved integration risk to verify during toastty link step.
 
+Chunk I (phase 2/3 event coalescing foundation):
+- added `SessionUpdateCoalescer` with explicit 500ms-style coalesce window support.
+- added typed event payloads:
+  - `SessionFileUpdate`
+  - `CoalescedSessionUpdate`
+- implemented per-session merge behavior:
+  - file deduplication while preserving arrival order
+  - latest non-nil `cwd`/`repoRoot` wins
+  - first/last event timestamps preserved
+- implemented flush APIs:
+  - `flushReady(at:)` for window-based emission
+  - `flushAll()` for deterministic drain
+- added deterministic unit tests for merge behavior, per-session independence, and drain semantics.
+- validation passed: `./scripts/automation/check.sh` with 50 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is not finalized yet.
