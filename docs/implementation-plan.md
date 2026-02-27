@@ -1502,5 +1502,6 @@ Chunk T (Ghostty startup crash on renderer thread callback isolation):
     - no startup crash in app log for that run.
 - design decision:
   - kept `GhosttyRuntimeManager` as `@MainActor` for UI-facing lifecycle safety, but ensured C callback entrypoints are nonisolated at definition site.
+  - explicit guardrail: moving callbacks to file scope removes actor metadata from callback entrypoints, but callback bodies must still dispatch to main actor/queue before touching `GhosttyRuntimeManager` state.
 - follow-up testing gap:
   - callback threading model is now safe for current callback set, but richer callbacks (clipboard/action handling) should be added with explicit thread-handoff rules as they are implemented.
