@@ -109,7 +109,21 @@ if [[ "${TUIST_ENABLE_GHOSTTY:-${TOASTTY_ENABLE_GHOSTTY:-0}}" == "1" ]]; then
 
   TERMINAL_MARKER="TOASTTY_VIEWPORT_END_${RUN_ID//[^A-Za-z0-9_]/_}"
   TERMINAL_COMMAND="find /usr/bin -maxdepth 1 | head -n 120; echo ${TERMINAL_MARKER}"
-  send_request "automation.terminal_send_text" "{\"text\":\"${TERMINAL_COMMAND}\",\"submit\":true,\"waitForSurfaceMs\":1500}"
+  TERMINAL_SEND_RESPONSE=""
+  TERMINAL_SEND_READY=0
+  for _ in $(seq 1 40); do
+    TERMINAL_SEND_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"${TERMINAL_COMMAND}\",\"submit\":true,\"allowUnavailable\":true}")"
+    if echo "$TERMINAL_SEND_RESPONSE" | grep -qE '"available"[[:space:]]*:[[:space:]]*true'; then
+      TERMINAL_SEND_READY=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$TERMINAL_SEND_READY" -ne 1 ]]; then
+    echo "error: terminal surface did not become available for send_text" >&2
+    echo "last terminal send response: ${TERMINAL_SEND_RESPONSE}" >&2
+    exit 1
+  fi
 
   TERMINAL_FOUND=0
   TERMINAL_VISIBLE_RESPONSE=""

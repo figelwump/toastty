@@ -50,13 +50,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
         return controller.automationReadVisibleText()
     }
-
-    func automationHasSurface(panelID: UUID) -> Bool {
-        guard let controller = controllers[panelID] else {
-            return false
-        }
-        return controller.automationHasSurface
-    }
 }
 
 @MainActor
@@ -70,14 +63,6 @@ final class TerminalSurfaceController {
     #endif
 
     private let fallbackView = TerminalFallbackView()
-
-    var automationHasSurface: Bool {
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        return ghosttySurface != nil
-        #else
-        return false
-        #endif
-    }
 
     init(panelID: UUID) {
         self.panelID = panelID

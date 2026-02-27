@@ -1671,7 +1671,7 @@ Chunk Z (W-1 follow-up: automation terminal input + viewport assertion hooks):
 
 Chunk Z review reconciliation (post-commit second opinion on `2094316`):
 - accepted:
-  - added `waitForSurfaceMs` support to `automation.terminal_send_text` with bounded polling on main run loop to avoid startup races before terminal surface attachment.
+  - added startup-race handling for `automation.terminal_send_text` surface availability.
   - switched Ghostty automation text-send path to `utf8CString` byte handling to keep byte-count and pointer representation aligned.
   - adjusted visible-text read path so `ghostty_surface_free_text(...)` always runs after successful `ghostty_surface_read_text(...)`, even when payload text pointer is unexpectedly missing.
   - removed hard-coded newline byte length by routing submit behavior through shared text-send helper.
@@ -1688,3 +1688,19 @@ Chunk Z review reconciliation (post-commit second opinion on `2094316`):
   - `./scripts/automation/check.sh` (67 tests).
   - `./scripts/automation/smoke-ui.sh` (baseline path).
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (Ghostty path, terminal marker + viewport screenshot).
+
+Chunk Z review reconciliation B (post-commit second opinion on `cb2779c`):
+- accepted:
+  - removed main-actor run-loop wait (`waitForSurfaceMs`) from automation command path.
+  - replaced with non-blocking retry model:
+    - `automation.terminal_send_text` now supports `allowUnavailable`.
+    - smoke script retries `terminal_send_text` until `"available": true` before proceeding.
+- accepted:
+  - removed now-unused surface-readiness helpers tied to the old wait-loop approach.
+- rejected:
+  - claim that `ghostty_surface_free_text(...)` is unsafe when text pointer is nil.
+  - reason: Ghostty text deinit path is null-safe in upstream implementation and API usage mirrors current embed patterns.
+- follow-up validation passed:
+  - `./scripts/automation/check.sh` (67 tests).
+  - `./scripts/automation/smoke-ui.sh` (baseline path).
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (Ghostty path with send-text availability retry + viewport marker assertion).

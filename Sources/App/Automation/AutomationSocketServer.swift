@@ -430,19 +430,27 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("text is required")
             }
             let submit = payload.bool("submit") ?? false
-            let waitForSurfaceMs = max(payload.int("waitForSurfaceMs") ?? 0, 0)
+            let allowUnavailable = payload.bool("allowUnavailable") ?? false
             let resolved = try resolveTerminalTarget(payload: payload)
-            if waitForSurfaceMs > 0 {
-                waitForTerminalSurface(panelID: resolved.panelID, timeoutMs: waitForSurfaceMs)
+            if terminalRuntimeRegistry.automationSendText(text, submit: submit, panelID: resolved.panelID) {
+                return [
+                    "workspaceID": .string(resolved.workspaceID.uuidString),
+                    "panelID": .string(resolved.panelID.uuidString),
+                    "submitted": .bool(submit),
+                    "available": .bool(true),
+                ]
             }
-            guard terminalRuntimeRegistry.automationSendText(text, submit: submit, panelID: resolved.panelID) else {
-                throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
+
+            if allowUnavailable {
+                return [
+                    "workspaceID": .string(resolved.workspaceID.uuidString),
+                    "panelID": .string(resolved.panelID.uuidString),
+                    "submitted": .bool(submit),
+                    "available": .bool(false),
+                ]
             }
-            return [
-                "workspaceID": .string(resolved.workspaceID.uuidString),
-                "panelID": .string(resolved.panelID.uuidString),
-                "submitted": .bool(submit),
-            ]
+
+            throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
 
         case "automation.terminal_visible_text":
             let resolved = try resolveTerminalTarget(payload: payload)
@@ -803,18 +811,6 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func waitForTerminalSurface(panelID: UUID, timeoutMs: Int) {
-        let timeoutSeconds = Double(timeoutMs) / 1000
-        let deadline = Date().addingTimeInterval(timeoutSeconds)
-        while Date() < deadline {
-            if terminalRuntimeRegistry.automationHasSurface(panelID: panelID) {
-                return
-            }
-            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
-        }
-    }
-
-    @MainActor
     private func encodedStateData(includeRuntime: Bool) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -1125,13 +1121,6 @@ private extension Dictionary where Key == String, Value == AutomationJSONValue {
 
     func bool(_ key: String) -> Bool? {
         guard case .bool(let value)? = self[key] else {
-            return nil
-        }
-        return value
-    }
-
-    func int(_ key: String) -> Int? {
-        guard case .int(let value)? = self[key] else {
             return nil
         }
         return value
