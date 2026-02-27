@@ -1600,7 +1600,7 @@ Chunk X (repo-level agent workflow notes for live app validation):
 - introduced and refined `AGENTS.md` at repo root to record project-specific expectations:
   - UI/runtime changes must be validated in a running app instance, not only via reducer/unit tests.
   - standard validation command set for Ghostty flows (`TUIST_ENABLE_GHOSTTY=1 tuist generate`, smoke automation, full `check.sh` gate).
-  - manual screenshot artifact workflow under `artifacts/manual/` (covered by `/artifacts/` entry in `.gitignore`).
+  - manual screenshot artifact workflow under `artifacts/manual/` (artifacts outputs are gitignored in this repo).
 - second-opinion follow-up refinement:
   - clarified architecture selection guidance for `xcodebuild` destination (`ARCH="$(uname -m)"`) and Rosetta caveat.
   - clarified that scripted click coordinates are example values and must be adapted per machine/window layout.
