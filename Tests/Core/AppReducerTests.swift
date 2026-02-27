@@ -1,4 +1,5 @@
 import CoreState
+import Foundation
 import Testing
 
 struct AppReducerTests {
@@ -41,6 +42,59 @@ struct AppReducerTests {
         let updatedLeaf = try #require(updatedWorkspace.paneTree.allLeafInfos.first)
         #expect(updatedLeaf.tabPanelIDs.count == existingCount + 1)
 
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func splitFocusedPaneRecoversFromStaleFocusedPanel() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        workspace.focusedPanelID = UUID()
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(updatedWorkspace.focusedPanelID)
+        #expect(updatedWorkspace.panels[focusedPanelID] != nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func createTerminalPanelUsesMonotonicTerminalTitleNumbering() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let paneID = try #require(workspace.paneTree.allLeafInfos.first?.paneID)
+
+        let panelOne = UUID()
+        let panelThree = UUID()
+        workspace.panels = [
+            panelOne: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
+            panelThree: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
+        ]
+        workspace.paneTree = .leaf(paneID: paneID, tabPanelIDs: [panelOne, panelThree], selectedIndex: 1)
+        workspace.focusedPanelID = panelThree
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let newPanelIDs = Set(updatedWorkspace.panels.keys).subtracting([panelOne, panelThree])
+        let newPanelID = try #require(newPanelIDs.first)
+        let newPanel = try #require(updatedWorkspace.panels[newPanelID])
+
+        guard case .terminal(let terminalState) = newPanel else {
+            Issue.record("expected new panel to be terminal")
+            return
+        }
+
+        #expect(terminalState.title == "Terminal 4")
         try StateValidator.validate(state)
     }
 }

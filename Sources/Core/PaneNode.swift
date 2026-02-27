@@ -17,6 +17,18 @@ public struct PaneLeafInfo: Equatable, Sendable {
     }
 }
 
+public struct PaneSplitInfo: Equatable, Sendable {
+    public let nodeID: UUID
+    public let orientation: SplitOrientation
+    public let ratio: Double
+
+    public init(nodeID: UUID, orientation: SplitOrientation, ratio: Double) {
+        self.nodeID = nodeID
+        self.orientation = orientation
+        self.ratio = ratio
+    }
+}
+
 public indirect enum PaneNode: Equatable, Sendable {
     case leaf(paneID: UUID, tabPanelIDs: [UUID], selectedIndex: Int)
     case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
@@ -101,6 +113,15 @@ public extension PaneNode {
         }
     }
 
+    var allSplitInfos: [PaneSplitInfo] {
+        switch self {
+        case .leaf:
+            return []
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            return [PaneSplitInfo(nodeID: nodeID, orientation: orientation, ratio: ratio)] + first.allSplitInfos + second.allSplitInfos
+        }
+    }
+
     func leafContaining(panelID: UUID) -> PaneLeafInfo? {
         switch self {
         case .leaf(let paneID, let tabPanelIDs, let selectedIndex):
@@ -117,14 +138,16 @@ public extension PaneNode {
             guard currentPaneID == paneID else { return false }
             self = replacement
             return true
-        case .split(let nodeID, let orientation, let ratio, var first, var second):
-            if first.replaceLeaf(paneID: paneID, with: replacement) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: second)
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            var updatedFirst = first
+            if updatedFirst.replaceLeaf(paneID: paneID, with: replacement) {
+                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second)
                 return true
             }
 
-            if second.replaceLeaf(paneID: paneID, with: replacement) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: second)
+            var updatedSecond = second
+            if updatedSecond.replaceLeaf(paneID: paneID, with: replacement) {
+                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond)
                 return true
             }
 
@@ -141,14 +164,16 @@ public extension PaneNode {
             let nextSelectedIndex = select ? tabs.count - 1 : selectedIndex
             self = .leaf(paneID: currentPaneID, tabPanelIDs: tabs, selectedIndex: nextSelectedIndex)
             return true
-        case .split(let nodeID, let orientation, let ratio, var first, var second):
-            if first.appendPanel(panelID, toPane: paneID, select: select) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: second)
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            var updatedFirst = first
+            if updatedFirst.appendPanel(panelID, toPane: paneID, select: select) {
+                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second)
                 return true
             }
 
-            if second.appendPanel(panelID, toPane: paneID, select: select) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: second)
+            var updatedSecond = second
+            if updatedSecond.appendPanel(panelID, toPane: paneID, select: select) {
+                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond)
                 return true
             }
 

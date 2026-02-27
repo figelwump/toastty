@@ -929,6 +929,16 @@ Chunk A (phase 0 step 2 + step 3 foundation):
 - validation passed: `./scripts/automation/check.sh` (runs `tuist generate`, `tuist build`, `tuist test`).
 - technical note: Tuist 4.68 uses `.target(... product: .unitTests ...)` instead of `.testTarget(...)` in `Project.swift`.
 
+Chunk A review reconciliation (post-commit second opinion on `99363fa`):
+- accepted: recover from stale `focusedPanelID` in `splitFocusedPane` by resolving fallback focus from pane tree.
+- accepted: validate `focusedPanelID` invariants (`focused panel exists` and `focused panel is present in pane tree`).
+- accepted: validate split ratio bounds (`0 < ratio < 1`).
+- accepted: make pane-tree mutation in `replaceLeaf`/`appendPanel` explicit with immutable branch copies.
+- accepted: make terminal default titles monotonic (`Terminal N`) based on max existing ordinal instead of panel count.
+- rejected: removing `@discardableResult` from reducer send; keeping non-throwing action dispatch is intentional for app-level no-op handling.
+- rejected: splitting leaf/split node id namespaces at this stage; current invariant intentionally enforces uniqueness across both id categories.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` and expanded tests (9 passing).
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

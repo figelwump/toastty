@@ -32,21 +32,19 @@ public struct AppReducer {
 
         case .splitFocusedPane(let workspaceID, let orientation):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-
-            guard let focusedPanelID = workspace.focusedPanelID ?? workspace.paneTree.allLeafInfos.first?.tabPanelIDs.first else {
+            guard let focusResolution = resolveFocusedPanel(in: workspace) else {
                 return false
             }
+            workspace.focusedPanelID = focusResolution.panelID
 
-            guard let sourceLeaf = workspace.paneTree.leafContaining(panelID: focusedPanelID) else {
-                return false
-            }
+            let sourceLeaf = focusResolution.leaf
 
             let newPanelID = UUID()
             let newPaneID = UUID()
 
             workspace.panels[newPanelID] = .terminal(
                 TerminalPanelState(
-                    title: "Terminal \(workspace.panels.count + 1)",
+                    title: nextTerminalTitle(in: workspace),
                     shell: "zsh",
                     cwd: NSHomeDirectory()
                 )
@@ -81,7 +79,7 @@ public struct AppReducer {
             let panelID = UUID()
             workspace.panels[panelID] = .terminal(
                 TerminalPanelState(
-                    title: "Terminal \(workspace.panels.count + 1)",
+                    title: nextTerminalTitle(in: workspace),
                     shell: "zsh",
                     cwd: NSHomeDirectory()
                 )
@@ -96,5 +94,33 @@ public struct AppReducer {
             state.workspacesByID[workspaceID] = workspace
             return true
         }
+    }
+
+    private static func resolveFocusedPanel(in workspace: WorkspaceState) -> (panelID: UUID, leaf: PaneLeafInfo)? {
+        if let focusedPanelID = workspace.focusedPanelID,
+           workspace.panels[focusedPanelID] != nil,
+           let focusedLeaf = workspace.paneTree.leafContaining(panelID: focusedPanelID) {
+            return (focusedPanelID, focusedLeaf)
+        }
+
+        for leaf in workspace.paneTree.allLeafInfos {
+            for panelID in leaf.tabPanelIDs where workspace.panels[panelID] != nil {
+                return (panelID, leaf)
+            }
+        }
+
+        return nil
+    }
+
+    private static func nextTerminalTitle(in workspace: WorkspaceState) -> String {
+        let prefix = "Terminal "
+        let currentMax = workspace.panels.values.compactMap { panelState -> Int? in
+            guard case .terminal(let terminalState) = panelState else { return nil }
+            guard terminalState.title.hasPrefix(prefix) else { return nil }
+            let suffix = terminalState.title.dropFirst(prefix.count)
+            return Int(suffix)
+        }.max() ?? 0
+
+        return "Terminal \(currentMax + 1)"
     }
 }

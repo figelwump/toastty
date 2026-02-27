@@ -4,11 +4,14 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case missingWorkspace(windowID: UUID, workspaceID: UUID)
     case selectedWorkspaceMissing(windowID: UUID, workspaceID: UUID)
     case workspaceInMultipleWindows(workspaceID: UUID)
+    case splitRatioOutOfBounds(workspaceID: UUID, nodeID: UUID, ratio: Double)
     case emptyPaneLeaf(workspaceID: UUID, paneID: UUID)
     case selectedIndexOutOfBounds(workspaceID: UUID, paneID: UUID, selectedIndex: Int, tabCount: Int)
     case missingPanel(workspaceID: UUID, panelID: UUID)
     case panelMissingFromPaneTree(workspaceID: UUID, panelID: UUID)
     case panelReferencedMultipleTimes(workspaceID: UUID, panelID: UUID)
+    case focusedPanelMissing(workspaceID: UUID, panelID: UUID)
+    case focusedPanelNotInPaneTree(workspaceID: UUID, panelID: UUID)
     case duplicateNodeID(workspaceID: UUID, nodeID: UUID)
 }
 
@@ -38,6 +41,16 @@ public enum StateValidator {
             let nodeIDs = workspace.paneTree.allNodeIDs
             if let duplicate = firstDuplicate(in: nodeIDs) {
                 throw StateInvariantViolation.duplicateNodeID(workspaceID: workspace.id, nodeID: duplicate)
+            }
+
+            for split in workspace.paneTree.allSplitInfos {
+                if split.ratio <= 0 || split.ratio >= 1 {
+                    throw StateInvariantViolation.splitRatioOutOfBounds(
+                        workspaceID: workspace.id,
+                        nodeID: split.nodeID,
+                        ratio: split.ratio
+                    )
+                }
             }
 
             var panePanelCounts: [UUID: Int] = [:]
@@ -71,6 +84,16 @@ public enum StateValidator {
                 }
                 if count > 1 {
                     throw StateInvariantViolation.panelReferencedMultipleTimes(workspaceID: workspace.id, panelID: panelID)
+                }
+            }
+
+            if let focusedPanelID = workspace.focusedPanelID {
+                guard workspace.panels[focusedPanelID] != nil else {
+                    throw StateInvariantViolation.focusedPanelMissing(workspaceID: workspace.id, panelID: focusedPanelID)
+                }
+
+                guard workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil else {
+                    throw StateInvariantViolation.focusedPanelNotInPaneTree(workspaceID: workspace.id, panelID: focusedPanelID)
                 }
             }
         }
