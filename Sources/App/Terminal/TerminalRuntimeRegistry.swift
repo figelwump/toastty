@@ -84,12 +84,18 @@ final class TerminalSurfaceController {
         ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
         guard let ghosttySurface else {
             hostedView.isHidden = true
+            if let hostView = hostedView as? TerminalHostView {
+                hostView.setGhosttySurface(nil)
+            }
             fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "Ghostty surface unavailable")
             swapToFallbackIfNeeded()
             return
         }
 
         hostedView.isHidden = false
+        if let hostView = hostedView as? TerminalHostView {
+            hostView.setGhosttySurface(ghosttySurface)
+        }
         if fallbackView.superview != nil {
             fallbackView.removeFromSuperview()
         }
@@ -110,6 +116,9 @@ final class TerminalSurfaceController {
 
     func invalidate() {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        if let hostView = hostedView as? TerminalHostView {
+            hostView.setGhosttySurface(nil)
+        }
         if let ghosttySurface {
             ghostty_surface_free(ghosttySurface)
             self.ghosttySurface = nil
@@ -156,6 +165,10 @@ final class TerminalSurfaceController {
 }
 
 final class TerminalHostView: NSView {
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    private var ghosttySurface: ghostty_surface_t?
+    #endif
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
@@ -169,6 +182,65 @@ final class TerminalHostView: NSView {
     override var acceptsFirstResponder: Bool {
         true
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    func setGhosttySurface(_ surface: ghostty_surface_t?) {
+        ghosttySurface = surface
+    }
+
+    override func keyDown(with event: NSEvent) {
+        guard handleKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS) else {
+            super.keyDown(with: event)
+            return
+        }
+    }
+
+    override func keyUp(with event: NSEvent) {
+        guard handleKeyEvent(event, action: GHOSTTY_ACTION_RELEASE) else {
+            super.keyUp(with: event)
+            return
+        }
+    }
+
+    private func handleKeyEvent(_ event: NSEvent, action: ghostty_input_action_e) -> Bool {
+        guard let ghosttySurface else { return false }
+
+        let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
+        var keyEvent = ghostty_input_key_s(
+            action: action,
+            mods: mods,
+            consumed_mods: ghostty_surface_key_translation_mods(ghosttySurface, mods),
+            keycode: UInt32(event.keyCode),
+            text: nil,
+            unshifted_codepoint: 0,
+            composing: false
+        )
+
+        if let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first {
+            keyEvent.unshifted_codepoint = scalar.value
+        }
+
+        if let text = event.characters, let firstByte = text.utf8.first, firstByte >= 0x20 {
+            return text.withCString { pointer in
+                keyEvent.text = pointer
+                return ghostty_surface_key(ghosttySurface, keyEvent)
+            }
+        }
+
+        return ghostty_surface_key(ghosttySurface, keyEvent)
+    }
+
+    private static func ghosttyModifierFlags(for flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
+        var raw = GHOSTTY_MODS_NONE.rawValue
+        if flags.contains(.shift) { raw |= GHOSTTY_MODS_SHIFT.rawValue }
+        if flags.contains(.control) { raw |= GHOSTTY_MODS_CTRL.rawValue }
+        if flags.contains(.option) { raw |= GHOSTTY_MODS_ALT.rawValue }
+        if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
+        if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
+        if flags.contains(.numericPad) { raw |= GHOSTTY_MODS_NUM.rawValue }
+        return ghostty_input_mods_e(rawValue: raw) ?? GHOSTTY_MODS_NONE
+    }
+    #endif
 }
 
 private final class TerminalFallbackView: NSView {

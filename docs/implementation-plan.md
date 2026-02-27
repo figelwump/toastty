@@ -1523,3 +1523,24 @@ Chunk U (Ghostty panel interactivity + spurious UUID input cleanup):
   - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination "platform=macOS,arch=arm64" -derivedDataPath Derived` (`67` tests passing)
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass; runtime stable + screenshots/state artifacts)
   - inspected smoke artifact `artifacts/automation/ui/smoke-20260227-122455/split-workspace/aux-column-smoke.png`: terminal prompt no longer contains injected UUID token.
+
+Chunk V (explicit AppKit key-event bridge into Ghostty surface):
+- deeper follow-up on terminal interactivity:
+  - responder handoff alone was not sufficient as a robust input path because host view had no explicit key event bridge into Ghostty's C input APIs.
+- implementation update (`Sources/App/Terminal/TerminalRuntimeRegistry.swift`):
+  - `TerminalHostView` now stores the active `ghostty_surface_t` and explicitly forwards `keyDown`/`keyUp` events through `ghostty_surface_key(...)`.
+  - wired per-event fields:
+    - action (`press` / `repeat` / `release`)
+    - modifiers (mapped from `NSEvent.ModifierFlags`)
+    - consumed modifiers (`ghostty_surface_key_translation_mods(...)`)
+    - keycode (`NSEvent.keyCode`)
+    - optional text payload for printable UTF-8 input.
+  - `TerminalSurfaceController` now updates/clears the host view's bound surface handle as surfaces are created, updated, or invalidated.
+- validation:
+  - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+  - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination "platform=macOS,arch=arm64" -derivedDataPath Derived` (`67` tests passing)
+  - manual app exercise via scripted keystroke:
+    - launched built app binary, sent `echo bridged_input_check` + return through System Events, captured `/tmp/toastty-manual-input3.png`.
+    - screenshot confirms command + output rendered in terminal panel (interactive input path functioning).
