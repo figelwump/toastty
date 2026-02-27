@@ -342,4 +342,22 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func togglingSameAuxPanelOnOffOnKeepsSingleInstance() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let diffPanels = workspace.panels.values.filter { $0.kind == .diff }
+        #expect(diffPanels.count == 1)
+        #expect(workspace.auxPanelVisibility.contains(.diff))
+
+        try StateValidator.validate(state)
+    }
 }

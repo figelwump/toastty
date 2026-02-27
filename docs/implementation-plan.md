@@ -1000,6 +1000,14 @@ Chunk D (phase 1 top-bar panel toggles + aux panel state behavior):
 - added reducer/tree regression tests for aux toggle creation, placement, and removal.
 - validation passed: `./scripts/automation/check.sh` with 27 passing tests.
 
+Chunk D review reconciliation (post-commit second opinion on `757ff30`):
+- accepted: adjust right-column heuristic in nested vertical splits to prefer top-right pane insertion.
+- accepted: add regression coverage for right-column vertical split behavior and repeated on/off toggling of the same aux panel kind.
+- rejected: workspace-leak concern on toggle-off empty-tree branch; `removeWorkspace` removes the workspace entry from `workspacesByID` directly in that path.
+- rejected: visibility desync concern in empty-tree branch for same reason (workspace removal, not persistence).
+- rejected: changing detach/new-window focus behavior in this chunk; still intentional for current UX.
+- follow-up validation passed after fixes: `./scripts/automation/check.sh` with 29 passing tests.
+
 Deferred work / known gaps:
 - Ghostty surface runtime is currently a placeholder representation in the scaffold UI.
 - no automation launch profile (`--automation`) or fixture/socket command surface yet.

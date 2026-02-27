@@ -34,4 +34,27 @@ struct PaneNodeMutationTests {
         #expect(leaf.tabPanelIDs == [panelB, panelC])
         #expect(leaf.selectedIndex == 1)
     }
+
+    @Test
+    func rightColumnPanePrefersTopPaneWithinVerticalRightColumn() throws {
+        let leftPaneID = UUID()
+        let topRightPaneID = UUID()
+        let bottomRightPaneID = UUID()
+
+        let tree = PaneNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.65,
+            first: .leaf(paneID: leftPaneID, tabPanelIDs: [UUID()], selectedIndex: 0),
+            second: .split(
+                nodeID: UUID(),
+                orientation: .vertical,
+                ratio: 0.5,
+                first: .leaf(paneID: topRightPaneID, tabPanelIDs: [UUID()], selectedIndex: 0),
+                second: .leaf(paneID: bottomRightPaneID, tabPanelIDs: [UUID()], selectedIndex: 0)
+            )
+        )
+
+        #expect(tree.rightColumnPaneID() == topRightPaneID)
+    }
 }

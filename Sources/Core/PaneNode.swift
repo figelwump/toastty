@@ -140,7 +140,7 @@ public extension PaneNode {
             if orientation == .horizontal {
                 return second.rightColumnPaneID()
             }
-            return second.rightColumnPaneID() ?? first.rightColumnPaneID()
+            return first.rightColumnPaneID() ?? second.rightColumnPaneID()
         }
     }
 
