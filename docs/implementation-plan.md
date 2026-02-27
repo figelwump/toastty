@@ -1468,6 +1468,9 @@ Chunk S review reconciliation (post-implementation second opinion):
     - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived build`
     - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Release -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived build`
     - all passed.
+- accepted (follow-up validation expansion): run Ghostty-enabled UI smoke for runtime confirmation.
+  - result: fails before automation readiness (`error: readiness file not found ...`).
+  - observed app log (`artifacts/automation/app-smoke-20260227-114016.log`) shows Ghostty-side crash capture via Sentry/breakpad; runtime stability remains unresolved even though link/build now pass.
 - rejected: add dedicated manifest-setting unit tests in this chunk.
   - reason: current test harness does not execute Tuist manifest evaluation; adding a new manifest-test harness is out of scope for this targeted linker fix.
 - rejected: classify `-framework Carbon` use as immediate blocker.
