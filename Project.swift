@@ -1,10 +1,14 @@
 import ProjectDescription
 import Foundation
 
-let rootPath = FileManager.default.currentDirectoryPath
+let rootPath = URL(fileURLWithPath: #filePath)
+    .deletingLastPathComponent()
+    .path
 let ghosttyXCFrameworkRelativePath = "Dependencies/GhosttyKit.xcframework"
 let ghosttyXCFrameworkAbsolutePath = "\(rootPath)/\(ghosttyXCFrameworkRelativePath)"
-let hasGhosttyXCFramework = FileManager.default.fileExists(atPath: ghosttyXCFrameworkAbsolutePath)
+let ghosttyIntegrationEnabled = ProcessInfo.processInfo.environment["TOASTTY_ENABLE_GHOSTTY"] == "1"
+let hasGhosttyXCFramework = ghosttyIntegrationEnabled
+    && FileManager.default.fileExists(atPath: ghosttyXCFrameworkAbsolutePath)
 
 var appDependencies: [TargetDependency] = [
     .target(name: "CoreState"),

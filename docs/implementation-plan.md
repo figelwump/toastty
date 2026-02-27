@@ -1322,6 +1322,20 @@ Chunk N review reconciliation (post-commit second opinion on `85c2b9b`):
   - `./scripts/automation/smoke-ui.sh`
   - manual live event smoke re-run (`session.start`, `session.update_files`, `session.needs_input`, `automation.dump_state includeRuntime`)
 
+Chunk O (manual-run feedback: Ghostty fallback messaging + safer enablement gate):
+- validated user-reported manual-run behavior where terminal panel displayed fallback messaging.
+- found `GhosttyKit` presence alone is not sufficient for stable linkage in current state (linker dependencies unresolved for direct app link path).
+- adjusted project enablement policy:
+  - Ghostty compile/link path is now explicit opt-in via `TOASTTY_ENABLE_GHOSTTY=1` at manifest generation time.
+  - default local builds stay on stable fallback path to avoid accidental linker breakage when a local xcframework artifact exists.
+- updated fallback UX text from hard error-style phrasing:
+  - `GhosttyKit not linked`
+  - to:
+  - `Ghostty terminal runtime not enabled in this build`
+- validation passed:
+  - `./scripts/automation/smoke-ui.sh` (fallback path)
+  - direct test pass: `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived`
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.

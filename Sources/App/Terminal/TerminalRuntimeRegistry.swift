@@ -1,6 +1,9 @@
 import AppKit
 import CoreState
 import Foundation
+#if TOASTTY_HAS_GHOSTTY_KIT
+import GhosttyKit
+#endif
 
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
@@ -100,7 +103,7 @@ final class TerminalSurfaceController {
         ghostty_surface_set_size(ghosttySurface, width, height)
         ghostty_surface_set_focus(ghosttySurface, focused)
         #else
-        fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "GhosttyKit not linked")
+        fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "Ghostty terminal runtime not enabled in this build")
         #endif
     }
 
