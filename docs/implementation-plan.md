@@ -1505,3 +1505,21 @@ Chunk T (Ghostty startup crash on renderer thread callback isolation):
   - explicit guardrail: moving callbacks to file scope removes actor metadata from callback entrypoints, but callback bodies must still dispatch to main actor/queue before touching `GhosttyRuntimeManager` state.
 - follow-up testing gap:
   - callback threading model is now safe for current callback set, but richer callbacks (clipboard/action handling) should be added with explicit thread-handoff rules as they are implemented.
+
+Chunk U (Ghostty panel interactivity + spurious UUID input cleanup):
+- investigated user report after crash fix:
+  - terminal rendered output but was not keyboard-interactive.
+  - shell prompt contained a raw UUID token (panel identifier) at startup.
+- root causes:
+  - `GhosttyRuntimeManager.makeSurface(...)` was writing `panelID.uuidString` into `surfaceConfig.initial_input`, which Ghostty correctly injected into the shell as typed input.
+  - panel focus state was updated in SwiftUI, but AppKit first-responder handoff for the embedded terminal host view was not enforced when focus changed.
+- implementation update:
+  - removed `surfaceConfig.initial_input` assignment (and related panel ID conversion) from Ghostty surface creation so startup input is no longer polluted.
+  - on Ghostty surface updates, when a panel is focused, explicitly call `window.makeFirstResponder(hostedView)` when needed.
+  - removed now-unused `panelID` parameter from `GhosttyRuntimeManager.makeSurface(...)` and updated call sites.
+- validation:
+  - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+  - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
+  - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination "platform=macOS,arch=arm64" -derivedDataPath Derived` (`67` tests passing)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass; runtime stable + screenshots/state artifacts)
+  - inspected smoke artifact `artifacts/automation/ui/smoke-20260227-122455/split-workspace/aux-column-smoke.png`: terminal prompt no longer contains injected UUID token.

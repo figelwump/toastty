@@ -102,6 +102,7 @@ final class TerminalSurfaceController {
         let height = UInt32(max(Int(viewportSize.height * backingScaleFactor), 1))
         ghostty_surface_set_size(ghosttySurface, width, height)
         ghostty_surface_set_focus(ghosttySurface, focused)
+        ensureFirstResponderIfNeeded(focused: focused)
         #else
         fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "Ghostty terminal runtime not enabled in this build")
         #endif
@@ -124,7 +125,6 @@ final class TerminalSurfaceController {
 
         guard let hostView = hostedView as? TerminalHostView else { return }
         ghosttySurface = ghosttyManager.makeSurface(
-            panelID: panelID,
             hostView: hostView,
             workingDirectory: terminalState.cwd,
             fontPoints: fontPoints
@@ -144,6 +144,13 @@ final class TerminalSurfaceController {
                 fallbackView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             ])
         }
+    }
+
+    private func ensureFirstResponderIfNeeded(focused: Bool) {
+        guard focused else { return }
+        guard let window = hostedView.window else { return }
+        guard window.firstResponder !== hostedView else { return }
+        window.makeFirstResponder(hostedView)
     }
     #endif
 }

@@ -66,7 +66,6 @@ final class GhosttyRuntimeManager {
     }
 
     func makeSurface(
-        panelID: UUID,
         hostView: NSView,
         workingDirectory: String,
         fontPoints: Double
@@ -81,13 +80,9 @@ final class GhosttyRuntimeManager {
         surfaceConfig.font_size = Float(fontPoints)
         surfaceConfig.context = GHOSTTY_SURFACE_CONTEXT_SPLIT
 
-        let panelIdentifier = panelID.uuidString
         let surface = workingDirectory.withCString { cwdPointer in
-            panelIdentifier.withCString { inputPointer in
-                surfaceConfig.working_directory = cwdPointer
-                surfaceConfig.initial_input = inputPointer
-                return ghostty_surface_new(app, &surfaceConfig)
-            }
+            surfaceConfig.working_directory = cwdPointer
+            return ghostty_surface_new(app, &surfaceConfig)
         }
         scheduleImmediateTick()
         return surface
