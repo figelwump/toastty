@@ -1,6 +1,11 @@
 import Foundation
 
 public struct AppState: Codable, Equatable, Sendable {
+    public static let defaultTerminalFontPoints: Double = 13
+    public static let minTerminalFontPoints: Double = 9
+    public static let maxTerminalFontPoints: Double = 24
+    public static let terminalFontStepPoints: Double = 1
+
     public var windows: [WindowState]
     public var workspacesByID: [UUID: WorkspaceState]
     public var selectedWindowID: UUID?
@@ -31,7 +36,7 @@ public struct AppState: Codable, Equatable, Sendable {
             windows: [window],
             workspacesByID: [workspace.id: workspace],
             selectedWindowID: window.id,
-            globalTerminalFontPoints: 13
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
         )
     }
 }

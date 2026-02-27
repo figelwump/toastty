@@ -1403,6 +1403,18 @@ Chunk Q (global terminal font controls + transient HUD):
   - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (67 tests passing)
   - `./scripts/automation/smoke-ui.sh` (font HUD + focused panel + aux-column smoke artifacts)
 
+Chunk Q review reconciliation (post-commit second opinion on `6d7a466`):
+- accepted: simplify HUD hide-task lifecycle by running the delayed clear task on `@MainActor` and removing redundant actor hops.
+- accepted: avoid system-menu ambiguity by moving font commands into a dedicated `Terminal` command menu.
+- accepted: centralize terminal font constants on `AppState` and reuse them from reducer/bootstrap to avoid default-value drift.
+- accepted: update font reducer tests to assert against shared constants and verify reset no-op leaves state unchanged.
+- rejected: strict requirement to add sleep before font HUD screenshot; current smoke flow reliably captures HUD after synchronous action dispatch in repeated runs.
+- rejected: startup HUD flash as a current blocker; observed behavior in local smoke/manual checks does not show initial-load HUD without user/action-triggered font changes.
+- rejected: fractional-display precision concern for HUD label; current v1 font step is integral and display intentionally shows integer points.
+- follow-up validation passed after fixes:
+  - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination \"platform=macOS,arch=arm64\" -derivedDataPath Derived` (67 tests passing)
+  - `./scripts/automation/smoke-ui.sh`
+
 Deferred work / known gaps:
 - Ghostty integration is currently local/optional (depends on unmanaged `Dependencies/GhosttyKit.xcframework` install); repo-level artifact strategy and CI policy are still unresolved.
 - Ghostty framework architecture/output policy (`arm64` vs `universal`) is still not finalized.

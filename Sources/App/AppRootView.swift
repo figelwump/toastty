@@ -33,13 +33,14 @@ struct AppRootView: View {
         .onChange(of: store.state.globalTerminalFontPoints) { _, nextPoints in
             fontHUDPoints = nextPoints
             hideFontHUDTask?.cancel()
-            hideFontHUDTask = Task {
-                try? await Task.sleep(for: .seconds(1.2))
-                guard Task.isCancelled == false else { return }
-                await MainActor.run {
-                    fontHUDPoints = nil
-                    hideFontHUDTask = nil
+            hideFontHUDTask = Task { @MainActor in
+                do {
+                    try await Task.sleep(for: .seconds(1.2))
+                } catch {
+                    return
                 }
+                fontHUDPoints = nil
+                hideFontHUDTask = nil
             }
         }
         .onDisappear {

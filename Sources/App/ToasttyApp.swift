@@ -46,11 +46,11 @@ struct ToasttyApp: App {
                 .frame(minWidth: 980, minHeight: 620)
         }
         .commands {
-            CommandMenu("View") {
+            CommandMenu("Terminal") {
                 Button("Increase Terminal Font") {
                     store.send(.increaseGlobalTerminalFont)
                 }
-                .keyboardShortcut("=", modifiers: [.command])
+                .keyboardShortcut("+", modifiers: [.command])
 
                 Button("Decrease Terminal Font") {
                     store.send(.decreaseGlobalTerminalFont)

@@ -600,36 +600,40 @@ struct AppReducerTests {
     func globalFontActionsAdjustAndResetFontSize() {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let defaultPoints = AppState.defaultTerminalFontPoints
+        let step = AppState.terminalFontStepPoints
 
         #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 14)
+        #expect(state.globalTerminalFontPoints == defaultPoints + step)
 
         #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 13)
+        #expect(state.globalTerminalFontPoints == defaultPoints)
 
         #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
         #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 15)
+        #expect(state.globalTerminalFontPoints == defaultPoints + (step * 2))
 
         #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 13)
+        #expect(state.globalTerminalFontPoints == defaultPoints)
     }
 
     @Test
     func globalFontActionsClampAtBounds() {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let defaultPoints = AppState.defaultTerminalFontPoints
 
-        state.globalTerminalFontPoints = 24
+        state.globalTerminalFontPoints = AppState.maxTerminalFontPoints
         #expect(reducer.send(.increaseGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == 24)
+        #expect(state.globalTerminalFontPoints == AppState.maxTerminalFontPoints)
 
-        state.globalTerminalFontPoints = 9
+        state.globalTerminalFontPoints = AppState.minTerminalFontPoints
         #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == 9)
+        #expect(state.globalTerminalFontPoints == AppState.minTerminalFontPoints)
 
-        state.globalTerminalFontPoints = 13
+        state.globalTerminalFontPoints = defaultPoints
         #expect(reducer.send(.resetGlobalTerminalFont, state: &state) == false)
+        #expect(state.globalTerminalFontPoints == defaultPoints)
     }
 
     @Test

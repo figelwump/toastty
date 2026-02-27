@@ -322,8 +322,8 @@ public struct AppReducer {
 
         case .increaseGlobalTerminalFont:
             let nextPoints = min(
-                maxTerminalFontPoints,
-                state.globalTerminalFontPoints + fontStepPoints
+                AppState.maxTerminalFontPoints,
+                state.globalTerminalFontPoints + AppState.terminalFontStepPoints
             )
             guard nextPoints != state.globalTerminalFontPoints else { return false }
             state.globalTerminalFontPoints = nextPoints
@@ -331,16 +331,16 @@ public struct AppReducer {
 
         case .decreaseGlobalTerminalFont:
             let nextPoints = max(
-                minTerminalFontPoints,
-                state.globalTerminalFontPoints - fontStepPoints
+                AppState.minTerminalFontPoints,
+                state.globalTerminalFontPoints - AppState.terminalFontStepPoints
             )
             guard nextPoints != state.globalTerminalFontPoints else { return false }
             state.globalTerminalFontPoints = nextPoints
             return true
 
         case .resetGlobalTerminalFont:
-            guard state.globalTerminalFontPoints != defaultTerminalFontPoints else { return false }
-            state.globalTerminalFontPoints = defaultTerminalFontPoints
+            guard state.globalTerminalFontPoints != AppState.defaultTerminalFontPoints else { return false }
+            state.globalTerminalFontPoints = AppState.defaultTerminalFontPoints
             return true
 
         case .splitFocusedPane(let workspaceID, let orientation):
@@ -567,10 +567,6 @@ public struct AppReducer {
     }
 
     private static let auxiliaryPanelKinds: Set<PanelKind> = [.diff, .markdown, .scratchpad]
-    private static let fontStepPoints: Double = 1
-    private static let minTerminalFontPoints: Double = 9
-    private static let maxTerminalFontPoints: Double = 24
-    private static let defaultTerminalFontPoints: Double = 13
 }
 
 private struct PanelLocation {
