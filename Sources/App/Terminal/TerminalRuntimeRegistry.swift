@@ -104,8 +104,9 @@ final class TerminalSurfaceController {
         let yScale = max(Double(backingScaleFactor), 1)
         ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
 
-        let width = UInt32(max(Int(viewportSize.width * backingScaleFactor), 1))
-        let height = UInt32(max(Int(viewportSize.height * backingScaleFactor), 1))
+        // The embedded API accepts logical surface dimensions; content scale is provided separately.
+        let width = UInt32(max(Int(viewportSize.width), 1))
+        let height = UInt32(max(Int(viewportSize.height), 1))
         ghostty_surface_set_size(ghosttySurface, width, height)
         ghostty_surface_set_focus(ghosttySurface, focused)
         ensureFirstResponderIfNeeded(focused: focused)

@@ -1562,3 +1562,23 @@ Chunk V review reconciliation (post-implementation second opinion):
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `xcodebuild test -workspace toastty.xcworkspace -scheme toastty-Workspace -destination "platform=macOS,arch=arm64" -derivedDataPath Derived` (`67` tests passing)
   - manual scripted input check repeated: `/tmp/toastty-manual-input4.png` confirms command text + output roundtrip in terminal.
+
+Chunk W (Ghostty viewport sizing fix for terminal scroll behavior):
+- investigated user-reported behavior where large command output (`ls -l`) did not visibly scroll and prompt recovery looked broken.
+- root cause:
+  - `TerminalSurfaceController.updateSurfaceSizing(...)` multiplied logical viewport dimensions by backing scale before calling `ghostty_surface_set_size(...)`.
+  - Ghostty embed API expects logical dimensions there, with DPI scaling passed separately via `ghostty_surface_set_content_scale(...)`.
+  - this effectively double-scaled the surface size on Retina, causing terminal grid/viewport mismatch.
+- implementation update (`Sources/App/Terminal/TerminalRuntimeRegistry.swift`):
+  - keep `ghostty_surface_set_content_scale(...)` behavior unchanged.
+  - pass logical `viewportSize.width/height` directly to `ghostty_surface_set_size(...)`.
+  - added inline comment clarifying Ghostty embed API contract to prevent regressions.
+- validation:
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass).
+  - `./scripts/automation/check.sh` (pass; 67 tests).
+  - live app validation (non-automation app run):
+    - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+    - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
+    - launched built app, clicked terminal panel, sent `ls -l` + repeated return via System Events, captured screenshot:
+      - `artifacts/manual/ghostty-scroll-validation-click-20260227-124214.png`
+    - screenshot shows command output scrolled and prompt visible at buffer bottom.
