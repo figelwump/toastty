@@ -44,20 +44,43 @@ struct SidebarView: View {
 
             Spacer(minLength: 0)
 
-            // New workspace button — simple text, no card
+            // New workspace button — full-width, matches workspace item sizing
             Button {
                 guard let windowID = store.selectedWindow?.id else { return }
                 store.send(.createWorkspace(windowID: windowID, title: nil))
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 10, weight: .medium))
+                    // Plus icon matching 11×11 stroke icon language
+                    Canvas { context, _ in
+                        var plus = Path()
+                        plus.move(to: CGPoint(x: 5.5, y: 2))
+                        plus.addLine(to: CGPoint(x: 5.5, y: 9))
+                        plus.move(to: CGPoint(x: 2, y: 5.5))
+                        plus.addLine(to: CGPoint(x: 9, y: 5.5))
+                        context.stroke(
+                            plus,
+                            with: .color(ToastyTheme.mutedTextStrong),
+                            style: StrokeStyle(lineWidth: 1.1, lineCap: .round)
+                        )
+                    }
+                    .frame(width: 11, height: 11)
+
                     Text("New workspace")
-                        .font(ToastyTheme.fontNewWorkspace)
+                        .font(ToastyTheme.fontWorkspaceNameInactive)
+                        .foregroundStyle(ToastyTheme.mutedTextStrong)
+                        .lineLimit(1)
+
+                    Spacer(minLength: 0)
+
+                    shortcutBadge("⌘⇧N")
                 }
-                .foregroundStyle(ToastyTheme.subtleText)
+                .padding(.vertical, 7)
                 .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+                .overlay(alignment: .leading) {
+                    Rectangle()
+                        .fill(Color.clear)
+                        .frame(width: 2)
+                }
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("sidebar.workspaces.new")
@@ -100,10 +123,8 @@ struct SidebarView: View {
 
                     Spacer(minLength: 0)
 
-                    // Keyboard shortcut hint
-                    Text(shortcutLabel)
-                        .font(ToastyTheme.fontWorkspaceSubtitle)
-                        .foregroundStyle(isSelected ? ToastyTheme.subtleText : Color(hex: 0x4A4A4A))
+                    // Keyboard shortcut badge pill
+                    shortcutBadge(shortcutLabel)
                 }
 
                 // Subtitle: pane count + context info
@@ -133,5 +154,15 @@ struct SidebarView: View {
     private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
         let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
         return paneLabel
+    }
+
+    /// Reusable keyboard shortcut badge pill (e.g. "⌘1", "⌘⇧N").
+    private func shortcutBadge(_ label: String) -> some View {
+        Text(label)
+            .font(ToastyTheme.fontShortcutBadge)
+            .foregroundStyle(ToastyTheme.shortcutBadgeText)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
     }
 }

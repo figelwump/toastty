@@ -35,13 +35,17 @@ struct WorkspaceView: View {
             auxToggle(title: "Markdown", systemImage: "doc.text", kind: .markdown, identifier: "topbar.toggle.markdown")
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
-            topBarButton(title: "Split Horizontal", active: false) {
+            topBarButton(title: "Split H", icon: {
+                SplitHorizontalIconView(color: ToastyTheme.mutedTextStrong)
+            }, active: false) {
                 split(orientation: .horizontal)
             }
             .disabled(isFocusedPanelModeActive)
             .accessibilityIdentifier("workspace.split.horizontal")
 
-            topBarButton(title: "Split Vertical", active: false) {
+            topBarButton(title: "Split V", icon: {
+                SplitVerticalIconView(color: ToastyTheme.mutedTextStrong)
+            }, active: false) {
                 split(orientation: .vertical)
             }
             .disabled(isFocusedPanelModeActive)
@@ -87,7 +91,9 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func focusedPanelToggle(identifier: String) -> some View {
         let isOn = isFocusedPanelModeActive
-        topBarButton(title: isOn ? "Restore Layout" : "Focus Panel", active: isOn) {
+        topBarButton(title: isOn ? "Restore Layout" : "Focus Panel", icon: {
+            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+        }, active: isOn) {
             guard let workspaceID = store.selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         }
@@ -111,6 +117,31 @@ struct WorkspaceView: View {
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(active ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
                 }
+                Text(title)
+                    .font(ToastyTheme.fontSubtext)
+                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(active ? ToastyTheme.elevatedBackground : Color.clear)
+        .overlay(
+            Rectangle()
+                .stroke(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+        )
+    }
+
+    /// Top bar button variant that accepts a custom icon view (e.g. Canvas-based icons).
+    private func topBarButton<Icon: View>(
+        title: String,
+        @ViewBuilder icon: () -> Icon,
+        active: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                icon()
                 Text(title)
                     .font(ToastyTheme.fontSubtext)
                     .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
@@ -399,5 +430,79 @@ private struct PanelCardView: View {
                 maxHeight: .infinity,
                 alignment: .leading
             )
+    }
+}
+
+// MARK: - Top Bar Icons
+
+/// Viewfinder bracket corners with center dot — Focus/Zoom toggle icon.
+/// Matches the 11×11 stroke-based icon language used across the top nav bar.
+struct FocusIconView: View {
+    let color: Color
+
+    var body: some View {
+        Canvas { context, _ in
+            // Four corner brackets
+            var brackets = Path()
+            // Top-left
+            brackets.move(to: CGPoint(x: 1.5, y: 3.5))
+            brackets.addLine(to: CGPoint(x: 1.5, y: 1.5))
+            brackets.addLine(to: CGPoint(x: 3.5, y: 1.5))
+            // Top-right
+            brackets.move(to: CGPoint(x: 7.5, y: 1.5))
+            brackets.addLine(to: CGPoint(x: 9.5, y: 1.5))
+            brackets.addLine(to: CGPoint(x: 9.5, y: 3.5))
+            // Bottom-right
+            brackets.move(to: CGPoint(x: 9.5, y: 7.5))
+            brackets.addLine(to: CGPoint(x: 9.5, y: 9.5))
+            brackets.addLine(to: CGPoint(x: 7.5, y: 9.5))
+            // Bottom-left
+            brackets.move(to: CGPoint(x: 3.5, y: 9.5))
+            brackets.addLine(to: CGPoint(x: 1.5, y: 9.5))
+            brackets.addLine(to: CGPoint(x: 1.5, y: 7.5))
+
+            context.stroke(
+                brackets,
+                with: .color(color),
+                style: StrokeStyle(lineWidth: 1.1, lineCap: .round, lineJoin: .round)
+            )
+
+            // Center dot
+            let dot = Path(ellipseIn: CGRect(x: 5.5 - 1.2, y: 5.5 - 1.2, width: 2.4, height: 2.4))
+            context.fill(dot, with: .color(color))
+        }
+        .frame(width: 11, height: 11)
+    }
+}
+
+/// Two side-by-side rounded rectangles — Split Horizontal icon.
+struct SplitHorizontalIconView: View {
+    let color: Color
+
+    var body: some View {
+        Canvas { context, _ in
+            let left = Path(roundedRect: CGRect(x: 1.5, y: 1.5, width: 3.2, height: 8), cornerRadius: 0.8)
+            let right = Path(roundedRect: CGRect(x: 6.3, y: 1.5, width: 3.2, height: 8), cornerRadius: 0.8)
+            let style = StrokeStyle(lineWidth: 1.1)
+            context.stroke(left, with: .color(color), style: style)
+            context.stroke(right, with: .color(color), style: style)
+        }
+        .frame(width: 11, height: 11)
+    }
+}
+
+/// Two stacked rounded rectangles — Split Vertical icon.
+struct SplitVerticalIconView: View {
+    let color: Color
+
+    var body: some View {
+        Canvas { context, _ in
+            let top = Path(roundedRect: CGRect(x: 1.5, y: 1.5, width: 8, height: 3.2), cornerRadius: 0.8)
+            let bottom = Path(roundedRect: CGRect(x: 1.5, y: 6.3, width: 8, height: 3.2), cornerRadius: 0.8)
+            let style = StrokeStyle(lineWidth: 1.1)
+            context.stroke(top, with: .color(color), style: style)
+            context.stroke(bottom, with: .color(color), style: style)
+        }
+        .frame(width: 11, height: 11)
     }
 }
