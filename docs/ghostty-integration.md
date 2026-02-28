@@ -103,3 +103,13 @@ Next actions:
   - diagnostic count and each diagnostic message (when present)
 - Embedded runtime skips `ghostty_config_load_cli_args` by default, preventing false Ghostty diagnostics for app-specific args (for example automation flags).
 - Optional override: set `TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1` to restore Ghostty CLI arg parsing behavior.
+
+## Host-side config keys currently applied
+
+- `unfocused-split-opacity`
+  - read via `ghostty_config_get`
+  - applied in Toastty pane rendering as overlay alpha `1 - config_value` on unfocused terminal panes
+- `unfocused-split-fill`
+  - read via `ghostty_config_get`
+  - when unset, falls back to Ghostty `background` color
+  - used as the overlay color for unfocused terminal panes

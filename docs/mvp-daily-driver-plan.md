@@ -954,3 +954,38 @@ Pending:
   - `/tmp/toastty.log` confirms:
     - user config source path logged
     - diagnostic count remains `0` for current `~/.config/ghostty/config`.
+
+2026-02-28 (Post-MVP continuation: apply Ghostty unfocused split styling keys in host UI):
+- implemented:
+  - added host-side style store (`GhosttyHostStyleStore`) to bridge Ghostty config values into SwiftUI pane rendering.
+  - `GhosttyRuntimeManager` now reads these finalized config values via typed `ghostty_config_get`:
+    - `unfocused-split-opacity` (mapped to overlay alpha `1 - value`)
+    - `unfocused-split-fill` (fallback to `background` when unset)
+  - applied style to unfocused terminal panes in `PanelCardView` as a non-interactive fill overlay.
+  - added Ghostty startup log entry:
+    - `Applied Ghostty unfocused split style` with overlay alpha and RGB payload.
+- validation:
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `/tmp/toastty.log` shows expected loaded values for current config:
+    - `overlay_opacity=0.300` from `unfocused-split-opacity=0.7`
+    - `fill_rgb=0.118,0.118,0.180` from `unfocused-split-fill=#1e1e2e`
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: unfocused split styling hardening):
+- reviewer source: Claude second-opinion on unfocused split styling patch.
+- accepted and implemented:
+  - added explicit `ghostty_config_get` failure handling/logging for `unfocused-split-opacity`.
+  - added explicit fallback failure logging when both `unfocused-split-fill` and `background` lookups fail.
+  - added warning log when computed overlay opacity requires clamp.
+  - guarded unfocused overlay rendering behind `focusedPanelID != nil` to avoid accidental dimming when focus is unresolved.
+- rejected/deferred:
+  - runtime live-reload propagation for these host-side style keys is deferred; current host-style application remains startup-time.
+  - exact compositor parity with Ghostty’s internal dimming pipeline is deferred; current implementation intentionally uses a SwiftUI overlay approximation.
+- re-validation:
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `/tmp/toastty.log` confirms style application log remains:
+    - `overlay_opacity=0.300`
+    - `fill_rgb=0.118,0.118,0.180`

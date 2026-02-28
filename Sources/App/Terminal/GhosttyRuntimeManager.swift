@@ -318,6 +318,21 @@ final class GhosttyRuntimeManager {
         let configSource = Self.loadGhosttyConfig(config)
         ghostty_config_finalize(config)
         Self.logGhosttyConfigDiagnostics(config, source: configSource)
+        let unfocusedSplitStyle = Self.resolveUnfocusedSplitStyle(config)
+        GhosttyHostStyleStore.shared.setUnfocusedSplitStyle(unfocusedSplitStyle)
+        ToasttyLog.info(
+            "Applied Ghostty unfocused split style",
+            category: .ghostty,
+            metadata: [
+                "overlay_opacity": String(format: "%.3f", unfocusedSplitStyle.fillOverlayOpacity),
+                "fill_rgb": String(
+                    format: "%.3f,%.3f,%.3f",
+                    unfocusedSplitStyle.fillColor.red,
+                    unfocusedSplitStyle.fillColor.green,
+                    unfocusedSplitStyle.fillColor.blue
+                ),
+            ]
+        )
 
         var runtimeConfig = makeGhosttyRuntimeConfig(
             userdata: Unmanaged.passUnretained(self).toOpaque()
@@ -523,6 +538,59 @@ final class GhosttyRuntimeManager {
                 ]
             )
         }
+    }
+
+    private static func resolveUnfocusedSplitStyle(_ config: ghostty_config_t) -> GhosttyUnfocusedSplitStyle {
+        var configuredUnfocusedSplitOpacity = 0.7
+        let opacityKey = "unfocused-split-opacity"
+        if !ghostty_config_get(config, &configuredUnfocusedSplitOpacity, opacityKey, UInt(opacityKey.lengthOfBytes(using: .utf8))) {
+            ToasttyLog.warning(
+                "Ghostty config missing unfocused split opacity; using fallback",
+                category: .ghostty,
+                metadata: [
+                    "key": opacityKey,
+                    "fallback": "0.7",
+                ]
+            )
+        }
+
+        var fillColor = ghostty_config_color_s()
+        let fillKey = "unfocused-split-fill"
+        if !ghostty_config_get(config, &fillColor, fillKey, UInt(fillKey.lengthOfBytes(using: .utf8))) {
+            let backgroundKey = "background"
+            if !ghostty_config_get(config, &fillColor, backgroundKey, UInt(backgroundKey.lengthOfBytes(using: .utf8))) {
+                ToasttyLog.warning(
+                    "Ghostty config missing unfocused split fill and background; using black fallback",
+                    category: .ghostty,
+                    metadata: [
+                        "fill_key": fillKey,
+                        "background_key": backgroundKey,
+                    ]
+                )
+            }
+        }
+
+        let rawOverlayOpacity = 1 - configuredUnfocusedSplitOpacity
+        let overlayOpacity = min(max(rawOverlayOpacity, 0), 1)
+        if abs(overlayOpacity - rawOverlayOpacity) > 0.0001 {
+            ToasttyLog.warning(
+                "Clamped Ghostty unfocused split overlay opacity",
+                category: .ghostty,
+                metadata: [
+                    "raw_value": String(rawOverlayOpacity),
+                    "clamped_value": String(overlayOpacity),
+                ]
+            )
+        }
+
+        return GhosttyUnfocusedSplitStyle(
+            fillOverlayOpacity: overlayOpacity,
+            fillColor: GhosttyHostColor(
+                red: Double(fillColor.r) / 255,
+                green: Double(fillColor.g) / 255,
+                blue: Double(fillColor.b) / 255
+            )
+        )
     }
 
     fileprivate func scheduleImmediateTick() {

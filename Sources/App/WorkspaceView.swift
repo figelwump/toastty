@@ -4,6 +4,7 @@ import SwiftUI
 struct WorkspaceView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,7 +67,8 @@ struct WorkspaceView: View {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             globalFontPoints: store.state.globalTerminalFontPoints,
             focusedPanelID: workspace.focusedPanelID,
-            focusedPanelModeActive: workspace.focusedPanelModeActive
+            focusedPanelModeActive: workspace.focusedPanelModeActive,
+            unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
@@ -133,6 +135,7 @@ private struct PaneNodeView: View {
     let globalFontPoints: Double
     let focusedPanelID: UUID?
     let focusedPanelModeActive: Bool
+    let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
 
     var body: some View {
         switch node {
@@ -151,6 +154,7 @@ private struct PaneNodeView: View {
                         panelState: panelState,
                         focusedPanelID: workspace.focusedPanelID,
                         globalFontPoints: globalFontPoints,
+                        unfocusedSplitStyle: unfocusedSplitStyle,
                         store: store,
                         terminalRuntimeRegistry: terminalRuntimeRegistry
                     )
@@ -183,7 +187,8 @@ private struct PaneNodeView: View {
                                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                                 globalFontPoints: globalFontPoints,
                                 focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
                             .frame(width: firstWidth, height: geometry.size.height)
                             .opacity(showFirst ? 1 : 0)
@@ -202,7 +207,8 @@ private struct PaneNodeView: View {
                                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                                 globalFontPoints: globalFontPoints,
                                 focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
                             .frame(width: secondWidth, height: geometry.size.height)
                             .opacity(showSecond ? 1 : 0)
@@ -224,7 +230,8 @@ private struct PaneNodeView: View {
                                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                                 globalFontPoints: globalFontPoints,
                                 focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
                             .frame(width: geometry.size.width, height: firstHeight)
                             .opacity(showFirst ? 1 : 0)
@@ -243,7 +250,8 @@ private struct PaneNodeView: View {
                                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                                 globalFontPoints: globalFontPoints,
                                 focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
                             .frame(width: geometry.size.width, height: secondHeight)
                             .opacity(showSecond ? 1 : 0)
@@ -302,6 +310,7 @@ private struct PanelCardView: View {
     let panelState: PanelState
     let focusedPanelID: UUID?
     let globalFontPoints: Double
+    let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
 
@@ -333,6 +342,14 @@ private struct PanelCardView: View {
                     globalFontPoints: globalFontPoints,
                     runtimeRegistry: terminalRuntimeRegistry
                 )
+                .overlay {
+                    if focusedPanelID != nil, !isFocused, unfocusedSplitStyle.fillOverlayOpacity > 0 {
+                        Rectangle()
+                            .fill(unfocusedSplitStyle.fillColor.color)
+                            .opacity(unfocusedSplitStyle.fillOverlayOpacity)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .frame(
                     maxWidth: .infinity,
                     maxHeight: .infinity,
