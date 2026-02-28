@@ -496,3 +496,21 @@ Pending:
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TOASTTY_ENABLE_GHOSTTY=1 tuist generate` (pass; compile conditions include `TOASTTY_HAS_GHOSTTY_KIT`)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: deterministic app-target panel resolution):
+- reviewer source: Claude second-opinion on commit `0d97aed`.
+- accepted:
+  - removed nondeterministic app-target fallback (`workspace.panels.keys.first`).
+  - added deterministic action panel resolution from pane-tree leaf order (`resolvedActionPanelID(in:)`), preferring:
+    - valid focused panel
+    - selected tab in first valid leaf
+    - first valid tab in that leaf
+  - captured `store.state` once per action dispatch in `handleGhosttyRuntimeAction(...)` to avoid mixed-state reads.
+- rejected (with rationale):
+  - removing pre-intent `focusPanel` sync was rejected; routing intent should still originate from the invoking panel context (surface-target) or resolved focused panel context (app-target) before split/resize/focus/equalize.
+  - adding AppState font decode migration/clamp logic was deferred; current issue scope was shortcut routing + minimum floor adjustment and no regression evidence from persisted state loading.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 77 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TOASTTY_ENABLE_GHOSTTY=1 tuist generate` + `xcodebuild -showBuildSettings` (pass; `TOASTTY_HAS_GHOSTTY_KIT` present)

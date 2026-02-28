@@ -83,6 +83,29 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return selectedWindow.selectedWorkspaceID ?? selectedWindow.workspaceIDs.first
     }
 
+    private func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
+        if let focusedPanelID = workspace.focusedPanelID,
+           workspace.panels[focusedPanelID] != nil,
+           workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil {
+            return focusedPanelID
+        }
+
+        for leaf in workspace.paneTree.allLeafInfos {
+            guard leaf.tabPanelIDs.isEmpty == false else { continue }
+            let selectedIndex = min(max(leaf.selectedIndex, 0), leaf.tabPanelIDs.count - 1)
+            let preferredPanelID = leaf.tabPanelIDs[selectedIndex]
+            if workspace.panels[preferredPanelID] != nil {
+                return preferredPanelID
+            }
+
+            if let firstValidPanelID = leaf.tabPanelIDs.first(where: { workspace.panels[$0] != nil }) {
+                return firstValidPanelID
+            }
+        }
+
+        return nil
+    }
+
     fileprivate func register(surface: ghostty_surface_t, for panelID: UUID) {
         panelIDBySurfaceHandle[UInt(bitPattern: surface)] = panelID
     }
@@ -119,21 +142,21 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         guard let store else {
             return false
         }
+        let state = store.state
 
         let panelID: UUID
         let workspaceIDForAction: UUID
         if let surfaceHandle = action.surfaceHandle {
             guard let resolvedPanelID = panelIDBySurfaceHandle[surfaceHandle],
-                  let workspaceIDForSurface = workspaceID(containing: resolvedPanelID, state: store.state) else {
+                  let workspaceIDForSurface = workspaceID(containing: resolvedPanelID, state: state) else {
                 return false
             }
             panelID = resolvedPanelID
             workspaceIDForAction = workspaceIDForSurface
         } else {
-            let state = store.state
             guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
                   let workspace = state.workspacesByID[selectedWorkspaceID],
-                  let resolvedPanelID = workspace.focusedPanelID ?? workspace.panels.keys.first else {
+                  let resolvedPanelID = resolvedActionPanelID(in: workspace) else {
                 return false
             }
             panelID = resolvedPanelID
