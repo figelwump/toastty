@@ -367,3 +367,15 @@ Pending:
   - new smoke artifacts with workflow assertions:
     - `artifacts/automation/ui/smoke-20260227-192246/split-workspace/aux-column-smoke.png`
     - `artifacts/automation/ui/smoke-20260227-192304/split-workspace/terminal-viewport-smoke.png`
+
+2026-02-28 (Chunk M4 follow-up: reviewer fixes):
+- accepted point:
+  - made focus-next/focus-previous smoke assertions conditional on `paneCount > 1` so fixture overrides with single-pane layouts do not fail spuriously.
+- rejected points (with rationale):
+  - `automation.workspace_snapshot` without explicit `workspaceID` is valid by design because `resolveWorkspaceID` falls back to selected workspace.
+  - `cmd+shift+f` QA checklist entry is valid; shortcut is wired in `WorkspaceView.focusedPanelToggle`.
+  - `leafPanelIDs` duplication concern is non-issue for current pane model (each panel belongs to a single leaf).
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 71 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)

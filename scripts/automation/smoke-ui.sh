@@ -121,29 +121,33 @@ if [[ -z "$BASELINE_PANE_COUNT" || -z "$BASELINE_FOCUSED_PANEL_ID" ]]; then
   exit 1
 fi
 
-send_request "automation.perform_action" '{"action":"workspace.focus-pane.next"}'
-FOCUS_NEXT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
-NEXT_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_NEXT_RESPONSE" "focusedPanelID")"
-if [[ -z "$NEXT_FOCUSED_PANEL_ID" ]]; then
-  echo "error: focused panel missing after workspace.focus-pane.next" >&2
-  echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
-  exit 1
-fi
-if [[ "$NEXT_FOCUSED_PANEL_ID" == "$BASELINE_FOCUSED_PANEL_ID" ]]; then
-  echo "error: workspace.focus-pane.next did not change focused panel" >&2
-  echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
-  echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
-  exit 1
-fi
+if (( BASELINE_PANE_COUNT > 1 )); then
+  send_request "automation.perform_action" '{"action":"workspace.focus-pane.next"}'
+  FOCUS_NEXT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+  NEXT_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_NEXT_RESPONSE" "focusedPanelID")"
+  if [[ -z "$NEXT_FOCUSED_PANEL_ID" ]]; then
+    echo "error: focused panel missing after workspace.focus-pane.next" >&2
+    echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
+    exit 1
+  fi
+  if [[ "$NEXT_FOCUSED_PANEL_ID" == "$BASELINE_FOCUSED_PANEL_ID" ]]; then
+    echo "error: workspace.focus-pane.next did not change focused panel" >&2
+    echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
+    echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
+    exit 1
+  fi
 
-send_request "automation.perform_action" '{"action":"workspace.focus-pane.previous"}'
-FOCUS_PREVIOUS_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
-PREVIOUS_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_PREVIOUS_RESPONSE" "focusedPanelID")"
-if [[ "$PREVIOUS_FOCUSED_PANEL_ID" != "$BASELINE_FOCUSED_PANEL_ID" ]]; then
-  echo "error: workspace.focus-pane.previous did not return focus to baseline panel" >&2
-  echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
-  echo "snapshot response: ${FOCUS_PREVIOUS_RESPONSE}" >&2
-  exit 1
+  send_request "automation.perform_action" '{"action":"workspace.focus-pane.previous"}'
+  FOCUS_PREVIOUS_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+  PREVIOUS_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_PREVIOUS_RESPONSE" "focusedPanelID")"
+  if [[ "$PREVIOUS_FOCUSED_PANEL_ID" != "$BASELINE_FOCUSED_PANEL_ID" ]]; then
+    echo "error: workspace.focus-pane.previous did not return focus to baseline panel" >&2
+    echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
+    echo "snapshot response: ${FOCUS_PREVIOUS_RESPONSE}" >&2
+    exit 1
+  fi
+else
+  echo "note: skipping focus-next/previous assertions for single-pane fixture"
 fi
 
 send_request "automation.perform_action" '{"action":"workspace.split.right"}'
