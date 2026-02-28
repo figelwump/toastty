@@ -69,10 +69,6 @@ struct SidebarView: View {
                         .font(ToastyTheme.fontWorkspaceNameInactive)
                         .foregroundStyle(ToastyTheme.mutedTextStrong)
                         .lineLimit(1)
-
-                    Spacer(minLength: 0)
-
-                    shortcutBadge("⌘⇧N")
                 }
                 .padding(.vertical, 7)
                 .padding(.horizontal, 10)
