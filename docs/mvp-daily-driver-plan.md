@@ -672,3 +672,28 @@ Pending:
   - `./scripts/automation/smoke-ui.sh` (pass, Ghostty-enabled path)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass, fallback path)
   - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation: split-ratio rendering fix for resize visibility):
+- root-cause debug from live logs:
+  - Ghostty resize shortcuts were routed and reducer mutations were applied, but pane widths/heights appeared unchanged.
+  - cause: `PaneNodeView` split rendering used equal-size `HStack`/`VStack` branches and ignored model split `ratio`.
+- implemented UI fix in `Sources/App/WorkspaceView.swift`:
+  - split nodes now render through `GeometryReader` and explicit first/second dimensions derived from clamped split `ratio`.
+  - horizontal split:
+    - first width = `(availableWidth * ratio)`
+    - second width = `(availableWidth - first width)`
+  - vertical split uses the same approach for heights.
+  - divider thickness is preserved at `1px`.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass, Ghostty-enabled path)
+  - manual shortcut repro with debug logs:
+    - `resize_split.left` and `resize_split.right` both routed/handled and now visibly change pane size.
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: split-ratio rendering fix):
+- reviewer source: Claude second-opinion on `WorkspaceView` ratio-rendering patch.
+- accepted:
+  - no blocking defects; ratio math/path validated.
+- rejected (with rationale):
+  - `GeometryReader` zero-size caveat was considered non-blocking in current layout hierarchy because pane tree is always rendered inside workspace content with explicit max-size constraints.
+  - toolchain compatibility caveat (`let` bindings in `ViewBuilder`) is non-blocking; current repo toolchain compiles/tests pass on target environment.

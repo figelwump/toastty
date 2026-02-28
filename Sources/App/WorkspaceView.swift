@@ -156,56 +156,70 @@ private struct PaneNodeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-        case .split(_, let orientation, _, let first, let second):
-            if orientation == .horizontal {
-                HStack(spacing: 0) {
-                    PaneNodeView(
-                        node: first,
-                        workspace: workspace,
-                        store: store,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        globalFontPoints: globalFontPoints
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .split(_, let orientation, let ratio, let first, let second):
+            GeometryReader { geometry in
+                let dividerThickness: CGFloat = 1
+                let clampedRatio = min(max(ratio, 0.1), 0.9)
 
-                    Rectangle()
-                        .fill(ToastyTheme.paneDivider)
-                        .frame(width: 1)
+                if orientation == .horizontal {
+                    let availableWidth = max(geometry.size.width - dividerThickness, 0)
+                    let firstWidth = availableWidth * clampedRatio
+                    let secondWidth = max(availableWidth - firstWidth, 0)
 
-                    PaneNodeView(
-                        node: second,
-                        workspace: workspace,
-                        store: store,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        globalFontPoints: globalFontPoints
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-            } else {
-                VStack(spacing: 0) {
-                    PaneNodeView(
-                        node: first,
-                        workspace: workspace,
-                        store: store,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        globalFontPoints: globalFontPoints
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    HStack(spacing: 0) {
+                        PaneNodeView(
+                            node: first,
+                            workspace: workspace,
+                            store: store,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            globalFontPoints: globalFontPoints
+                        )
+                        .frame(width: firstWidth, height: geometry.size.height)
 
-                    Rectangle()
-                        .fill(ToastyTheme.paneDivider)
-                        .frame(height: 1)
+                        Rectangle()
+                            .fill(ToastyTheme.paneDivider)
+                            .frame(width: dividerThickness, height: geometry.size.height)
 
-                    PaneNodeView(
-                        node: second,
-                        workspace: workspace,
-                        store: store,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        globalFontPoints: globalFontPoints
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        PaneNodeView(
+                            node: second,
+                            workspace: workspace,
+                            store: store,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            globalFontPoints: globalFontPoints
+                        )
+                        .frame(width: secondWidth, height: geometry.size.height)
+                    }
+                } else {
+                    let availableHeight = max(geometry.size.height - dividerThickness, 0)
+                    let firstHeight = availableHeight * clampedRatio
+                    let secondHeight = max(availableHeight - firstHeight, 0)
+
+                    VStack(spacing: 0) {
+                        PaneNodeView(
+                            node: first,
+                            workspace: workspace,
+                            store: store,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            globalFontPoints: globalFontPoints
+                        )
+                        .frame(width: geometry.size.width, height: firstHeight)
+
+                        Rectangle()
+                            .fill(ToastyTheme.paneDivider)
+                            .frame(width: geometry.size.width, height: dividerThickness)
+
+                        PaneNodeView(
+                            node: second,
+                            workspace: workspace,
+                            store: store,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            globalFontPoints: globalFontPoints
+                        )
+                        .frame(width: geometry.size.width, height: secondHeight)
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
