@@ -885,3 +885,14 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 80 tests)
   - `/tmp/focus-mode-check.sh` (pass):
     - before/after screenshots confirm the focus toggle no longer shifts terminal content vertically.
+
+2026-02-28 (Post-MVP continuation: global Focus Panel shortcut):
+- implemented:
+  - added app-level `cmd+shift+f` command in `ToasttyApp` Workspace menu to toggle focused-panel mode from the currently selected workspace.
+  - removed the view-local `keyboardShortcut` binding from `WorkspaceView.focusedPanelToggle` to avoid duplicate shortcut routing.
+  - command label follows current state (`Focus Panel` / `Restore Layout`) and is disabled when no workspace is selected.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - runtime key-event verification with app debug logs:
+    - sent two `cmd+shift+f` key chords via System Events.
+    - observed two reducer cycles for `toggleFocusedPanelMode` (dispatch + applied pairs in `/tmp/toastty-focus-shortcut.log`), confirming shortcut routing executes the intended action.

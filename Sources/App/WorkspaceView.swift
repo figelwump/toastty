@@ -89,7 +89,6 @@ struct WorkspaceView: View {
             guard let workspaceID = store.selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         }
-        .keyboardShortcut("f", modifiers: [.command, .shift])
         .accessibilityIdentifier(identifier)
     }
 

@@ -78,6 +78,12 @@ struct ToasttyApp: App {
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(store.selectedWindow == nil)
 
+                Button(store.selectedWorkspace?.focusedPanelModeActive == true ? "Restore Layout" : "Focus Panel") {
+                    toggleFocusedPanelFromSelection()
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(store.selectedWorkspace == nil)
+
                 if let window = store.selectedWindow {
                     ForEach(
                         Array(window.workspaceIDs.prefix(Self.workspaceShortcutKeys.count).enumerated()),
@@ -136,5 +142,10 @@ struct ToasttyApp: App {
         guard store.state.workspacesByID[workspaceID] != nil else { return }
         let windowID = window.id
         store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
+    }
+
+    private func toggleFocusedPanelFromSelection() {
+        guard let workspaceID = store.selectedWorkspace?.id else { return }
+        store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
     }
 }
