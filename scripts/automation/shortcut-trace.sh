@@ -8,9 +8,12 @@ DERIVED_PATH="${DERIVED_PATH:-$ROOT_DIR/Derived}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts/automation}"
 SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock}"
 ARCH="${ARCH:-$(uname -m)}"
-CLICK_X="${CLICK_X:-}"
-CLICK_Y="${CLICK_Y:-}"
+CLICK_X="${CLICK_X:-760}"
+CLICK_Y="${CLICK_Y:-420}"
 TRACE_LOG_PATH="${TRACE_LOG_PATH:-/tmp/toastty.log}"
+SPLIT_KEY_CODE="${SPLIT_KEY_CODE:-2}"
+FOCUS_NEXT_KEY_CODE="${FOCUS_NEXT_KEY_CODE:-30}"
+FOCUS_PREVIOUS_KEY_CODE="${FOCUS_PREVIOUS_KEY_CODE:-33}"
 RESIZE_KEY_CODE="${RESIZE_KEY_CODE:-124}"
 EQUALIZE_KEY_CODE="${EQUALIZE_KEY_CODE:-24}"
 
@@ -95,9 +98,31 @@ extract_double_field() {
     | sed -nE "s/.*\"${field}\"[[:space:]]*:[[:space:]]*(-?[0-9]+(\\.[0-9]+)?)([},].*)?/\\1/p"
 }
 
+extract_string_field() {
+  local json="$1"
+  local field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "string")'
+    return
+  fi
+
+  echo "$json" \
+    | tr -d '\n' \
+    | sed -nE "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\\1/p"
+}
+
+count_intent_logs() {
+  local intent="$1"
+  awk -v intent="\"intent\":\"${intent}\"" 'index($0, intent) { c++ } END { print c + 0 }' "$TRACE_LOG_PATH"
+}
+
+count_input_key_logs() {
+  local key_code="$1"
+  awk -v keyCode="\"key_code\":\"${key_code}\"" 'index($0, "\"category\":\"input\"") && index($0, keyCode) { c++ } END { print c + 0 }' "$TRACE_LOG_PATH"
+}
+
 focus_app_terminal() {
-  if [[ -n "$CLICK_X" && -n "$CLICK_Y" ]]; then
-    osascript <<OSA
+  osascript <<OSA
 tell application "ToasttyApp" to activate
 delay 0.5
 tell application "System Events"
@@ -105,29 +130,22 @@ tell application "System Events"
   delay 0.2
 end tell
 OSA
-    return
-  fi
+}
 
-  osascript <<'OSA'
-tell application "ToasttyApp" to activate
-delay 0.5
-tell application "System Events"
-  tell process "ToasttyApp"
-    set frontmost to true
-    if not (exists window 1) then error "ToasttyApp window not found"
-    set winPos to position of window 1
-    set winSize to size of window 1
-  end tell
-end tell
--- Prefer a stable point inside the left terminal pane instead of window center,
--- which can land on split dividers in multi-pane fixtures.
-set clickX to (item 1 of winPos) + ((item 1 of winSize) div 3)
-set clickY to (item 2 of winPos) + ((item 2 of winSize) div 3)
-tell application "System Events"
-  click at {clickX, clickY}
-  delay 0.2
-end tell
-OSA
+send_split_right_shortcut() {
+  osascript -e "tell application \"System Events\" to key code ${SPLIT_KEY_CODE} using {command down}"
+}
+
+send_split_down_shortcut() {
+  osascript -e "tell application \"System Events\" to key code ${SPLIT_KEY_CODE} using {command down, shift down}"
+}
+
+send_focus_next_shortcut() {
+  osascript -e "tell application \"System Events\" to key code ${FOCUS_NEXT_KEY_CODE} using {command down}"
+}
+
+send_focus_previous_shortcut() {
+  osascript -e "tell application \"System Events\" to key code ${FOCUS_PREVIOUS_KEY_CODE} using {command down}"
 }
 
 send_resize_shortcut() {
@@ -253,25 +271,148 @@ if ! awk -v ratio="$EQUALIZED_RATIO" 'BEGIN { d = ratio - 0.5; if (d < 0) d = -d
   exit 1
 fi
 
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
+SPLIT_BASELINE_SNAPSHOT=""
+SPLIT_BASELINE_PANE_COUNT_RAW=""
+SPLIT_BASELINE_FOCUS_ID=""
+for _ in $(seq 1 20); do
+  SPLIT_BASELINE_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  SPLIT_BASELINE_PANE_COUNT_RAW="$(extract_double_field "$SPLIT_BASELINE_SNAPSHOT" "paneCount")"
+  SPLIT_BASELINE_FOCUS_ID="$(extract_string_field "$SPLIT_BASELINE_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$SPLIT_BASELINE_PANE_COUNT_RAW" && -n "$SPLIT_BASELINE_FOCUS_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$SPLIT_BASELINE_PANE_COUNT_RAW" || -z "$SPLIT_BASELINE_FOCUS_ID" ]]; then
+  echo "error: missing split-workflow baseline snapshot fields" >&2
+  echo "snapshot response: ${SPLIT_BASELINE_SNAPSHOT}" >&2
+  exit 1
+fi
+SPLIT_BASELINE_PANE_COUNT="${SPLIT_BASELINE_PANE_COUNT_RAW%.*}"
+
+focus_app_terminal
+
+send_split_right_shortcut
+SPLIT_RIGHT_SNAPSHOT=""
+SPLIT_RIGHT_PANE_COUNT=""
+SPLIT_RIGHT_FOCUS_ID=""
+EXPECTED_SPLIT_RIGHT_COUNT=$((SPLIT_BASELINE_PANE_COUNT + 1))
+for _ in $(seq 1 20); do
+  SPLIT_RIGHT_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  SPLIT_RIGHT_PANE_COUNT_RAW="$(extract_double_field "$SPLIT_RIGHT_SNAPSHOT" "paneCount")"
+  SPLIT_RIGHT_FOCUS_ID="$(extract_string_field "$SPLIT_RIGHT_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$SPLIT_RIGHT_PANE_COUNT_RAW" ]]; then
+    SPLIT_RIGHT_PANE_COUNT="${SPLIT_RIGHT_PANE_COUNT_RAW%.*}"
+  fi
+  if [[ -n "$SPLIT_RIGHT_PANE_COUNT" && "$SPLIT_RIGHT_PANE_COUNT" -ge "$EXPECTED_SPLIT_RIGHT_COUNT" && -n "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$SPLIT_RIGHT_PANE_COUNT" || "$SPLIT_RIGHT_PANE_COUNT" -lt "$EXPECTED_SPLIT_RIGHT_COUNT" || -z "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+  echo "error: split-right shortcut did not increase pane count" >&2
+  echo "baseline pane count: ${SPLIT_BASELINE_PANE_COUNT}" >&2
+  echo "expected minimum pane count: ${EXPECTED_SPLIT_RIGHT_COUNT}" >&2
+  echo "observed pane count: ${SPLIT_RIGHT_PANE_COUNT:-<missing>}" >&2
+  echo "snapshot response: ${SPLIT_RIGHT_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_focus_next_shortcut
+FOCUS_NEXT_SNAPSHOT=""
+FOCUS_NEXT_PANEL_ID=""
+for _ in $(seq 1 20); do
+  FOCUS_NEXT_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  FOCUS_NEXT_PANEL_ID="$(extract_string_field "$FOCUS_NEXT_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$FOCUS_NEXT_PANEL_ID" && "$FOCUS_NEXT_PANEL_ID" != "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$FOCUS_NEXT_PANEL_ID" || "$FOCUS_NEXT_PANEL_ID" == "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+  echo "error: focus-next shortcut did not change focused panel" >&2
+  echo "focused panel before focus-next: ${SPLIT_RIGHT_FOCUS_ID}" >&2
+  echo "focused panel after focus-next: ${FOCUS_NEXT_PANEL_ID:-<missing>}" >&2
+  echo "snapshot response: ${FOCUS_NEXT_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_focus_previous_shortcut
+FOCUS_PREVIOUS_SNAPSHOT=""
+FOCUS_PREVIOUS_PANEL_ID=""
+for _ in $(seq 1 20); do
+  FOCUS_PREVIOUS_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  FOCUS_PREVIOUS_PANEL_ID="$(extract_string_field "$FOCUS_PREVIOUS_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$FOCUS_PREVIOUS_PANEL_ID" && "$FOCUS_PREVIOUS_PANEL_ID" == "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$FOCUS_PREVIOUS_PANEL_ID" || "$FOCUS_PREVIOUS_PANEL_ID" != "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+  echo "error: focus-previous shortcut did not restore focused panel" >&2
+  echo "expected focused panel after focus-previous: ${SPLIT_RIGHT_FOCUS_ID}" >&2
+  echo "observed focused panel: ${FOCUS_PREVIOUS_PANEL_ID:-<missing>}" >&2
+  echo "snapshot response: ${FOCUS_PREVIOUS_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_split_down_shortcut
+SPLIT_DOWN_SNAPSHOT=""
+SPLIT_DOWN_PANE_COUNT=""
+EXPECTED_SPLIT_DOWN_COUNT=$((SPLIT_BASELINE_PANE_COUNT + 2))
+for _ in $(seq 1 20); do
+  SPLIT_DOWN_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  SPLIT_DOWN_PANE_COUNT_RAW="$(extract_double_field "$SPLIT_DOWN_SNAPSHOT" "paneCount")"
+  if [[ -n "$SPLIT_DOWN_PANE_COUNT_RAW" ]]; then
+    SPLIT_DOWN_PANE_COUNT="${SPLIT_DOWN_PANE_COUNT_RAW%.*}"
+  fi
+  if [[ -n "$SPLIT_DOWN_PANE_COUNT" && "$SPLIT_DOWN_PANE_COUNT" -ge "$EXPECTED_SPLIT_DOWN_COUNT" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$SPLIT_DOWN_PANE_COUNT" || "$SPLIT_DOWN_PANE_COUNT" -lt "$EXPECTED_SPLIT_DOWN_COUNT" ]]; then
+  echo "error: split-down shortcut did not increase pane count" >&2
+  echo "expected minimum pane count: ${EXPECTED_SPLIT_DOWN_COUNT}" >&2
+  echo "observed pane count: ${SPLIT_DOWN_PANE_COUNT:-<missing>}" >&2
+  echo "snapshot response: ${SPLIT_DOWN_SNAPSHOT}" >&2
+  exit 1
+fi
+
 if [[ ! -f "$TRACE_LOG_PATH" ]]; then
   echo "error: trace log file was not created: $TRACE_LOG_PATH" >&2
   exit 1
 fi
 
-RESIZE_LOG_COUNT="$(awk '/"intent":"resize_split.right"/ { c++ } END { print c + 0 }' "$TRACE_LOG_PATH")"
-EQUALIZE_LOG_COUNT="$(awk '/"intent":"equalize_splits"/ { c++ } END { print c + 0 }' "$TRACE_LOG_PATH")"
-INPUT_RIGHT_COUNT="$(awk '/"category":"input"/ && /"key_code":"124"/ { c++ } END { print c + 0 }' "$TRACE_LOG_PATH")"
-INPUT_EQUAL_COUNT="$(awk '/"category":"input"/ && /"key_code":"24"/ { c++ } END { print c + 0 }' "$TRACE_LOG_PATH")"
+SPLIT_RIGHT_LOG_COUNT="$(count_intent_logs "split.right")"
+SPLIT_DOWN_LOG_COUNT="$(count_intent_logs "split.down")"
+FOCUS_NEXT_LOG_COUNT="$(count_intent_logs "focus.next")"
+FOCUS_PREVIOUS_LOG_COUNT="$(count_intent_logs "focus.previous")"
+RESIZE_LOG_COUNT="$(count_intent_logs "resize_split.right")"
+EQUALIZE_LOG_COUNT="$(count_intent_logs "equalize_splits")"
+INPUT_SPLIT_COUNT="$(count_input_key_logs "$SPLIT_KEY_CODE")"
+INPUT_FOCUS_NEXT_COUNT="$(count_input_key_logs "$FOCUS_NEXT_KEY_CODE")"
+INPUT_FOCUS_PREVIOUS_COUNT="$(count_input_key_logs "$FOCUS_PREVIOUS_KEY_CODE")"
+INPUT_RIGHT_COUNT="$(count_input_key_logs "$RESIZE_KEY_CODE")"
+INPUT_EQUAL_COUNT="$(count_input_key_logs "$EQUALIZE_KEY_CODE")"
 
-if [[ "$RESIZE_LOG_COUNT" == "0" || "$EQUALIZE_LOG_COUNT" == "0" ]]; then
+if [[ "$SPLIT_RIGHT_LOG_COUNT" == "0" || "$SPLIT_DOWN_LOG_COUNT" == "0" || "$FOCUS_NEXT_LOG_COUNT" == "0" || "$FOCUS_PREVIOUS_LOG_COUNT" == "0" || "$RESIZE_LOG_COUNT" == "0" || "$EQUALIZE_LOG_COUNT" == "0" ]]; then
   echo "error: missing expected Ghostty intent logs in $TRACE_LOG_PATH" >&2
+  echo "split.right intent count: $SPLIT_RIGHT_LOG_COUNT" >&2
+  echo "split.down intent count: $SPLIT_DOWN_LOG_COUNT" >&2
+  echo "focus.next intent count: $FOCUS_NEXT_LOG_COUNT" >&2
+  echo "focus.previous intent count: $FOCUS_PREVIOUS_LOG_COUNT" >&2
   echo "resize intent count: $RESIZE_LOG_COUNT" >&2
   echo "equalize intent count: $EQUALIZE_LOG_COUNT" >&2
   exit 1
 fi
 
-if [[ "$INPUT_RIGHT_COUNT" == "0" || "$INPUT_EQUAL_COUNT" == "0" ]]; then
+if [[ "$INPUT_SPLIT_COUNT" == "0" || "$INPUT_FOCUS_NEXT_COUNT" == "0" || "$INPUT_FOCUS_PREVIOUS_COUNT" == "0" || "$INPUT_RIGHT_COUNT" == "0" || "$INPUT_EQUAL_COUNT" == "0" ]]; then
   echo "error: missing expected key event logs in $TRACE_LOG_PATH" >&2
+  echo "split key event count: $INPUT_SPLIT_COUNT (key code $SPLIT_KEY_CODE)" >&2
+  echo "focus-next key event count: $INPUT_FOCUS_NEXT_COUNT (key code $FOCUS_NEXT_KEY_CODE)" >&2
+  echo "focus-previous key event count: $INPUT_FOCUS_PREVIOUS_COUNT (key code $FOCUS_PREVIOUS_KEY_CODE)" >&2
   echo "right-arrow key event count: $INPUT_RIGHT_COUNT" >&2
   echo "equal key event count: $INPUT_EQUAL_COUNT" >&2
   echo "hint: ensure Terminal has focus and Accessibility permissions are granted for Terminal/System Events." >&2
@@ -289,8 +430,22 @@ fi
 echo "baseline root ratio: $BASELINE_RATIO"
 echo "resized root ratio: $RESIZED_RATIO"
 echo "equalized root ratio: $EQUALIZED_RATIO"
+echo "split baseline pane count: $SPLIT_BASELINE_PANE_COUNT"
+echo "after split-right pane count: $SPLIT_RIGHT_PANE_COUNT"
+echo "after split-down pane count: $SPLIT_DOWN_PANE_COUNT"
+echo "focus baseline panel: $SPLIT_BASELINE_FOCUS_ID"
+echo "focus after split-right: $SPLIT_RIGHT_FOCUS_ID"
+echo "focus after focus-next: $FOCUS_NEXT_PANEL_ID"
+echo "focus after focus-previous: $FOCUS_PREVIOUS_PANEL_ID"
+echo "split.right intent logs: $SPLIT_RIGHT_LOG_COUNT"
+echo "split.down intent logs: $SPLIT_DOWN_LOG_COUNT"
+echo "focus.next intent logs: $FOCUS_NEXT_LOG_COUNT"
+echo "focus.previous intent logs: $FOCUS_PREVIOUS_LOG_COUNT"
 echo "resize intent logs: $RESIZE_LOG_COUNT"
 echo "equalize intent logs: $EQUALIZE_LOG_COUNT"
+echo "split input logs: $INPUT_SPLIT_COUNT"
+echo "focus-next input logs: $INPUT_FOCUS_NEXT_COUNT"
+echo "focus-previous input logs: $INPUT_FOCUS_PREVIOUS_COUNT"
 echo "right-arrow input logs: $INPUT_RIGHT_COUNT"
 echo "equal input logs: $INPUT_EQUAL_COUNT"
 echo "shortcut screenshot: ${SHORTCUT_SCREENSHOT_PATH:-unknown}"

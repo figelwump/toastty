@@ -38,12 +38,13 @@
 ## Automation Nuts and Bolts
 - `scripts/automation/smoke-ui.sh` builds/runs the app in automation mode, drives socket actions, and emits screenshots/state dumps.
 - `scripts/automation/shortcut-trace.sh` drives real keyboard shortcuts through AppKit (`cmd+ctrl+right`, `cmd+ctrl+=`) and verifies:
-  - split ratio change/equalization via `automation.workspace_snapshot`
+  - split/focus workflow via real key chords (`cmd+d`, `cmd+shift+d`, `cmd+[`, `cmd+]`) and pane/focus snapshots.
+  - split ratio change/equalization via real key chords (`cmd+ctrl+right`, `cmd+ctrl+=`) and `automation.workspace_snapshot`.
   - Ghostty/runtime intent logs in `/tmp/toastty.log`
   - key event forwarding logs (`category=input`).
-  - default focus targeting clicks a left-pane-biased point derived from the app window bounds; override with `CLICK_X` + `CLICK_Y` when needed.
+  - default focus targeting uses coordinates (`CLICK_X=760`, `CLICK_Y=420`); override for different display/window layouts.
 - Key smoke env overrides: `RUN_ID`, `FIXTURE`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
-- Shortcut-trace env overrides: `CLICK_X`, `CLICK_Y`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`.
+- Shortcut-trace env overrides: `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`.
 - Readiness file shape: `artifacts/automation/automation-ready-<run-id>.json`
 - App log shape: `artifacts/automation/app-<run-id>.log`
 - `scripts/automation/check.sh` runs `tuist generate`, `tuist build`, and `xcodebuild test` for scheme `toastty-Workspace` (update the script if scheme naming changes).

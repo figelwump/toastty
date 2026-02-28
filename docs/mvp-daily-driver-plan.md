@@ -605,3 +605,36 @@ Pending:
 - re-validation:
   - `./scripts/automation/shortcut-trace.sh` (pass)
   - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation: real-key split/focus trace expansion):
+- expanded `scripts/automation/shortcut-trace.sh` coverage beyond resize/equalize:
+  - verifies split/focus key chords with real input events:
+    - `cmd+d` (`split.right`)
+    - `cmd+shift+d` (`split.down`)
+    - `cmd+]` (`focus.next`)
+    - `cmd+[` (`focus.previous`)
+  - asserts state mutations via `automation.workspace_snapshot`:
+    - pane count increases after split-right and split-down
+    - focus changes after focus-next and restores after focus-previous
+  - verifies matching Ghostty intent logs + forwarded key-event logs for all traced shortcuts.
+- script ergonomics:
+  - added shortcut key-code env overrides:
+    - `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`
+  - retained coordinate override path for focus targeting:
+    - defaults `CLICK_X=760`, `CLICK_Y=420` with override support for display/layout differences.
+- validation:
+  - `./scripts/automation/shortcut-trace.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: split/focus trace expansion):
+- reviewer source: Claude second-opinion on split/focus shortcut-trace expansion.
+- accepted and implemented:
+  - removed dead/unreachable focus fallback branch in `focus_app_terminal` (explicit coordinate path only).
+  - added bounded polling after split-workflow fixture reload before reading baseline pane/focus fields.
+- rejected (with rationale):
+  - concern about `focus-previous` assertion validity was rejected; the check intentionally validates an immediate `next -> previous` round-trip and is independent of total pane count.
+  - substring false-positive concern for key-code log matching was rejected; patterns include closing quotes (for example `"key_code":"2"`) so `"20"`/`"21"` lines do not match.
+  - splitting key-code override into separate right/down env vars was rejected for now; both actions intentionally share the same physical key with modifier variation (`cmd` vs `cmd+shift`).
+- re-validation:
+  - `./scripts/automation/shortcut-trace.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
