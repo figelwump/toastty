@@ -5,6 +5,7 @@ enum ToastyTheme {
     static let surfaceBackground = Color(hex: 0x0D0D0D)
     static let elevatedBackground = Color(hex: 0x1A1A1A)
     static let hairline = Color(hex: 0x1F1F1F)
+    static let subtleBorder = Color(hex: 0x2A2A2A)
     static let paneDivider = Color(hex: 0x333333)
 
     static let primaryText = Color(hex: 0xE8E4DF)
@@ -22,7 +23,7 @@ enum ToastyTheme {
 
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)
-    static let fontSubtext = Font.system(size: 10, weight: .medium, design: .rounded)
+    static let fontSubtext = Font.system(size: 11, weight: .medium)
     static let fontMonoHeader = Font.system(size: 12, weight: .semibold, design: .monospaced)
 
     // Sidebar-specific fonts matching design spec

@@ -30,8 +30,8 @@ struct WorkspaceView: View {
 
             Spacer()
 
-            auxToggle(title: "Diff", kind: .diff, identifier: "topbar.toggle.diff")
-            auxToggle(title: "Markdown", kind: .markdown, identifier: "topbar.toggle.markdown")
+            auxToggle(title: "Diff", systemImage: "text.alignleft", kind: .diff, identifier: "topbar.toggle.diff")
+            auxToggle(title: "Markdown", systemImage: "doc.text", kind: .markdown, identifier: "topbar.toggle.markdown")
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
             topBarButton(title: "Split Horizontal", active: false) {
@@ -72,9 +72,9 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
-    private func auxToggle(title: String, kind: PanelKind, identifier: String) -> some View {
+    private func auxToggle(title: String, systemImage: String, kind: PanelKind, identifier: String) -> some View {
         let isOn = store.selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
-        topBarButton(title: title, active: isOn) {
+        topBarButton(title: title, systemImage: systemImage, active: isOn) {
             guard let workspaceID = store.selectedWorkspace?.id else { return }
             store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: kind))
         }
@@ -96,18 +96,32 @@ struct WorkspaceView: View {
         store.selectedWorkspace?.focusedPanelModeActive ?? false
     }
 
-    private func topBarButton(title: String, active: Bool, action: @escaping () -> Void) -> some View {
-        Button(title, action: action)
-            .buttonStyle(.plain)
-            .font(ToastyTheme.fontSubtext)
-            .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background(active ? ToastyTheme.elevatedBackground : Color.clear)
-            .overlay(
-                Rectangle()
-                    .stroke(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
-            )
+    private func topBarButton(
+        title: String,
+        systemImage: String? = nil,
+        active: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let systemImage {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(active ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+                }
+                Text(title)
+                    .font(ToastyTheme.fontSubtext)
+                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(active ? ToastyTheme.elevatedBackground : Color.clear)
+        .overlay(
+            Rectangle()
+                .stroke(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+        )
     }
 }
 
