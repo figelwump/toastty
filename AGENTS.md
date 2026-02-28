@@ -28,6 +28,13 @@
 - Ghostty integration is default-on at `tuist generate` time when `Dependencies/GhosttyKit.xcframework` exists.
 - Opt out with either `TUIST_DISABLE_GHOSTTY=1` (preferred for Tuist flows) or compatibility alias `TOASTTY_DISABLE_GHOSTTY=1`.
 - Ghostty is linked only when both conditions are true: `Dependencies/GhosttyKit.xcframework` exists and disable env var is not set.
+- Embedded Ghostty config loading order:
+  - `TOASTTY_GHOSTTY_CONFIG_PATH` when set and file exists.
+  - fallback explicit user path: `$XDG_CONFIG_HOME/ghostty/config` when present.
+  - fallback explicit user path: `~/.config/ghostty/config` when present.
+  - final fallback: Ghostty default search paths (`ghostty_config_load_default_files`).
+- Embedded runtime does not parse Ghostty CLI args by default (avoids Toastty launch flags being reported as Ghostty config diagnostics).
+- Opt-in Ghostty CLI arg parsing with `TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1`.
 - For deterministic fallback builds in CI, set `TUIST_DISABLE_GHOSTTY=1` explicitly.
 - When linked, app target adds `TOASTTY_HAS_GHOSTTY_KIT` and Ghostty transitive linker flags from `Project.swift` (`-lc++`, `-framework Carbon`).
 - Default generate path falls back automatically when the xcframework is absent or integration is explicitly disabled.

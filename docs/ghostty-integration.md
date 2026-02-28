@@ -89,3 +89,17 @@ Next actions:
 - currently deferred / not yet mapped:
   - Ghostty font action bindings (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
   - broader tabs/windows/clipboard parity beyond existing Toastty primitives
+
+## Embedded config loading behavior
+
+- Toastty now resolves Ghostty config in this order:
+  - `TOASTTY_GHOSTTY_CONFIG_PATH` (if set and path exists)
+  - `$XDG_CONFIG_HOME/ghostty/config` (if present)
+  - `~/.config/ghostty/config` (if present)
+  - Ghostty default search paths via `ghostty_config_load_default_files`
+- Recursive Ghostty config includes are loaded via `ghostty_config_load_recursive_files`.
+- Startup logs now include:
+  - which source was used (`env_path`, `user_path`, `default_files`)
+  - diagnostic count and each diagnostic message (when present)
+- Embedded runtime skips `ghostty_config_load_cli_args` by default, preventing false Ghostty diagnostics for app-specific args (for example automation flags).
+- Optional override: set `TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1` to restore Ghostty CLI arg parsing behavior.

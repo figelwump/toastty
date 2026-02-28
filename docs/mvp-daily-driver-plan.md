@@ -915,3 +915,42 @@ Pending:
 - re-validation:
   - `./scripts/automation/check.sh` (pass, 80 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation: embedded Ghostty config path support):
+- implemented:
+  - updated `GhosttyRuntimeManager` startup config loading to support explicit Ghostty config resolution in this order:
+    - `TOASTTY_GHOSTTY_CONFIG_PATH` (when set and file exists)
+    - `XDG_CONFIG_HOME/ghostty/config` (when set and file exists)
+    - `~/.config/ghostty/config` (when present)
+    - Ghostty default search paths (`ghostty_config_load_default_files`)
+  - enabled recursive config include loading via `ghostty_config_load_recursive_files`.
+  - added startup logging for config source and config diagnostics count/messages.
+  - switched Ghostty CLI arg parsing to explicit opt-in (`TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1`) so Toastty app arguments are not misinterpreted as Ghostty config fields by default.
+  - env-path hardening:
+    - `TOASTTY_GHOSTTY_CONFIG_PATH` must resolve to an absolute regular file path (directory paths and relative paths are rejected with fallback logging).
+- validation:
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `/tmp/toastty.log` verification:
+    - `Loaded Ghostty config from user path` with `path=/Users/vishal/.config/ghostty/config`
+    - `Ghostty config load complete` with `diagnostic_count=0`
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: Ghostty config loading hardening):
+- reviewer source: Claude second-opinion on Ghostty config-loading diff.
+- accepted and implemented:
+  - restricted recursive include loading to explicit file-load branches (env/user path) and left default-search branch to Ghostty default loader behavior.
+  - added regular-file validation for configured paths (reject directories).
+  - switched `TOASTTY_GHOSTTY_CONFIG_PATH` normalization to absolute-only semantics (no cwd-relative fallback).
+  - added `XDG_CONFIG_HOME`-aware user config fallback before `~/.config/ghostty/config`.
+  - added opt-in Ghostty CLI arg parsing (`TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1`) to preserve override capability without default diagnostic noise.
+- rejected/deferred:
+  - no additional sandbox-specific home-directory behavior change now; current target is unsandboxed and default-search fallback remains in place.
+  - diagnostic severity mapping was not implemented because Ghostty diagnostics exposed by current embedded header only provide message text (`ghostty_diagnostic_s.message`).
+- re-validation:
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `/tmp/toastty.log` confirms:
+    - user config source path logged
+    - diagnostic count remains `0` for current `~/.config/ghostty/config`.

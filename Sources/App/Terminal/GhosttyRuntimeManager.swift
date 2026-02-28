@@ -285,9 +285,18 @@ private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghos
     )
 }
 
+private enum GhosttyConfigSource: String {
+    case envPath = "env_path"
+    case userPath = "user_path"
+    case defaultFiles = "default_files"
+}
+
 @MainActor
 final class GhosttyRuntimeManager {
     static let shared = GhosttyRuntimeManager()
+
+    private static let ghosttyConfigPathEnvironmentKey = "TOASTTY_GHOSTTY_CONFIG_PATH"
+    private static let ghosttyParseCLIArgsEnvironmentKey = "TOASTTY_GHOSTTY_PARSE_CLI_ARGS"
 
     weak var actionHandler: (any GhosttyRuntimeActionHandling)?
 
@@ -300,12 +309,15 @@ final class GhosttyRuntimeManager {
             return
         }
 
-        let config = ghostty_config_new()
+        guard let config = ghostty_config_new() else {
+            ToasttyLog.error("Ghostty config allocation failed", category: .ghostty)
+            return
+        }
         self.config = config
 
-        ghostty_config_load_cli_args(config)
-        ghostty_config_load_default_files(config)
+        let configSource = Self.loadGhosttyConfig(config)
         ghostty_config_finalize(config)
+        Self.logGhosttyConfigDiagnostics(config, source: configSource)
 
         var runtimeConfig = makeGhosttyRuntimeConfig(
             userdata: Unmanaged.passUnretained(self).toOpaque()
@@ -347,6 +359,170 @@ final class GhosttyRuntimeManager {
 
     private static func initializeGhosttyRuntime() -> Bool {
         ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
+    }
+
+    private static func loadGhosttyConfig(_ config: ghostty_config_t) -> GhosttyConfigSource {
+        let environment = ProcessInfo.processInfo.environment
+        if truthy(environment[ghosttyParseCLIArgsEnvironmentKey]) {
+            ghostty_config_load_cli_args(config)
+            ToasttyLog.info(
+                "Ghostty CLI arg parsing enabled",
+                category: .ghostty,
+                metadata: [
+                    "env_key": ghosttyParseCLIArgsEnvironmentKey,
+                ]
+            )
+        }
+
+        if let rawEnvPath = environment[ghosttyConfigPathEnvironmentKey] {
+            guard let envPath = normalizedConfigPath(from: rawEnvPath) else {
+                ToasttyLog.warning(
+                    "Configured Ghostty config path is invalid; falling back",
+                    category: .ghostty,
+                    metadata: [
+                        "path": rawEnvPath,
+                        "reason": "must be absolute or use ~/ prefix",
+                    ]
+                )
+                return loadFallbackGhosttyConfig(config, environment: environment)
+            }
+
+            if isRegularFile(at: envPath) {
+                envPath.withCString { pathPointer in
+                    ghostty_config_load_file(config, pathPointer)
+                }
+                ghostty_config_load_recursive_files(config)
+                ToasttyLog.info(
+                    "Loaded Ghostty config from TOASTTY_GHOSTTY_CONFIG_PATH",
+                    category: .ghostty,
+                    metadata: [
+                        "path": envPath,
+                    ]
+                )
+                return .envPath
+            }
+
+            ToasttyLog.warning(
+                "Configured Ghostty config path does not exist; falling back",
+                category: .ghostty,
+                metadata: [
+                    "path": envPath,
+                ]
+            )
+            return loadFallbackGhosttyConfig(config, environment: environment)
+        }
+
+        return loadFallbackGhosttyConfig(config, environment: environment)
+    }
+
+    private static func loadFallbackGhosttyConfig(
+        _ config: ghostty_config_t,
+        environment: [String: String]
+    ) -> GhosttyConfigSource {
+        if let userConfigPath = userGhosttyConfigPath(environment: environment) {
+            userConfigPath.withCString { pathPointer in
+                ghostty_config_load_file(config, pathPointer)
+            }
+            ghostty_config_load_recursive_files(config)
+            ToasttyLog.info(
+                "Loaded Ghostty config from user path",
+                category: .ghostty,
+                metadata: [
+                    "path": userConfigPath,
+                ]
+            )
+            return .userPath
+        }
+
+        ghostty_config_load_default_files(config)
+        ToasttyLog.info(
+            "Loaded Ghostty config from default search paths",
+            category: .ghostty
+        )
+        return .defaultFiles
+    }
+
+    private static func userGhosttyConfigPath(environment: [String: String]) -> String? {
+        var candidatePaths: [String] = []
+        if let xdgConfigHomePath = normalizedConfigPath(from: environment["XDG_CONFIG_HOME"]) {
+            candidatePaths.append(
+                URL(fileURLWithPath: xdgConfigHomePath, isDirectory: true)
+                    .appendingPathComponent("ghostty/config")
+                    .standardizedFileURL
+                    .path
+            )
+        }
+        candidatePaths.append(
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".config/ghostty/config")
+                .standardizedFileURL
+                .path
+        )
+
+        var visited = Set<String>()
+        for candidatePath in candidatePaths where visited.insert(candidatePath).inserted {
+            if isRegularFile(at: candidatePath) {
+                return candidatePath
+            }
+        }
+        return nil
+    }
+
+    private static func isRegularFile(at path: String) -> Bool {
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+            return false
+        }
+        return !isDirectory.boolValue
+    }
+
+    private static func normalizedConfigPath(from rawPath: String?) -> String? {
+        guard let trimmedPath = rawPath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmedPath.isEmpty == false else {
+            return nil
+        }
+        let expandedPath = (trimmedPath as NSString).expandingTildeInPath
+        guard expandedPath.hasPrefix("/") else { return nil }
+        return URL(fileURLWithPath: expandedPath).standardizedFileURL.path
+    }
+
+    private static func truthy(_ value: String?) -> Bool {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+    }
+
+    private static func logGhosttyConfigDiagnostics(_ config: ghostty_config_t, source: GhosttyConfigSource) {
+        let diagnosticsCount = ghostty_config_diagnostics_count(config)
+        ToasttyLog.info(
+            "Ghostty config load complete",
+            category: .ghostty,
+            metadata: [
+                "source": source.rawValue,
+                "diagnostic_count": String(diagnosticsCount),
+            ]
+        )
+        guard diagnosticsCount > 0 else { return }
+
+        for index in 0..<diagnosticsCount {
+            let diagnostic = ghostty_config_get_diagnostic(config, index)
+            let message: String
+            if let diagnosticMessage = diagnostic.message {
+                message = String(cString: diagnosticMessage)
+            } else {
+                message = "unknown diagnostic"
+            }
+            ToasttyLog.warning(
+                "Ghostty config diagnostic",
+                category: .ghostty,
+                metadata: [
+                    "source": source.rawValue,
+                    "index": String(index),
+                    "message": message,
+                ]
+            )
+        }
     }
 
     fileprivate func scheduleImmediateTick() {
