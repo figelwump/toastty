@@ -339,3 +339,31 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 71 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Chunk M4: daily-driver hardening):
+- automation runtime surface:
+  - added `automation.workspace_snapshot` command in `AutomationSocketServer` returning:
+    - `workspaceID`
+    - `paneCount`
+    - `panelCount`
+    - `focusedPanelID`
+    - `leafPaneIDs`
+    - `leafPanelIDs`
+- smoke assertions extended for split/focus workflow:
+  - baseline snapshot capture after fixture load.
+  - assert `workspace.focus-pane.next` changes focused panel.
+  - assert `workspace.focus-pane.previous` returns focus to baseline panel.
+  - assert `workspace.split.right` increases pane count.
+- docs/process hardening:
+  - updated `AGENTS.md` with:
+    - new smoke assertion behavior
+    - daily-driver QA checklist
+    - Ghostty shortcut parity snapshot + deferred gaps
+  - updated `docs/ghostty-integration.md` with current mapped actions and deferred action list.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 71 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - new smoke artifacts with workflow assertions:
+    - `artifacts/automation/ui/smoke-20260227-192246/split-workspace/aux-column-smoke.png`
+    - `artifacts/automation/ui/smoke-20260227-192304/split-workspace/terminal-viewport-smoke.png`

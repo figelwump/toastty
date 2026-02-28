@@ -78,3 +78,15 @@ Next actions:
     - repro: `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
     - latest crash log: `artifacts/automation/app-smoke-20260227-114016.log` (Sentry/breakpad capture emitted)
   - default generate path remains fallback (no Ghostty compile condition) to keep day-to-day app runs stable.
+
+## Current action parity (MVP snapshot)
+
+- supported Ghostty actions routed into app state:
+  - `new_split:{right,down,left,up}` -> directional pane split
+  - `goto_split:{previous,next,left,right,up,down}` -> pane focus movement
+  - `toggle_split_zoom` -> focused-panel mode toggle
+- currently deferred / not yet mapped:
+  - `resize_split`
+  - `equalize_splits`
+  - Ghostty font action bindings (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
+  - broader tabs/windows/clipboard parity beyond existing Toastty primitives

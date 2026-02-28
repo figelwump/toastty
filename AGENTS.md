@@ -38,6 +38,12 @@
 - App log shape: `artifacts/automation/app-<run-id>.log`
 - `scripts/automation/check.sh` runs `tuist generate`, `tuist build`, and `xcodebuild test` for scheme `toastty-Workspace` (update the script if scheme naming changes).
 - `check.sh` does not force Ghostty; use `TUIST_ENABLE_GHOSTTY=1` and ensure `Dependencies/GhosttyKit.xcframework` exists when you need Ghostty-linked coverage.
+- split/focus workflow assertions in smoke:
+  - `automation.workspace_snapshot` now reports focused panel and pane counts for deterministic assertions.
+  - smoke script validates:
+    - `workspace.focus-pane.next` changes focus
+    - `workspace.focus-pane.previous` restores baseline focus
+    - `workspace.split.right` increases pane count
 
 ## Manual Interaction Scripting Tips
 - Activation alone is often insufficient; click into the target terminal panel before typing.
@@ -61,6 +67,27 @@ OSA
 - For non-US keyboard layouts, clipboard paste is usually more reliable than literal `keystroke`.
 - `key code 36` is the hardware key code for Return and is layout-independent.
 - Clipboard-based examples overwrite the system clipboard; account for that side effect.
+
+## Daily-Driver QA Checklist
+- Run baseline + Ghostty smoke:
+  - `./scripts/automation/smoke-ui.sh`
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
+- Launch app manually and verify:
+  - `cmd+d`, `cmd+shift+d`, `cmd+[`, `cmd+]` on real terminal panes.
+  - focused panel toggle (`cmd+shift+f`) round-trip.
+  - terminal viewport follows output growth (no stuck scroll position).
+- Inspect latest screenshot artifacts before handoff:
+  - top bar chrome state, sidebar selection state, pane separators, focused panel border.
+
+## Ghostty Shortcut Parity Snapshot
+- currently mapped via Ghostty `action_cb`:
+  - `new_split:{right,down,left,up}`
+  - `goto_split:{previous,next,left,right,up,down}`
+  - `toggle_split_zoom`
+- known gaps (deferred):
+  - `resize_split`, `equalize_splits`
+  - Ghostty font-size actions via callback (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
+  - tabs/windows/clipboard action parity beyond current Toastty primitives
 
 ## Current Project Snapshot (as of 2026-02-27; verify against current code when in doubt)
 - Current local state supports Ghostty-enabled app builds/runs when opt-in gating and local xcframework dependency are present.

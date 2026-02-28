@@ -486,6 +486,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "hash": .string(stateHash),
             ]
 
+        case "automation.workspace_snapshot":
+            let workspaceID = try resolveWorkspaceID(args: payload)
+            return try workspaceSnapshot(workspaceID: workspaceID)
+
         case "automation.capture_screenshot":
             guard let step = payload.string("step"), step.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("step is required")
@@ -859,6 +863,28 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return try encoder.encode(snapshot)
         }
         return try encoder.encode(store.state)
+    }
+
+    @MainActor
+    private func workspaceSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        let leafInfos = workspace.paneTree.allLeafInfos
+        let leafPaneIDs = leafInfos.map { AutomationJSONValue.string($0.paneID.uuidString) }
+        let leafPanelIDs = leafInfos.flatMap { info in
+            info.tabPanelIDs.map { AutomationJSONValue.string($0.uuidString) }
+        }
+
+        return [
+            "workspaceID": .string(workspaceID.uuidString),
+            "paneCount": .int(leafInfos.count),
+            "panelCount": .int(workspace.panels.count),
+            "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "leafPaneIDs": .array(leafPaneIDs),
+            "leafPanelIDs": .array(leafPanelIDs),
+        ]
     }
 
     private func ensureStateArtifactDirectory() throws -> URL {

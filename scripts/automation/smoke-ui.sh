@@ -103,8 +103,64 @@ extract_bool_field() {
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(true|false).*/\\1/p"
 }
 
+extract_int_field() {
+  local json="$1"
+  local field="$2"
+  echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(-?[0-9]+).*/\\1/p"
+}
+
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
+
+WORKSPACE_BASELINE_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+BASELINE_PANE_COUNT="$(extract_int_field "$WORKSPACE_BASELINE_RESPONSE" "paneCount")"
+BASELINE_FOCUSED_PANEL_ID="$(extract_string_field "$WORKSPACE_BASELINE_RESPONSE" "focusedPanelID")"
+if [[ -z "$BASELINE_PANE_COUNT" || -z "$BASELINE_FOCUSED_PANEL_ID" ]]; then
+  echo "error: failed to read baseline workspace snapshot" >&2
+  echo "snapshot response: ${WORKSPACE_BASELINE_RESPONSE}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.focus-pane.next"}'
+FOCUS_NEXT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+NEXT_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_NEXT_RESPONSE" "focusedPanelID")"
+if [[ -z "$NEXT_FOCUSED_PANEL_ID" ]]; then
+  echo "error: focused panel missing after workspace.focus-pane.next" >&2
+  echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
+  exit 1
+fi
+if [[ "$NEXT_FOCUSED_PANEL_ID" == "$BASELINE_FOCUSED_PANEL_ID" ]]; then
+  echo "error: workspace.focus-pane.next did not change focused panel" >&2
+  echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
+  echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.focus-pane.previous"}'
+FOCUS_PREVIOUS_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+PREVIOUS_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_PREVIOUS_RESPONSE" "focusedPanelID")"
+if [[ "$PREVIOUS_FOCUSED_PANEL_ID" != "$BASELINE_FOCUSED_PANEL_ID" ]]; then
+  echo "error: workspace.focus-pane.previous did not return focus to baseline panel" >&2
+  echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
+  echo "snapshot response: ${FOCUS_PREVIOUS_RESPONSE}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.split.right"}'
+SPLIT_RIGHT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+SPLIT_RIGHT_PANE_COUNT="$(extract_int_field "$SPLIT_RIGHT_RESPONSE" "paneCount")"
+if [[ -z "$SPLIT_RIGHT_PANE_COUNT" ]]; then
+  echo "error: pane count missing after workspace.split.right" >&2
+  echo "snapshot response: ${SPLIT_RIGHT_RESPONSE}" >&2
+  exit 1
+fi
+if (( SPLIT_RIGHT_PANE_COUNT <= BASELINE_PANE_COUNT )); then
+  echo "error: workspace.split.right did not increase pane count" >&2
+  echo "baseline pane count: ${BASELINE_PANE_COUNT}" >&2
+  echo "post-split pane count: ${SPLIT_RIGHT_PANE_COUNT}" >&2
+  echo "snapshot response: ${SPLIT_RIGHT_RESPONSE}" >&2
+  exit 1
+fi
 
 TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
 if [[ "${TUIST_ENABLE_GHOSTTY:-${TOASTTY_ENABLE_GHOSTTY:-0}}" == "1" ]]; then
