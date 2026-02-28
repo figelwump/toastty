@@ -881,6 +881,50 @@ struct AppReducerTests {
     }
 
     @Test
+    func configuredFontBaselineUpdatesConfiguredValueAndResetUsesIt() {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.setConfiguredTerminalFont(points: 14), state: &state))
+        #expect(state.configuredTerminalFontPoints == 14)
+        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == 14)
+    }
+
+    @Test
+    func configuredFontBaselineDoesNotOverrideUserAdjustedFont() {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let defaultPoints = AppState.defaultTerminalFontPoints
+
+        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == defaultPoints + AppState.terminalFontStepPoints)
+
+        #expect(reducer.send(.setConfiguredTerminalFont(points: 9), state: &state))
+        #expect(state.configuredTerminalFontPoints == 9)
+        #expect(state.globalTerminalFontPoints == defaultPoints + AppState.terminalFontStepPoints)
+
+        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == 9)
+    }
+
+    @Test
+    func clearingConfiguredFontBaselineReturnsResetToDefault() {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.setConfiguredTerminalFont(points: 15), state: &state))
+        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == 15)
+
+        #expect(reducer.send(.setConfiguredTerminalFont(points: nil), state: &state))
+        #expect(state.configuredTerminalFontPoints == nil)
+        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
+        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+    }
+
+    @Test
     func globalFontActionsClampAtBounds() {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -897,6 +941,9 @@ struct AppReducerTests {
         state.globalTerminalFontPoints = defaultPoints
         #expect(reducer.send(.resetGlobalTerminalFont, state: &state) == false)
         #expect(state.globalTerminalFontPoints == defaultPoints)
+
+        #expect(reducer.send(.setGlobalTerminalFont(points: AppState.maxTerminalFontPoints + 10), state: &state))
+        #expect(state.globalTerminalFontPoints == AppState.maxTerminalFontPoints)
     }
 
     @Test

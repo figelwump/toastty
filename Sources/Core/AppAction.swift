@@ -36,6 +36,8 @@ public enum AppAction: Equatable, Sendable {
     case reopenLastClosedPanel(workspaceID: UUID)
     case toggleAuxPanel(workspaceID: UUID, kind: PanelKind)
     case toggleFocusedPanelMode(workspaceID: UUID)
+    case setConfiguredTerminalFont(points: Double?)
+    case setGlobalTerminalFont(points: Double)
     case increaseGlobalTerminalFont
     case decreaseGlobalTerminalFont
     case resetGlobalTerminalFont
@@ -74,6 +76,10 @@ public extension AppAction {
             return "toggleAuxPanel"
         case .toggleFocusedPanelMode:
             return "toggleFocusedPanelMode"
+        case .setConfiguredTerminalFont:
+            return "setConfiguredTerminalFont"
+        case .setGlobalTerminalFont:
+            return "setGlobalTerminalFont"
         case .increaseGlobalTerminalFont:
             return "increaseGlobalTerminalFont"
         case .decreaseGlobalTerminalFont:

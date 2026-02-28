@@ -302,6 +302,7 @@ final class GhosttyRuntimeManager {
 
     private var app: ghostty_app_t?
     private var config: ghostty_config_t?
+    private(set) var configuredTerminalFontPoints: Double?
 
     private init() {
         guard Self.initializeGhosttyRuntime() else {
@@ -316,9 +317,10 @@ final class GhosttyRuntimeManager {
         self.config = config
 
         let configSource = Self.loadGhosttyConfig(config)
-        ghostty_config_finalize(config)
         Self.logGhosttyConfigDiagnostics(config, source: configSource)
+        configuredTerminalFontPoints = Self.resolveConfiguredTerminalFontPoints(config)
         Self.applyHostStyle(config)
+        ghostty_config_finalize(config)
 
         var runtimeConfig = makeGhosttyRuntimeConfig(
             userdata: Unmanaged.passUnretained(self).toOpaque()
@@ -370,9 +372,10 @@ final class GhosttyRuntimeManager {
         }
 
         let configSource = Self.loadGhosttyConfig(newConfig)
-        ghostty_config_finalize(newConfig)
         Self.logGhosttyConfigDiagnostics(newConfig, source: configSource)
+        configuredTerminalFontPoints = Self.resolveConfiguredTerminalFontPoints(newConfig)
         Self.applyHostStyle(newConfig)
+        ghostty_config_finalize(newConfig)
 
         // Ghostty's App.updateConfig docs state the caller retains ownership and
         // may free its config buffers immediately after this call returns.
@@ -389,6 +392,7 @@ final class GhosttyRuntimeManager {
             category: .ghostty,
             metadata: [
                 "source": configSource.rawValue,
+                "configured_font_points": configuredTerminalFontPoints.map { String(format: "%.2f", $0) } ?? "unset",
             ]
         )
         return true
@@ -612,7 +616,7 @@ final class GhosttyRuntimeManager {
 
         let rawOverlayOpacity = 1 - configuredUnfocusedSplitOpacity
         let overlayOpacity = min(max(rawOverlayOpacity, 0), 1)
-        if abs(overlayOpacity - rawOverlayOpacity) > 0.0001 {
+        if abs(overlayOpacity - rawOverlayOpacity) > AppState.terminalFontComparisonEpsilon {
             ToasttyLog.warning(
                 "Clamped Ghostty unfocused split overlay opacity",
                 category: .ghostty,
@@ -631,6 +635,50 @@ final class GhosttyRuntimeManager {
                 blue: Double(fillColor.b) / 255
             )
         )
+    }
+
+    private static func resolveConfiguredTerminalFontPoints(_ config: ghostty_config_t) -> Double? {
+        var configuredFontPoints = AppState.defaultTerminalFontPoints
+        let fontSizeKey = "font-size"
+        guard ghostty_config_get(
+            config,
+            &configuredFontPoints,
+            fontSizeKey,
+            UInt(fontSizeKey.lengthOfBytes(using: .utf8))
+        ) else {
+            ToasttyLog.info(
+                "Ghostty config missing font size; using Toastty fallback",
+                category: .ghostty,
+                metadata: [
+                    "key": fontSizeKey,
+                    "fallback": String(format: "%.2f", AppState.defaultTerminalFontPoints),
+                ]
+            )
+            return nil
+        }
+
+        let clampedFontPoints = AppState.clampedTerminalFontPoints(configuredFontPoints)
+        if abs(clampedFontPoints - configuredFontPoints) > AppState.terminalFontComparisonEpsilon {
+            ToasttyLog.warning(
+                "Clamped Ghostty configured font size to Toastty bounds",
+                category: .ghostty,
+                metadata: [
+                    "raw_value": String(format: "%.2f", configuredFontPoints),
+                    "clamped_value": String(format: "%.2f", clampedFontPoints),
+                    "min": String(format: "%.2f", AppState.minTerminalFontPoints),
+                    "max": String(format: "%.2f", AppState.maxTerminalFontPoints),
+                ]
+            )
+        }
+
+        ToasttyLog.info(
+            "Resolved Ghostty configured terminal font size",
+            category: .ghostty,
+            metadata: [
+                "points": String(format: "%.2f", clampedFontPoints),
+            ]
+        )
+        return clampedFontPoints
     }
 
     fileprivate func scheduleImmediateTick() {

@@ -1034,3 +1034,26 @@ Pending:
     - delegate adaptor conflict concern was not actionable in this repo because there is no existing `NSApplicationDelegateAdaptor` usage to conflict with.
 - validation:
   - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: Ghostty font baseline + persisted override semantics):
+- reviewer source: Claude second-opinion on Ghostty `font-size` + Toastty override patch.
+- accepted and implemented:
+  - removed reducer heuristic that tried to infer whether global font was "following baseline" from floating-point comparisons.
+  - made configured baseline updates explicit:
+    - `.setConfiguredTerminalFont` now updates only configured baseline state.
+    - startup/reload paths apply/reset global font explicitly when no Toastty override is present.
+  - made persisted override behavior explicit:
+    - `Increase/Decrease` and explicit `setGlobal` persist override even when value equals Ghostty baseline.
+    - only `Reset Terminal Font` clears `~/.config/toastty/config`.
+  - moved Ghostty config reads (`font-size`, host-style keys, diagnostics) before `ghostty_config_finalize` in init/reload flows.
+  - added shared terminal-font epsilon constant in `AppState` to avoid duplicated magic thresholds.
+  - added reducer tests for:
+    - configured baseline update + reset behavior
+    - clearing configured baseline (`nil`) and resetting to default fallback.
+- rejected/deferred (with rationale):
+  - integration-level AppStore/ToasttyApp tests were deferred in this chunk because current unit test target is CoreState-focused; reducer coverage was expanded immediately and runtime behavior was validated via smoke/manual paths.
+  - stale `AppState` decode concern for configured baseline was deferred because app-state persistence is not currently used for production startup (automation fixtures only).
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 83 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)

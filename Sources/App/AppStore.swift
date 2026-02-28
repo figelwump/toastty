@@ -6,9 +6,14 @@ final class AppStore: ObservableObject {
     @Published private(set) var state: AppState
 
     private let reducer = AppReducer()
+    private let persistTerminalFontPreference: Bool
 
-    init(state: AppState = .bootstrap()) {
+    init(
+        state: AppState = .bootstrap(),
+        persistTerminalFontPreference: Bool = true
+    ) {
         self.state = state
+        self.persistTerminalFontPreference = persistTerminalFontPreference
     }
 
     @discardableResult
@@ -20,6 +25,7 @@ final class AppStore: ObservableObject {
             metadata: ["action": actionName]
         )
         var next = state
+        let previousState = state
         guard reducer.send(action, state: &next) else {
             ToasttyLog.warning(
                 "Reducer rejected app action",
@@ -29,6 +35,7 @@ final class AppStore: ObservableObject {
             return false
         }
         state = next
+        persistTerminalFontPreferenceIfNeeded(action: action, previousState: previousState, nextState: next)
         ToasttyLog.debug(
             "Applied app action",
             category: .store,
@@ -53,5 +60,22 @@ final class AppStore: ObservableObject {
         guard let window = selectedWindow,
               let workspaceID = window.selectedWorkspaceID else { return nil }
         return state.workspacesByID[workspaceID]
+    }
+
+    private func persistTerminalFontPreferenceIfNeeded(action: AppAction, previousState: AppState, nextState: AppState) {
+        guard persistTerminalFontPreference else { return }
+        guard abs(previousState.globalTerminalFontPoints - nextState.globalTerminalFontPoints) >=
+            AppState.terminalFontComparisonEpsilon else {
+            return
+        }
+
+        switch action {
+        case .resetGlobalTerminalFont:
+            ToasttyConfigStore.persistTerminalFontSizePoints(nil)
+        case .increaseGlobalTerminalFont, .decreaseGlobalTerminalFont, .setGlobalTerminalFont:
+            ToasttyConfigStore.persistTerminalFontSizePoints(nextState.globalTerminalFontPoints)
+        default:
+            break
+        }
     }
 }

@@ -68,9 +68,16 @@ struct ToasttyApp: App {
 
     init() {
         let bootstrap = AppBootstrap.make()
-        let store = AppStore(state: bootstrap.state)
+        let persistTerminalFontPreference = bootstrap.automationConfig == nil
+        let store = AppStore(
+            state: bootstrap.state,
+            persistTerminalFontPreference: persistTerminalFontPreference
+        )
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         terminalRuntimeRegistry.bind(store: store)
+        if persistTerminalFontPreference {
+            Self.applyInitialTerminalFontState(to: store)
+        }
         _store = StateObject(wrappedValue: store)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
@@ -219,9 +226,30 @@ struct ToasttyApp: App {
         #endif
     }
 
+    @MainActor
     private func reloadConfiguration() {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        _ = GhosttyRuntimeManager.shared.reloadConfiguration()
+        let runtimeManager = GhosttyRuntimeManager.shared
+        guard runtimeManager.reloadConfiguration() else { return }
+        let toasttyConfig = ToasttyConfigStore.load()
+        _ = store.send(.setConfiguredTerminalFont(points: runtimeManager.configuredTerminalFontPoints))
+        if toasttyConfig.terminalFontSizePoints == nil {
+            _ = store.send(.resetGlobalTerminalFont)
+        }
         #endif
+    }
+
+    @MainActor
+    private static func applyInitialTerminalFontState(to store: AppStore) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        _ = store.send(.setConfiguredTerminalFont(points: GhosttyRuntimeManager.shared.configuredTerminalFontPoints))
+        #endif
+
+        let toasttyConfig = ToasttyConfigStore.load()
+        if let persistedFontSizePoints = toasttyConfig.terminalFontSizePoints {
+            _ = store.send(.setGlobalTerminalFont(points: persistedFontSizePoints))
+        } else {
+            _ = store.send(.resetGlobalTerminalFont)
+        }
     }
 }

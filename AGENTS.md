@@ -35,6 +35,10 @@
   - final fallback: Ghostty default search paths (`ghostty_config_load_default_files`).
 - Embedded runtime does not parse Ghostty CLI args by default (avoids Toastty launch flags being reported as Ghostty config diagnostics).
 - Opt-in Ghostty CLI arg parsing with `TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1`.
+- Toastty terminal font override is stored in `~/.config/toastty/config` as `terminal-font-size`.
+  - when unset, Toastty follows Ghostty `font-size`.
+  - Toastty keeps this override until an explicit `Reset Terminal Font`.
+  - `Reset Terminal Font` clears Toastty override and returns to Ghostty baseline.
 - Currently applied host-side Ghostty split styling keys:
   - `unfocused-split-opacity` (mapped to an unfocused pane fill overlay alpha of `1 - configured_opacity`)
   - `unfocused-split-fill` (fallback to Ghostty `background` when unset)

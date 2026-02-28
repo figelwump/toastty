@@ -113,6 +113,19 @@ Next actions:
   - read via `ghostty_config_get`
   - when unset, falls back to Ghostty `background` color
   - used as the overlay color for unfocused terminal panes
+- `font-size`
+  - read via `ghostty_config_get`
+  - used as Toastty’s baseline terminal font size when no Toastty-specific override is present
+
+## Terminal font preference behavior
+
+- Baseline source: Ghostty `font-size` from loaded Ghostty config.
+- Toastty user override source: `~/.config/toastty/config` key `terminal-font-size`.
+- Runtime behavior:
+  - `Increase/Decrease Terminal Font` adjusts current font size and persists `terminal-font-size`.
+  - Toastty keeps the persisted override until `Reset Terminal Font` is used (it does not auto-clear when value matches baseline).
+  - `Reset Terminal Font` clears Toastty override and returns to Ghostty `font-size` baseline.
+  - `Reload Configuration` updates Ghostty baseline; if Toastty override is not set, current terminal font follows the new baseline.
 
 ## Manual reload entrypoint
 

@@ -320,27 +320,46 @@ public struct AppReducer {
             state.workspacesByID[workspaceID] = workspace
             return true
 
+        case .setConfiguredTerminalFont(let points):
+            let clampedConfiguredPoints = points.map(AppState.clampedTerminalFontPoints)
+            guard state.configuredTerminalFontPoints != clampedConfiguredPoints else { return false }
+            state.configuredTerminalFontPoints = clampedConfiguredPoints
+            return true
+
+        case .setGlobalTerminalFont(let points):
+            let clampedPoints = AppState.clampedTerminalFontPoints(points)
+            guard abs(state.globalTerminalFontPoints - clampedPoints) >= AppState.terminalFontComparisonEpsilon else {
+                return false
+            }
+            state.globalTerminalFontPoints = clampedPoints
+            return true
+
         case .increaseGlobalTerminalFont:
-            let nextPoints = min(
-                AppState.maxTerminalFontPoints,
+            let nextPoints = AppState.clampedTerminalFontPoints(
                 state.globalTerminalFontPoints + AppState.terminalFontStepPoints
             )
-            guard nextPoints != state.globalTerminalFontPoints else { return false }
+            guard abs(nextPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon else {
+                return false
+            }
             state.globalTerminalFontPoints = nextPoints
             return true
 
         case .decreaseGlobalTerminalFont:
-            let nextPoints = max(
-                AppState.minTerminalFontPoints,
+            let nextPoints = AppState.clampedTerminalFontPoints(
                 state.globalTerminalFontPoints - AppState.terminalFontStepPoints
             )
-            guard nextPoints != state.globalTerminalFontPoints else { return false }
+            guard abs(nextPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon else {
+                return false
+            }
             state.globalTerminalFontPoints = nextPoints
             return true
 
         case .resetGlobalTerminalFont:
-            guard state.globalTerminalFontPoints != AppState.defaultTerminalFontPoints else { return false }
-            state.globalTerminalFontPoints = AppState.defaultTerminalFontPoints
+            let configuredBaseline = state.configuredTerminalFontPoints ?? AppState.defaultTerminalFontPoints
+            guard abs(state.globalTerminalFontPoints - configuredBaseline) >= AppState.terminalFontComparisonEpsilon else {
+                return false
+            }
+            state.globalTerminalFontPoints = configuredBaseline
             return true
 
         case .splitFocusedPane(let workspaceID, let orientation):
