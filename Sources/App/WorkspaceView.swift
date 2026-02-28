@@ -101,15 +101,14 @@ struct WorkspaceView: View {
         Button(title, action: action)
             .buttonStyle(.plain)
             .font(ToastyTheme.fontSubtext)
-            .foregroundStyle(active ? ToastyTheme.accent : ToastyTheme.primaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(active ? ToastyTheme.accent.opacity(0.16) : ToastyTheme.elevatedBackground)
+            .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(active ? ToastyTheme.elevatedBackground : Color.clear)
             .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(active ? ToastyTheme.accent : ToastyTheme.hairline, lineWidth: 1)
+                Rectangle()
+                    .stroke(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 }
 
@@ -303,9 +302,11 @@ private struct PanelCardView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 5)
                 .background(ToastyTheme.elevatedBackground)
-            Rectangle()
-                .fill(isFocused ? ToastyTheme.accent : ToastyTheme.hairline)
-                .frame(height: isFocused ? 2 : 1)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(isFocused ? ToastyTheme.accent : ToastyTheme.hairline)
+                        .frame(height: isFocused ? 2 : 1)
+                }
 
             switch panelState {
             case .terminal(let terminalState):

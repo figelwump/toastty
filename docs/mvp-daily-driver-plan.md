@@ -869,3 +869,19 @@ Pending:
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `/tmp/focus-mode-check.sh` (pass, focused screenshot shows terminal content and no edge artifact strip).
+
+2026-02-28 (Post-MVP continuation: header focus-indicator layout stability):
+- issue observed:
+  - focus indicator line sat below header bounds and changed panel content Y-position when focus moved between panes.
+- implemented:
+  - moved the focus indicator into the header background as a bottom overlay in `PanelCardView` (instead of a separate row below the header).
+  - preserved existing header padding and removed separate underline row so terminal content no longer reflows on focus changes.
+- reviewer follow-up (Claude):
+  - accepted:
+    - avoid fixed header height to prevent potential text clipping; keep natural header sizing with overlay-only underline.
+  - rejected:
+    - no additional reducer tests were added because this is a view-layout-only change; behavior verified with UI automation snapshots.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `/tmp/focus-mode-check.sh` (pass):
+    - before/after screenshots confirm the focus toggle no longer shifts terminal content vertically.
