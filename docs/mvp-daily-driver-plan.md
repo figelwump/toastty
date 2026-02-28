@@ -1,7 +1,7 @@
 # Toastty Daily-Driver MVP Plan
 
 Date: 2026-02-28
-Status: active plan
+Status: completed (M1-M4 implemented and validated)
 Supersedes execution priority of `docs/implementation-plan.md` until this MVP is complete.
 
 ## 1) Goal
@@ -379,3 +379,8 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 71 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (MVP closeout):
+- all planned chunks (`M1` through `M4`) completed and validated.
+- implementation remains intentionally scoped:
+  - deferred Ghostty parity items remain tracked in `AGENTS.md` and `docs/ghostty-integration.md`.
