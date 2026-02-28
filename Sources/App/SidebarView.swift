@@ -6,8 +6,10 @@ struct SidebarView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Workspaces")
-                .font(.headline)
+                .font(ToastyTheme.fontTitle)
+                .foregroundStyle(ToastyTheme.primaryText)
                 .accessibilityIdentifier("sidebar.workspaces.title")
+                .padding(.top, 2)
 
             if let window = store.selectedWindow {
                 ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
@@ -17,13 +19,15 @@ struct SidebarView: View {
                             title: workspace.title,
                             shortcutLabel: "⌘\(index + 1)",
                             isSelected: window.selectedWorkspaceID == workspaceID,
+                            unreadCount: workspace.unreadNotificationCount,
                             index: index + 1
                         )
                     }
                 }
             } else {
                 Text("No windows")
-                    .foregroundStyle(.secondary)
+                    .font(ToastyTheme.fontBody)
+                    .foregroundStyle(ToastyTheme.mutedText)
             }
 
             Spacer(minLength: 0)
@@ -33,29 +37,75 @@ struct SidebarView: View {
                 store.send(.createWorkspace(windowID: windowID, title: nil))
             } label: {
                 Label("New workspace", systemImage: "plus")
+                    .font(ToastyTheme.fontBody)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
+            .foregroundStyle(ToastyTheme.primaryText)
+            .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
+            )
             .accessibilityIdentifier("sidebar.workspaces.new")
         }
-        .padding(14)
+        .padding(12)
+        .background(ToastyTheme.chromeBackground)
     }
 
-    private func workspaceButton(workspaceID: UUID, title: String, shortcutLabel: String, isSelected: Bool, index: Int) -> some View {
+    private func workspaceButton(
+        workspaceID: UUID,
+        title: String,
+        shortcutLabel: String,
+        isSelected: Bool,
+        unreadCount: Int,
+        index: Int
+    ) -> some View {
         Button {
             guard let windowID = store.selectedWindow?.id else { return }
             store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
         } label: {
-            HStack {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Spacer()
-                Text(shortcutLabel)
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
+                    .font(ToastyTheme.fontBody)
+                    .foregroundStyle(ToastyTheme.primaryText)
+
+                HStack(spacing: 6) {
+                    Text(shortcutLabel)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.mutedTextStrong)
+
+                    if unreadCount > 0 {
+                        Text("\(unreadCount)")
+                            .font(ToastyTheme.fontSubtext)
+                            .foregroundStyle(Color.white)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(ToastyTheme.badgeBlue, in: Capsule())
+                            .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 4)
+                    }
+
+                    Spacer()
+                }
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
-            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+            .overlay(alignment: .leading) {
+                if isSelected {
+                    Rectangle()
+                        .fill(ToastyTheme.accent)
+                        .frame(width: 2)
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("sidebar.workspace.\(index)")

@@ -12,11 +12,17 @@ struct AppRootView: View {
     var body: some View {
         HStack(spacing: 0) {
             SidebarView(store: store)
-                .frame(width: 200)
-            Divider()
+                .frame(width: ToastyTheme.sidebarWidth)
+
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(width: 1)
+
             WorkspaceView(store: store, terminalRuntimeRegistry: terminalRuntimeRegistry)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(ToastyTheme.chromeBackground)
+        .foregroundStyle(ToastyTheme.primaryText)
         .overlay(alignment: .top) {
             if let fontHUDPoints {
                 FontHUD(points: fontHUDPoints)
@@ -64,6 +70,11 @@ private struct FontHUD: View {
             .font(.headline.monospaced())
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(.regularMaterial, in: Capsule())
+            .foregroundStyle(ToastyTheme.primaryText)
+            .background(ToastyTheme.elevatedBackground, in: Capsule())
+            .overlay(
+                Capsule()
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
+            )
     }
 }

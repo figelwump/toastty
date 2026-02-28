@@ -8,7 +8,9 @@ struct WorkspaceView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             topBar
-            Divider()
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(height: 1)
 
             if let workspace = store.selectedWorkspace {
                 workspaceContent(for: workspace)
@@ -16,13 +18,14 @@ struct WorkspaceView: View {
                 ContentUnavailableView("No workspace selected", systemImage: "rectangle.slash")
             }
         }
+        .background(ToastyTheme.surfaceBackground)
     }
 
     private var topBar: some View {
-        HStack {
+        HStack(spacing: 6) {
             Text(store.selectedWorkspace?.title ?? "")
-                .font(.title3)
-                .fontWeight(.semibold)
+                .font(ToastyTheme.fontTitle)
+                .foregroundStyle(ToastyTheme.primaryText)
                 .accessibilityIdentifier("topbar.workspace.title")
 
             Spacer()
@@ -31,19 +34,21 @@ struct WorkspaceView: View {
             auxToggle(title: "Markdown", kind: .markdown, identifier: "topbar.toggle.markdown")
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
-            Button("Split Horizontal") {
+            topBarButton(title: "Split Horizontal", active: false) {
                 split(orientation: .horizontal)
             }
             .disabled(isFocusedPanelModeActive)
             .accessibilityIdentifier("workspace.split.horizontal")
-            Button("Split Vertical") {
+
+            topBarButton(title: "Split Vertical", active: false) {
                 split(orientation: .vertical)
             }
             .disabled(isFocusedPanelModeActive)
             .accessibilityIdentifier("workspace.split.vertical")
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .frame(height: ToastyTheme.topBarHeight)
+        .background(ToastyTheme.chromeBackground)
         .accessibilityIdentifier("topbar.container")
     }
 
@@ -82,12 +87,10 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func auxToggle(title: String, kind: PanelKind, identifier: String) -> some View {
         let isOn = store.selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
-        Button(title) {
+        topBarButton(title: title, active: isOn) {
             guard let workspaceID = store.selectedWorkspace?.id else { return }
             store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: kind))
         }
-        .buttonStyle(.bordered)
-        .tint(isOn ? .accentColor : .gray)
         .disabled(isFocusedPanelModeActive)
         .accessibilityIdentifier(identifier)
     }
@@ -95,18 +98,31 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func focusedPanelToggle(identifier: String) -> some View {
         let isOn = isFocusedPanelModeActive
-        Button(isOn ? "Restore Layout" : "Focus Panel") {
+        topBarButton(title: isOn ? "Restore Layout" : "Focus Panel", active: isOn) {
             guard let workspaceID = store.selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         }
-        .buttonStyle(.bordered)
-        .tint(isOn ? .accentColor : .gray)
         .keyboardShortcut("f", modifiers: [.command, .shift])
         .accessibilityIdentifier(identifier)
     }
 
     private var isFocusedPanelModeActive: Bool {
         store.selectedWorkspace?.focusedPanelModeActive ?? false
+    }
+
+    private func topBarButton(title: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(title, action: action)
+            .font(ToastyTheme.fontSubtext)
+            .foregroundStyle(active ? ToastyTheme.accent : ToastyTheme.primaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(active ? ToastyTheme.accent.opacity(0.16) : ToastyTheme.elevatedBackground)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(active ? ToastyTheme.accent : ToastyTheme.hairline, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .buttonStyle(.plain)
     }
 }
 
@@ -153,7 +169,7 @@ private struct PaneNodeView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Rectangle()
-                        .fill(Color.gray.opacity(0.35))
+                        .fill(ToastyTheme.hairline)
                         .frame(width: 1)
 
                     PaneNodeView(
@@ -177,7 +193,7 @@ private struct PaneNodeView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Rectangle()
-                        .fill(Color.gray.opacity(0.35))
+                        .fill(ToastyTheme.hairline)
                         .frame(height: 1)
 
                     PaneNodeView(
@@ -221,11 +237,12 @@ private struct PanelCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(panelLabel)
-                .font(.body.monospaced())
+                .font(ToastyTheme.fontMonoHeader)
+                .foregroundStyle(ToastyTheme.primaryText)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 5)
-                .background(Color.gray.opacity(0.14))
+                .background(ToastyTheme.elevatedBackground)
 
             switch panelState {
             case .terminal(let terminalState):
@@ -250,10 +267,10 @@ private struct PanelCardView: View {
                 auxPanelPlaceholder(title: "Scratchpad Panel")
             }
         }
-        .background(Color.gray.opacity(0.06))
+        .background(ToastyTheme.surfaceBackground)
         .overlay(
             Rectangle()
-                .strokeBorder(isFocused ? Color.accentColor : Color.gray.opacity(0.28), lineWidth: isFocused ? 1.5 : 1)
+                .strokeBorder(isFocused ? ToastyTheme.accent : ToastyTheme.hairline, lineWidth: isFocused ? 1.5 : 1)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
@@ -278,8 +295,8 @@ private struct PanelCardView: View {
     @ViewBuilder
     private func auxPanelPlaceholder(title: String) -> some View {
         Text(title)
-            .font(.body.monospaced())
-            .foregroundStyle(.secondary)
+            .font(ToastyTheme.fontMonoHeader)
+            .foregroundStyle(ToastyTheme.mutedText)
             .frame(
                 maxWidth: .infinity,
                 maxHeight: .infinity,

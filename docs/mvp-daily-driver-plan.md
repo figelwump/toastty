@@ -307,3 +307,20 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 71 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Chunk M3: sidebar/topbar chrome parity):
+- added shared theme tokens in `Sources/App/Theme.swift`:
+  - Paper-aligned base colors (`#111111`, `#0D0D0D`, `#1A1A1A`, `#1F1F1F`, `#E8E4DF`, `#666666`, `#555555`, `#F5A623`, `#3B82F6`).
+  - shared typography presets and shell constants (`sidebarWidth=180`, `topBarHeight=36`).
+- restyled app chrome:
+  - `AppRootView`: themed root background, 1px hairline divider between sidebar/workspace, themed font HUD.
+  - `SidebarView`: selected workspace row styling with accent-leading border, subtext/shortcut tone, unread notification badge (blue capsule + glow), restyled new workspace action.
+  - `WorkspaceView` top bar: fixed-height chrome bar, themed control pills for `Diff`, `Markdown`, `Focus Panel`, `Split Horizontal`, `Split Vertical` (controls remain visible).
+- panel surfaces updated to consume shared theme tokens for headers/borders/separators to keep visual consistency with restyled chrome.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 71 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - artifact references:
+    - `artifacts/automation/ui/smoke-20260227-191623/split-workspace/aux-column-smoke.png`
+    - `artifacts/automation/ui/smoke-20260227-191640/split-workspace/terminal-viewport-smoke.png`
