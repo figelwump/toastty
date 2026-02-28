@@ -177,9 +177,9 @@ final class TerminalSurfaceController {
             if let hostView = hostedView as? TerminalHostView {
                 hostView.setGhosttySurface(nil)
             }
-        fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty surface unavailable")
-        swapToFallbackIfNeeded()
-        return
+            fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty surface unavailable")
+            swapToFallbackIfNeeded()
+            return
         }
 
         hostedView.isHidden = false
@@ -437,6 +437,8 @@ private final class TerminalFallbackView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor(calibratedWhite: 0.11, alpha: 1).cgColor
+        layer?.borderWidth = 0
+        layer?.borderColor = NSColor.clear.cgColor
 
         subtitleLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         subtitleLabel.textColor = NSColor(calibratedWhite: 0.75, alpha: 1)
