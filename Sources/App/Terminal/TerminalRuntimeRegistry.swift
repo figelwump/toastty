@@ -13,18 +13,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     #endif
 
-    init() {
+    func bind(store: AppStore) {
+        if let existingStore = self.store {
+            precondition(existingStore === store, "TerminalRuntimeRegistry cannot be rebound to a different AppStore.")
+        }
+        self.store = store
         #if TOASTTY_HAS_GHOSTTY_KIT
         GhosttyRuntimeManager.shared.actionHandler = self
         #endif
-    }
-
-    func bind(store: AppStore) {
-        if let existingStore = self.store, existingStore !== store {
-            assertionFailure("TerminalRuntimeRegistry cannot be rebound to a different AppStore.")
-            return
-        }
-        self.store = store
     }
 
     func controller(for panelID: UUID) -> TerminalSurfaceController {

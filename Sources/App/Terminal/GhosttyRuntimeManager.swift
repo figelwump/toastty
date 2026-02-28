@@ -69,14 +69,14 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
     guard let runtimeAction = makeGhosttyRuntimeAction(target: target, action: action) else {
         return false
     }
-
-    let managerHandle = UInt(bitPattern: userdata)
-    Task { @MainActor in
-        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else { return }
-        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
-        _ = manager.routeRuntimeAction(runtimeAction)
+    guard Thread.isMainThread else {
+        return false
     }
-    return true
+
+    let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(userdata).takeUnretainedValue()
+    return MainActor.assumeIsolated {
+        manager.routeRuntimeAction(runtimeAction)
+    }
 }
 
 private extension PaneSplitDirection {

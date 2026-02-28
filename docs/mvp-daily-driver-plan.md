@@ -266,3 +266,11 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 70 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Chunk M1 follow-up: callback return semantics hardening):
+- revised callback dispatch model after follow-up review:
+  - Ghostty action callback now handles only on main thread and returns the actual handled result.
+  - off-main callback invocations return unhandled (no async fire-and-forget), avoiding incorrect `true` acknowledgements.
+- rebinding contract tightened:
+  - `TerminalRuntimeRegistry.bind(store:)` now uses a hard `precondition` to prevent rebinding to a different `AppStore`.
+  - Ghostty action handler registration remains in `bind(store:)` after the store is available.
