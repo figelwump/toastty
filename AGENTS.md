@@ -6,6 +6,10 @@
 - Primary baseline smoke run: `./scripts/automation/smoke-ui.sh`
 - Ghostty-path smoke run: `./scripts/automation/smoke-ui.sh` (Ghostty checks run automatically when `Dependencies/GhosttyKit.xcframework` exists and Ghostty is not disabled via env).
 - Explicit fallback smoke run: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
+- Required ordering when running both paths:
+  - run fallback first: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
+  - run Ghostty-enabled second: `./scripts/automation/smoke-ui.sh`
+  - leave workspace generated in Ghostty-enabled mode before handoff: `TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate`
 - For Ghostty-related runtime changes, run both baseline smoke and Ghostty-path smoke before considering validation complete.
 - Full build/test gate: `./scripts/automation/check.sh`
 - Store manual validation captures in `artifacts/manual/`; `artifacts/` is gitignored and should stay uncommitted.
@@ -74,8 +78,9 @@ OSA
 
 ## Daily-Driver QA Checklist
 - Run baseline + Ghostty smoke:
-  - `./scripts/automation/smoke-ui.sh` (Ghostty path only if xcframework exists and Ghostty is not disabled)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
+  - `./scripts/automation/smoke-ui.sh` (Ghostty path only if xcframework exists and Ghostty is not disabled)
+  - finish with `TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate` so local Xcode builds default to Ghostty-enabled.
 - Launch app manually and verify:
   - `cmd+d`, `cmd+shift+d`, `cmd+[`, `cmd+]` on real terminal panes.
   - focused panel toggle (`cmd+shift+f`) round-trip.
