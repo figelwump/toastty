@@ -441,3 +441,20 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 77 tests)
   - `./scripts/automation/smoke-ui.sh` (pass; Ghostty viewport screenshot captured)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation: Ghostty runtime action + font propagation fixes):
+- addressed user-reported regressions:
+  - Ghostty split resize / equalize shortcuts no-op while Ghostty runtime is enabled.
+  - terminal font HUD updates without visible font-size changes in Ghostty terminal surfaces.
+- runtime callback dispatch:
+  - `ghosttyActionCallback` now synchronously routes actions onto the main queue when invoked off-main, preserving callback handled semantics instead of dropping actions.
+- font propagation:
+  - added `TerminalRuntimeRegistry.applyGlobalFontChange(from:to:)` and per-surface binding dispatch in `TerminalSurfaceController` using:
+    - `increase_font_size:<n>`
+    - `decrease_font_size:<n>`
+    - `reset_font_size`
+  - hooked app-level `globalTerminalFontPoints` state changes in `AppRootView` to apply Ghostty binding actions to all live terminal surfaces.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 77 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass; viewport step remains best-effort when surface unavailable in automation)

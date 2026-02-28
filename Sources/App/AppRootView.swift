@@ -37,7 +37,8 @@ struct AppRootView: View {
         .onChange(of: store.state) { _, nextState in
             terminalRuntimeRegistry.synchronize(with: nextState)
         }
-        .onChange(of: store.state.globalTerminalFontPoints) { _, nextPoints in
+        .onChange(of: store.state.globalTerminalFontPoints) { previousPoints, nextPoints in
+            terminalRuntimeRegistry.applyGlobalFontChange(from: previousPoints, to: nextPoints)
             fontHUDPoints = nextPoints
             hideFontHUDTask?.cancel()
             hideFontHUDTask = Task { @MainActor in

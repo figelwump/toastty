@@ -51,6 +51,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
     }
 
+    func applyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard previousPoints != nextPoints else { return }
+        for controller in controllers.values {
+            controller.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+        }
+        #endif
+    }
+
     func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
         guard let controller = controllers[panelID] else {
             return false
@@ -302,6 +311,42 @@ final class TerminalSurfaceController {
             guard byteCount > 0 else { return }
             ghostty_surface_text(surface, baseAddress, uintptr_t(byteCount))
         }
+    }
+
+    func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
+        guard let ghosttySurface else { return }
+
+        if nextPoints == AppState.defaultTerminalFontPoints {
+            _ = invokeGhosttyBindingAction("reset_font_size", on: ghosttySurface)
+            return
+        }
+
+        let pointDelta = nextPoints - previousPoints
+        guard pointDelta != 0 else { return }
+        let stepMagnitude = max(
+            Int(round(abs(pointDelta) / AppState.terminalFontStepPoints)),
+            1
+        )
+        let action = pointDelta > 0
+            ? "increase_font_size:\(stepMagnitude)"
+            : "decrease_font_size:\(stepMagnitude)"
+        _ = invokeGhosttyBindingAction(action, on: ghosttySurface)
+    }
+
+    @discardableResult
+    private func invokeGhosttyBindingAction(_ action: String, on surface: ghostty_surface_t) -> Bool {
+        let cString = action.utf8CString
+        let handled = cString.withUnsafeBufferPointer { buffer -> Bool in
+            guard let baseAddress = buffer.baseAddress else { return false }
+            let byteCount = max(buffer.count - 1, 0)
+            guard byteCount > 0 else { return false }
+            return ghostty_surface_binding_action(surface, baseAddress, uintptr_t(byteCount))
+        }
+        if handled == false,
+           let data = "toastty ghostty warning: binding action not handled: \(action)\n".data(using: .utf8) {
+            FileHandle.standardError.write(data)
+        }
+        return handled
     }
     #endif
 

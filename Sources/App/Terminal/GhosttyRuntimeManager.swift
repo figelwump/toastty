@@ -80,18 +80,28 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
     guard let runtimeAction = makeGhosttyRuntimeAction(target: target, action: action) else {
         return false
     }
-    guard Thread.isMainThread else {
-        assertionFailure("Ghostty action callback invoked off main thread; action ignored.")
-        if let data = "toastty ghostty warning: action callback invoked off main thread; action ignored\n".data(using: .utf8) {
-            FileHandle.standardError.write(data)
+
+    // Keep callback semantics synchronous for Ghostty while safely hopping to main when needed.
+    let managerHandle = UInt(bitPattern: userdata)
+    if Thread.isMainThread {
+        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
+            return false
         }
-        return false
+        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
+        return MainActor.assumeIsolated {
+            manager.routeRuntimeAction(runtimeAction)
+        }
     }
 
-    let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(userdata).takeUnretainedValue()
-    return MainActor.assumeIsolated {
-        manager.routeRuntimeAction(runtimeAction)
+    var handled = false
+    DispatchQueue.main.sync {
+        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
+            return
+        }
+        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
+        handled = manager.routeRuntimeAction(runtimeAction)
     }
+    return handled
 }
 
 private extension PaneSplitDirection {
