@@ -638,3 +638,37 @@ Pending:
 - re-validation:
   - `./scripts/automation/shortcut-trace.sh` (pass)
   - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation: deterministic Ghostty viewport assertion in smoke):
+- removed best-effort behavior for Ghostty viewport validation in `scripts/automation/smoke-ui.sh` when Ghostty integration is enabled.
+- smoke now resolves terminal send-text target from a candidate set:
+  - `SPLIT_RIGHT_FOCUSED_PANEL_ID`
+  - `BASELINE_FOCUSED_PANEL_ID`
+  - `NEXT_FOCUSED_PANEL_ID`
+  - `PREVIOUS_FOCUSED_PANEL_ID`
+- smoke now fails fast when:
+  - no candidate terminal surface reports `available:true` for `automation.terminal_send_text`
+  - marker text is not observed in `automation.terminal_visible_text`
+  - terminal viewport screenshot path is missing/unresolved.
+- fallback (Ghostty-disabled) path remains unchanged and reports viewport screenshot as skipped.
+- validation:
+  - `./scripts/automation/smoke-ui.sh` (pass, Ghostty-enabled path)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass, fallback path)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: deterministic viewport smoke):
+- reviewer source: Claude second-opinion on deterministic viewport smoke change.
+- accepted and implemented:
+  - avoided repeated command execution during readiness polling:
+    - smoke now probes availability with `automation.terminal_send_text` using `text=""` + `submit=false`
+    - sends the heavy terminal command once after a surface is confirmed available.
+  - added split-right response guard for missing `focusedPanelID`.
+  - added explicit JSON-string escaping helper for terminal command payload text.
+  - enabled empty-string probes in automation command handler:
+    - `automation.terminal_send_text` now requires `text` key presence but no longer rejects empty string values.
+- rejected (with rationale):
+  - suggestion that `NEXT_FOCUSED_PANEL_ID` / `PREVIOUS_FOCUSED_PANEL_ID` are never populated was rejected; they are intentionally initialized and conditionally populated when multi-pane focus assertions run.
+- re-validation:
+  - `./scripts/automation/smoke-ui.sh` (pass, Ghostty-enabled path)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass, fallback path)
+  - `./scripts/automation/check.sh` (pass, 80 tests)

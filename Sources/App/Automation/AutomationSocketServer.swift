@@ -426,7 +426,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             ]
 
         case "automation.terminal_send_text":
-            guard let text = payload.string("text"), text.isEmpty == false else {
+            guard let text = payload.string("text") else {
                 throw AutomationSocketError.invalidPayload("text is required")
             }
             if payload["waitForSurfaceMs"] != nil {

@@ -57,8 +57,9 @@
     - `workspace.split.right` increases pane count
     - `workspace.resize-split.right` increases root split ratio
     - `workspace.equalize-splits` normalizes root split ratio to `0.5`
-  - Ghostty terminal viewport I/O assertion is currently best-effort in smoke:
-    - if terminal surface remains unavailable in automation mode, smoke logs a note and continues.
+  - Ghostty terminal viewport I/O assertion is deterministic in smoke (Ghostty-enabled path):
+    - smoke now fails if no candidate terminal surface is available for `automation.terminal_send_text`.
+    - smoke now fails if terminal marker text is not observed before screenshot capture.
 - shortcut-trace prerequisites:
   - Accessibility + Automation permissions for `osascript` / `System Events` (for synthetic key chords).
   - Ghostty-enabled build path (`TUIST_DISABLE_GHOSTTY` and `TOASTTY_DISABLE_GHOSTTY` unset).

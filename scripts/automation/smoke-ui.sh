@@ -116,12 +116,23 @@ extract_double_field() {
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(-?[0-9]+(\\.[0-9]+)?).*/\\1/p"
 }
 
+json_escape_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  printf '%s' "$value"
+}
+
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
 
 WORKSPACE_BASELINE_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
 BASELINE_PANE_COUNT="$(extract_int_field "$WORKSPACE_BASELINE_RESPONSE" "paneCount")"
 BASELINE_FOCUSED_PANEL_ID="$(extract_string_field "$WORKSPACE_BASELINE_RESPONSE" "focusedPanelID")"
+NEXT_FOCUSED_PANEL_ID=""
+PREVIOUS_FOCUSED_PANEL_ID=""
 if [[ -z "$BASELINE_PANE_COUNT" || -z "$BASELINE_FOCUSED_PANEL_ID" ]]; then
   echo "error: failed to read baseline workspace snapshot" >&2
   echo "snapshot response: ${WORKSPACE_BASELINE_RESPONSE}" >&2
@@ -198,8 +209,9 @@ fi
 send_request "automation.perform_action" '{"action":"workspace.split.right"}'
 SPLIT_RIGHT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
 SPLIT_RIGHT_PANE_COUNT="$(extract_int_field "$SPLIT_RIGHT_RESPONSE" "paneCount")"
-if [[ -z "$SPLIT_RIGHT_PANE_COUNT" ]]; then
-  echo "error: pane count missing after workspace.split.right" >&2
+SPLIT_RIGHT_FOCUSED_PANEL_ID="$(extract_string_field "$SPLIT_RIGHT_RESPONSE" "focusedPanelID")"
+if [[ -z "$SPLIT_RIGHT_PANE_COUNT" || -z "$SPLIT_RIGHT_FOCUSED_PANEL_ID" ]]; then
+  echo "error: pane count or focused panel missing after workspace.split.right" >&2
   echo "snapshot response: ${SPLIT_RIGHT_RESPONSE}" >&2
   exit 1
 fi
@@ -219,43 +231,72 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
     exit 1
   fi
 
-  TERMINAL_TARGET_PANEL_ID="$BASELINE_FOCUSED_PANEL_ID"
+  TERMINAL_TARGET_PANEL_ID=""
+  # Prioritize the freshly focused split panel, then fall back to known focused panels.
+  TERMINAL_CANDIDATE_PANEL_IDS=(
+    "$SPLIT_RIGHT_FOCUSED_PANEL_ID"
+    "$BASELINE_FOCUSED_PANEL_ID"
+    "$NEXT_FOCUSED_PANEL_ID"
+    "$PREVIOUS_FOCUSED_PANEL_ID"
+  )
   TERMINAL_MARKER="TOASTTY_VIEWPORT_END_${RUN_ID//[^A-Za-z0-9_]/_}"
   TERMINAL_COMMAND="find /usr/bin -maxdepth 1 | head -n 120; echo ${TERMINAL_MARKER}"
+  TERMINAL_COMMAND_JSON="$(json_escape_string "$TERMINAL_COMMAND")"
   TERMINAL_SEND_RESPONSE=""
+  TERMINAL_PROBE_RESPONSE=""
   TERMINAL_SEND_READY=0
   TERMINAL_READY_ATTEMPTS="${TERMINAL_READY_ATTEMPTS:-40}"
   TERMINAL_READY_INTERVAL_SEC="${TERMINAL_READY_INTERVAL_SEC:-0.1}"
   for _ in $(seq 1 "$TERMINAL_READY_ATTEMPTS"); do
-    TERMINAL_SEND_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"${TERMINAL_COMMAND}\",\"submit\":true,\"allowUnavailable\":true,\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
-    if [[ "$(extract_bool_field "$TERMINAL_SEND_RESPONSE" "available")" == "true" ]]; then
-      TERMINAL_SEND_READY=1
+    for candidate_panel_id in "${TERMINAL_CANDIDATE_PANEL_IDS[@]}"; do
+      if [[ -z "$candidate_panel_id" ]]; then
+        continue
+      fi
+      TERMINAL_PROBE_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${candidate_panel_id}\"}")"
+      if [[ "$(extract_bool_field "$TERMINAL_PROBE_RESPONSE" "available")" == "true" ]]; then
+        TERMINAL_TARGET_PANEL_ID="$candidate_panel_id"
+        TERMINAL_SEND_READY=1
+        break
+      fi
+    done
+    if [[ "$TERMINAL_SEND_READY" -eq 1 ]]; then
       break
     fi
     sleep "$TERMINAL_READY_INTERVAL_SEC"
   done
-  if [[ "$TERMINAL_SEND_READY" -eq 1 ]]; then
-    TERMINAL_FOUND=0
-    TERMINAL_VISIBLE_RESPONSE=""
-    for _ in $(seq 1 40); do
-      TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${TERMINAL_MARKER}\",\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
-      if echo "$TERMINAL_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
-        TERMINAL_FOUND=1
-        break
-      fi
-      sleep 0.1
-    done
+  if [[ "$TERMINAL_SEND_READY" -ne 1 ]]; then
+    echo "error: terminal surface unavailable for send_text during smoke run" >&2
+    echo "candidate panel ids: ${TERMINAL_CANDIDATE_PANEL_IDS[*]}" >&2
+    echo "last terminal probe response: ${TERMINAL_PROBE_RESPONSE}" >&2
+    exit 1
+  fi
 
-    if [[ "$TERMINAL_FOUND" -eq 1 ]]; then
-      TERMINAL_VIEWPORT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"terminal-viewport-smoke"}')"
-      TERMINAL_VIEWPORT_SCREENSHOT_PATH="$(extract_string_field "$TERMINAL_VIEWPORT_RESPONSE" "path")"
-    else
-      echo "note: terminal viewport marker not observed; skipping viewport screenshot"
-      echo "last terminal response: ${TERMINAL_VISIBLE_RESPONSE}"
+  TERMINAL_SEND_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"${TERMINAL_COMMAND_JSON}\",\"submit\":true,\"allowUnavailable\":false,\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
+
+  TERMINAL_FOUND=0
+  TERMINAL_VISIBLE_RESPONSE=""
+  for _ in $(seq 1 40); do
+    TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${TERMINAL_MARKER}\",\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
+    if echo "$TERMINAL_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
+      TERMINAL_FOUND=1
+      break
     fi
-  else
-    echo "note: terminal surface unavailable for send_text; skipping viewport assertion"
-    echo "last terminal send response: ${TERMINAL_SEND_RESPONSE}"
+    sleep 0.1
+  done
+
+  if [[ "$TERMINAL_FOUND" -ne 1 ]]; then
+    echo "error: terminal viewport marker not observed during smoke run" >&2
+    echo "target panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
+    echo "last terminal response: ${TERMINAL_VISIBLE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  TERMINAL_VIEWPORT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"terminal-viewport-smoke"}')"
+  TERMINAL_VIEWPORT_SCREENSHOT_PATH="$(extract_string_field "$TERMINAL_VIEWPORT_RESPONSE" "path")"
+  if [[ -z "$TERMINAL_VIEWPORT_SCREENSHOT_PATH" || ! -f "$TERMINAL_VIEWPORT_SCREENSHOT_PATH" ]]; then
+    echo "error: terminal viewport screenshot path missing or file not found" >&2
+    echo "capture response: ${TERMINAL_VIEWPORT_RESPONSE}" >&2
+    exit 1
   fi
 fi
 
