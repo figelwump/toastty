@@ -2,11 +2,11 @@ import ProjectDescription
 import Foundation
 
 let ghosttyXCFrameworkRelativePath = "Dependencies/GhosttyKit.xcframework"
-let ghosttyIntegrationEnabled = {
+let ghosttyIntegrationDisabled = {
     let environment = ProcessInfo.processInfo.environment
     // Tuist manifest evaluation reliably exposes TUIST_* env vars; keep TOASTTY_* as best-effort compatibility.
-    return environment["TUIST_ENABLE_GHOSTTY"] == "1"
-        || environment["TOASTTY_ENABLE_GHOSTTY"] == "1"
+    return environment["TUIST_DISABLE_GHOSTTY"] == "1"
+        || environment["TOASTTY_DISABLE_GHOSTTY"] == "1"
 }()
 let manifestRootPath = URL(fileURLWithPath: #filePath)
     .deletingLastPathComponent()
@@ -16,9 +16,10 @@ let ghosttyXCFrameworkCandidatePaths = [
     "\(manifestRootPath)/\(ghosttyXCFrameworkRelativePath)",
     "\(workingDirectoryRootPath)/\(ghosttyXCFrameworkRelativePath)",
 ]
-let hasGhosttyXCFramework = ghosttyIntegrationEnabled && ghosttyXCFrameworkCandidatePaths.contains {
+let hasGhosttyXCFrameworkArtifact = ghosttyXCFrameworkCandidatePaths.contains {
     FileManager.default.fileExists(atPath: $0)
 }
+let hasGhosttyXCFramework = hasGhosttyXCFrameworkArtifact && !ghosttyIntegrationDisabled
 
 var appDependencies: [TargetDependency] = [
     .target(name: "CoreState"),

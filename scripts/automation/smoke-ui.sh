@@ -15,6 +15,7 @@ fi
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
 APP_BINARY="$DERIVED_PATH/Build/Products/Debug/ToasttyApp.app/Contents/MacOS/ToasttyApp"
 LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
+GHOSTTY_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
 
 mkdir -p "$ARTIFACTS_DIR"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$LOG_FILE"
@@ -167,11 +168,8 @@ if (( SPLIT_RIGHT_PANE_COUNT <= BASELINE_PANE_COUNT )); then
 fi
 
 TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
-if [[ "${TUIST_ENABLE_GHOSTTY:-${TOASTTY_ENABLE_GHOSTTY:-0}}" == "1" ]]; then
-  if [[ ! -d "$ROOT_DIR/Dependencies/GhosttyKit.xcframework" ]]; then
-    echo "error: Ghostty smoke requested but Dependencies/GhosttyKit.xcframework is missing" >&2
-    exit 1
-  fi
+GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
+if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
 
   TERMINAL_MARKER="TOASTTY_VIEWPORT_END_${RUN_ID//[^A-Za-z0-9_]/_}"
   TERMINAL_COMMAND="find /usr/bin -maxdepth 1 | head -n 120; echo ${TERMINAL_MARKER}"

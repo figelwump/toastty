@@ -62,22 +62,21 @@ Next actions:
 
 ## Toastty manifest wiring notes
 
-- Ghostty linking in `Project.swift` is explicitly opt-in at manifest generation time.
-- Important nuance: Tuist manifest evaluation does not expose arbitrary shell env variables like `TOASTTY_ENABLE_GHOSTTY`.
-  - use `TUIST_ENABLE_GHOSTTY=1 tuist generate` to enable Ghostty linkage in generated Xcode project settings.
-  - after generate, verify `TOASTTY_HAS_GHOSTTY_KIT` appears in `SWIFT_ACTIVE_COMPILATION_CONDITIONS` for `ToasttyApp`.
+- Ghostty linking in `Project.swift` is default-on when `Dependencies/GhosttyKit.xcframework` exists.
+- Disable linking explicitly with `TUIST_DISABLE_GHOSTTY=1` (preferred for Tuist flows) or compatibility alias `TOASTTY_DISABLE_GHOSTTY=1`.
+  - after generate, verify `TOASTTY_HAS_GHOSTTY_KIT` appears in `SWIFT_ACTIVE_COMPILATION_CONDITIONS` for `ToasttyApp` when Ghostty is enabled.
 - Current local integration status:
   - generated project correctly links `Dependencies/GhosttyKit.xcframework` when enabled.
   - app target must add Ghostty transitive linker flags:
     - `-lc++`
     - `-framework Carbon`
   - with those flags in `Project.swift`, Ghostty-enabled app builds now succeed via:
-    - `TUIST_ENABLE_GHOSTTY=1 tuist generate`
+    - `tuist generate` (with xcframework present and Ghostty not disabled)
     - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
   - runtime caveat (still open): Ghostty-enabled automation smoke run currently crashes before readiness file creation.
-    - repro: `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
+    - repro: `./scripts/automation/smoke-ui.sh` (with xcframework present and Ghostty not disabled)
     - latest crash log: `artifacts/automation/app-smoke-20260227-114016.log` (Sentry/breakpad capture emitted)
-  - default generate path remains fallback (no Ghostty compile condition) to keep day-to-day app runs stable.
+  - generate path falls back automatically (no Ghostty compile condition) when the xcframework is absent or integration is disabled.
 
 ## Current action parity (MVP snapshot)
 
