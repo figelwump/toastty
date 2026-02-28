@@ -1,5 +1,21 @@
 import Foundation
 
+public enum PaneSplitDirection: String, Codable, Equatable, Sendable {
+    case right
+    case down
+    case left
+    case up
+}
+
+public enum PaneFocusDirection: String, Codable, Equatable, Sendable {
+    case previous
+    case next
+    case up
+    case down
+    case left
+    case right
+}
+
 public enum AppAction: Equatable, Sendable {
     case selectWindow(windowID: UUID)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
@@ -17,5 +33,7 @@ public enum AppAction: Equatable, Sendable {
     case decreaseGlobalTerminalFont
     case resetGlobalTerminalFont
     case splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation)
+    case splitFocusedPaneInDirection(workspaceID: UUID, direction: PaneSplitDirection)
+    case focusPane(workspaceID: UUID, direction: PaneFocusDirection)
     case createTerminalPanel(workspaceID: UUID, paneID: UUID)
 }

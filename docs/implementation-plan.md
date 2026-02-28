@@ -2,6 +2,11 @@
 
 Date: 2026-02-26
 
+Status update (2026-02-28):
+- execution priority for this plan is paused.
+- active implementation plan is now `docs/mvp-daily-driver-plan.md`.
+- this document remains as historical architecture/decision context.
+
 ## 1) Product goal
 
 `toastty` is a Ghostty-based multi-pane, multi-window coding workspace with first-class agent context.

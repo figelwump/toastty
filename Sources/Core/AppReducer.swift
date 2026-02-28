@@ -344,6 +344,44 @@ public struct AppReducer {
             return true
 
         case .splitFocusedPane(let workspaceID, let orientation):
+            let direction: PaneSplitDirection = orientation == .horizontal ? .right : .down
+            return splitFocusedPane(workspaceID: workspaceID, direction: direction, state: &state)
+
+        case .splitFocusedPaneInDirection(let workspaceID, let direction):
+            return splitFocusedPane(workspaceID: workspaceID, direction: direction, state: &state)
+
+        case .focusPane(let workspaceID, let direction):
+            return focusPane(workspaceID: workspaceID, direction: direction, state: &state)
+
+        case .createTerminalPanel(let workspaceID, let paneID):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+
+            let panelID = UUID()
+            workspace.panels[panelID] = .terminal(
+                TerminalPanelState(
+                    title: nextTerminalTitle(in: workspace),
+                    shell: "zsh",
+                    cwd: NSHomeDirectory()
+                )
+            )
+
+            guard workspace.paneTree.appendPanel(panelID, toPane: paneID, select: true) else {
+                workspace.panels.removeValue(forKey: panelID)
+                return false
+            }
+
+            workspace.focusedPanelID = panelID
+            state.workspacesByID[workspaceID] = workspace
+            return true
+        }
+    }
+
+    @discardableResult
+    private static func splitFocusedPane(
+        workspaceID: UUID,
+        direction: PaneSplitDirection,
+        state: inout AppState
+    ) -> Bool {
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.focusedPanelModeActive == false else { return false }
             guard let focusResolution = resolveFocusedPanel(in: workspace) else {
@@ -371,12 +409,30 @@ public struct AppReducer {
                 selectedIndex: sourceLeaf.selectedIndex
             )
 
+            let orientation: SplitOrientation = switch direction {
+            case .left, .right:
+                .horizontal
+            case .up, .down:
+                .vertical
+            }
+
+            let firstNode: PaneNode
+            let secondNode: PaneNode
+            switch direction {
+            case .right, .down:
+                firstNode = originalLeaf
+                secondNode = newLeaf
+            case .left, .up:
+                firstNode = newLeaf
+                secondNode = originalLeaf
+            }
+
             let split = PaneNode.split(
                 nodeID: UUID(),
                 orientation: orientation,
                 ratio: 0.5,
-                first: originalLeaf,
-                second: newLeaf
+                first: firstNode,
+                second: secondNode
             )
 
             guard workspace.paneTree.replaceLeaf(paneID: sourceLeaf.paneID, with: split) else {
@@ -387,27 +443,187 @@ public struct AppReducer {
             state.workspacesByID[workspaceID] = workspace
             return true
 
-        case .createTerminalPanel(let workspaceID, let paneID):
-            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+    }
 
-            let panelID = UUID()
-            workspace.panels[panelID] = .terminal(
-                TerminalPanelState(
-                    title: nextTerminalTitle(in: workspace),
-                    shell: "zsh",
-                    cwd: NSHomeDirectory()
-                )
-            )
+    @discardableResult
+    private static func focusPane(
+        workspaceID: UUID,
+        direction: PaneFocusDirection,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID] else { return false }
+        guard workspace.focusedPanelModeActive == false else { return false }
+        guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+            return false
+        }
 
-            guard workspace.paneTree.appendPanel(panelID, toPane: paneID, select: true) else {
-                workspace.panels.removeValue(forKey: panelID)
-                return false
+        let sourcePaneID = focusResolution.leaf.paneID
+        guard let targetPaneID = targetPaneID(
+            from: sourcePaneID,
+            direction: direction,
+            paneTree: workspace.paneTree
+        ) else {
+            return false
+        }
+        guard targetPaneID != sourcePaneID else {
+            return false
+        }
+        guard let targetLeaf = workspace.paneTree.leafNode(paneID: targetPaneID) else {
+            return false
+        }
+        guard let targetPanelID = selectedPanelID(in: targetLeaf, workspace: workspace) else {
+            return false
+        }
+        guard targetPanelID != workspace.focusedPanelID else {
+            return false
+        }
+
+        workspace.focusedPanelID = targetPanelID
+        state.workspacesByID[workspaceID] = workspace
+        return true
+    }
+
+    private static func targetPaneID(
+        from sourcePaneID: UUID,
+        direction: PaneFocusDirection,
+        paneTree: PaneNode
+    ) -> UUID? {
+        let leaves = paneTree.allLeafInfos
+        guard let sourceLeafIndex = leaves.firstIndex(where: { $0.paneID == sourcePaneID }) else {
+            return nil
+        }
+
+        switch direction {
+        case .previous:
+            guard leaves.count > 1 else { return nil }
+            let previousIndex = (sourceLeafIndex - 1 + leaves.count) % leaves.count
+            return leaves[previousIndex].paneID
+        case .next:
+            guard leaves.count > 1 else { return nil }
+            let nextIndex = (sourceLeafIndex + 1) % leaves.count
+            return leaves[nextIndex].paneID
+        case .up, .down, .left, .right:
+            let frames = paneFrames(for: paneTree)
+            guard let sourceFrame = frames.first(where: { $0.paneID == sourcePaneID }) else {
+                return nil
+            }
+            return closestPaneID(to: sourceFrame, direction: direction, frames: frames)
+        }
+    }
+
+    private static func selectedPanelID(in leafNode: PaneNode, workspace: WorkspaceState) -> UUID? {
+        guard case .leaf(_, let tabPanelIDs, let selectedIndex) = leafNode else {
+            return nil
+        }
+        guard tabPanelIDs.isEmpty == false else {
+            return nil
+        }
+        let resolvedIndex = min(max(selectedIndex, 0), tabPanelIDs.count - 1)
+        let panelID = tabPanelIDs[resolvedIndex]
+        guard workspace.panels[panelID] != nil else {
+            return nil
+        }
+        return panelID
+    }
+
+    private struct PaneFrame {
+        let paneID: UUID
+        let minX: Double
+        let minY: Double
+        let maxX: Double
+        let maxY: Double
+        let centerX: Double
+        let centerY: Double
+    }
+
+    private static func paneFrames(for paneTree: PaneNode) -> [PaneFrame] {
+        struct NormalizedRect {
+            let minX: Double
+            let minY: Double
+            let width: Double
+            let height: Double
+
+            var maxX: Double { minX + width }
+            var maxY: Double { minY + height }
+            var centerX: Double { minX + (width * 0.5) }
+            var centerY: Double { minY + (height * 0.5) }
+        }
+
+        func walk(_ node: PaneNode, rect: NormalizedRect) -> [PaneFrame] {
+            switch node {
+            case .leaf(let paneID, _, _):
+                return [
+                    PaneFrame(
+                        paneID: paneID,
+                        minX: rect.minX,
+                        minY: rect.minY,
+                        maxX: rect.maxX,
+                        maxY: rect.maxY,
+                        centerX: rect.centerX,
+                        centerY: rect.centerY
+                    ),
+                ]
+            case .split(_, let orientation, let ratio, let first, let second):
+                if orientation == .horizontal {
+                    let firstWidth = rect.width * ratio
+                    let secondWidth = max(rect.width - firstWidth, 0)
+                    let firstRect = NormalizedRect(minX: rect.minX, minY: rect.minY, width: firstWidth, height: rect.height)
+                    let secondRect = NormalizedRect(minX: rect.minX + firstWidth, minY: rect.minY, width: secondWidth, height: rect.height)
+                    return walk(first, rect: firstRect) + walk(second, rect: secondRect)
+                }
+
+                let firstHeight = rect.height * ratio
+                let secondHeight = max(rect.height - firstHeight, 0)
+                let firstRect = NormalizedRect(minX: rect.minX, minY: rect.minY, width: rect.width, height: firstHeight)
+                let secondRect = NormalizedRect(minX: rect.minX, minY: rect.minY + firstHeight, width: rect.width, height: secondHeight)
+                return walk(first, rect: firstRect) + walk(second, rect: secondRect)
+            }
+        }
+
+        return walk(
+            paneTree,
+            rect: NormalizedRect(minX: 0, minY: 0, width: 1, height: 1)
+        )
+    }
+
+    private static func closestPaneID(
+        to source: PaneFrame,
+        direction: PaneFocusDirection,
+        frames: [PaneFrame]
+    ) -> UUID? {
+        let directionalCandidates: [(frame: PaneFrame, primaryDistance: Double, secondaryDistance: Double)] = frames.compactMap { candidate in
+            guard candidate.paneID != source.paneID else {
+                return nil
             }
 
-            workspace.focusedPanelID = panelID
-            state.workspacesByID[workspaceID] = workspace
-            return true
+            switch direction {
+            case .left:
+                guard candidate.centerX < source.centerX else { return nil }
+                return (candidate, source.centerX - candidate.centerX, abs(candidate.centerY - source.centerY))
+            case .right:
+                guard candidate.centerX > source.centerX else { return nil }
+                return (candidate, candidate.centerX - source.centerX, abs(candidate.centerY - source.centerY))
+            case .up:
+                guard candidate.centerY < source.centerY else { return nil }
+                return (candidate, source.centerY - candidate.centerY, abs(candidate.centerX - source.centerX))
+            case .down:
+                guard candidate.centerY > source.centerY else { return nil }
+                return (candidate, candidate.centerY - source.centerY, abs(candidate.centerX - source.centerX))
+            case .previous, .next:
+                return nil
+            }
         }
+
+        let sorted = directionalCandidates.sorted { lhs, rhs in
+            if lhs.primaryDistance != rhs.primaryDistance {
+                return lhs.primaryDistance < rhs.primaryDistance
+            }
+            if lhs.secondaryDistance != rhs.secondaryDistance {
+                return lhs.secondaryDistance < rhs.secondaryDistance
+            }
+            return lhs.frame.paneID.uuidString < rhs.frame.paneID.uuidString
+        }
+        return sorted.first?.frame.paneID
     }
 
     private static func resolveFocusedPanel(in workspace: WorkspaceState) -> (panelID: UUID, leaf: PaneLeafInfo)? {

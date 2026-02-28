@@ -3,6 +3,11 @@ import AppKit
 import Foundation
 import GhosttyKit
 
+@MainActor
+protocol GhosttyRuntimeActionHandling: AnyObject {
+    func handleGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool
+}
+
 private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
     guard let userdata else { return }
     // Store as an integer handle to satisfy strict Sendable checks across dispatch hops.
@@ -14,6 +19,20 @@ private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
     }
 }
 
+private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
+    guard let app else { return false }
+    guard let userdata = ghostty_app_userdata(app) else { return false }
+    guard Thread.isMainThread else {
+        // Keybinding-driven split actions are expected on the AppKit main thread.
+        return false
+    }
+
+    let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(userdata).takeUnretainedValue()
+    return MainActor.assumeIsolated {
+        return manager.routeRuntimeAction(target: target, action: action)
+    }
+}
+
 private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghostty_runtime_config_s {
     ghostty_runtime_config_s(
         userdata: userdata,
@@ -22,8 +41,8 @@ private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghos
             // Ghostty may invoke wakeup from a renderer thread; all app ticks must return to main.
             ghosttyWakeupCallback(userdata)
         },
-        action_cb: { _, _, _ in
-            true
+        action_cb: { app, target, action in
+            ghosttyActionCallback(app: app, target: target, action: action)
         },
         read_clipboard_cb: { _, _, _ in },
         confirm_read_clipboard_cb: { _, _, _, _ in },
@@ -35,6 +54,8 @@ private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghos
 @MainActor
 final class GhosttyRuntimeManager {
     static let shared = GhosttyRuntimeManager()
+
+    weak var actionHandler: (any GhosttyRuntimeActionHandling)?
 
     private var app: ghostty_app_t?
     private var config: ghostty_config_t?
@@ -101,6 +122,10 @@ final class GhosttyRuntimeManager {
     private func tick() {
         guard let app else { return }
         ghostty_app_tick(app)
+    }
+
+    fileprivate func routeRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
+        actionHandler?.handleGhosttyRuntimeAction(target: target, action: action) ?? false
     }
 }
 #endif

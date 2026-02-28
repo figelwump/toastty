@@ -8,13 +8,21 @@ import GhosttyKit
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
+    private weak var store: AppStore?
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
+    #endif
+
+    func bind(store: AppStore) {
+        self.store = store
+    }
 
     func controller(for panelID: UUID) -> TerminalSurfaceController {
         if let existing = controllers[panelID] {
             return existing
         }
 
-        let created = TerminalSurfaceController(panelID: panelID)
+        let created = TerminalSurfaceController(panelID: panelID, registry: self)
         controllers[panelID] = created
         return created
     }
@@ -50,11 +58,126 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
         return controller.automationReadVisibleText()
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    fileprivate func register(surface: ghostty_surface_t, for panelID: UUID) {
+        panelIDBySurfaceHandle[UInt(bitPattern: surface)] = panelID
+    }
+
+    fileprivate func unregister(surface: ghostty_surface_t, for panelID: UUID) {
+        let key = UInt(bitPattern: surface)
+        if panelIDBySurfaceHandle[key] == panelID {
+            panelIDBySurfaceHandle.removeValue(forKey: key)
+        }
+    }
+
+    private func panelID(for surface: ghostty_surface_t) -> UUID? {
+        panelIDBySurfaceHandle[UInt(bitPattern: surface)]
+    }
+
+    private func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
+        for window in state.windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = state.workspacesByID[workspaceID] else { continue }
+                guard workspace.panels[panelID] != nil else { continue }
+                if workspace.paneTree.leafContaining(panelID: panelID) != nil {
+                    return workspaceID
+                }
+            }
+        }
+        return nil
+    }
+    #endif
 }
+
+#if TOASTTY_HAS_GHOSTTY_KIT
+extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
+    func handleGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
+        guard target.tag == GHOSTTY_TARGET_SURFACE else {
+            return false
+        }
+
+        guard let sourceSurface = target.target.surface else {
+            return false
+        }
+        guard let panelID = panelID(for: sourceSurface) else {
+            return false
+        }
+        guard let store else {
+            return false
+        }
+        guard let workspaceID = workspaceID(containing: panelID, state: store.state) else {
+            return false
+        }
+        guard store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID)) else {
+            return false
+        }
+
+        switch action.tag {
+        case GHOSTTY_ACTION_NEW_SPLIT:
+            guard let direction = PaneSplitDirection(ghosttyDirection: action.action.new_split) else {
+                return false
+            }
+            return store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: direction))
+
+        case GHOSTTY_ACTION_GOTO_SPLIT:
+            guard let direction = PaneFocusDirection(ghosttyDirection: action.action.goto_split) else {
+                return false
+            }
+            return store.send(.focusPane(workspaceID: workspaceID, direction: direction))
+
+        case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
+            return store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+
+        default:
+            return false
+        }
+    }
+}
+
+private extension PaneSplitDirection {
+    init?(ghosttyDirection: ghostty_action_split_direction_e) {
+        switch ghosttyDirection {
+        case GHOSTTY_SPLIT_DIRECTION_RIGHT:
+            self = .right
+        case GHOSTTY_SPLIT_DIRECTION_DOWN:
+            self = .down
+        case GHOSTTY_SPLIT_DIRECTION_LEFT:
+            self = .left
+        case GHOSTTY_SPLIT_DIRECTION_UP:
+            self = .up
+        default:
+            return nil
+        }
+    }
+}
+
+private extension PaneFocusDirection {
+    init?(ghosttyDirection: ghostty_action_goto_split_e) {
+        switch ghosttyDirection {
+        case GHOSTTY_GOTO_SPLIT_PREVIOUS:
+            self = .previous
+        case GHOSTTY_GOTO_SPLIT_NEXT:
+            self = .next
+        case GHOSTTY_GOTO_SPLIT_UP:
+            self = .up
+        case GHOSTTY_GOTO_SPLIT_DOWN:
+            self = .down
+        case GHOSTTY_GOTO_SPLIT_LEFT:
+            self = .left
+        case GHOSTTY_GOTO_SPLIT_RIGHT:
+            self = .right
+        default:
+            return nil
+        }
+    }
+}
+#endif
 
 @MainActor
 final class TerminalSurfaceController {
     private let panelID: UUID
+    private unowned let registry: TerminalRuntimeRegistry
     private let hostedView: NSView
 
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -64,8 +187,9 @@ final class TerminalSurfaceController {
 
     private let fallbackView = TerminalFallbackView()
 
-    init(panelID: UUID) {
+    init(panelID: UUID, registry: TerminalRuntimeRegistry) {
         self.panelID = panelID
+        self.registry = registry
         #if TOASTTY_HAS_GHOSTTY_KIT
         hostedView = TerminalHostView()
         #else
@@ -135,6 +259,7 @@ final class TerminalSurfaceController {
             hostView.setGhosttySurface(nil)
         }
         if let ghosttySurface {
+            registry.unregister(surface: ghosttySurface, for: panelID)
             ghostty_surface_free(ghosttySurface)
             self.ghosttySurface = nil
         }
@@ -220,12 +345,17 @@ final class TerminalSurfaceController {
     private func ensureGhosttySurface(terminalState: TerminalPanelState, fontPoints: Double) {
         guard ghosttySurface == nil else { return }
 
+        ghosttyManager.actionHandler = registry
         guard let hostView = hostedView as? TerminalHostView else { return }
-        ghosttySurface = ghosttyManager.makeSurface(
+        guard let surface = ghosttyManager.makeSurface(
             hostView: hostView,
             workingDirectory: terminalState.cwd,
             fontPoints: fontPoints
-        )
+        ) else {
+            return
+        }
+        ghosttySurface = surface
+        registry.register(surface: surface, for: panelID)
     }
 
     private func swapToFallbackIfNeeded() {
@@ -327,7 +457,7 @@ final class TerminalHostView: NSView {
         if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
         if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
         if flags.contains(.numericPad) { raw |= GHOSTTY_MODS_NUM.rawValue }
-        return ghostty_input_mods_e(rawValue: raw) ?? GHOSTTY_MODS_NONE
+        return ghostty_input_mods_e(rawValue: raw)
     }
 
     private static func ghosttyText(for event: NSEvent) -> String? {

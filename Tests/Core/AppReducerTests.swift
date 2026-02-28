@@ -27,6 +27,79 @@ struct AppReducerTests {
     }
 
     @Test
+    func splitFocusedPaneInDirectionSupportsLeadingPlacements() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let sourcePanelID = try #require(workspaceBefore.focusedPanelID)
+
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left), state: &state))
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, let orientation, _, let first, let second) = workspaceAfter.paneTree else {
+            Issue.record("expected split root after directional split")
+            return
+        }
+
+        #expect(orientation == .horizontal)
+        guard case .leaf(_, let firstTabs, _ ) = first,
+              case .leaf(_, let secondTabs, _ ) = second else {
+            Issue.record("expected leaf children in split root")
+            return
+        }
+        #expect(firstTabs.contains(sourcePanelID) == false)
+        #expect(secondTabs.contains(sourcePanelID))
+        #expect(workspaceAfter.focusedPanelID != sourcePanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func focusPaneMovesToNextAndPreviousLeaf() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let initialWorkspace = try #require(state.workspacesByID[workspaceID])
+        let sourcePanelID = try #require(initialWorkspace.focusedPanelID)
+
+        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .next), state: &state))
+        let nextWorkspace = try #require(state.workspacesByID[workspaceID])
+        let nextPanelID = try #require(nextWorkspace.focusedPanelID)
+        #expect(nextPanelID != sourcePanelID)
+
+        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .previous), state: &state))
+        let previousWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(previousWorkspace.focusedPanelID == sourcePanelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func focusPaneDirectionalMovesToSpatialNeighbor() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        let workspaceAfterSplit = try #require(state.workspacesByID[workspaceID])
+        let panelAfterSplit = try #require(workspaceAfterSplit.focusedPanelID)
+
+        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .up), state: &state))
+        let workspaceAfterMove = try #require(state.workspacesByID[workspaceID])
+        let movedPanelID = try #require(workspaceAfterMove.focusedPanelID)
+        #expect(movedPanelID != panelAfterSplit)
+        #expect(
+            reducer.send(.focusPane(workspaceID: workspaceID, direction: .down), state: &state),
+            "downward move should return to lower pane"
+        )
+        let workspaceAfterReturn = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterReturn.focusedPanelID == panelAfterSplit)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func createTerminalPanelAppendsToTargetPane() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

@@ -13,6 +13,7 @@ struct ToasttyApp: App {
         let bootstrap = AppBootstrap.make()
         let store = AppStore(state: bootstrap.state)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        terminalRuntimeRegistry.bind(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
@@ -67,6 +68,34 @@ struct ToasttyApp: App {
                 }
                 .keyboardShortcut("0", modifiers: [.command])
             }
+
+            #if !TOASTTY_HAS_GHOSTTY_KIT
+            CommandMenu("Pane") {
+                Button("Split Right") {
+                    guard let workspaceID = store.selectedWorkspace?.id else { return }
+                    store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right))
+                }
+                .keyboardShortcut("d", modifiers: [.command])
+
+                Button("Split Down") {
+                    guard let workspaceID = store.selectedWorkspace?.id else { return }
+                    store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .down))
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+
+                Button("Focus Previous Pane") {
+                    guard let workspaceID = store.selectedWorkspace?.id else { return }
+                    store.send(.focusPane(workspaceID: workspaceID, direction: .previous))
+                }
+                .keyboardShortcut("[", modifiers: [.command])
+
+                Button("Focus Next Pane") {
+                    guard let workspaceID = store.selectedWorkspace?.id else { return }
+                    store.send(.focusPane(workspaceID: workspaceID, direction: .next))
+                }
+                .keyboardShortcut("]", modifiers: [.command])
+            }
+            #endif
         }
     }
 }

@@ -712,6 +712,36 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.split.vertical":
             didMutate = store.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical))
 
+        case "workspace.split.right":
+            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right))
+
+        case "workspace.split.down":
+            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .down))
+
+        case "workspace.split.left":
+            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left))
+
+        case "workspace.split.up":
+            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .up))
+
+        case "workspace.focus-pane.previous":
+            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .previous))
+
+        case "workspace.focus-pane.next":
+            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .next))
+
+        case "workspace.focus-pane.left":
+            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .left))
+
+        case "workspace.focus-pane.right":
+            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .right))
+
+        case "workspace.focus-pane.up":
+            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .up))
+
+        case "workspace.focus-pane.down":
+            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .down))
+
         case "topbar.toggle.diff":
             didMutate = store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff))
 
