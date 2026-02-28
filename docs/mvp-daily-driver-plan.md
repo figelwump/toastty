@@ -781,3 +781,21 @@ Pending:
 - rejected (with rationale):
   - concern about focused-state information loss in panel border was rejected because this was an explicit design change request to remove full-panel accent border.
   - suggestion to remove explicit constant assertion in `AppStateCodableTests` was rejected; we keep it intentionally to lock desired default at `12`.
+
+2026-02-28 (Post-MVP continuation: prevent Xcode focus-steal during automation runs):
+- updated automation scripts to generate workspace without auto-opening Xcode:
+  - `scripts/automation/check.sh`
+  - `scripts/automation/smoke-ui.sh`
+  - `scripts/automation/shortcut-trace.sh`
+  - change: `tuist generate` -> `tuist generate --no-open`
+- validation:
+  - `bash -n scripts/automation/check.sh scripts/automation/smoke-ui.sh scripts/automation/shortcut-trace.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: automation no-open generation):
+- reviewer source: Claude second-opinion on `tuist generate --no-open` script patch.
+- accepted:
+  - added explicit smoke validation to confirm `--no-open` works in runtime automation path, not only `check.sh`.
+- rejected (with rationale):
+  - concern that `smoke-ui.sh` and `shortcut-trace.sh` do not check generate exit status was rejected because both scripts run with `set -e`, so `tuist generate --no-open` failure is already fatal.

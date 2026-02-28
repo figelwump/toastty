@@ -35,7 +35,7 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
-tuist generate >/dev/null
+tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \

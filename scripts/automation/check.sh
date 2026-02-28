@@ -6,7 +6,7 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   ARCH="arm64"
 fi
 
-if ! tuist generate; then
+if ! tuist generate --no-open; then
   exit 10
 fi
 
