@@ -64,8 +64,7 @@ struct WorkspaceView: View {
                 focusedPanelID: panelID,
                 globalFontPoints: store.state.globalTerminalFontPoints,
                 store: store,
-                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                expanded: true
+                terminalRuntimeRegistry: terminalRuntimeRegistry
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         } else {
@@ -121,9 +120,7 @@ private struct PaneNodeView: View {
     var body: some View {
         switch node {
         case .leaf(_, let tabPanelIDs, let selectedIndex):
-            let selectedPanelID = tabPanelIDs.indices.contains(selectedIndex)
-                ? tabPanelIDs[selectedIndex]
-                : tabPanelIDs.first
+            let selectedPanelID = paneSelectedPanelID(tabPanelIDs: tabPanelIDs, selectedIndex: selectedIndex)
 
             Group {
                 if let panelID = selectedPanelID,
@@ -135,8 +132,7 @@ private struct PaneNodeView: View {
                         focusedPanelID: workspace.focusedPanelID,
                         globalFontPoints: globalFontPoints,
                         store: store,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        expanded: true
+                        terminalRuntimeRegistry: terminalRuntimeRegistry
                     )
                 } else {
                     Color.clear
@@ -196,6 +192,17 @@ private struct PaneNodeView: View {
             }
         }
     }
+
+    private func paneSelectedPanelID(tabPanelIDs: [UUID], selectedIndex: Int) -> UUID? {
+        if tabPanelIDs.indices.contains(selectedIndex) {
+            return tabPanelIDs[selectedIndex]
+        }
+        if tabPanelIDs.isEmpty {
+            return nil
+        }
+        assertionFailure("PaneNodeView received an out-of-range selected index.")
+        return tabPanelIDs.first
+    }
 }
 
 private struct PanelCardView: View {
@@ -206,7 +213,6 @@ private struct PanelCardView: View {
     let globalFontPoints: Double
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
-    let expanded: Bool
 
     private var isFocused: Bool {
         focusedPanelID == panelID
@@ -232,8 +238,7 @@ private struct PanelCardView: View {
                 )
                 .frame(
                     maxWidth: .infinity,
-                    minHeight: expanded ? 0 : 120,
-                    maxHeight: expanded ? .infinity : nil,
+                    maxHeight: .infinity,
                     alignment: .topLeading
                 )
 
@@ -248,9 +253,9 @@ private struct PanelCardView: View {
         .background(Color.gray.opacity(0.06))
         .overlay(
             Rectangle()
-                .stroke(isFocused ? Color.accentColor : Color.gray.opacity(0.28), lineWidth: isFocused ? 1.5 : 1)
+                .strokeBorder(isFocused ? Color.accentColor : Color.gray.opacity(0.28), lineWidth: isFocused ? 1.5 : 1)
         )
-        .frame(maxWidth: .infinity, maxHeight: expanded ? .infinity : nil, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {
             store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
@@ -277,8 +282,7 @@ private struct PanelCardView: View {
             .foregroundStyle(.secondary)
             .frame(
                 maxWidth: .infinity,
-                minHeight: expanded ? 0 : 80,
-                maxHeight: expanded ? .infinity : nil,
+                maxHeight: .infinity,
                 alignment: .leading
             )
     }

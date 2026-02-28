@@ -295,3 +295,15 @@ Pending:
   - updated smoke artifacts:
     - `artifacts/automation/ui/smoke-20260227-191037/split-workspace/aux-column-smoke.png`
     - `artifacts/automation/ui/smoke-20260227-191102/split-workspace/terminal-viewport-smoke.png`
+
+2026-02-28 (Chunk M2 follow-up: reviewer fixes):
+- accepted points:
+  - added assertion-backed recovery for out-of-range `selectedIndex` in `PaneNodeView` (fallback to first tab panel with debug assertion).
+  - switched panel border overlay from `stroke` to `strokeBorder` for cleaner square edge rendering.
+  - removed dead `expanded` branching from `PanelCardView` and simplified to always fill pane bounds.
+- rejected point:
+  - kept explicit `#expect(AppState.defaultTerminalFontPoints == 11)` assertion to enforce MVP-required default, not just relative bootstrap behavior.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 71 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
