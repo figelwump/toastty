@@ -2,6 +2,8 @@ import SwiftUI
 
 @main
 struct ToasttyApp: App {
+    private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+
     @StateObject private var store: AppStore
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let automationLifecycle: AutomationLifecycle?
@@ -74,18 +76,20 @@ struct ToasttyApp: App {
                     createWorkspaceFromSelection()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
+                .disabled(store.selectedWindow == nil)
 
                 if let window = store.selectedWindow {
-                    ForEach(Array(window.workspaceIDs.prefix(9).enumerated()), id: \.element) { index, workspaceID in
-                        if let workspace = store.state.workspacesByID[workspaceID] {
-                            Button(workspace.title) {
-                                selectWorkspaceFromSelection(workspaceID: workspaceID)
-                            }
-                            .keyboardShortcut(
-                                KeyEquivalent(Character(String(index + 1))),
-                                modifiers: [.command]
-                            )
+                    ForEach(
+                        Array(window.workspaceIDs.prefix(Self.workspaceShortcutKeys.count).enumerated()),
+                        id: \.offset
+                    ) { index, workspaceID in
+                        let workspace = store.state.workspacesByID[workspaceID]
+                        let title = workspace?.title ?? "Missing Workspace \(index + 1)"
+                        Button(title) {
+                            selectWorkspaceFromShortcutIndex(index)
                         }
+                        .keyboardShortcut(Self.workspaceShortcutKeys[index], modifiers: [.command])
+                        .disabled(workspace == nil)
                     }
                 }
             }
@@ -125,8 +129,12 @@ struct ToasttyApp: App {
         store.send(.createWorkspace(windowID: windowID, title: nil))
     }
 
-    private func selectWorkspaceFromSelection(workspaceID: UUID) {
-        guard let windowID = store.selectedWindow?.id else { return }
+    private func selectWorkspaceFromShortcutIndex(_ index: Int) {
+        guard let window = store.selectedWindow else { return }
+        guard window.workspaceIDs.indices.contains(index) else { return }
+        let workspaceID = window.workspaceIDs[index]
+        guard store.state.workspacesByID[workspaceID] != nil else { return }
+        let windowID = window.id
         store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }
 }

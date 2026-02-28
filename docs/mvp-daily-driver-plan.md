@@ -817,3 +817,22 @@ Pending:
     - `cmd+2` switched selected workspace from fixture workspace 1 -> workspace 2
     - `cmd+1` switched back to workspace 1
     - `cmd+shift+n` increased workspace count (`2` -> `3`) and selected the new workspace
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: workspace keyboard shortcuts):
+- reviewer source: Claude second-opinion on workspace shortcut patch.
+- accepted and implemented:
+  - replaced dynamic `Character(String(index + 1))` shortcut creation with explicit `KeyEquivalent` map (`1...9`) to avoid latent runtime traps if bounds change.
+  - switched workspace-selection shortcut routing to index-based resolution at execution time (`selectWorkspaceFromShortcutIndex`) so actions always target the currently selected window/workspace ordering.
+  - disabled `New Workspace` command when no window is selected.
+  - preserved contiguous shortcut slots even if workspace lookup fails by rendering a disabled fallback menu item (`Missing Workspace N`).
+- rejected (with rationale):
+  - suggestion to drop `cmd+shift+n` due system shortcut conflict:
+    - rejected because user explicitly requested this shortcut.
+  - concern about menu-order differences across Ghostty/non-Ghostty builds:
+    - rejected as non-blocking; `Workspace` menu is intended to exist in both builds while `Pane` fallback remains non-Ghostty-only.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `/tmp/workspace-shortcuts-check.sh` (pass):
+    - verified `cmd+2`, `cmd+1`, `cmd+shift+n` with runtime state assertions.
