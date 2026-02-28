@@ -564,3 +564,44 @@ Pending:
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TOASTTY_ENABLE_GHOSTTY=1 tuist generate` + `xcodebuild -showBuildSettings` (pass; `TOASTTY_HAS_GHOSTTY_KIT` present)
+
+2026-02-28 (Post-MVP continuation: real-key shortcut trace automation):
+- closed the previously-documented shortcut testing gap by adding `scripts/automation/shortcut-trace.sh`.
+- script behavior:
+  - launches app in automation mode with `TOASTTY_LOG_LEVEL=debug`.
+  - focuses terminal surface via AppKit scripting (`System Events` click).
+  - sends real key chords:
+    - `cmd+ctrl+right` (Ghostty `resize_split:right,10`)
+    - `cmd+ctrl+=` (Ghostty `equalize_splits`)
+  - validates behavior through state snapshots:
+    - resize increases `rootSplitRatio`
+    - equalize normalizes `rootSplitRatio` to `0.5`
+  - validates observability:
+    - Ghostty action-intent logs present (`resize_split.right`, `equalize_splits`)
+    - input key-event forwarding logs present (`key_code` 124 and 24)
+- docs/process updates:
+  - `AGENTS.md` now includes shortcut-trace usage and prerequisites.
+- validation:
+  - `./scripts/automation/shortcut-trace.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: shortcut-trace hardening):
+- reviewer source: Claude second-opinion on `shortcut-trace` change set.
+- accepted and implemented:
+  - key chord helpers now honor configurable key codes:
+    - `RESIZE_KEY_CODE`
+    - `EQUALIZE_KEY_CODE`
+  - added request-id dependency guard (`uuidgen`) and request timeout (`nc -w 2`) to avoid indefinite socket hangs.
+  - improved numeric JSON extraction:
+    - uses `jq` when available with fallback regex parser.
+  - hardened startup liveness check:
+    - retries `kill -0` after a short delay before treating startup as failed.
+  - replaced fixed post-key sleeps with bounded snapshot polling for resize/equalize assertions.
+  - screenshot capture now fails loudly when path is missing/unresolved.
+  - default focus click now derives from app window bounds and targets a left-pane-biased point; explicit `CLICK_X`/`CLICK_Y` overrides remain supported.
+- rejected/deferred:
+  - force-killing prior `ToasttyApp` processes was rejected to avoid interrupting active manual app sessions.
+  - changing documented dates was rejected as out of scope; entries intentionally reflect current log chronology.
+- re-validation:
+  - `./scripts/automation/shortcut-trace.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)

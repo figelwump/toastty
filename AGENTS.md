@@ -37,7 +37,13 @@
 
 ## Automation Nuts and Bolts
 - `scripts/automation/smoke-ui.sh` builds/runs the app in automation mode, drives socket actions, and emits screenshots/state dumps.
+- `scripts/automation/shortcut-trace.sh` drives real keyboard shortcuts through AppKit (`cmd+ctrl+right`, `cmd+ctrl+=`) and verifies:
+  - split ratio change/equalization via `automation.workspace_snapshot`
+  - Ghostty/runtime intent logs in `/tmp/toastty.log`
+  - key event forwarding logs (`category=input`).
+  - default focus targeting clicks a left-pane-biased point derived from the app window bounds; override with `CLICK_X` + `CLICK_Y` when needed.
 - Key smoke env overrides: `RUN_ID`, `FIXTURE`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
+- Shortcut-trace env overrides: `CLICK_X`, `CLICK_Y`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`.
 - Readiness file shape: `artifacts/automation/automation-ready-<run-id>.json`
 - App log shape: `artifacts/automation/app-<run-id>.log`
 - `scripts/automation/check.sh` runs `tuist generate`, `tuist build`, and `xcodebuild test` for scheme `toastty-Workspace` (update the script if scheme naming changes).
@@ -52,6 +58,10 @@
     - `workspace.equalize-splits` normalizes root split ratio to `0.5`
   - Ghostty terminal viewport I/O assertion is currently best-effort in smoke:
     - if terminal surface remains unavailable in automation mode, smoke logs a note and continues.
+- shortcut-trace prerequisites:
+  - Accessibility + Automation permissions for `osascript` / `System Events` (for synthetic key chords).
+  - Ghostty-enabled build path (`TUIST_DISABLE_GHOSTTY` and `TOASTTY_DISABLE_GHOSTTY` unset).
+  - CLI deps: `nc`, `osascript`, `uuidgen` (`jq` optional, used when available for robust JSON parsing).
 
 ## Logging and Diagnostics
 - App/runtime logging now uses `ToasttyLog` (Core module) with category + level metadata.
