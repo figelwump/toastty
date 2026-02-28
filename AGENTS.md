@@ -129,9 +129,9 @@ OSA
   - Ghostty font-size actions via callback (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
   - tabs/windows/clipboard action parity beyond current Toastty primitives
 
-## Current Project Snapshot (as of 2026-02-27; verify against current code when in doubt)
+## Current Project Snapshot (as of 2026-02-28; verify against current code when in doubt)
 - Current local state supports Ghostty-enabled app builds/runs when local xcframework dependency is present (default-on, explicit opt-out available).
 - Terminal focus + keyboard bridging is in place; regressions in cursor-follow/scrolling still need manual visual validation.
-- Smoke automation currently validates layout actions (split, aux toggles, focused panel, font HUD) and captures artifacts.
-- Current automated suite does not yet provide deterministic assertions for Ghostty terminal text I/O and viewport scrolling.
+- Smoke automation validates layout actions (split, aux toggles, focused panel, font HUD), deterministic Ghostty terminal send/read marker flow (when Ghostty is enabled), and captures artifacts.
+- Viewport scrolling smoothness still requires manual visual validation in the running app.
 - Ghostty xcframework remains a local dependency (`Dependencies/GhosttyKit.xcframework`), not a fully managed/pinned remote artifact.
