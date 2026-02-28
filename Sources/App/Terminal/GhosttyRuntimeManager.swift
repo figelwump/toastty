@@ -1,11 +1,55 @@
 #if TOASTTY_HAS_GHOSTTY_KIT
 import AppKit
+import CoreState
 import Foundation
 import GhosttyKit
 
 @MainActor
 protocol GhosttyRuntimeActionHandling: AnyObject {
-    func handleGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool
+    func handleGhosttyRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool
+}
+
+struct GhosttyRuntimeAction: Sendable {
+    enum Intent: Sendable {
+        case split(PaneSplitDirection)
+        case focus(PaneFocusDirection)
+        case toggleFocusedPanelMode
+    }
+
+    let surfaceHandle: UInt
+    let intent: Intent
+}
+
+private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> GhosttyRuntimeAction? {
+    guard target.tag == GHOSTTY_TARGET_SURFACE else {
+        return nil
+    }
+    guard let surface = target.target.surface else {
+        return nil
+    }
+
+    let intent: GhosttyRuntimeAction.Intent
+    switch action.tag {
+    case GHOSTTY_ACTION_NEW_SPLIT:
+        guard let direction = PaneSplitDirection(ghosttyDirection: action.action.new_split) else {
+            return nil
+        }
+        intent = .split(direction)
+
+    case GHOSTTY_ACTION_GOTO_SPLIT:
+        guard let direction = PaneFocusDirection(ghosttyDirection: action.action.goto_split) else {
+            return nil
+        }
+        intent = .focus(direction)
+
+    case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
+        intent = .toggleFocusedPanelMode
+
+    default:
+        return nil
+    }
+
+    return GhosttyRuntimeAction(surfaceHandle: UInt(bitPattern: surface), intent: intent)
 }
 
 private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
@@ -22,21 +66,55 @@ private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
 private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
     guard let app else { return false }
     guard let userdata = ghostty_app_userdata(app) else { return false }
-
-    let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(userdata).takeUnretainedValue()
-    if Thread.isMainThread {
-        return MainActor.assumeIsolated {
-            manager.routeRuntimeAction(target: target, action: action)
-        }
+    guard let runtimeAction = makeGhosttyRuntimeAction(target: target, action: action) else {
+        return false
     }
 
-    var handled = false
-    DispatchQueue.main.sync {
-        handled = MainActor.assumeIsolated {
-        return manager.routeRuntimeAction(target: target, action: action)
+    let managerHandle = UInt(bitPattern: userdata)
+    Task { @MainActor in
+        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else { return }
+        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
+        _ = manager.routeRuntimeAction(runtimeAction)
+    }
+    return true
+}
+
+private extension PaneSplitDirection {
+    init?(ghosttyDirection: ghostty_action_split_direction_e) {
+        switch ghosttyDirection {
+        case GHOSTTY_SPLIT_DIRECTION_RIGHT:
+            self = .right
+        case GHOSTTY_SPLIT_DIRECTION_DOWN:
+            self = .down
+        case GHOSTTY_SPLIT_DIRECTION_LEFT:
+            self = .left
+        case GHOSTTY_SPLIT_DIRECTION_UP:
+            self = .up
+        default:
+            return nil
         }
     }
-    return handled
+}
+
+private extension PaneFocusDirection {
+    init?(ghosttyDirection: ghostty_action_goto_split_e) {
+        switch ghosttyDirection {
+        case GHOSTTY_GOTO_SPLIT_PREVIOUS:
+            self = .previous
+        case GHOSTTY_GOTO_SPLIT_NEXT:
+            self = .next
+        case GHOSTTY_GOTO_SPLIT_UP:
+            self = .up
+        case GHOSTTY_GOTO_SPLIT_DOWN:
+            self = .down
+        case GHOSTTY_GOTO_SPLIT_LEFT:
+            self = .left
+        case GHOSTTY_GOTO_SPLIT_RIGHT:
+            self = .right
+        default:
+            return nil
+        }
+    }
 }
 
 private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghostty_runtime_config_s {
@@ -130,8 +208,8 @@ final class GhosttyRuntimeManager {
         ghostty_app_tick(app)
     }
 
-    fileprivate func routeRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
-        actionHandler?.handleGhosttyRuntimeAction(target: target, action: action) ?? false
+    fileprivate func routeRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool {
+        actionHandler?.handleGhosttyRuntimeAction(action) ?? false
     }
 }
 #endif

@@ -254,3 +254,15 @@ Pending:
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - note: `TOASTTY_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` is not reliable for Tuist-generate flows; use `TUIST_ENABLE_GHOSTTY=1`.
+
+2026-02-28 (Chunk M1 follow-up: deadlock-safe callback routing):
+- replaced synchronous cross-thread handoff in `ghosttyActionCallback` with a deadlock-safe queued main-actor dispatch path.
+- introduced typed `GhosttyRuntimeAction` payload:
+  - callback now parses supported actions and source surface handle eagerly, returns `false` for unsupported tags.
+  - known actions are enqueued on the main actor and routed through the registry handler.
+- moved Ghostty tag/direction parsing from `TerminalRuntimeRegistry` into runtime manager callback parsing.
+- added defensive single-store bind guard in `TerminalRuntimeRegistry.bind(store:)` to prevent accidental rebinding to a different store instance.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 70 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
