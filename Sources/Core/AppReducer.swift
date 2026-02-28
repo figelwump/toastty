@@ -500,9 +500,30 @@ public struct AppReducer {
         amount: Int,
         state: inout AppState
     ) -> Bool {
-        guard var workspace = state.workspacesByID[workspaceID] else { return false }
-        guard workspace.focusedPanelModeActive == false else { return false }
-        guard let focusResolution = resolveFocusedPanel(in: workspace) else { return false }
+        guard var workspace = state.workspacesByID[workspaceID] else {
+            ToasttyLog.debug(
+                "Resize split rejected: workspace missing",
+                category: .reducer,
+                metadata: ["workspace_id": workspaceID.uuidString]
+            )
+            return false
+        }
+        guard workspace.focusedPanelModeActive == false else {
+            ToasttyLog.debug(
+                "Resize split rejected: focused panel mode active",
+                category: .reducer,
+                metadata: ["workspace_id": workspaceID.uuidString]
+            )
+            return false
+        }
+        guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+            ToasttyLog.debug(
+                "Resize split rejected: no focused panel",
+                category: .reducer,
+                metadata: ["workspace_id": workspaceID.uuidString]
+            )
+            return false
+        }
         workspace.focusedPanelID = focusResolution.panelID
 
         let delta = splitResizeDelta(direction: direction, amount: amount)
@@ -512,22 +533,68 @@ public struct AppReducer {
             direction: direction,
             delta: delta
         )
-        guard result.didResize else { return false }
+        guard result.didResize else {
+            ToasttyLog.debug(
+                "Resize split rejected: no matching split orientation",
+                category: .reducer,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "direction": direction.rawValue,
+                    "amount": String(amount),
+                ]
+            )
+            return false
+        }
 
         workspace.paneTree = result.node
         state.workspacesByID[workspaceID] = workspace
+        ToasttyLog.debug(
+            "Resize split applied",
+            category: .reducer,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "direction": direction.rawValue,
+                "amount": String(amount),
+            ]
+        )
         return true
     }
 
     private static func equalizePaneSplits(workspaceID: UUID, state: inout AppState) -> Bool {
-        guard var workspace = state.workspacesByID[workspaceID] else { return false }
-        guard workspace.focusedPanelModeActive == false else { return false }
+        guard var workspace = state.workspacesByID[workspaceID] else {
+            ToasttyLog.debug(
+                "Equalize splits rejected: workspace missing",
+                category: .reducer,
+                metadata: ["workspace_id": workspaceID.uuidString]
+            )
+            return false
+        }
+        guard workspace.focusedPanelModeActive == false else {
+            ToasttyLog.debug(
+                "Equalize splits rejected: focused panel mode active",
+                category: .reducer,
+                metadata: ["workspace_id": workspaceID.uuidString]
+            )
+            return false
+        }
 
         let result = equalizeSplitRatios(in: workspace.paneTree)
-        guard result.didMutate else { return false }
+        guard result.didMutate else {
+            ToasttyLog.debug(
+                "Equalize splits rejected: tree already equalized",
+                category: .reducer,
+                metadata: ["workspace_id": workspaceID.uuidString]
+            )
+            return false
+        }
 
         workspace.paneTree = result.node
         state.workspacesByID[workspaceID] = workspace
+        ToasttyLog.debug(
+            "Equalized pane splits",
+            category: .reducer,
+            metadata: ["workspace_id": workspaceID.uuidString]
+        )
         return true
     }
 

@@ -514,3 +514,53 @@ Pending:
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `TOASTTY_ENABLE_GHOSTTY=1 tuist generate` + `xcodebuild -showBuildSettings` (pass; `TOASTTY_HAS_GHOSTTY_KIT` present)
+
+2026-02-28 (Post-MVP continuation: default terminal font set to 7):
+- updated `AppState.defaultTerminalFontPoints` from `11` to `7` per product direction for denser default terminal layout.
+- updated codable/bootstrap assertion in `Tests/Core/AppStateCodableTests.swift` to enforce the new default.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 77 tests)
+
+2026-02-28 (Post-MVP continuation: app-wide logging foundation + shortcut-path instrumentation):
+- added reusable logging system in `Core`:
+  - `Sources/Core/Diagnostics/ToasttyLog.swift`
+  - category/level logging (`debug|info|warning|error`) with structured JSON line output.
+  - default file sink at `/tmp/toastty.log` with size rotation (`/tmp/toastty.previous.log`).
+  - env controls:
+    - `TOASTTY_LOG_LEVEL`
+    - `TOASTTY_LOG_FILE` (set `none` to disable file sink)
+    - `TOASTTY_LOG_STDERR`
+    - `TOASTTY_LOG_DISABLE`
+- instrumented critical runtime paths:
+  - bootstrap + startup path (`AppBootstrap`)
+  - app action dispatch/rejection (`AppStore`)
+  - Ghostty callback routing (`GhosttyRuntimeManager`)
+  - Ghostty runtime action resolution + reducer handoff (`TerminalRuntimeRegistry`)
+  - terminal key-event forwarding to Ghostty (`TerminalHostView`)
+  - reducer rejection/apply reasons for resize/equalize (`AppReducer`)
+- added config tests:
+  - `Tests/Core/ToasttyLogConfigurationTests.swift`
+- operator usage:
+  - live monitor: `tail -f /tmp/toastty.log`
+  - pretty output: `tail -f /tmp/toastty.log | jq`
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: logging-path hardening):
+- reviewer source: Claude second-opinion on pending logging/instrumentation change set.
+- accepted:
+  - made log message + metadata evaluation lazy in `ToasttyLog` (guard level before constructing metadata payload).
+  - restored direct stderr write for automation fixture bootstrap failures so startup errors still surface when logging is disabled.
+  - redacted key event payload from raw text to `text_length` only.
+  - reduced duplicate warning noise by downgrading registry-level reducer rejection to debug (store retains warning).
+  - normalized minor logging metadata quality (`selected_window_id` now `<none>` when absent).
+- rejected (with rationale):
+  - replacing exhaustive `AppAction.logName` switch with string-reflection parsing was rejected to preserve compile-time exhaustiveness and stable naming.
+  - removing callback-layer Ghostty handled logs was rejected; both callback and registry layers are useful to isolate whether a drop happened before or after action routing.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TOASTTY_ENABLE_GHOSTTY=1 tuist generate` + `xcodebuild -showBuildSettings` (pass; `TOASTTY_HAS_GHOSTTY_KIT` present)

@@ -53,6 +53,24 @@
   - Ghostty terminal viewport I/O assertion is currently best-effort in smoke:
     - if terminal surface remains unavailable in automation mode, smoke logs a note and continues.
 
+## Logging and Diagnostics
+- App/runtime logging now uses `ToasttyLog` (Core module) with category + level metadata.
+- Default log file: `/tmp/toastty.log` (rotates to `/tmp/toastty.previous.log` after 5 MB).
+- `/tmp` logging is for local development diagnostics; avoid sharing raw logs without review.
+- Tail live logs while reproducing issues:
+  - `tail -f /tmp/toastty.log`
+  - JSON pretty view: `tail -f /tmp/toastty.log | jq`
+- Key env vars:
+  - `TOASTTY_LOG_LEVEL=debug|info|warning|error`
+  - `TOASTTY_LOG_FILE=/custom/path.log` (set to `none` to disable file sink)
+  - `TOASTTY_LOG_STDERR=1` (mirror logs to stderr)
+  - `TOASTTY_LOG_DISABLE=1` (disable logging)
+- Shortcut/terminal debugging is instrumented across:
+  - key event forwarding (`TerminalHostView`)
+  - Ghostty action callback routing (`GhosttyRuntimeManager`)
+  - runtime action dispatch to reducer (`TerminalRuntimeRegistry`)
+  - reducer outcomes for split resize/equalize (`AppReducer`)
+
 ## Manual Interaction Scripting Tips
 - Activation alone is often insufficient; click into the target terminal panel before typing.
 - `System Events` UI scripting requires both macOS Accessibility permission and Automation permission (caller controlling `System Events`).

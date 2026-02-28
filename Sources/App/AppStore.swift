@@ -13,9 +13,30 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func send(_ action: AppAction) -> Bool {
+        let actionName = action.logName
+        ToasttyLog.debug(
+            "Dispatching app action",
+            category: .store,
+            metadata: ["action": actionName]
+        )
         var next = state
-        guard reducer.send(action, state: &next) else { return false }
+        guard reducer.send(action, state: &next) else {
+            ToasttyLog.warning(
+                "Reducer rejected app action",
+                category: .store,
+                metadata: ["action": actionName]
+            )
+            return false
+        }
         state = next
+        ToasttyLog.debug(
+            "Applied app action",
+            category: .store,
+            metadata: [
+                "action": actionName,
+                "selected_window_id": state.selectedWindowID?.uuidString ?? "<none>",
+            ]
+        )
         return true
     }
 

@@ -20,10 +20,53 @@ struct GhosttyRuntimeAction: Sendable {
 
     let surfaceHandle: UInt?
     let intent: Intent
+
+    var logIntentName: String {
+        switch intent {
+        case .split(let direction):
+            return "split.\(direction.rawValue)"
+        case .focus(let direction):
+            return "focus.\(direction.rawValue)"
+        case .resizeSplit(let direction, _):
+            return "resize_split.\(direction.rawValue)"
+        case .equalizeSplits:
+            return "equalize_splits"
+        case .toggleFocusedPanelMode:
+            return "toggle_focused_panel_mode"
+        }
+    }
 }
 
 private final class GhosttyActionCallbackResult: @unchecked Sendable {
     var handled = false
+}
+
+private func ghosttyTargetName(_ target: ghostty_target_s) -> String {
+    switch target.tag {
+    case GHOSTTY_TARGET_SURFACE:
+        return "surface"
+    case GHOSTTY_TARGET_APP:
+        return "app"
+    default:
+        return "unknown(\(target.tag.rawValue))"
+    }
+}
+
+private func ghosttyActionName(_ action: ghostty_action_s) -> String {
+    switch action.tag {
+    case GHOSTTY_ACTION_NEW_SPLIT:
+        return "new_split"
+    case GHOSTTY_ACTION_GOTO_SPLIT:
+        return "goto_split"
+    case GHOSTTY_ACTION_RESIZE_SPLIT:
+        return "resize_split"
+    case GHOSTTY_ACTION_EQUALIZE_SPLITS:
+        return "equalize_splits"
+    case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
+        return "toggle_split_zoom"
+    default:
+        return "unknown(\(action.tag.rawValue))"
+    }
 }
 
 private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> GhosttyRuntimeAction? {
@@ -87,9 +130,23 @@ private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
 }
 
 private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
-    guard let app else { return false }
-    guard let userdata = ghostty_app_userdata(app) else { return false }
+    guard let app else {
+        ToasttyLog.warning("Ghostty callback missing app handle", category: .ghostty)
+        return false
+    }
+    guard let userdata = ghostty_app_userdata(app) else {
+        ToasttyLog.warning("Ghostty callback missing app userdata", category: .ghostty)
+        return false
+    }
     guard let runtimeAction = makeGhosttyRuntimeAction(target: target, action: action) else {
+        ToasttyLog.debug(
+            "Skipping Ghostty action without Toastty handler",
+            category: .ghostty,
+            metadata: [
+                "target": ghosttyTargetName(target),
+                "action": ghosttyActionName(action),
+            ]
+        )
         return false
     }
 
@@ -97,12 +154,24 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
     let managerHandle = UInt(bitPattern: userdata)
     if Thread.isMainThread {
         guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
+            ToasttyLog.warning("Ghostty callback missing manager pointer", category: .ghostty)
             return false
         }
         let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
-        return MainActor.assumeIsolated {
+        let handled = MainActor.assumeIsolated {
             manager.routeRuntimeAction(runtimeAction)
         }
+        ToasttyLog.debug(
+            "Handled Ghostty runtime action",
+            category: .ghostty,
+            metadata: [
+                "intent": runtimeAction.logIntentName,
+                "target": ghosttyTargetName(target),
+                "handled": handled ? "true" : "false",
+                "thread": "main",
+            ]
+        )
+        return handled
     }
 
     let result = GhosttyActionCallbackResult()
@@ -119,11 +188,27 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
 
     // Avoid deadlocking callback threads if the main queue is blocked behind runtime internals.
     guard semaphore.wait(timeout: .now() + .milliseconds(250)) == .success else {
-        if let data = "toastty ghostty warning: action callback timed out waiting for main queue\n".data(using: .utf8) {
-            FileHandle.standardError.write(data)
-        }
+        ToasttyLog.warning(
+            "Ghostty action callback timed out waiting for main queue",
+            category: .ghostty,
+            metadata: [
+                "intent": runtimeAction.logIntentName,
+                "target": ghosttyTargetName(target),
+                "thread": "background",
+            ]
+        )
         return false
     }
+    ToasttyLog.debug(
+        "Handled Ghostty runtime action",
+        category: .ghostty,
+        metadata: [
+            "intent": runtimeAction.logIntentName,
+            "target": ghosttyTargetName(target),
+            "handled": result.handled ? "true" : "false",
+            "thread": "background",
+        ]
+    )
     return result.handled
 }
 
@@ -211,9 +296,7 @@ final class GhosttyRuntimeManager {
 
     private init() {
         guard Self.initializeGhosttyRuntime() else {
-            if let data = "toastty ghostty error: ghostty_init failed\n".data(using: .utf8) {
-                FileHandle.standardError.write(data)
-            }
+            ToasttyLog.error("Ghostty initialization failed", category: .ghostty)
             return
         }
 
@@ -229,8 +312,8 @@ final class GhosttyRuntimeManager {
         )
 
         app = ghostty_app_new(&runtimeConfig, config)
-        if app == nil, let data = "toastty ghostty error: ghostty_app_new returned nil\n".data(using: .utf8) {
-            FileHandle.standardError.write(data)
+        if app == nil {
+            ToasttyLog.error("Ghostty runtime creation failed", category: .ghostty)
         }
         scheduleImmediateTick()
     }

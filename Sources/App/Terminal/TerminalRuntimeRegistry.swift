@@ -140,6 +140,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
 extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     func handleGhosttyRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool {
         guard let store else {
+            ToasttyLog.warning(
+                "Ghostty action dropped because store is unavailable",
+                category: .terminal,
+                metadata: ["intent": action.logIntentName]
+            )
             return false
         }
         let state = store.state
@@ -149,6 +154,14 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         if let surfaceHandle = action.surfaceHandle {
             guard let resolvedPanelID = panelIDBySurfaceHandle[surfaceHandle],
                   let workspaceIDForSurface = workspaceID(containing: resolvedPanelID, state: state) else {
+                ToasttyLog.debug(
+                    "Ghostty surface action could not resolve panel/workspace",
+                    category: .terminal,
+                    metadata: [
+                        "intent": action.logIntentName,
+                        "surface_handle": String(surfaceHandle),
+                    ]
+                )
                 return false
             }
             panelID = resolvedPanelID
@@ -157,6 +170,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
                   let workspace = state.workspacesByID[selectedWorkspaceID],
                   let resolvedPanelID = resolvedActionPanelID(in: workspace) else {
+                ToasttyLog.debug(
+                    "Ghostty app action could not resolve active panel",
+                    category: .terminal,
+                    metadata: ["intent": action.logIntentName]
+                )
                 return false
             }
             panelID = resolvedPanelID
@@ -164,18 +182,28 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         guard store.send(.focusPanel(workspaceID: workspaceIDForAction, panelID: panelID)) else {
+            ToasttyLog.warning(
+                "Ghostty action failed to focus resolved panel",
+                category: .terminal,
+                metadata: [
+                    "intent": action.logIntentName,
+                    "workspace_id": workspaceIDForAction.uuidString,
+                    "panel_id": panelID.uuidString,
+                ]
+            )
             return false
         }
 
+        let handled: Bool
         switch action.intent {
         case .split(let direction):
-            return store.send(.splitFocusedPaneInDirection(workspaceID: workspaceIDForAction, direction: direction))
+            handled = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceIDForAction, direction: direction))
 
         case .focus(let direction):
-            return store.send(.focusPane(workspaceID: workspaceIDForAction, direction: direction))
+            handled = store.send(.focusPane(workspaceID: workspaceIDForAction, direction: direction))
 
         case .resizeSplit(let direction, let amount):
-            return store.send(
+            handled = store.send(
                 .resizeFocusedPaneSplit(
                     workspaceID: workspaceIDForAction,
                     direction: direction,
@@ -184,11 +212,34 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             )
 
         case .equalizeSplits:
-            return store.send(.equalizePaneSplits(workspaceID: workspaceIDForAction))
+            handled = store.send(.equalizePaneSplits(workspaceID: workspaceIDForAction))
 
         case .toggleFocusedPanelMode:
-            return store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
+            handled = store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
         }
+
+        if handled {
+            ToasttyLog.debug(
+                "Handled Ghostty runtime action in registry",
+                category: .terminal,
+                metadata: [
+                    "intent": action.logIntentName,
+                    "workspace_id": workspaceIDForAction.uuidString,
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+        } else {
+            ToasttyLog.debug(
+                "Reducer rejected Ghostty runtime action",
+                category: .terminal,
+                metadata: [
+                    "intent": action.logIntentName,
+                    "workspace_id": workspaceIDForAction.uuidString,
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+        }
+        return handled
     }
 }
 #endif
@@ -388,9 +439,15 @@ final class TerminalSurfaceController {
             guard byteCount > 0 else { return false }
             return ghostty_surface_binding_action(surface, baseAddress, uintptr_t(byteCount))
         }
-        if handled == false,
-           let data = "toastty ghostty warning: binding action not handled: \(action)\n".data(using: .utf8) {
-            FileHandle.standardError.write(data)
+        if handled == false {
+            ToasttyLog.warning(
+                "Ghostty binding action not handled",
+                category: .ghostty,
+                metadata: [
+                    "action": action,
+                    "panel_id": panelID.uuidString,
+                ]
+            )
         }
         return handled
     }
@@ -476,7 +533,17 @@ final class TerminalHostView: NSView {
     }
 
     private func handleKeyEvent(_ event: NSEvent, action: ghostty_input_action_e) -> Bool {
-        guard let ghosttySurface else { return false }
+        guard let ghosttySurface else {
+            ToasttyLog.debug(
+                "Dropped key event because Ghostty surface is unavailable",
+                category: .input,
+                metadata: [
+                    "key_code": String(event.keyCode),
+                    "action": Self.ghosttyInputActionName(action),
+                ]
+            )
+            return false
+        }
 
         let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
         var keyEvent = ghostty_input_key_s(
@@ -493,14 +560,30 @@ final class TerminalHostView: NSView {
             keyEvent.unshifted_codepoint = scalar.value
         }
 
-        if let text = Self.ghosttyText(for: event), !text.isEmpty {
-            return text.withCString { pointer in
+        let text = Self.ghosttyText(for: event)
+        let handled: Bool
+        if let text, !text.isEmpty {
+            handled = text.withCString { pointer in
                 keyEvent.text = pointer
                 return ghostty_surface_key(ghosttySurface, keyEvent)
             }
+        } else {
+            handled = ghostty_surface_key(ghosttySurface, keyEvent)
         }
 
-        return ghostty_surface_key(ghosttySurface, keyEvent)
+        ToasttyLog.debug(
+            "Forwarded key event to Ghostty surface",
+            category: .input,
+            metadata: [
+                "handled": handled ? "true" : "false",
+                "key_code": String(event.keyCode),
+                "action": Self.ghosttyInputActionName(action),
+                "modifiers": Self.modifierDescription(event.modifierFlags),
+                "text_length": String(text?.count ?? 0),
+            ]
+        )
+
+        return handled
     }
 
     private static func ghosttyModifierFlags(for flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
@@ -528,6 +611,30 @@ final class TerminalHostView: NSView {
         }
 
         return characters
+    }
+
+    private static func modifierDescription(_ flags: NSEvent.ModifierFlags) -> String {
+        var parts: [String] = []
+        if flags.contains(.command) { parts.append("command") }
+        if flags.contains(.option) { parts.append("option") }
+        if flags.contains(.control) { parts.append("control") }
+        if flags.contains(.shift) { parts.append("shift") }
+        if flags.contains(.capsLock) { parts.append("capsLock") }
+        if flags.contains(.numericPad) { parts.append("numericPad") }
+        return parts.joined(separator: ",")
+    }
+
+    private static func ghosttyInputActionName(_ action: ghostty_input_action_e) -> String {
+        switch action {
+        case GHOSTTY_ACTION_PRESS:
+            return "press"
+        case GHOSTTY_ACTION_RELEASE:
+            return "release"
+        case GHOSTTY_ACTION_REPEAT:
+            return "repeat"
+        default:
+            return "unknown(\(action.rawValue))"
+        }
     }
     #endif
 }

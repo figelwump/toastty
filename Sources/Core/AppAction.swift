@@ -46,3 +46,52 @@ public enum AppAction: Equatable, Sendable {
     case equalizePaneSplits(workspaceID: UUID)
     case createTerminalPanel(workspaceID: UUID, paneID: UUID)
 }
+
+public extension AppAction {
+    var logName: String {
+        switch self {
+        case .selectWindow:
+            return "selectWindow"
+        case .selectWorkspace:
+            return "selectWorkspace"
+        case .createWorkspace:
+            return "createWorkspace"
+        case .focusPanel:
+            return "focusPanel"
+        case .reorderPanel:
+            return "reorderPanel"
+        case .movePanelToPane:
+            return "movePanelToPane"
+        case .movePanelToWorkspace:
+            return "movePanelToWorkspace"
+        case .detachPanelToNewWindow:
+            return "detachPanelToNewWindow"
+        case .closePanel:
+            return "closePanel"
+        case .reopenLastClosedPanel:
+            return "reopenLastClosedPanel"
+        case .toggleAuxPanel:
+            return "toggleAuxPanel"
+        case .toggleFocusedPanelMode:
+            return "toggleFocusedPanelMode"
+        case .increaseGlobalTerminalFont:
+            return "increaseGlobalTerminalFont"
+        case .decreaseGlobalTerminalFont:
+            return "decreaseGlobalTerminalFont"
+        case .resetGlobalTerminalFont:
+            return "resetGlobalTerminalFont"
+        case .splitFocusedPane:
+            return "splitFocusedPane"
+        case .splitFocusedPaneInDirection:
+            return "splitFocusedPaneInDirection"
+        case .focusPane:
+            return "focusPane"
+        case .resizeFocusedPaneSplit:
+            return "resizeFocusedPaneSplit"
+        case .equalizePaneSplits:
+            return "equalizePaneSplits"
+        case .createTerminalPanel:
+            return "createTerminalPanel"
+        }
+    }
+}
