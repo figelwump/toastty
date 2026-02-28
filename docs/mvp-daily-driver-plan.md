@@ -761,3 +761,23 @@ Pending:
 - rejected (with rationale):
   - concern about stale `usesBackingPixelSurfaceSizing` state on surface replacement was rejected after verifying state reset happens before assigning each newly created surface.
   - suggestion to change `TerminalPanelHostView` helper to `static`/free function was rejected as style-only and non-functional.
+
+2026-02-28 (Post-MVP continuation: default font size + focused-panel chrome tweak):
+- updated default terminal font baseline:
+  - `AppState.defaultTerminalFontPoints` changed from `7` to `12`.
+  - updated bootstrap codable test expectation in `AppStateCodableTests`.
+- updated focused panel visual treatment in `PanelCardView`:
+  - removed full-panel accent border for focused panel.
+  - focused state now appears as an accent underline at the bottom of the panel header only.
+  - non-focused headers retain a subtle hairline separator.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: default font + focused header indicator):
+- reviewer source: Claude second-opinion on default-font + panel-focus styling patch.
+- accepted and implemented:
+  - moved header focus indicator from in-header overlay to a dedicated separator row to avoid drawing over header content.
+- rejected (with rationale):
+  - concern about focused-state information loss in panel border was rejected because this was an explicit design change request to remove full-panel accent border.
+  - suggestion to remove explicit constant assertion in `AppStateCodableTests` was rejected; we keep it intentionally to lock desired default at `12`.

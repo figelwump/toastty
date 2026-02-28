@@ -257,6 +257,9 @@ private struct PanelCardView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 5)
                 .background(ToastyTheme.elevatedBackground)
+            Rectangle()
+                .fill(isFocused ? ToastyTheme.accent : ToastyTheme.hairline)
+                .frame(height: isFocused ? 2 : 1)
 
             switch panelState {
             case .terminal(let terminalState):
@@ -284,7 +287,7 @@ private struct PanelCardView: View {
         .background(ToastyTheme.surfaceBackground)
         .overlay(
             Rectangle()
-                .strokeBorder(isFocused ? ToastyTheme.accent : ToastyTheme.hairline, lineWidth: isFocused ? 1.5 : 1)
+                .strokeBorder(ToastyTheme.hairline, lineWidth: 1)
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
