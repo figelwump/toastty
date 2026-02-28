@@ -458,3 +458,19 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 77 tests)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass; viewport step remains best-effort when surface unavailable in automation)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: callback deadlock hardening):
+- accepted point:
+  - replaced blocking `DispatchQueue.main.sync` handoff in `ghosttyActionCallback` with:
+    - main-queue async dispatch
+    - bounded wait (`250ms`) for handled result
+    - explicit timeout warning log on failure
+  - rationale: avoids potential callback-thread deadlock while still preserving synchronous handled semantics where possible.
+- rejected points (with rationale):
+  - pointer `userdata -> UInt -> pointer` round-trip is retained to satisfy strict sendability constraints across dispatch hops and keep callback helper patterns consistent.
+  - font propagation drift concern is not applicable for current model (`terminalFontStepPoints == 1`, integer-point state transitions, and reset path uses explicit `reset_font_size` action).
+  - “new controller misses current font state” is not applicable because new Ghostty surfaces are initialized from current `globalFontPoints` in `ensureGhosttySurface(...)`.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 77 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass; viewport step remains best-effort when surface unavailable in automation)

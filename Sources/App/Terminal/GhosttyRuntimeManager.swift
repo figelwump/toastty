@@ -22,6 +22,10 @@ struct GhosttyRuntimeAction: Sendable {
     let intent: Intent
 }
 
+private final class GhosttyActionCallbackResult: @unchecked Sendable {
+    var handled = false
+}
+
 private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> GhosttyRuntimeAction? {
     guard target.tag == GHOSTTY_TARGET_SURFACE else {
         return nil
@@ -93,15 +97,26 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
         }
     }
 
-    var handled = false
-    DispatchQueue.main.sync {
+    let result = GhosttyActionCallbackResult()
+    let semaphore = DispatchSemaphore(value: 0)
+    DispatchQueue.main.async {
         guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
+            semaphore.signal()
             return
         }
         let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
-        handled = manager.routeRuntimeAction(runtimeAction)
+        result.handled = manager.routeRuntimeAction(runtimeAction)
+        semaphore.signal()
     }
-    return handled
+
+    // Avoid deadlocking callback threads if the main queue is blocked behind runtime internals.
+    guard semaphore.wait(timeout: .now() + .milliseconds(250)) == .success else {
+        if let data = "toastty ghostty warning: action callback timed out waiting for main queue\n".data(using: .utf8) {
+            FileHandle.standardError.write(data)
+        }
+        return false
+    }
+    return result.handled
 }
 
 private extension PaneSplitDirection {
