@@ -81,6 +81,10 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
         return false
     }
     guard Thread.isMainThread else {
+        assertionFailure("Ghostty action callback invoked off main thread; action ignored.")
+        if let data = "toastty ghostty warning: action callback invoked off main thread; action ignored\n".data(using: .utf8) {
+            FileHandle.standardError.write(data)
+        }
         return false
     }
 

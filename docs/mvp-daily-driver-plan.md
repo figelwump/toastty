@@ -423,3 +423,21 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 74 tests)
   - `./scripts/automation/smoke-ui.sh` (pass; Ghostty viewport step still best-effort when surface unavailable)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: reducer + tests hardening):
+- accepted and implemented:
+  - simplified resize amount clamping to a single clamp site (`splitResizeDelta`) to avoid duplicated clamp logic.
+  - optimized equalize traversal to return the original node when no subtree ratio changes are required.
+  - added explicit off-main-thread callback diagnostics in `ghosttyActionCallback` (assert + stderr warning) to avoid silent drops.
+  - added coverage for:
+    - nearest matching ancestor resize behavior in nested split trees.
+    - split ratio upper-bound clamp behavior.
+    - resize/equalize mutation blocking while focused-panel mode is active.
+- rejected (with rationale):
+  - changing off-main callback semantics to return handled (`true`) was rejected for now because prior work intentionally avoids async-ack and sync-cross-thread deadlock risk; current behavior now emits explicit diagnostics if invariant breaks.
+  - floating-point epsilon compare for equalize mutation detection was rejected because equalize writes canonical `0.5` ratios directly; repeated equalize is already covered and returns `false`.
+  - removing pre-action focus sync in runtime registry was rejected because Ghostty actions should target the invoking surface’s panel and current `focusPanel` reducer path is a guarded single-field mutation.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 77 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass; Ghostty viewport screenshot captured)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)

@@ -505,8 +505,7 @@ public struct AppReducer {
         guard let focusResolution = resolveFocusedPanel(in: workspace) else { return false }
         workspace.focusedPanelID = focusResolution.panelID
 
-        let stepAmount = max(amount, 1)
-        let delta = splitResizeDelta(direction: direction, amount: stepAmount)
+        let delta = splitResizeDelta(direction: direction, amount: amount)
         let result = resizeNearestMatchingSplit(
             in: workspace.paneTree,
             focusedPaneID: focusResolution.leaf.paneID,
@@ -681,6 +680,9 @@ public struct AppReducer {
             let secondResult = equalizeSplitRatios(in: second)
             let targetRatio = 0.5
             let didMutate = firstResult.didMutate || secondResult.didMutate || ratio != targetRatio
+            guard didMutate else {
+                return SplitEqualizeResult(node: node, didMutate: false)
+            }
 
             return SplitEqualizeResult(
                 node: .split(
