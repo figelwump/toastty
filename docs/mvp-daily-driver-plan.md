@@ -697,3 +697,27 @@ Pending:
 - rejected (with rationale):
   - `GeometryReader` zero-size caveat was considered non-blocking in current layout hierarchy because pane tree is always rendered inside workspace content with explicit max-size constraints.
   - toolchain compatibility caveat (`let` bindings in `ViewBuilder`) is non-blocking; current repo toolchain compiles/tests pass on target environment.
+
+2026-02-28 (Post-MVP continuation: resize step-size tuning):
+- adjusted pane-resize sensitivity in `AppReducer.splitResizeDelta(...)`:
+  - reduced per-amount magnitude from `0.02` to `0.005` for finer keyboard-driven resizing.
+  - increased amount clamp upper bound from `20` to `60` to preserve upper-bound clamp behavior for very large amount inputs.
+- resolved a precision edge case in resize clamping:
+  - added epsilon-based split-ratio change detection so `0.8999999999999999 -> 0.9` is treated as no-op at clamp bounds.
+  - updated clamp assertion to tolerance-based expectation in `resizeFocusedPaneSplitClampsAtUpperBound`.
+- updated reducer tests for new delta expectations:
+  - `resizeFocusedPaneSplitAdjustsNearestMatchingRatio`
+  - `resizeFocusedPaneSplitUsesNearestMatchingAncestor`
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: resize step-size tuning):
+- reviewer source: Claude second-opinion on resize-step + clamp-precision patch.
+- accepted:
+  - add rationale comments for epsilon tolerance and the `amount` clamp upper bound in `splitResizeDelta`.
+- rejected (with rationale):
+  - remove new `AGENTS.md` reminder line about `/tmp/toastty.log`:
+    - rejected because user explicitly requested that reminder be added.
+  - tighten clamp test assertions beyond tolerance-based check:
+    - rejected as non-actionable for current fixture because `amount: Int.max` still overshoots to upper bound after clamp and no-op-on-second-resize behavior remains covered.

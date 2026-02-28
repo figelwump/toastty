@@ -66,6 +66,7 @@
   - CLI deps: `nc`, `osascript`, `uuidgen` (`jq` optional, used when available for robust JSON parsing).
 
 ## Logging and Diagnostics
+- Reminder: when not overridden, Toastty logs to `/tmp/toastty.log`.
 - App/runtime logging now uses `ToasttyLog` (Core module) with category + level metadata.
 - Default log file: `/tmp/toastty.log` (rotates to `/tmp/toastty.previous.log` after 5 MB).
 - `/tmp` logging is for local development diagnostics; avoid sharing raw logs without review.

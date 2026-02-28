@@ -696,7 +696,7 @@ struct AppReducerTests {
         }
 
         #expect(resizedRatio > initialRatio)
-        #expect(abs(resizedRatio - (initialRatio + 0.04)) < 0.0001)
+        #expect(abs(resizedRatio - (initialRatio + 0.01)) < 0.0001)
         try StateValidator.validate(state)
     }
 
@@ -771,7 +771,7 @@ struct AppReducerTests {
         }
 
         #expect(rootRatio == 0.5)
-        #expect(abs(nestedRatio - 0.62) < 0.0001)
+        #expect(abs(nestedRatio - 0.605) < 0.0001)
         try StateValidator.validate(state)
     }
 
@@ -793,7 +793,7 @@ struct AppReducerTests {
             Issue.record("expected split tree after clamped resize")
             return
         }
-        #expect(ratioAfterFirstResize == 0.9)
+        #expect(abs(ratioAfterFirstResize - 0.9) < 0.0001)
 
         #expect(
             reducer.send(

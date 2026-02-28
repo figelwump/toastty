@@ -609,9 +609,14 @@ public struct AppReducer {
         let didMutate: Bool
     }
 
+    // Suppresses floating-point noise near clamp bounds; this must stay well below the
+    // minimum intentional resize step (0.005) so real resizes always apply.
+    private static let splitRatioChangeEpsilon: Double = 0.0001
+
     private static func splitResizeDelta(direction: PaneResizeDirection, amount: Int) -> Double {
-        let clampedAmount = max(1, min(amount, 20))
-        let magnitude = Double(clampedAmount) * 0.02
+        // Keep headroom for large shortcut-supplied amounts while clamping pathological values.
+        let clampedAmount = max(1, min(amount, 60))
+        let magnitude = Double(clampedAmount) * 0.005
         switch direction {
         case .left, .up:
             return -magnitude
@@ -654,7 +659,7 @@ public struct AppReducer {
 
                 if splitOrientation(contains: direction, orientation: orientation) {
                     let nextRatio = clampedSplitRatio(ratio + delta)
-                    if nextRatio != ratio {
+                    if hasMeaningfulSplitRatioChange(from: ratio, to: nextRatio) {
                         return SplitResizeResult(
                             node: .split(
                                 nodeID: nodeID,
@@ -705,7 +710,7 @@ public struct AppReducer {
 
                 if splitOrientation(contains: direction, orientation: orientation) {
                     let nextRatio = clampedSplitRatio(ratio + delta)
-                    if nextRatio != ratio {
+                    if hasMeaningfulSplitRatioChange(from: ratio, to: nextRatio) {
                         return SplitResizeResult(
                             node: .split(
                                 nodeID: nodeID,
@@ -775,6 +780,10 @@ public struct AppReducer {
 
     private static func clampedSplitRatio(_ value: Double) -> Double {
         min(max(value, 0.1), 0.9)
+    }
+
+    private static func hasMeaningfulSplitRatioChange(from oldValue: Double, to newValue: Double) -> Bool {
+        abs(newValue - oldValue) > splitRatioChangeEpsilon
     }
 
     private static func targetPaneID(
