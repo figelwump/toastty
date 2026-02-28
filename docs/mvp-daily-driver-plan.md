@@ -989,3 +989,31 @@ Pending:
   - `/tmp/toastty.log` confirms style application log remains:
     - `overlay_opacity=0.300`
     - `fill_rgb=0.118,0.118,0.180`
+
+2026-02-28 (Post-MVP continuation: app-menu configuration reload command):
+- implemented:
+  - added `Toastty -> Reload Configuration` app-menu command via SwiftUI `CommandGroup(after: .appInfo)`.
+  - wired command to `GhosttyRuntimeManager.reloadConfiguration()` (Ghostty builds only):
+    - allocates/reloads/finalizes a new Ghostty config
+    - logs source + diagnostics
+    - applies via `ghostty_app_update_config`
+    - re-applies host-side unfocused split style and schedules tick
+  - command is disabled in non-Ghostty builds.
+- validation:
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: reload command ownership/threading):
+- reviewer source: Claude second-opinion on reload-command patch.
+- accepted and implemented:
+  - documented config ownership semantics inline at `ghostty_app_update_config` callsite to make lifetime assumptions explicit for future maintenance.
+- rejected (with rationale):
+  - thread-safety concern rejected: `GhosttyRuntimeManager` is `@MainActor` and reload flow is main-actor isolated.
+  - immediate previous-config free rejected as unsafe concern after source verification:
+    - Ghostty `App.updateConfig` documents caller-owned config memory and allows freeing once the call returns.
+    - embedded runtime clones app-level config during `.config_change`, so runtime does not retain caller buffer ownership.
+- re-validation:
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/check.sh` (pass, 80 tests)

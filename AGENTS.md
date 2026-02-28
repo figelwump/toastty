@@ -38,6 +38,7 @@
 - Currently applied host-side Ghostty split styling keys:
   - `unfocused-split-opacity` (mapped to an unfocused pane fill overlay alpha of `1 - configured_opacity`)
   - `unfocused-split-fill` (fallback to Ghostty `background` when unset)
+- App menu now includes `Toastty -> Reload Configuration`, which triggers Ghostty config reload in-process.
 - For deterministic fallback builds in CI, set `TUIST_DISABLE_GHOSTTY=1` explicitly.
 - When linked, app target adds `TOASTTY_HAS_GHOSTTY_KIT` and Ghostty transitive linker flags from `Project.swift` (`-lc++`, `-framework Carbon`).
 - Default generate path falls back automatically when the xcframework is absent or integration is explicitly disabled.

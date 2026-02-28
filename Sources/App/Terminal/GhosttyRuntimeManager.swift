@@ -318,21 +318,7 @@ final class GhosttyRuntimeManager {
         let configSource = Self.loadGhosttyConfig(config)
         ghostty_config_finalize(config)
         Self.logGhosttyConfigDiagnostics(config, source: configSource)
-        let unfocusedSplitStyle = Self.resolveUnfocusedSplitStyle(config)
-        GhosttyHostStyleStore.shared.setUnfocusedSplitStyle(unfocusedSplitStyle)
-        ToasttyLog.info(
-            "Applied Ghostty unfocused split style",
-            category: .ghostty,
-            metadata: [
-                "overlay_opacity": String(format: "%.3f", unfocusedSplitStyle.fillOverlayOpacity),
-                "fill_rgb": String(
-                    format: "%.3f,%.3f,%.3f",
-                    unfocusedSplitStyle.fillColor.red,
-                    unfocusedSplitStyle.fillColor.green,
-                    unfocusedSplitStyle.fillColor.blue
-                ),
-            ]
-        )
+        Self.applyHostStyle(config)
 
         var runtimeConfig = makeGhosttyRuntimeConfig(
             userdata: Unmanaged.passUnretained(self).toOpaque()
@@ -370,6 +356,42 @@ final class GhosttyRuntimeManager {
         }
         scheduleImmediateTick()
         return surface
+    }
+
+    @discardableResult
+    func reloadConfiguration() -> Bool {
+        guard let app else {
+            ToasttyLog.warning("Reload config requested before Ghostty app init", category: .ghostty)
+            return false
+        }
+        guard let newConfig = ghostty_config_new() else {
+            ToasttyLog.error("Ghostty config allocation failed during reload", category: .ghostty)
+            return false
+        }
+
+        let configSource = Self.loadGhosttyConfig(newConfig)
+        ghostty_config_finalize(newConfig)
+        Self.logGhosttyConfigDiagnostics(newConfig, source: configSource)
+        Self.applyHostStyle(newConfig)
+
+        // Ghostty's App.updateConfig docs state the caller retains ownership and
+        // may free its config buffers immediately after this call returns.
+        ghostty_app_update_config(app, newConfig)
+
+        if let previousConfig = config {
+            ghostty_config_free(previousConfig)
+        }
+        config = newConfig
+        scheduleImmediateTick()
+
+        ToasttyLog.info(
+            "Reloaded Ghostty configuration",
+            category: .ghostty,
+            metadata: [
+                "source": configSource.rawValue,
+            ]
+        )
+        return true
     }
 
     private static func initializeGhosttyRuntime() -> Bool {
@@ -538,6 +560,24 @@ final class GhosttyRuntimeManager {
                 ]
             )
         }
+    }
+
+    private static func applyHostStyle(_ config: ghostty_config_t) {
+        let unfocusedSplitStyle = resolveUnfocusedSplitStyle(config)
+        GhosttyHostStyleStore.shared.setUnfocusedSplitStyle(unfocusedSplitStyle)
+        ToasttyLog.info(
+            "Applied Ghostty unfocused split style",
+            category: .ghostty,
+            metadata: [
+                "overlay_opacity": String(format: "%.3f", unfocusedSplitStyle.fillOverlayOpacity),
+                "fill_rgb": String(
+                    format: "%.3f,%.3f,%.3f",
+                    unfocusedSplitStyle.fillColor.red,
+                    unfocusedSplitStyle.fillColor.green,
+                    unfocusedSplitStyle.fillColor.blue
+                ),
+            ]
+        )
     }
 
     private static func resolveUnfocusedSplitStyle(_ config: ghostty_config_t) -> GhosttyUnfocusedSplitStyle {

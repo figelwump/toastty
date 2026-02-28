@@ -54,6 +54,13 @@ struct ToasttyApp: App {
                 .frame(minWidth: 980, minHeight: 620)
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Reload Configuration") {
+                    reloadConfiguration()
+                }
+                .disabled(!supportsConfigurationReload)
+            }
+
             CommandMenu("Terminal") {
                 Button("Increase Terminal Font") {
                     store.send(.increaseGlobalTerminalFont)
@@ -147,5 +154,19 @@ struct ToasttyApp: App {
     private func toggleFocusedPanelFromSelection() {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
         store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+    }
+
+    private var supportsConfigurationReload: Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        true
+        #else
+        false
+        #endif
+    }
+
+    private func reloadConfiguration() {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        _ = GhosttyRuntimeManager.shared.reloadConfiguration()
+        #endif
     }
 }

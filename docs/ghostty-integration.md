@@ -113,3 +113,11 @@ Next actions:
   - read via `ghostty_config_get`
   - when unset, falls back to Ghostty `background` color
   - used as the overlay color for unfocused terminal panes
+
+## Manual reload entrypoint
+
+- App menu entry: `Toastty -> Reload Configuration`
+- Behavior:
+  - re-loads Ghostty config using Toastty’s embedded config resolution order
+  - applies config via `ghostty_app_update_config`
+  - re-applies host-side unfocused split style keys
