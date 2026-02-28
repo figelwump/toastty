@@ -71,6 +71,8 @@ struct SidebarView: View {
                 Text(title)
                     .font(ToastyTheme.fontBody)
                     .foregroundStyle(ToastyTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
                 HStack(spacing: 6) {
                     Text(shortcutLabel)
@@ -80,11 +82,10 @@ struct SidebarView: View {
                     if unreadCount > 0 {
                         Text("\(unreadCount)")
                             .font(ToastyTheme.fontSubtext)
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(ToastyTheme.primaryText)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(ToastyTheme.badgeBlue, in: Capsule())
-                            .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 4)
                     }
 
                     Spacer()
@@ -93,19 +94,23 @@ struct SidebarView: View {
             .padding(.vertical, 6)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(ToastyTheme.hairline, lineWidth: 1)
+            )
             .overlay(alignment: .leading) {
                 if isSelected {
                     Rectangle()
                         .fill(ToastyTheme.accent)
                         .frame(width: 2)
+                        .padding(.vertical, 1)
                 }
             }
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(ToastyTheme.hairline, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .contentShape(RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("sidebar.workspace.\(index)")

@@ -23,6 +23,7 @@ struct AppRootView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ToastyTheme.chromeBackground)
         .foregroundStyle(ToastyTheme.primaryText)
+        .preferredColorScheme(.dark)
         .overlay(alignment: .top) {
             if let fontHUDPoints {
                 FontHUD(points: fontHUDPoints)
@@ -71,7 +72,7 @@ private struct FontHUD: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .foregroundStyle(ToastyTheme.primaryText)
-            .background(ToastyTheme.elevatedBackground, in: Capsule())
+            .background(.regularMaterial, in: Capsule())
             .overlay(
                 Capsule()
                     .stroke(ToastyTheme.hairline, lineWidth: 1)

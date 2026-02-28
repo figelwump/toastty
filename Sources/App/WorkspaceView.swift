@@ -112,6 +112,7 @@ struct WorkspaceView: View {
 
     private func topBarButton(title: String, active: Bool, action: @escaping () -> Void) -> some View {
         Button(title, action: action)
+            .buttonStyle(.plain)
             .font(ToastyTheme.fontSubtext)
             .foregroundStyle(active ? ToastyTheme.accent : ToastyTheme.primaryText)
             .padding(.horizontal, 10)
@@ -122,7 +123,6 @@ struct WorkspaceView: View {
                     .stroke(active ? ToastyTheme.accent : ToastyTheme.hairline, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 6))
-            .buttonStyle(.plain)
     }
 }
 
@@ -169,7 +169,7 @@ private struct PaneNodeView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Rectangle()
-                        .fill(ToastyTheme.hairline)
+                        .fill(ToastyTheme.paneDivider)
                         .frame(width: 1)
 
                     PaneNodeView(
@@ -193,7 +193,7 @@ private struct PaneNodeView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                     Rectangle()
-                        .fill(ToastyTheme.hairline)
+                        .fill(ToastyTheme.paneDivider)
                         .frame(height: 1)
 
                     PaneNodeView(

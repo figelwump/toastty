@@ -324,3 +324,18 @@ Pending:
   - artifact references:
     - `artifacts/automation/ui/smoke-20260227-191623/split-workspace/aux-column-smoke.png`
     - `artifacts/automation/ui/smoke-20260227-191640/split-workspace/terminal-viewport-smoke.png`
+
+2026-02-28 (Chunk M3 follow-up: reviewer fixes):
+- accepted points:
+  - moved top-bar `.buttonStyle(.plain)` earlier in modifier chain for clearer styling semantics.
+  - improved selected workspace row styling so accent bar remains visible and not clipped/overdrawn by rounded clipping/border order.
+  - added `lineLimit(1)` + truncation for workspace titles at `180px` sidebar width.
+  - introduced `ToastyTheme.paneDivider` (`#333333`) for pane split separators to preserve visibility on dark surfaces.
+  - restored adaptive material background for `FontHUD` and explicitly enforced `.preferredColorScheme(.dark)` for the dark MVP chrome.
+  - removed badge shadow and switched badge text color to themed primary text.
+- rejected points:
+  - no model change required for `workspace.unreadNotificationCount`; property already exists in `WorkspaceState`.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 71 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)

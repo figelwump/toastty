@@ -5,6 +5,7 @@ enum ToastyTheme {
     static let surfaceBackground = Color(hex: 0x0D0D0D)
     static let elevatedBackground = Color(hex: 0x1A1A1A)
     static let hairline = Color(hex: 0x1F1F1F)
+    static let paneDivider = Color(hex: 0x333333)
 
     static let primaryText = Color(hex: 0xE8E4DF)
     static let mutedText = Color(hex: 0x666666)
