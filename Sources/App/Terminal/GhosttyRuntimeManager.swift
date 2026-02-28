@@ -329,7 +329,11 @@ final class GhosttyRuntimeManager {
         surfaceConfig.platform_tag = GHOSTTY_PLATFORM_MACOS
         surfaceConfig.platform.macos.nsview = Unmanaged.passUnretained(hostView).toOpaque()
         surfaceConfig.userdata = Unmanaged.passUnretained(hostView).toOpaque()
-        surfaceConfig.scale_factor = max(Double(hostView.window?.backingScaleFactor ?? 1), 1)
+        let hostScale = hostView.window?.screen?.backingScaleFactor
+            ?? hostView.window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 1
+        surfaceConfig.scale_factor = max(Double(hostScale), 1)
         surfaceConfig.font_size = Float(fontPoints)
         surfaceConfig.context = GHOSTTY_SURFACE_CONTEXT_SPLIT
 

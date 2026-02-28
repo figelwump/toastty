@@ -721,3 +721,43 @@ Pending:
     - rejected because user explicitly requested that reminder be added.
   - tighten clamp test assertions beyond tolerance-based check:
     - rejected as non-actionable for current fixture because `amount: Int.max` still overshoots to upper bound after clamp and no-op-on-second-resize behavior remains covered.
+
+2026-02-28 (Post-MVP continuation: Ghostty high-DPI terminal clarity fix):
+- issue:
+  - Ghostty terminal content rendered blurrier than surrounding app chrome on Retina displays.
+- root cause:
+  - surface size updates were passed in logical points and, in some runtime paths, Ghostty reported pixel dimensions equal to logical dimensions (effectively 1x rendering).
+  - backing-scale updates were not guaranteed to reflow on window/display moves.
+- implemented:
+  - `TerminalPanelHostView`:
+    - improved backing-scale resolution (`window.screen`, `window`, then `NSScreen.main`).
+    - trigger layout/update on `viewDidMoveToWindow` and `viewDidChangeBackingProperties`.
+  - `TerminalHostView`:
+    - sync `CALayer.contentsScale` on init and on window/backing-change events.
+  - `TerminalSurfaceController`:
+    - added guarded adaptive sizing:
+      - first set logical size as before.
+      - if reported `ghostty_surface_size.width_px/height_px` indicates low-DPI sizing on scale>1, switch to backing-pixel sizing for that surface lifetime.
+    - added debug render-metric logs (`viewport`, `scale`, `width_px`, `height_px`, `cell_*`, `pixel_sizing`) to verify behavior.
+  - `GhosttyRuntimeManager`:
+    - improved initial `surfaceConfig.scale_factor` resolution to use window/screen scale when available.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `TOASTTY_LOG_LEVEL=debug ./scripts/automation/smoke-ui.sh` (pass)
+  - debug log confirmation:
+    - fallback path detected low-DPI report (`reported_width_px == logical_width` at scale 2.0)
+    - adaptive switch enabled (`pixel_sizing:true`)
+    - post-switch reports `width_px/height_px` aligned to backing-pixel dimensions.
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: Ghostty high-DPI clarity fix):
+- reviewer source: Claude second-opinion on Ghostty DPI patch.
+- accepted and implemented:
+  - sizing-mode detection now resolves once per surface lifecycle (instead of probing each update).
+  - improved sizing heuristic from absolute pixel tolerance to ratio-based detection relative to backing scale.
+  - reduced repeated FFI `ghostty_surface_size` calls by threading measured size into render-metric logging when already available.
+  - removed `syncLayerContentsScale()` from `layout()` to avoid per-layout overhead.
+  - guarded `viewDidMoveToWindow` scale/layout callbacks so they only run when `window != nil`.
+  - downgraded adaptive-switch announcement from `info` to `debug` to reduce normal logging noise.
+- rejected (with rationale):
+  - concern about stale `usesBackingPixelSurfaceSizing` state on surface replacement was rejected after verifying state reset happens before assigning each newly created surface.
+  - suggestion to change `TerminalPanelHostView` helper to `static`/free function was rejected as style-only and non-functional.

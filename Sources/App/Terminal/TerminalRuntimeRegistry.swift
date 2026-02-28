@@ -253,6 +253,22 @@ final class TerminalSurfaceController {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
     private let ghosttyManager = GhosttyRuntimeManager.shared
+    private var usesBackingPixelSurfaceSizing = false
+    private var hasDeterminedSurfaceSizingMode = false
+    private var lastRenderMetrics: GhosttyRenderMetrics?
+
+    private struct GhosttyRenderMetrics: Equatable {
+        let viewportWidth: Int
+        let viewportHeight: Int
+        let scaleThousandths: Int
+        let widthPx: Int
+        let heightPx: Int
+        let columns: Int
+        let rows: Int
+        let cellWidthPx: Int
+        let cellHeightPx: Int
+        let pixelSizingEnabled: Bool
+    }
     #endif
 
     private let fallbackView = TerminalFallbackView()
@@ -312,10 +328,60 @@ final class TerminalSurfaceController {
         let yScale = max(Double(backingScaleFactor), 1)
         ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
 
-        // The embedded API accepts logical surface dimensions; content scale is provided separately.
-        let width = UInt32(max(Int(viewportSize.width), 1))
-        let height = UInt32(max(Int(viewportSize.height), 1))
-        ghostty_surface_set_size(ghosttySurface, width, height)
+        let logicalWidth = max(Int(viewportSize.width.rounded(.down)), 1)
+        let logicalHeight = max(Int(viewportSize.height.rounded(.down)), 1)
+        let pixelWidth = max(Int((viewportSize.width * backingScaleFactor).rounded()), 1)
+        let pixelHeight = max(Int((viewportSize.height * backingScaleFactor).rounded()), 1)
+        let hasUsableViewport = logicalWidth > 16 && logicalHeight > 16
+        var measuredSizeForLogging: ghostty_surface_size_s?
+
+        if hasDeterminedSurfaceSizingMode == false {
+            ghostty_surface_set_size(ghosttySurface, UInt32(logicalWidth), UInt32(logicalHeight))
+            let measuredSize = ghostty_surface_size(ghosttySurface)
+            measuredSizeForLogging = measuredSize
+
+            if hasUsableViewport {
+                hasDeterminedSurfaceSizingMode = true
+                usesBackingPixelSurfaceSizing = shouldUseBackingPixelSurfaceSizing(
+                    measuredSize: measuredSize,
+                    logicalWidth: logicalWidth,
+                    logicalHeight: logicalHeight,
+                    expectedPixelWidth: pixelWidth,
+                    expectedPixelHeight: pixelHeight,
+                    scale: xScale
+                )
+
+                if usesBackingPixelSurfaceSizing {
+                    ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
+                    measuredSizeForLogging = ghostty_surface_size(ghosttySurface)
+                    ToasttyLog.debug(
+                        "Enabled backing-pixel Ghostty surface sizing for high-DPI rendering",
+                        category: .ghostty,
+                        metadata: [
+                            "panel_id": panelID.uuidString,
+                            "scale": String(format: "%.3f", xScale),
+                            "logical_width": String(logicalWidth),
+                            "logical_height": String(logicalHeight),
+                            "pixel_width": String(pixelWidth),
+                            "pixel_height": String(pixelHeight),
+                            "reported_width_px": String(measuredSize.width_px),
+                            "reported_height_px": String(measuredSize.height_px),
+                        ]
+                    )
+                }
+            }
+        } else if usesBackingPixelSurfaceSizing {
+            ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
+        } else {
+            ghostty_surface_set_size(ghosttySurface, UInt32(logicalWidth), UInt32(logicalHeight))
+        }
+
+        logRenderMetricsIfNeeded(
+            viewportWidth: logicalWidth,
+            viewportHeight: logicalHeight,
+            scale: xScale,
+            measuredSize: measuredSizeForLogging
+        )
         ghostty_surface_set_focus(ghosttySurface, focused)
         ensureFirstResponderIfNeeded(focused: focused)
         #else
@@ -333,6 +399,9 @@ final class TerminalSurfaceController {
             ghostty_surface_free(ghosttySurface)
             self.ghosttySurface = nil
         }
+        usesBackingPixelSurfaceSizing = false
+        hasDeterminedSurfaceSizingMode = false
+        lastRenderMetrics = nil
         #endif
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
@@ -465,8 +534,76 @@ final class TerminalSurfaceController {
         ) else {
             return
         }
+        usesBackingPixelSurfaceSizing = false
+        hasDeterminedSurfaceSizingMode = false
+        lastRenderMetrics = nil
         ghosttySurface = surface
         registry.register(surface: surface, for: panelID)
+    }
+
+    private func shouldUseBackingPixelSurfaceSizing(
+        measuredSize: ghostty_surface_size_s,
+        logicalWidth: Int,
+        logicalHeight: Int,
+        expectedPixelWidth: Int,
+        expectedPixelHeight: Int,
+        scale: Double
+    ) -> Bool {
+        guard scale > 1.05 else { return false }
+        let measuredWidth = Int(measuredSize.width_px)
+        let measuredHeight = Int(measuredSize.height_px)
+        guard logicalWidth > 0, logicalHeight > 0 else { return false }
+
+        let measuredWidthRatio = Double(measuredWidth) / Double(logicalWidth)
+        let measuredHeightRatio = Double(measuredHeight) / Double(logicalHeight)
+        let expectedRatio = scale
+        let thresholdRatio = expectedRatio * 0.98
+        let looksLogicalScale = measuredWidthRatio <= 1.02 && measuredHeightRatio <= 1.02
+        let significantlyBelowExpected = measuredWidthRatio < thresholdRatio || measuredHeightRatio < thresholdRatio
+        let belowExpectedPixels = measuredWidth < expectedPixelWidth || measuredHeight < expectedPixelHeight
+        return looksLogicalScale && significantlyBelowExpected && belowExpectedPixels
+    }
+
+    private func logRenderMetricsIfNeeded(
+        viewportWidth: Int,
+        viewportHeight: Int,
+        scale: Double,
+        measuredSize: ghostty_surface_size_s?
+    ) {
+        guard let ghosttySurface else { return }
+        let measuredSize = measuredSize ?? ghostty_surface_size(ghosttySurface)
+        let metrics = GhosttyRenderMetrics(
+            viewportWidth: viewportWidth,
+            viewportHeight: viewportHeight,
+            scaleThousandths: Int((scale * 1000).rounded()),
+            widthPx: Int(measuredSize.width_px),
+            heightPx: Int(measuredSize.height_px),
+            columns: Int(measuredSize.columns),
+            rows: Int(measuredSize.rows),
+            cellWidthPx: Int(measuredSize.cell_width_px),
+            cellHeightPx: Int(measuredSize.cell_height_px),
+            pixelSizingEnabled: usesBackingPixelSurfaceSizing
+        )
+        guard metrics != lastRenderMetrics else { return }
+        lastRenderMetrics = metrics
+
+        ToasttyLog.debug(
+            "Ghostty surface render metrics",
+            category: .ghostty,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "viewport_width": String(metrics.viewportWidth),
+                "viewport_height": String(metrics.viewportHeight),
+                "scale_thousandths": String(metrics.scaleThousandths),
+                "width_px": String(metrics.widthPx),
+                "height_px": String(metrics.heightPx),
+                "columns": String(metrics.columns),
+                "rows": String(metrics.rows),
+                "cell_width_px": String(metrics.cellWidthPx),
+                "cell_height_px": String(metrics.cellHeightPx),
+                "pixel_sizing": metrics.pixelSizingEnabled ? "true" : "false",
+            ]
+        )
     }
 
     private func swapToFallbackIfNeeded() {
@@ -503,6 +640,7 @@ final class TerminalHostView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
+        syncLayerContentsScale()
     }
 
     required init?(coder: NSCoder) {
@@ -511,6 +649,17 @@ final class TerminalHostView: NSView {
 
     override var acceptsFirstResponder: Bool {
         true
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard window != nil else { return }
+        syncLayerContentsScale()
+    }
+
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        syncLayerContentsScale()
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -637,6 +786,14 @@ final class TerminalHostView: NSView {
         }
     }
     #endif
+
+    private func syncLayerContentsScale() {
+        let scale = window?.screen?.backingScaleFactor
+            ?? window?.backingScaleFactor
+            ?? NSScreen.main?.backingScaleFactor
+            ?? 1
+        layer?.contentsScale = max(scale, 1)
+    }
 }
 
 private final class TerminalFallbackView: NSView {
