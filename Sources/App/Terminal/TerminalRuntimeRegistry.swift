@@ -177,9 +177,9 @@ final class TerminalSurfaceController {
             if let hostView = hostedView as? TerminalHostView {
                 hostView.setGhosttySurface(nil)
             }
-            fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "Ghostty surface unavailable")
-            swapToFallbackIfNeeded()
-            return
+        fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty surface unavailable")
+        swapToFallbackIfNeeded()
+        return
         }
 
         hostedView.isHidden = false
@@ -201,7 +201,7 @@ final class TerminalSurfaceController {
         ghostty_surface_set_focus(ghosttySurface, focused)
         ensureFirstResponderIfNeeded(focused: focused)
         #else
-        fallbackView.update(terminalState: terminalState, focused: focused, unavailableReason: "Ghostty terminal runtime not enabled in this build")
+        fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
         #endif
     }
 
@@ -430,7 +430,6 @@ final class TerminalHostView: NSView {
 }
 
 private final class TerminalFallbackView: NSView {
-    private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
     private let reasonLabel = NSTextField(labelWithString: "")
 
@@ -438,10 +437,6 @@ private final class TerminalFallbackView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = NSColor(calibratedWhite: 0.11, alpha: 1).cgColor
-        layer?.cornerRadius = 8
-
-        titleLabel.font = .monospacedSystemFont(ofSize: 12, weight: .semibold)
-        titleLabel.textColor = .white
 
         subtitleLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         subtitleLabel.textColor = NSColor(calibratedWhite: 0.75, alpha: 1)
@@ -449,7 +444,7 @@ private final class TerminalFallbackView: NSView {
         reasonLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         reasonLabel.textColor = NSColor(calibratedWhite: 0.65, alpha: 1)
 
-        let stack = NSStackView(views: [titleLabel, subtitleLabel, reasonLabel])
+        let stack = NSStackView(views: [subtitleLabel, reasonLabel])
         stack.orientation = .vertical
         stack.spacing = 6
         stack.alignment = .leading
@@ -468,11 +463,8 @@ private final class TerminalFallbackView: NSView {
         fatalError("init(coder:) has not been implemented")
     }
 
-    func update(terminalState: TerminalPanelState, focused: Bool, unavailableReason: String) {
-        titleLabel.stringValue = "\(terminalState.title) · \(terminalState.shell)"
+    func update(terminalState: TerminalPanelState, unavailableReason: String) {
         subtitleLabel.stringValue = terminalState.cwd
         reasonLabel.stringValue = unavailableReason
-        layer?.borderWidth = focused ? 1.5 : 1
-        layer?.borderColor = (focused ? NSColor.systemBlue : NSColor(calibratedWhite: 0.4, alpha: 1)).cgColor
     }
 }
