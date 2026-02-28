@@ -4,6 +4,14 @@ import Testing
 
 struct AppStateCodableTests {
     @Test
+    func bootstrapUsesDefaultTerminalFontSize() {
+        let state = AppState.bootstrap()
+
+        #expect(AppState.defaultTerminalFontPoints == 11)
+        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+    }
+
+    @Test
     func focusedPanelModeFlagResetsWhenDecodingAppState() throws {
         var state = AppState.bootstrap()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)

@@ -1,7 +1,7 @@
 import Foundation
 
 public struct AppState: Codable, Equatable, Sendable {
-    public static let defaultTerminalFontPoints: Double = 13
+    public static let defaultTerminalFontPoints: Double = 11
     public static let minTerminalFontPoints: Double = 9
     public static let maxTerminalFontPoints: Double = 24
     public static let terminalFontStepPoints: Double = 1

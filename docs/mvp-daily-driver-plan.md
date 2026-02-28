@@ -274,3 +274,24 @@ Pending:
 - rebinding contract tightened:
   - `TerminalRuntimeRegistry.bind(store:)` now uses a hard `precondition` to prevent rebinding to a different `AppStore`.
   - Ghostty action handler registration remains in `bind(store:)` after the store is available.
+
+2026-02-28 (Chunk M2: pane container cleanup + terminal sizing):
+- removed pane-ID wrapper chrome from workspace pane rendering:
+  - deleted `Pane XXXXX` labels and outer rounded pane shells.
+  - leaf panes now render only the selected tab panel surface (no stacked tab panel list).
+- made pane layout flush and square:
+  - split stacks now use `spacing: 0` with explicit `1px` separators.
+  - panel shells and terminal hosts now render with square borders (no rounded clipping).
+  - workspace content no longer applies outer padding around pane tree.
+- reduced default terminal sizing:
+  - `AppState.defaultTerminalFontPoints` updated from `13` to `11`.
+  - automation fixtures now consume `AppState.defaultTerminalFontPoints` to keep smoke state representative of default app behavior.
+- test coverage:
+  - added `bootstrapUsesDefaultTerminalFontSize()` in `Tests/Core/AppStateCodableTests.swift`.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 71 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - updated smoke artifacts:
+    - `artifacts/automation/ui/smoke-20260227-191037/split-workspace/aux-column-smoke.png`
+    - `artifacts/automation/ui/smoke-20260227-191102/split-workspace/terminal-viewport-smoke.png`

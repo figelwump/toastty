@@ -12,7 +12,6 @@ struct WorkspaceView: View {
 
             if let workspace = store.selectedWorkspace {
                 workspaceContent(for: workspace)
-                    .padding(12)
             } else {
                 ContentUnavailableView("No workspace selected", systemImage: "rectangle.slash")
             }
@@ -77,6 +76,7 @@ struct WorkspaceView: View {
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 globalFontPoints: store.state.globalTerminalFontPoints
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
     }
 
@@ -120,37 +120,33 @@ private struct PaneNodeView: View {
 
     var body: some View {
         switch node {
-        case .leaf(let paneID, let tabPanelIDs, _):
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Pane \(shortID(paneID))")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+        case .leaf(_, let tabPanelIDs, let selectedIndex):
+            let selectedPanelID = tabPanelIDs.indices.contains(selectedIndex)
+                ? tabPanelIDs[selectedIndex]
+                : tabPanelIDs.first
 
-                ForEach(tabPanelIDs, id: \.self) { panelID in
-                    if let panelState = workspace.panels[panelID] {
-                        PanelCardView(
-                            workspaceID: workspace.id,
-                            panelID: panelID,
-                            panelState: panelState,
-                            focusedPanelID: workspace.focusedPanelID,
-                            globalFontPoints: globalFontPoints,
-                            store: store,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            expanded: false
-                        )
-                    }
+            Group {
+                if let panelID = selectedPanelID,
+                   let panelState = workspace.panels[panelID] {
+                    PanelCardView(
+                        workspaceID: workspace.id,
+                        panelID: panelID,
+                        panelState: panelState,
+                        focusedPanelID: workspace.focusedPanelID,
+                        globalFontPoints: globalFontPoints,
+                        store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        expanded: true
+                    )
+                } else {
+                    Color.clear
                 }
             }
-            .padding(8)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(Color.gray.opacity(0.35), lineWidth: 1)
-            )
 
         case .split(_, let orientation, _, let first, let second):
             if orientation == .horizontal {
-                HStack(spacing: 10) {
+                HStack(spacing: 0) {
                     PaneNodeView(
                         node: first,
                         workspace: workspace,
@@ -158,6 +154,12 @@ private struct PaneNodeView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         globalFontPoints: globalFontPoints
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.35))
+                        .frame(width: 1)
+
                     PaneNodeView(
                         node: second,
                         workspace: workspace,
@@ -165,9 +167,10 @@ private struct PaneNodeView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         globalFontPoints: globalFontPoints
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
-                VStack(spacing: 10) {
+                VStack(spacing: 0) {
                     PaneNodeView(
                         node: first,
                         workspace: workspace,
@@ -175,6 +178,12 @@ private struct PaneNodeView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         globalFontPoints: globalFontPoints
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    Rectangle()
+                        .fill(Color.gray.opacity(0.35))
+                        .frame(height: 1)
+
                     PaneNodeView(
                         node: second,
                         workspace: workspace,
@@ -182,13 +191,10 @@ private struct PaneNodeView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         globalFontPoints: globalFontPoints
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
-    }
-
-    private func shortID(_ id: UUID) -> String {
-        String(id.uuidString.prefix(6))
     }
 }
 
@@ -207,10 +213,13 @@ private struct PanelCardView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 0) {
             Text(panelLabel)
                 .font(.body.monospaced())
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(Color.gray.opacity(0.14))
 
             switch panelState {
             case .terminal(let terminalState):
@@ -223,11 +232,10 @@ private struct PanelCardView: View {
                 )
                 .frame(
                     maxWidth: .infinity,
-                    minHeight: expanded ? 0 : 170,
+                    minHeight: expanded ? 0 : 120,
                     maxHeight: expanded ? .infinity : nil,
                     alignment: .topLeading
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 6))
 
             case .diff:
                 auxPanelPlaceholder(title: "Diff Panel")
@@ -237,16 +245,13 @@ private struct PanelCardView: View {
                 auxPanelPlaceholder(title: "Scratchpad Panel")
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(Color.gray.opacity(0.10))
+        .background(Color.gray.opacity(0.06))
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(isFocused ? Color.accentColor : Color.gray.opacity(0.2), lineWidth: isFocused ? 1.5 : 1)
+            Rectangle()
+                .stroke(isFocused ? Color.accentColor : Color.gray.opacity(0.28), lineWidth: isFocused ? 1.5 : 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
         .frame(maxWidth: .infinity, maxHeight: expanded ? .infinity : nil, alignment: .topLeading)
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
         .onTapGesture {
             store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
         }

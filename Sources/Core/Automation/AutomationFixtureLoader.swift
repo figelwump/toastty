@@ -57,7 +57,7 @@ public enum AutomationFixtureLoader {
                 second.id: second,
             ],
             selectedWindowID: windowID,
-            globalTerminalFontPoints: 13
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
         )
     }
 
@@ -97,7 +97,7 @@ public enum AutomationFixtureLoader {
             windows: [window],
             workspacesByID: [workspaceID: workspace],
             selectedWindowID: windowID,
-            globalTerminalFontPoints: 13
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
         )
     }
 
