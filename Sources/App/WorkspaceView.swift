@@ -59,29 +59,16 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState) -> some View {
-        if workspace.focusedPanelModeActive,
-           let panelID = workspace.focusedPanelID,
-           let panelState = workspace.panels[panelID] {
-            PanelCardView(
-                workspaceID: workspace.id,
-                panelID: panelID,
-                panelState: panelState,
-                focusedPanelID: panelID,
-                globalFontPoints: store.state.globalTerminalFontPoints,
-                store: store,
-                terminalRuntimeRegistry: terminalRuntimeRegistry
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        } else {
-            PaneNodeView(
-                node: workspace.paneTree,
-                workspace: workspace,
-                store: store,
-                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                globalFontPoints: store.state.globalTerminalFontPoints
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
+        PaneNodeView(
+            node: workspace.paneTree,
+            workspace: workspace,
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            globalFontPoints: store.state.globalTerminalFontPoints,
+            focusedPanelID: workspace.focusedPanelID,
+            focusedPanelModeActive: workspace.focusedPanelModeActive
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -132,11 +119,16 @@ private struct PaneNodeView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let globalFontPoints: Double
+    let focusedPanelID: UUID?
+    let focusedPanelModeActive: Bool
 
     var body: some View {
         switch node {
         case .leaf(_, let tabPanelIDs, let selectedIndex):
-            let selectedPanelID = paneSelectedPanelID(tabPanelIDs: tabPanelIDs, selectedIndex: selectedIndex)
+            let selectedPanelID = paneSelectedPanelID(
+                tabPanelIDs: tabPanelIDs,
+                selectedIndex: selectedIndex
+            )
 
             Group {
                 if let panelID = selectedPanelID,
@@ -158,13 +150,17 @@ private struct PaneNodeView: View {
 
         case .split(_, let orientation, let ratio, let first, let second):
             GeometryReader { geometry in
-                let dividerThickness: CGFloat = 1
-                let clampedRatio = min(max(ratio, 0.1), 0.9)
+                let baseRatio = min(max(ratio, 0.1), 0.9)
+                let effectiveRatio = effectiveSplitRatio(baseRatio: baseRatio, first: first, second: second)
+                let isCollapsed = effectiveRatio <= 0.0001 || effectiveRatio >= 0.9999
+                let dividerThickness: CGFloat = isCollapsed ? 0 : 1
 
                 if orientation == .horizontal {
                     let availableWidth = max(geometry.size.width - dividerThickness, 0)
-                    let firstWidth = availableWidth * clampedRatio
+                    let firstWidth = availableWidth * effectiveRatio
                     let secondWidth = max(availableWidth - firstWidth, 0)
+                    let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
+                    let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
 
                     HStack(spacing: 0) {
                         PaneNodeView(
@@ -172,27 +168,40 @@ private struct PaneNodeView: View {
                             workspace: workspace,
                             store: store,
                             terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints
+                            globalFontPoints: globalFontPoints,
+                            focusedPanelID: focusedPanelID,
+                            focusedPanelModeActive: focusedPanelModeActive
                         )
                         .frame(width: firstWidth, height: geometry.size.height)
+                        .opacity(showFirst ? 1 : 0)
+                        .allowsHitTesting(showFirst)
 
-                        Rectangle()
-                            .fill(ToastyTheme.paneDivider)
-                            .frame(width: dividerThickness, height: geometry.size.height)
+                        if dividerThickness > 0 {
+                            Rectangle()
+                                .fill(ToastyTheme.paneDivider)
+                                .frame(width: dividerThickness, height: geometry.size.height)
+                        }
 
                         PaneNodeView(
                             node: second,
                             workspace: workspace,
                             store: store,
                             terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints
+                            globalFontPoints: globalFontPoints,
+                            focusedPanelID: focusedPanelID,
+                            focusedPanelModeActive: focusedPanelModeActive
                         )
                         .frame(width: secondWidth, height: geometry.size.height)
+                        .opacity(showSecond ? 1 : 0)
+                        .allowsHitTesting(showSecond)
                     }
+                    .clipped()
                 } else {
                     let availableHeight = max(geometry.size.height - dividerThickness, 0)
-                    let firstHeight = availableHeight * clampedRatio
+                    let firstHeight = availableHeight * effectiveRatio
                     let secondHeight = max(availableHeight - firstHeight, 0)
+                    let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
+                    let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
 
                     VStack(spacing: 0) {
                         PaneNodeView(
@@ -200,30 +209,67 @@ private struct PaneNodeView: View {
                             workspace: workspace,
                             store: store,
                             terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints
+                            globalFontPoints: globalFontPoints,
+                            focusedPanelID: focusedPanelID,
+                            focusedPanelModeActive: focusedPanelModeActive
                         )
                         .frame(width: geometry.size.width, height: firstHeight)
+                        .opacity(showFirst ? 1 : 0)
+                        .allowsHitTesting(showFirst)
 
-                        Rectangle()
-                            .fill(ToastyTheme.paneDivider)
-                            .frame(width: geometry.size.width, height: dividerThickness)
+                        if dividerThickness > 0 {
+                            Rectangle()
+                                .fill(ToastyTheme.paneDivider)
+                                .frame(width: geometry.size.width, height: dividerThickness)
+                        }
 
                         PaneNodeView(
                             node: second,
                             workspace: workspace,
                             store: store,
                             terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints
+                            globalFontPoints: globalFontPoints,
+                            focusedPanelID: focusedPanelID,
+                            focusedPanelModeActive: focusedPanelModeActive
                         )
                         .frame(width: geometry.size.width, height: secondHeight)
+                        .opacity(showSecond ? 1 : 0)
+                        .allowsHitTesting(showSecond)
                     }
+                    .clipped()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
+    private func effectiveSplitRatio(baseRatio: Double, first: PaneNode, second: PaneNode) -> Double {
+        guard focusedPanelModeActive, let focusedPanelID else {
+            return baseRatio
+        }
+        let firstContainsFocused = first.leafContaining(panelID: focusedPanelID) != nil
+        let secondContainsFocused = second.leafContaining(panelID: focusedPanelID) != nil
+
+        if firstContainsFocused && secondContainsFocused {
+            assertionFailure("Focused panel unexpectedly appears in both split branches.")
+            return baseRatio
+        }
+
+        if firstContainsFocused && !secondContainsFocused {
+            return 1
+        }
+        if secondContainsFocused && !firstContainsFocused {
+            return 0
+        }
+        return baseRatio
+    }
+
     private func paneSelectedPanelID(tabPanelIDs: [UUID], selectedIndex: Int) -> UUID? {
+        if focusedPanelModeActive,
+           let focusedPanelID,
+           tabPanelIDs.contains(focusedPanelID) {
+            return focusedPanelID
+        }
         if tabPanelIDs.indices.contains(selectedIndex) {
             return tabPanelIDs[selectedIndex]
         }

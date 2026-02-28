@@ -836,3 +836,36 @@ Pending:
   - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `/tmp/workspace-shortcuts-check.sh` (pass):
     - verified `cmd+2`, `cmd+1`, `cmd+shift+n` with runtime state assertions.
+
+2026-02-28 (Post-MVP continuation: focused-panel mode terminal render regression fix):
+- issue observed:
+  - toggling `Focus Panel` (aka focused-panel mode) maximized the panel frame but Ghostty content went blank/black.
+- root cause:
+  - focused mode previously switched UI rendering from full `PaneNodeView` tree to a standalone `PanelCardView`.
+  - that structural swap re-mounted terminal host views in a way that broke Ghostty rendering continuity.
+- implemented:
+  - removed the focused-mode standalone branch from `workspaceContent`.
+  - always render the pane tree (`PaneNodeView`) and, when focused mode is active, collapse split ratios toward the branch containing `focusedPanelID`.
+  - in focused mode, leaf tab selection now prefers `focusedPanelID` when it exists in the leaf.
+  - when a split is collapsed, hide non-visible branch rendering (`opacity` + hit-testing off) and remove divider thickness to avoid stray 1px artifacts.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - focused-mode targeted repro script (`/tmp/focus-mode-check.sh`) confirms:
+    - terminal text remains visible after `topbar.toggle.focused-panel`.
+    - screenshot after focus no longer shows blank terminal content.
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: focused-panel mode rendering):
+- reviewer source: Claude second-opinion on focused-panel rendering patch.
+- accepted and implemented:
+  - added an assertion guard for impossible split-state duplication where a focused panel appears in both branches.
+  - tightened branch visibility logic so branch hiding only occurs when a split is truly collapsed (instead of tiny-size threshold heuristics).
+- rejected (with rationale):
+  - stale `focusedPanelID` concerns were not adopted as a code change here because reducer invariants already maintain focused-panel validity during toggle/close flows; fallback remains non-fatal.
+  - extra focused-mode unit tests were deferred; existing reducer tests already cover state invariants and this fix is primarily view-hosting/render behavior validated via automation screenshots.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `/tmp/focus-mode-check.sh` (pass, focused screenshot shows terminal content and no edge artifact strip).
