@@ -1,9 +1,64 @@
+import AppKit
 import SwiftUI
+
+@MainActor
+private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicationDelegate {
+    private static let menuItemTitle = "Reload Configuration"
+    private static let symbolName = "arrow.clockwise"
+    private var iconWasApplied = false
+
+    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.applyReloadIconIfPresent()
+        }
+        DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.applyReloadIconIfPresent()
+            }
+        }
+    }
+
+    nonisolated func applicationDidBecomeActive(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            guard !self.iconWasApplied else { return }
+            self.applyReloadIconIfPresent()
+        }
+    }
+
+    private func applyReloadIconIfPresent() {
+        guard !iconWasApplied else { return }
+        guard let mainMenu = NSApp.mainMenu else { return }
+        guard let menuItem = findMenuItem(in: mainMenu.items) else { return }
+        guard menuItem.image == nil else { return }
+        menuItem.image = NSImage(
+            systemSymbolName: Self.symbolName,
+            accessibilityDescription: Self.menuItemTitle
+        )
+        menuItem.image?.isTemplate = true
+        iconWasApplied = true
+    }
+
+    private func findMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
+        for item in items {
+            if item.title == Self.menuItemTitle {
+                return item
+            }
+            if let submenu = item.submenu,
+               let nestedItem = findMenuItem(in: submenu.items) {
+                return nestedItem
+            }
+        }
+        return nil
+    }
+}
 
 @main
 struct ToasttyApp: App {
     private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
+    @NSApplicationDelegateAdaptor(ReloadConfigurationMenuIconInstaller.self)
+    private var reloadConfigurationMenuIconInstaller
     @StateObject private var store: AppStore
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let automationLifecycle: AutomationLifecycle?

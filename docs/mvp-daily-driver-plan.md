@@ -1017,3 +1017,20 @@ Pending:
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/check.sh` (pass, 80 tests)
+
+2026-02-28 (Post-MVP continuation: reload menu icon polish):
+- implemented:
+  - added AppKit-backed menu icon installation for `Toastty -> Reload Configuration`:
+    - new `ReloadConfigurationMenuIconInstaller` (`NSApplicationDelegate`) scans the app menu and applies `arrow.clockwise` to that menu item.
+    - installer runs at app launch plus next-runloop scheduling, with activation fallback, to handle command-menu initialization timing.
+    - once applied, icon setup short-circuits on future activations (`iconWasApplied`), avoiding repeated menu-tree traversal.
+  - kept `CommandGroup` menu entry text-only in SwiftUI and left existing enable/disable behavior for non-Ghostty builds unchanged.
+- reviewer follow-up:
+  - accepted:
+    - SwiftUI `Label(..., systemImage: ...)` inside `CommandGroup` can fail to render a visible icon in AppKit menus, so direct `NSMenuItem.image` assignment is used for reliable icon display.
+    - replaced `Task.yield()` timing with explicit next-runloop scheduling (`DispatchQueue.main.async`) from launch callback.
+    - added `iconWasApplied` short-circuit so activation fallback does not keep traversing the full menu tree once the icon is set.
+  - rejected:
+    - delegate adaptor conflict concern was not actionable in this repo because there is no existing `NSApplicationDelegateAdaptor` usage to conflict with.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
