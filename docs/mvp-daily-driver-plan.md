@@ -799,3 +799,21 @@ Pending:
   - added explicit smoke validation to confirm `--no-open` works in runtime automation path, not only `check.sh`.
 - rejected (with rationale):
   - concern that `smoke-ui.sh` and `shortcut-trace.sh` do not check generate exit status was rejected because both scripts run with `set -e`, so `tuist generate --no-open` failure is already fatal.
+
+2026-02-28 (Post-MVP continuation: workspace keyboard shortcuts):
+- added global workspace command bindings in `ToasttyApp`:
+  - `cmd+shift+n` -> create/select new workspace
+  - `cmd+1...cmd+9` -> select workspace index in selected window (up to first 9)
+- added helper handlers in `ToasttyApp` to route command actions through existing reducer actions:
+  - `.createWorkspace(windowID:title:)`
+  - `.selectWorkspace(windowID:workspaceID:)`
+- ghostty-enabled build follow-up:
+  - fixed `SidebarView` missing `CoreState` import that blocked ghostty-enabled app builds.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - manual shortcut exercise under automation via `osascript` key chords:
+    - `cmd+2` switched selected workspace from fixture workspace 1 -> workspace 2
+    - `cmd+1` switched back to workspace 1
+    - `cmd+shift+n` increased workspace count (`2` -> `3`) and selected the new workspace

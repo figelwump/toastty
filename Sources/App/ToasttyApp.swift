@@ -69,6 +69,27 @@ struct ToasttyApp: App {
                 .keyboardShortcut("0", modifiers: [.command])
             }
 
+            CommandMenu("Workspace") {
+                Button("New Workspace") {
+                    createWorkspaceFromSelection()
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+
+                if let window = store.selectedWindow {
+                    ForEach(Array(window.workspaceIDs.prefix(9).enumerated()), id: \.element) { index, workspaceID in
+                        if let workspace = store.state.workspacesByID[workspaceID] {
+                            Button(workspace.title) {
+                                selectWorkspaceFromSelection(workspaceID: workspaceID)
+                            }
+                            .keyboardShortcut(
+                                KeyEquivalent(Character(String(index + 1))),
+                                modifiers: [.command]
+                            )
+                        }
+                    }
+                }
+            }
+
             #if !TOASTTY_HAS_GHOSTTY_KIT
             CommandMenu("Pane") {
                 Button("Split Right") {
@@ -97,5 +118,15 @@ struct ToasttyApp: App {
             }
             #endif
         }
+    }
+
+    private func createWorkspaceFromSelection() {
+        guard let windowID = store.selectedWindow?.id else { return }
+        store.send(.createWorkspace(windowID: windowID, title: nil))
+    }
+
+    private func selectWorkspaceFromSelection(workspaceID: UUID) {
+        guard let windowID = store.selectedWindow?.id else { return }
+        store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }
 }
