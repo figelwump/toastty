@@ -896,3 +896,22 @@ Pending:
   - runtime key-event verification with app debug logs:
     - sent two `cmd+shift+f` key chords via System Events.
     - observed two reducer cycles for `toggleFocusedPanelMode` (dispatch + applied pairs in `/tmp/toastty-focus-shortcut.log`), confirming shortcut routing executes the intended action.
+
+2026-02-28 (Post-MVP continuation: focused-panel mode transition animation):
+- implemented:
+  - added explicit split-node animation in `PaneNodeView` so focus-mode enter/exit visibly animates split collapse/restore.
+  - animation is bound to `effectiveRatio`, limiting animation to split-size transitions rather than the entire workspace view tree.
+  - uses `.easeInOut(duration: 0.2)`; automation runs with `--disable-animations` remain deterministic via existing root transaction disabling.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation reviewer follow-up: focus transition animation scope):
+- reviewer source: Claude second-opinion on staged diff for focus-transition animation.
+- accepted and implemented:
+  - narrowed animation scope from workspace-level animation hooks to split-node ratio changes (`effectiveRatio`) to reduce unrelated animation side effects.
+- rejected/deferred:
+  - no new automated UI assertion for animation smoothness yet; current smoke run is deterministic with `--disable-animations`, so animation behavior remains manual-visual validation territory for now.
+- re-validation:
+  - `./scripts/automation/check.sh` (pass, 80 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)

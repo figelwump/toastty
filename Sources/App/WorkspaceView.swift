@@ -153,89 +153,92 @@ private struct PaneNodeView: View {
                 let isCollapsed = effectiveRatio <= 0.0001 || effectiveRatio >= 0.9999
                 let dividerThickness: CGFloat = isCollapsed ? 0 : 1
 
-                if orientation == .horizontal {
-                    let availableWidth = max(geometry.size.width - dividerThickness, 0)
-                    let firstWidth = availableWidth * effectiveRatio
-                    let secondWidth = max(availableWidth - firstWidth, 0)
-                    let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
-                    let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
+                Group {
+                    if orientation == .horizontal {
+                        let availableWidth = max(geometry.size.width - dividerThickness, 0)
+                        let firstWidth = availableWidth * effectiveRatio
+                        let secondWidth = max(availableWidth - firstWidth, 0)
+                        let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
+                        let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
 
-                    HStack(spacing: 0) {
-                        PaneNodeView(
-                            node: first,
-                            workspace: workspace,
-                            store: store,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints,
-                            focusedPanelID: focusedPanelID,
-                            focusedPanelModeActive: focusedPanelModeActive
-                        )
-                        .frame(width: firstWidth, height: geometry.size.height)
-                        .opacity(showFirst ? 1 : 0)
-                        .allowsHitTesting(showFirst)
+                        HStack(spacing: 0) {
+                            PaneNodeView(
+                                node: first,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive
+                            )
+                            .frame(width: firstWidth, height: geometry.size.height)
+                            .opacity(showFirst ? 1 : 0)
+                            .allowsHitTesting(showFirst)
 
-                        if dividerThickness > 0 {
-                            Rectangle()
-                                .fill(ToastyTheme.paneDivider)
-                                .frame(width: dividerThickness, height: geometry.size.height)
+                            if dividerThickness > 0 {
+                                Rectangle()
+                                    .fill(ToastyTheme.paneDivider)
+                                    .frame(width: dividerThickness, height: geometry.size.height)
+                            }
+
+                            PaneNodeView(
+                                node: second,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive
+                            )
+                            .frame(width: secondWidth, height: geometry.size.height)
+                            .opacity(showSecond ? 1 : 0)
+                            .allowsHitTesting(showSecond)
                         }
+                        .clipped()
+                    } else {
+                        let availableHeight = max(geometry.size.height - dividerThickness, 0)
+                        let firstHeight = availableHeight * effectiveRatio
+                        let secondHeight = max(availableHeight - firstHeight, 0)
+                        let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
+                        let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
 
-                        PaneNodeView(
-                            node: second,
-                            workspace: workspace,
-                            store: store,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints,
-                            focusedPanelID: focusedPanelID,
-                            focusedPanelModeActive: focusedPanelModeActive
-                        )
-                        .frame(width: secondWidth, height: geometry.size.height)
-                        .opacity(showSecond ? 1 : 0)
-                        .allowsHitTesting(showSecond)
-                    }
-                    .clipped()
-                } else {
-                    let availableHeight = max(geometry.size.height - dividerThickness, 0)
-                    let firstHeight = availableHeight * effectiveRatio
-                    let secondHeight = max(availableHeight - firstHeight, 0)
-                    let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
-                    let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
+                        VStack(spacing: 0) {
+                            PaneNodeView(
+                                node: first,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive
+                            )
+                            .frame(width: geometry.size.width, height: firstHeight)
+                            .opacity(showFirst ? 1 : 0)
+                            .allowsHitTesting(showFirst)
 
-                    VStack(spacing: 0) {
-                        PaneNodeView(
-                            node: first,
-                            workspace: workspace,
-                            store: store,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints,
-                            focusedPanelID: focusedPanelID,
-                            focusedPanelModeActive: focusedPanelModeActive
-                        )
-                        .frame(width: geometry.size.width, height: firstHeight)
-                        .opacity(showFirst ? 1 : 0)
-                        .allowsHitTesting(showFirst)
+                            if dividerThickness > 0 {
+                                Rectangle()
+                                    .fill(ToastyTheme.paneDivider)
+                                    .frame(width: geometry.size.width, height: dividerThickness)
+                            }
 
-                        if dividerThickness > 0 {
-                            Rectangle()
-                                .fill(ToastyTheme.paneDivider)
-                                .frame(width: geometry.size.width, height: dividerThickness)
+                            PaneNodeView(
+                                node: second,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive
+                            )
+                            .frame(width: geometry.size.width, height: secondHeight)
+                            .opacity(showSecond ? 1 : 0)
+                            .allowsHitTesting(showSecond)
                         }
-
-                        PaneNodeView(
-                            node: second,
-                            workspace: workspace,
-                            store: store,
-                            terminalRuntimeRegistry: terminalRuntimeRegistry,
-                            globalFontPoints: globalFontPoints,
-                            focusedPanelID: focusedPanelID,
-                            focusedPanelModeActive: focusedPanelModeActive
-                        )
-                        .frame(width: geometry.size.width, height: secondHeight)
-                        .opacity(showSecond ? 1 : 0)
-                        .allowsHitTesting(showSecond)
+                        .clipped()
                     }
-                    .clipped()
                 }
+                .animation(.easeInOut(duration: 0.2), value: effectiveRatio)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
