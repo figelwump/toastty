@@ -83,9 +83,9 @@ Next actions:
 - supported Ghostty actions routed into app state:
   - `new_split:{right,down,left,up}` -> directional pane split
   - `goto_split:{previous,next,left,right,up,down}` -> pane focus movement
+  - `resize_split:{up,down,left,right}` -> focused split ratio adjustment
+  - `equalize_splits` -> normalize split ratios
   - `toggle_split_zoom` -> focused-panel mode toggle
 - currently deferred / not yet mapped:
-  - `resize_split`
-  - `equalize_splits`
   - Ghostty font action bindings (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
   - broader tabs/windows/clipboard parity beyond existing Toastty primitives

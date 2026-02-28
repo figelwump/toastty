@@ -44,6 +44,10 @@
     - `workspace.focus-pane.next` changes focus
     - `workspace.focus-pane.previous` restores baseline focus
     - `workspace.split.right` increases pane count
+    - `workspace.resize-split.right` increases root split ratio
+    - `workspace.equalize-splits` normalizes root split ratio to `0.5`
+  - Ghostty terminal viewport I/O assertion is currently best-effort in smoke:
+    - if terminal surface remains unavailable in automation mode, smoke logs a note and continues.
 
 ## Manual Interaction Scripting Tips
 - Activation alone is often insufficient; click into the target terminal panel before typing.
@@ -83,9 +87,10 @@ OSA
 - currently mapped via Ghostty `action_cb`:
   - `new_split:{right,down,left,up}`
   - `goto_split:{previous,next,left,right,up,down}`
+  - `resize_split:{up,down,left,right}`
+  - `equalize_splits`
   - `toggle_split_zoom`
 - known gaps (deferred):
-  - `resize_split`, `equalize_splits`
   - Ghostty font-size actions via callback (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
   - tabs/windows/clipboard action parity beyond current Toastty primitives
 

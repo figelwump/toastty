@@ -119,6 +119,18 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         case .focus(let direction):
             return store.send(.focusPane(workspaceID: workspaceID, direction: direction))
 
+        case .resizeSplit(let direction, let amount):
+            return store.send(
+                .resizeFocusedPaneSplit(
+                    workspaceID: workspaceID,
+                    direction: direction,
+                    amount: amount
+                )
+            )
+
+        case .equalizeSplits:
+            return store.send(.equalizePaneSplits(workspaceID: workspaceID))
+
         case .toggleFocusedPanelMode:
             return store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         }

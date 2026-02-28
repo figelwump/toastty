@@ -16,6 +16,13 @@ public enum PaneFocusDirection: String, Codable, Equatable, Sendable {
     case right
 }
 
+public enum PaneResizeDirection: String, Codable, Equatable, Sendable {
+    case up
+    case down
+    case left
+    case right
+}
+
 public enum AppAction: Equatable, Sendable {
     case selectWindow(windowID: UUID)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
@@ -35,5 +42,7 @@ public enum AppAction: Equatable, Sendable {
     case splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedPaneInDirection(workspaceID: UUID, direction: PaneSplitDirection)
     case focusPane(workspaceID: UUID, direction: PaneFocusDirection)
+    case resizeFocusedPaneSplit(workspaceID: UUID, direction: PaneResizeDirection, amount: Int)
+    case equalizePaneSplits(workspaceID: UUID)
     case createTerminalPanel(workspaceID: UUID, paneID: UUID)
 }

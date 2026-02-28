@@ -746,6 +746,45 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.focus-pane.down":
             didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .down))
 
+        case "workspace.resize-split.left":
+            didMutate = store.send(
+                .resizeFocusedPaneSplit(
+                    workspaceID: workspaceID,
+                    direction: .left,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.resize-split.right":
+            didMutate = store.send(
+                .resizeFocusedPaneSplit(
+                    workspaceID: workspaceID,
+                    direction: .right,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.resize-split.up":
+            didMutate = store.send(
+                .resizeFocusedPaneSplit(
+                    workspaceID: workspaceID,
+                    direction: .up,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.resize-split.down":
+            didMutate = store.send(
+                .resizeFocusedPaneSplit(
+                    workspaceID: workspaceID,
+                    direction: .down,
+                    amount: max(args.int("amount") ?? 1, 1)
+                )
+            )
+
+        case "workspace.equalize-splits":
+            didMutate = store.send(.equalizePaneSplits(workspaceID: workspaceID))
+
         case "topbar.toggle.diff":
             didMutate = store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff))
 
@@ -876,12 +915,20 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let leafPanelIDs = leafInfos.flatMap { info in
             info.tabPanelIDs.map { AutomationJSONValue.string($0.uuidString) }
         }
+        let rootSplitRatio: AutomationJSONValue
+        switch workspace.paneTree {
+        case .split(_, _, let ratio, _, _):
+            rootSplitRatio = .double(ratio)
+        case .leaf:
+            rootSplitRatio = .null
+        }
 
         return [
             "workspaceID": .string(workspaceID.uuidString),
             "paneCount": .int(leafInfos.count),
             "panelCount": .int(workspace.panels.count),
             "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
+            "rootSplitRatio": rootSplitRatio,
             "leafPaneIDs": .array(leafPaneIDs),
             "leafPanelIDs": .array(leafPanelIDs),
         ]
@@ -1180,6 +1227,13 @@ private extension Dictionary where Key == String, Value == AutomationJSONValue {
 
     func bool(_ key: String) -> Bool? {
         guard case .bool(let value)? = self[key] else {
+            return nil
+        }
+        return value
+    }
+
+    func int(_ key: String) -> Int? {
+        guard case .int(let value)? = self[key] else {
             return nil
         }
         return value

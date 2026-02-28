@@ -670,6 +670,109 @@ struct AppReducerTests {
     }
 
     @Test
+    func resizeFocusedPaneSplitAdjustsNearestMatchingRatio() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let initialWorkspace = try #require(state.workspacesByID[workspaceID])
+
+        guard case .split(_, let orientation, let initialRatio, _, _) = initialWorkspace.paneTree else {
+            Issue.record("expected split-workspace fixture to have split root")
+            return
+        }
+        #expect(orientation == .horizontal)
+
+        #expect(
+            reducer.send(
+                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .right, amount: 2),
+                state: &state
+            )
+        )
+
+        let resizedWorkspace = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let resizedRatio, _, _) = resizedWorkspace.paneTree else {
+            Issue.record("expected split root after resize")
+            return
+        }
+
+        #expect(resizedRatio > initialRatio)
+        #expect(abs(resizedRatio - (initialRatio + 0.04)) < 0.0001)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeFocusedPaneSplitReturnsFalseWhenNoMatchingSplitOrientationExists() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+
+        #expect(
+            reducer.send(
+                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .up, amount: 1),
+                state: &state
+            ) == false
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.paneTree == workspaceBefore.paneTree)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func equalizePaneSplitsNormalizesNestedRatios() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+
+        guard case .split(_, _, _, let first, let second) = workspace.paneTree,
+              case .leaf(let leftPaneID, let leftTabs, let leftSelectedIndex) = first,
+              case .leaf(let rightPaneID, let rightTabs, let rightSelectedIndex) = second,
+              let leftPanelID = leftTabs.first,
+              let rightPanelID = rightTabs.first else {
+            Issue.record("expected split-workspace fixture to expose two terminal leaves")
+            return
+        }
+
+        let extraPanelID = UUID()
+        let extraPaneID = UUID()
+        workspace.panels[extraPanelID] = .terminal(
+            TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")
+        )
+        let nestedSecond = PaneNode.split(
+            nodeID: UUID(),
+            orientation: .vertical,
+            ratio: 0.8,
+            first: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: rightSelectedIndex),
+            second: .leaf(paneID: extraPaneID, tabPanelIDs: [extraPanelID], selectedIndex: 0)
+        )
+        workspace.paneTree = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.7,
+            first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: leftSelectedIndex),
+            second: nestedSecond
+        )
+        workspace.focusedPanelID = leftPanelID
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let rootRatio, _, let updatedSecond) = updatedWorkspace.paneTree,
+              case .split(_, _, let nestedRatio, _, _) = updatedSecond else {
+            Issue.record("expected nested split tree after equalize")
+            return
+        }
+
+        #expect(rootRatio == 0.5)
+        #expect(nestedRatio == 0.5)
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func globalFontActionsAdjustAndResetFontSize() {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

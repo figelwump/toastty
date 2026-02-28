@@ -353,6 +353,17 @@ public struct AppReducer {
         case .focusPane(let workspaceID, let direction):
             return focusPane(workspaceID: workspaceID, direction: direction, state: &state)
 
+        case .resizeFocusedPaneSplit(let workspaceID, let direction, let amount):
+            return resizeFocusedPaneSplit(
+                workspaceID: workspaceID,
+                direction: direction,
+                amount: amount,
+                state: &state
+            )
+
+        case .equalizePaneSplits(let workspaceID):
+            return equalizePaneSplits(workspaceID: workspaceID, state: &state)
+
         case .createTerminalPanel(let workspaceID, let paneID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
 
@@ -481,6 +492,220 @@ public struct AppReducer {
         workspace.focusedPanelID = targetPanelID
         state.workspacesByID[workspaceID] = workspace
         return true
+    }
+
+    private static func resizeFocusedPaneSplit(
+        workspaceID: UUID,
+        direction: PaneResizeDirection,
+        amount: Int,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID] else { return false }
+        guard workspace.focusedPanelModeActive == false else { return false }
+        guard let focusResolution = resolveFocusedPanel(in: workspace) else { return false }
+        workspace.focusedPanelID = focusResolution.panelID
+
+        let stepAmount = max(amount, 1)
+        let delta = splitResizeDelta(direction: direction, amount: stepAmount)
+        let result = resizeNearestMatchingSplit(
+            in: workspace.paneTree,
+            focusedPaneID: focusResolution.leaf.paneID,
+            direction: direction,
+            delta: delta
+        )
+        guard result.didResize else { return false }
+
+        workspace.paneTree = result.node
+        state.workspacesByID[workspaceID] = workspace
+        return true
+    }
+
+    private static func equalizePaneSplits(workspaceID: UUID, state: inout AppState) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID] else { return false }
+        guard workspace.focusedPanelModeActive == false else { return false }
+
+        let result = equalizeSplitRatios(in: workspace.paneTree)
+        guard result.didMutate else { return false }
+
+        workspace.paneTree = result.node
+        state.workspacesByID[workspaceID] = workspace
+        return true
+    }
+
+    private struct SplitResizeResult {
+        let node: PaneNode
+        let containsFocusedPane: Bool
+        let didResize: Bool
+    }
+
+    private struct SplitEqualizeResult {
+        let node: PaneNode
+        let didMutate: Bool
+    }
+
+    private static func splitResizeDelta(direction: PaneResizeDirection, amount: Int) -> Double {
+        let clampedAmount = max(1, min(amount, 20))
+        let magnitude = Double(clampedAmount) * 0.02
+        switch direction {
+        case .left, .up:
+            return -magnitude
+        case .right, .down:
+            return magnitude
+        }
+    }
+
+    private static func resizeNearestMatchingSplit(
+        in node: PaneNode,
+        focusedPaneID: UUID,
+        direction: PaneResizeDirection,
+        delta: Double
+    ) -> SplitResizeResult {
+        switch node {
+        case .leaf(let paneID, _, _):
+            return SplitResizeResult(node: node, containsFocusedPane: paneID == focusedPaneID, didResize: false)
+
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            let firstResult = resizeNearestMatchingSplit(
+                in: first,
+                focusedPaneID: focusedPaneID,
+                direction: direction,
+                delta: delta
+            )
+            if firstResult.containsFocusedPane {
+                if firstResult.didResize {
+                    return SplitResizeResult(
+                        node: .split(
+                            nodeID: nodeID,
+                            orientation: orientation,
+                            ratio: ratio,
+                            first: firstResult.node,
+                            second: second
+                        ),
+                        containsFocusedPane: true,
+                        didResize: true
+                    )
+                }
+
+                if splitOrientation(contains: direction, orientation: orientation) {
+                    let nextRatio = clampedSplitRatio(ratio + delta)
+                    if nextRatio != ratio {
+                        return SplitResizeResult(
+                            node: .split(
+                                nodeID: nodeID,
+                                orientation: orientation,
+                                ratio: nextRatio,
+                                first: firstResult.node,
+                                second: second
+                            ),
+                            containsFocusedPane: true,
+                            didResize: true
+                        )
+                    }
+                }
+
+                return SplitResizeResult(
+                    node: .split(
+                        nodeID: nodeID,
+                        orientation: orientation,
+                        ratio: ratio,
+                        first: firstResult.node,
+                        second: second
+                    ),
+                    containsFocusedPane: true,
+                    didResize: false
+                )
+            }
+
+            let secondResult = resizeNearestMatchingSplit(
+                in: second,
+                focusedPaneID: focusedPaneID,
+                direction: direction,
+                delta: delta
+            )
+            if secondResult.containsFocusedPane {
+                if secondResult.didResize {
+                    return SplitResizeResult(
+                        node: .split(
+                            nodeID: nodeID,
+                            orientation: orientation,
+                            ratio: ratio,
+                            first: first,
+                            second: secondResult.node
+                        ),
+                        containsFocusedPane: true,
+                        didResize: true
+                    )
+                }
+
+                if splitOrientation(contains: direction, orientation: orientation) {
+                    let nextRatio = clampedSplitRatio(ratio + delta)
+                    if nextRatio != ratio {
+                        return SplitResizeResult(
+                            node: .split(
+                                nodeID: nodeID,
+                                orientation: orientation,
+                                ratio: nextRatio,
+                                first: first,
+                                second: secondResult.node
+                            ),
+                            containsFocusedPane: true,
+                            didResize: true
+                        )
+                    }
+                }
+
+                return SplitResizeResult(
+                    node: .split(
+                        nodeID: nodeID,
+                        orientation: orientation,
+                        ratio: ratio,
+                        first: first,
+                        second: secondResult.node
+                    ),
+                    containsFocusedPane: true,
+                    didResize: false
+                )
+            }
+
+            return SplitResizeResult(node: node, containsFocusedPane: false, didResize: false)
+        }
+    }
+
+    private static func equalizeSplitRatios(in node: PaneNode) -> SplitEqualizeResult {
+        switch node {
+        case .leaf:
+            return SplitEqualizeResult(node: node, didMutate: false)
+
+        case .split(let nodeID, let orientation, let ratio, let first, let second):
+            let firstResult = equalizeSplitRatios(in: first)
+            let secondResult = equalizeSplitRatios(in: second)
+            let targetRatio = 0.5
+            let didMutate = firstResult.didMutate || secondResult.didMutate || ratio != targetRatio
+
+            return SplitEqualizeResult(
+                node: .split(
+                    nodeID: nodeID,
+                    orientation: orientation,
+                    ratio: targetRatio,
+                    first: firstResult.node,
+                    second: secondResult.node
+                ),
+                didMutate: didMutate
+            )
+        }
+    }
+
+    private static func splitOrientation(contains direction: PaneResizeDirection, orientation: SplitOrientation) -> Bool {
+        switch (direction, orientation) {
+        case (.left, .horizontal), (.right, .horizontal), (.up, .vertical), (.down, .vertical):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func clampedSplitRatio(_ value: Double) -> Double {
+        min(max(value, 0.1), 0.9)
     }
 
     private static func targetPaneID(

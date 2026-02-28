@@ -13,6 +13,8 @@ struct GhosttyRuntimeAction: Sendable {
     enum Intent: Sendable {
         case split(PaneSplitDirection)
         case focus(PaneFocusDirection)
+        case resizeSplit(PaneResizeDirection, amount: Int)
+        case equalizeSplits
         case toggleFocusedPanelMode
     }
 
@@ -41,6 +43,15 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
             return nil
         }
         intent = .focus(direction)
+
+    case GHOSTTY_ACTION_RESIZE_SPLIT:
+        guard let direction = PaneResizeDirection(ghosttyDirection: action.action.resize_split.direction) else {
+            return nil
+        }
+        intent = .resizeSplit(direction, amount: Int(action.action.resize_split.amount))
+
+    case GHOSTTY_ACTION_EQUALIZE_SPLITS:
+        intent = .equalizeSplits
 
     case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
         intent = .toggleFocusedPanelMode
@@ -110,6 +121,23 @@ private extension PaneFocusDirection {
         case GHOSTTY_GOTO_SPLIT_LEFT:
             self = .left
         case GHOSTTY_GOTO_SPLIT_RIGHT:
+            self = .right
+        default:
+            return nil
+        }
+    }
+}
+
+private extension PaneResizeDirection {
+    init?(ghosttyDirection: ghostty_action_resize_split_direction_e) {
+        switch ghosttyDirection {
+        case GHOSTTY_RESIZE_SPLIT_UP:
+            self = .up
+        case GHOSTTY_RESIZE_SPLIT_DOWN:
+            self = .down
+        case GHOSTTY_RESIZE_SPLIT_LEFT:
+            self = .left
+        case GHOSTTY_RESIZE_SPLIT_RIGHT:
             self = .right
         default:
             return nil
