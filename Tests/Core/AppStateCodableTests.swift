@@ -7,7 +7,7 @@ struct AppStateCodableTests {
     func bootstrapUsesDefaultTerminalFontSize() {
         let state = AppState.bootstrap()
 
-        #expect(AppState.defaultTerminalFontPoints == 11)
+        #expect(AppState.defaultTerminalFontPoints == 7)
         #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
     }
 
