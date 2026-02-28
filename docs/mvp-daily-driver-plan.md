@@ -474,3 +474,25 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 77 tests)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass; viewport step remains best-effort when surface unavailable in automation)
+
+2026-02-28 (Post-MVP continuation: Ghostty app-target action routing + smaller font floor):
+- addressed follow-up regressions reported during manual validation:
+  - Ghostty resize/equalize shortcuts still no-op for some key paths.
+  - minimum font size (`9`) remained visually too large for dense side-by-side layouts.
+- runtime action routing fix:
+  - expanded `makeGhosttyRuntimeAction(...)` to accept both:
+    - `GHOSTTY_TARGET_SURFACE` (surface-local actions)
+    - `GHOSTTY_TARGET_APP` (app-scoped actions)
+  - for app-scoped runtime actions, `TerminalRuntimeRegistry.handleGhosttyRuntimeAction(...)` now resolves context from:
+    - selected workspace
+    - focused panel fallback
+  - rationale: some Ghostty bindings are emitted against app target rather than a specific surface target.
+- font floor adjustment:
+  - lowered `AppState.minTerminalFontPoints` from `9` to `6` to support denser pane layouts on laptop screens.
+- testing gap note:
+  - existing smoke automation validates state mutations via `automation.perform_action` and does not yet synthesize physical keyboard events through Ghostty key handling; manual keypress verification remains required for shortcut parity.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 77 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TOASTTY_ENABLE_GHOSTTY=1 tuist generate` (pass; compile conditions include `TOASTTY_HAS_GHOSTTY_KIT`)

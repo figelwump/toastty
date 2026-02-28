@@ -75,6 +75,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
+    private func selectedWorkspaceID(state: AppState) -> UUID? {
+        guard let selectedWindowID = state.selectedWindowID,
+              let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) else {
+            return nil
+        }
+        return selectedWindow.selectedWorkspaceID ?? selectedWindow.workspaceIDs.first
+    }
+
     fileprivate func register(surface: ghostty_surface_t, for panelID: UUID) {
         panelIDBySurfaceHandle[UInt(bitPattern: surface)] = panelID
     }
@@ -108,40 +116,55 @@ final class TerminalRuntimeRegistry: ObservableObject {
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     func handleGhosttyRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool {
-        guard let panelID = panelIDBySurfaceHandle[action.surfaceHandle] else {
-            return false
-        }
         guard let store else {
             return false
         }
-        guard let workspaceID = workspaceID(containing: panelID, state: store.state) else {
-            return false
+
+        let panelID: UUID
+        let workspaceIDForAction: UUID
+        if let surfaceHandle = action.surfaceHandle {
+            guard let resolvedPanelID = panelIDBySurfaceHandle[surfaceHandle],
+                  let workspaceIDForSurface = workspaceID(containing: resolvedPanelID, state: store.state) else {
+                return false
+            }
+            panelID = resolvedPanelID
+            workspaceIDForAction = workspaceIDForSurface
+        } else {
+            let state = store.state
+            guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
+                  let workspace = state.workspacesByID[selectedWorkspaceID],
+                  let resolvedPanelID = workspace.focusedPanelID ?? workspace.panels.keys.first else {
+                return false
+            }
+            panelID = resolvedPanelID
+            workspaceIDForAction = selectedWorkspaceID
         }
-        guard store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID)) else {
+
+        guard store.send(.focusPanel(workspaceID: workspaceIDForAction, panelID: panelID)) else {
             return false
         }
 
         switch action.intent {
         case .split(let direction):
-            return store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: direction))
+            return store.send(.splitFocusedPaneInDirection(workspaceID: workspaceIDForAction, direction: direction))
 
         case .focus(let direction):
-            return store.send(.focusPane(workspaceID: workspaceID, direction: direction))
+            return store.send(.focusPane(workspaceID: workspaceIDForAction, direction: direction))
 
         case .resizeSplit(let direction, let amount):
             return store.send(
                 .resizeFocusedPaneSplit(
-                    workspaceID: workspaceID,
+                    workspaceID: workspaceIDForAction,
                     direction: direction,
                     amount: amount
                 )
             )
 
         case .equalizeSplits:
-            return store.send(.equalizePaneSplits(workspaceID: workspaceID))
+            return store.send(.equalizePaneSplits(workspaceID: workspaceIDForAction))
 
         case .toggleFocusedPanelMode:
-            return store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+            return store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
         }
     }
 }

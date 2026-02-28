@@ -18,7 +18,7 @@ struct GhosttyRuntimeAction: Sendable {
         case toggleFocusedPanelMode
     }
 
-    let surfaceHandle: UInt
+    let surfaceHandle: UInt?
     let intent: Intent
 }
 
@@ -27,10 +27,18 @@ private final class GhosttyActionCallbackResult: @unchecked Sendable {
 }
 
 private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> GhosttyRuntimeAction? {
-    guard target.tag == GHOSTTY_TARGET_SURFACE else {
-        return nil
-    }
-    guard let surface = target.target.surface else {
+    let surfaceHandle: UInt?
+    switch target.tag {
+    case GHOSTTY_TARGET_SURFACE:
+        guard let surface = target.target.surface else {
+            return nil
+        }
+        surfaceHandle = UInt(bitPattern: surface)
+
+    case GHOSTTY_TARGET_APP:
+        surfaceHandle = nil
+
+    default:
         return nil
     }
 
@@ -64,7 +72,7 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         return nil
     }
 
-    return GhosttyRuntimeAction(surfaceHandle: UInt(bitPattern: surface), intent: intent)
+    return GhosttyRuntimeAction(surfaceHandle: surfaceHandle, intent: intent)
 }
 
 private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
