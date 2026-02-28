@@ -243,3 +243,14 @@ Pending:
     - focused panel ID changed after pane navigation
     - screenshot artifact:
       - `artifacts/manual/ui/manual-shortcuts-20260227-185331/single-workspace/ghostty-shortcuts-manual.png`
+
+2026-02-28 (Chunk M1 follow-up: reviewer hardening fixes):
+- accepted and implemented second-opinion review points:
+  - runtime action callback now executes on main thread even when invoked from a non-main Ghostty callback thread (sync handoff), instead of returning unhandled.
+  - Ghostty action handler registration moved to `TerminalRuntimeRegistry.bind(store:)` (single assignment) rather than repeated per-surface setup.
+  - Ghostty action routing now validates `action.tag` and direction payload before mutating focus state, avoiding side effects for unsupported tags.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 70 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - `TUIST_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - note: `TOASTTY_ENABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` is not reliable for Tuist-generate flows; use `TUIST_ENABLE_GHOSTTY=1`.

@@ -15,6 +15,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func bind(store: AppStore) {
         self.store = store
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        GhosttyRuntimeManager.shared.actionHandler = self
+        #endif
     }
 
     func controller(for panelID: UUID) -> TerminalSurfaceController {
@@ -92,8 +95,35 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
+    private enum RoutedGhosttyAction {
+        case split(PaneSplitDirection)
+        case focusPane(PaneFocusDirection)
+        case toggleFocusedPanelMode
+    }
+
     func handleGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
         guard target.tag == GHOSTTY_TARGET_SURFACE else {
+            return false
+        }
+
+        let routedAction: RoutedGhosttyAction
+        switch action.tag {
+        case GHOSTTY_ACTION_NEW_SPLIT:
+            guard let direction = PaneSplitDirection(ghosttyDirection: action.action.new_split) else {
+                return false
+            }
+            routedAction = .split(direction)
+
+        case GHOSTTY_ACTION_GOTO_SPLIT:
+            guard let direction = PaneFocusDirection(ghosttyDirection: action.action.goto_split) else {
+                return false
+            }
+            routedAction = .focusPane(direction)
+
+        case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
+            routedAction = .toggleFocusedPanelMode
+
+        default:
             return false
         }
 
@@ -113,24 +143,15 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return false
         }
 
-        switch action.tag {
-        case GHOSTTY_ACTION_NEW_SPLIT:
-            guard let direction = PaneSplitDirection(ghosttyDirection: action.action.new_split) else {
-                return false
-            }
+        switch routedAction {
+        case .split(let direction):
             return store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: direction))
 
-        case GHOSTTY_ACTION_GOTO_SPLIT:
-            guard let direction = PaneFocusDirection(ghosttyDirection: action.action.goto_split) else {
-                return false
-            }
+        case .focusPane(let direction):
             return store.send(.focusPane(workspaceID: workspaceID, direction: direction))
 
-        case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
+        case .toggleFocusedPanelMode:
             return store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
-
-        default:
-            return false
         }
     }
 }
@@ -345,7 +366,6 @@ final class TerminalSurfaceController {
     private func ensureGhosttySurface(terminalState: TerminalPanelState, fontPoints: Double) {
         guard ghosttySurface == nil else { return }
 
-        ghosttyManager.actionHandler = registry
         guard let hostView = hostedView as? TerminalHostView else { return }
         guard let surface = ghosttyManager.makeSurface(
             hostView: hostView,

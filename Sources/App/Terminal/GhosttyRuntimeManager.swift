@@ -22,15 +22,21 @@ private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
 private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s, action: ghostty_action_s) -> Bool {
     guard let app else { return false }
     guard let userdata = ghostty_app_userdata(app) else { return false }
-    guard Thread.isMainThread else {
-        // Keybinding-driven split actions are expected on the AppKit main thread.
-        return false
-    }
 
     let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(userdata).takeUnretainedValue()
-    return MainActor.assumeIsolated {
-        return manager.routeRuntimeAction(target: target, action: action)
+    if Thread.isMainThread {
+        return MainActor.assumeIsolated {
+            manager.routeRuntimeAction(target: target, action: action)
+        }
     }
+
+    var handled = false
+    DispatchQueue.main.sync {
+        handled = MainActor.assumeIsolated {
+        return manager.routeRuntimeAction(target: target, action: action)
+        }
+    }
+    return handled
 }
 
 private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghostty_runtime_config_s {
