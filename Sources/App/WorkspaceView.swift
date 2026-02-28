@@ -35,17 +35,17 @@ struct WorkspaceView: View {
             auxToggle(title: "Markdown", systemImage: "doc.text", kind: .markdown, identifier: "topbar.toggle.markdown")
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
-            topBarButton(title: "Split H", icon: {
-                SplitHorizontalIconView(color: ToastyTheme.mutedTextStrong)
-            }, active: false) {
+            topBarFlashButton(title: "Split H", icon: { highlighted in
+                SplitHorizontalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+            }) {
                 split(orientation: .horizontal)
             }
             .disabled(isFocusedPanelModeActive)
             .accessibilityIdentifier("workspace.split.horizontal")
 
-            topBarButton(title: "Split V", icon: {
-                SplitVerticalIconView(color: ToastyTheme.mutedTextStrong)
-            }, active: false) {
+            topBarFlashButton(title: "Split V", icon: { highlighted in
+                SplitVerticalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+            }) {
                 split(orientation: .vertical)
             }
             .disabled(isFocusedPanelModeActive)
@@ -155,6 +155,20 @@ struct WorkspaceView: View {
             Rectangle()
                 .stroke(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
         )
+    }
+
+    /// Top bar button for momentary actions (e.g. split). Briefly flashes the "active"
+    /// styling (accent icon, light text, elevated background) while pressed, then fades back.
+    private func topBarFlashButton<Icon: View>(
+        title: String,
+        @ViewBuilder icon: @escaping (_ isHighlighted: Bool) -> Icon,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            // Placeholder label — TopBarFlashButtonStyle renders the actual content.
+            Text(title)
+        }
+        .buttonStyle(TopBarFlashButtonStyle(title: title, icon: icon))
     }
 }
 
@@ -504,5 +518,33 @@ struct SplitVerticalIconView: View {
             context.stroke(bottom, with: .color(color), style: style)
         }
         .frame(width: 11, height: 11)
+    }
+}
+
+// MARK: - Flash Button Style
+
+/// Custom ButtonStyle for momentary top bar actions. Shows the "active" pill styling
+/// (accent icon, primary text, elevated background + border) while pressed, with a
+/// smooth fade-out on release.
+private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
+    let title: String
+    @ViewBuilder let icon: (_ isHighlighted: Bool) -> Icon
+
+    func makeBody(configuration: Configuration) -> some View {
+        let highlighted = configuration.isPressed
+        HStack(spacing: 4) {
+            icon(highlighted)
+            Text(title)
+                .font(ToastyTheme.fontSubtext)
+                .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
+        .overlay(
+            Rectangle()
+                .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+        )
+        .animation(.easeOut(duration: 0.15), value: highlighted)
     }
 }
