@@ -73,9 +73,9 @@ Next actions:
   - with those flags in `Project.swift`, Ghostty-enabled app builds now succeed via:
     - `tuist generate` (with xcframework present and Ghostty not disabled)
     - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
-  - runtime caveat (still open): Ghostty-enabled automation smoke run currently crashes before readiness file creation.
-    - repro: `./scripts/automation/smoke-ui.sh` (with xcframework present and Ghostty not disabled)
-    - latest crash log: `artifacts/automation/app-smoke-20260227-114016.log` (Sentry/breakpad capture emitted)
+  - automation smoke currently exercises the Ghostty viewport path by default when the xcframework is present.
+    - run: `./scripts/automation/smoke-ui.sh`
+    - fallback verification: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
   - generate path falls back automatically (no Ghostty compile condition) when the xcframework is absent or integration is disabled.
 
 ## Current action parity (MVP snapshot)

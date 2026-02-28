@@ -24,6 +24,7 @@
 - Ghostty integration is default-on at `tuist generate` time when `Dependencies/GhosttyKit.xcframework` exists.
 - Opt out with either `TUIST_DISABLE_GHOSTTY=1` (preferred for Tuist flows) or compatibility alias `TOASTTY_DISABLE_GHOSTTY=1`.
 - Ghostty is linked only when both conditions are true: `Dependencies/GhosttyKit.xcframework` exists and disable env var is not set.
+- For deterministic fallback builds in CI, set `TUIST_DISABLE_GHOSTTY=1` explicitly.
 - When linked, app target adds `TOASTTY_HAS_GHOSTTY_KIT` and Ghostty transitive linker flags from `Project.swift` (`-lc++`, `-framework Carbon`).
 - Default generate path falls back automatically when the xcframework is absent or integration is explicitly disabled.
 - Install/update local Ghostty artifact: `./scripts/ghostty/install-local-xcframework.sh`
@@ -69,7 +70,7 @@ OSA
 
 ## Daily-Driver QA Checklist
 - Run baseline + Ghostty smoke:
-  - `./scripts/automation/smoke-ui.sh`
+  - `./scripts/automation/smoke-ui.sh` (Ghostty path only if xcframework exists and Ghostty is not disabled)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
 - Launch app manually and verify:
   - `cmd+d`, `cmd+shift+d`, `cmd+[`, `cmd+]` on real terminal panes.
