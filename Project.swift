@@ -84,5 +84,23 @@ let project = Project(
                 .target(name: "CoreState"),
             ]
         ),
-    ]
+    ],
+    schemes: [
+        .scheme(
+            name: "ToasttyApp",
+            buildAction: .buildAction(
+                targets: [
+                    .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                ]
+            ),
+            runAction: .runAction(
+                executable: .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                arguments: .arguments(
+                    environmentVariables: [
+                        "TOASTTY_LOG_LEVEL": .environmentVariable(value: "debug", isEnabled: true),
+                    ]
+                )
+            )
+        ),
+    ],
 )
