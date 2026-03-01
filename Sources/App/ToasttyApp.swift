@@ -5,7 +5,18 @@ import SwiftUI
 private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicationDelegate {
     private static let menuItemTitle = "Reload Configuration"
     private static let symbolName = "arrow.clockwise"
+    private static let automationArgument = "--automation"
+    private static let automationEnvironmentFlag = "TOASTTY_AUTOMATION"
     private var iconWasApplied = false
+    private let shouldConfirmQuit: Bool
+
+    override init() {
+        let processInfo = ProcessInfo.processInfo
+        let isAutomationSession = processInfo.arguments.contains(Self.automationArgument)
+            || processInfo.environment[Self.automationEnvironmentFlag] == "1"
+        shouldConfirmQuit = !isAutomationSession
+        super.init()
+    }
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor [weak self] in
@@ -24,6 +35,20 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
             guard !self.iconWasApplied else { return }
             self.applyReloadIconIfPresent()
         }
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard shouldConfirmQuit else { return .terminateNow }
+
+        let confirmationAlert = NSAlert()
+        confirmationAlert.messageText = "Quit Toastty?"
+        confirmationAlert.informativeText = "Are you sure you want to quit?"
+        confirmationAlert.alertStyle = .informational
+        confirmationAlert.addButton(withTitle: "Cancel")
+        confirmationAlert.addButton(withTitle: "Quit")
+
+        let response = confirmationAlert.runModal()
+        return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
     private func applyReloadIconIfPresent() {
