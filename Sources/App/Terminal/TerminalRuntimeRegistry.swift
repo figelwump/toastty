@@ -74,13 +74,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return controller.automationReadVisibleText()
     }
 
-    func requestPanelInputFocus(panelID: UUID) {
-        guard let controller = controllers[panelID] else {
-            return
-        }
-        controller.requestInputFocus()
-    }
-
     #if TOASTTY_HAS_GHOSTTY_KIT
     private func selectedWorkspaceID(state: AppState) -> UUID? {
         guard let selectedWindowID = state.selectedWindowID,
@@ -256,8 +249,6 @@ final class TerminalSurfaceController {
     private let panelID: UUID
     private unowned let registry: TerminalRuntimeRegistry
     private let hostedView: NSView
-    private weak var activeSourceContainer: NSView?
-    private var activeSourceContainerID: ObjectIdentifier?
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
@@ -293,8 +284,6 @@ final class TerminalSurfaceController {
     }
 
     func attach(into container: NSView) {
-        activeSourceContainer = container
-        activeSourceContainerID = ObjectIdentifier(container)
         if hostedView.superview !== container {
             hostedView.removeFromSuperview()
             container.addSubview(hostedView)
@@ -313,38 +302,9 @@ final class TerminalSurfaceController {
         focused: Bool,
         fontPoints: Double,
         viewportSize: CGSize,
-        backingScaleFactor: CGFloat,
-        sourceContainer: NSView
+        backingScaleFactor: CGFloat
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        let sourceContainerID = ObjectIdentifier(sourceContainer)
-        guard activeSourceContainerID == sourceContainerID,
-              activeSourceContainer === sourceContainer else {
-            ToasttyLog.debug(
-                "Skipping terminal update from stale container callback",
-                category: .ghostty,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                ]
-            )
-            return
-        }
-
-        if hostedView.superview == nil {
-            attach(into: sourceContainer)
-        }
-
-        guard hostedView.superview === sourceContainer else {
-            ToasttyLog.debug(
-                "Skipping terminal update because host view is not attached to source container",
-                category: .ghostty,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                ]
-            )
-            return
-        }
-
         ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
         guard let ghosttySurface else {
             hostedView.isHidden = true
@@ -375,51 +335,40 @@ final class TerminalSurfaceController {
         let hasUsableViewport = logicalWidth > 16 && logicalHeight > 16
         var measuredSizeForLogging: ghostty_surface_size_s?
 
-        if hasUsableViewport == false {
-            let isOccluded: Bool
-            if let hostView = hostedView as? TerminalHostView {
-                isOccluded = hostView.synchronizeGhosttyVisibility(forceRefreshWhenVisible: false)
-                hostView.setShouldOwnFirstResponder(focused && !isOccluded)
-            } else {
-                isOccluded = false
-            }
-            ghostty_surface_set_focus(ghosttySurface, focused && !isOccluded)
-            ensureFirstResponderIfNeeded(focused: focused && !isOccluded)
-            return
-        }
-
         if hasDeterminedSurfaceSizingMode == false {
             ghostty_surface_set_size(ghosttySurface, UInt32(logicalWidth), UInt32(logicalHeight))
             let measuredSize = ghostty_surface_size(ghosttySurface)
             measuredSizeForLogging = measuredSize
 
-            hasDeterminedSurfaceSizingMode = true
-            usesBackingPixelSurfaceSizing = shouldUseBackingPixelSurfaceSizing(
-                measuredSize: measuredSize,
-                logicalWidth: logicalWidth,
-                logicalHeight: logicalHeight,
-                expectedPixelWidth: pixelWidth,
-                expectedPixelHeight: pixelHeight,
-                scale: xScale
-            )
-
-            if usesBackingPixelSurfaceSizing {
-                ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
-                measuredSizeForLogging = ghostty_surface_size(ghosttySurface)
-                ToasttyLog.debug(
-                    "Enabled backing-pixel Ghostty surface sizing for high-DPI rendering",
-                    category: .ghostty,
-                    metadata: [
-                        "panel_id": panelID.uuidString,
-                        "scale": String(format: "%.3f", xScale),
-                        "logical_width": String(logicalWidth),
-                        "logical_height": String(logicalHeight),
-                        "pixel_width": String(pixelWidth),
-                        "pixel_height": String(pixelHeight),
-                        "reported_width_px": String(measuredSize.width_px),
-                        "reported_height_px": String(measuredSize.height_px),
-                    ]
+            if hasUsableViewport {
+                hasDeterminedSurfaceSizingMode = true
+                usesBackingPixelSurfaceSizing = shouldUseBackingPixelSurfaceSizing(
+                    measuredSize: measuredSize,
+                    logicalWidth: logicalWidth,
+                    logicalHeight: logicalHeight,
+                    expectedPixelWidth: pixelWidth,
+                    expectedPixelHeight: pixelHeight,
+                    scale: xScale
                 )
+
+                if usesBackingPixelSurfaceSizing {
+                    ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
+                    measuredSizeForLogging = ghostty_surface_size(ghosttySurface)
+                    ToasttyLog.debug(
+                        "Enabled backing-pixel Ghostty surface sizing for high-DPI rendering",
+                        category: .ghostty,
+                        metadata: [
+                            "panel_id": panelID.uuidString,
+                            "scale": String(format: "%.3f", xScale),
+                            "logical_width": String(logicalWidth),
+                            "logical_height": String(logicalHeight),
+                            "pixel_width": String(pixelWidth),
+                            "pixel_height": String(pixelHeight),
+                            "reported_width_px": String(measuredSize.width_px),
+                            "reported_height_px": String(measuredSize.height_px),
+                        ]
+                    )
+                }
             }
         } else if usesBackingPixelSurfaceSizing {
             ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
@@ -433,15 +382,8 @@ final class TerminalSurfaceController {
             scale: xScale,
             measuredSize: measuredSizeForLogging
         )
-        let isOccluded: Bool
-        if let hostView = hostedView as? TerminalHostView {
-            isOccluded = hostView.synchronizeGhosttyVisibility(forceRefreshWhenVisible: hasUsableViewport)
-            hostView.setShouldOwnFirstResponder(focused && !isOccluded)
-        } else {
-            isOccluded = false
-        }
-        ghostty_surface_set_focus(ghosttySurface, focused && !isOccluded)
-        ensureFirstResponderIfNeeded(focused: focused && !isOccluded)
+        ghostty_surface_set_focus(ghosttySurface, focused)
+        ensureFirstResponderIfNeeded(focused: focused)
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
         #endif
@@ -461,8 +403,6 @@ final class TerminalSurfaceController {
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
         #endif
-        activeSourceContainer = nil
-        activeSourceContainerID = nil
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }
@@ -481,8 +421,6 @@ final class TerminalSurfaceController {
             sendSurfaceText("\n", to: ghosttySurface)
         }
 
-        ghosttyManager.requestImmediateTick()
-        ghostty_surface_refresh(ghosttySurface)
         return true
         #else
         return false
@@ -690,21 +628,12 @@ final class TerminalSurfaceController {
         guard window.firstResponder !== hostedView else { return }
         window.makeFirstResponder(hostedView)
     }
-
-    func requestInputFocus() {
-        guard let window = hostedView.window else { return }
-        guard window.firstResponder !== hostedView else { return }
-        window.makeFirstResponder(hostedView)
-    }
     #endif
 }
 
 final class TerminalHostView: NSView {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
-    private var lastOcclusionState: Bool?
-    private var shouldOwnFirstResponder = false
-    private weak var observedWindow: NSWindow?
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -724,48 +653,18 @@ final class TerminalHostView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateWindowObservation()
-        let attachedToWindow = window != nil
-        if attachedToWindow {
-            syncLayerContentsScale()
-        }
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        attemptToBecomeFirstResponderIfNeeded()
-        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: attachedToWindow)
-        #endif
+        guard window != nil else { return }
+        syncLayerContentsScale()
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         syncLayerContentsScale()
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
-        #endif
-    }
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        guard window != nil else { return }
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
-        #endif
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
         ghosttySurface = surface
-        lastOcclusionState = nil
-        attemptToBecomeFirstResponderIfNeeded()
-        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
-    }
-
-    func setShouldOwnFirstResponder(_ ownsFirstResponder: Bool) {
-        shouldOwnFirstResponder = ownsFirstResponder
-        attemptToBecomeFirstResponderIfNeeded()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -833,11 +732,6 @@ final class TerminalHostView: NSView {
             ]
         )
 
-        if handled {
-            GhosttyRuntimeManager.shared.requestImmediateTick()
-            ghostty_surface_refresh(ghosttySurface)
-        }
-
         return handled
     }
 
@@ -890,102 +784,6 @@ final class TerminalHostView: NSView {
         default:
             return "unknown(\(action.rawValue))"
         }
-    }
-
-    func synchronizeGhosttyVisibility(forceRefreshWhenVisible: Bool) -> Bool {
-        guard let ghosttySurface else {
-            lastOcclusionState = nil
-            return true
-        }
-
-        let isOccluded = computeGhosttyOcclusion()
-        if lastOcclusionState != isOccluded {
-            ghostty_surface_set_occlusion(ghosttySurface, isOccluded)
-            if isOccluded {
-                // Detached/hidden surfaces should not keep keyboard focus.
-                ghostty_surface_set_focus(ghosttySurface, false)
-            } else {
-                // Force full redraw after reattachment to avoid stale frame artifacts.
-                ghostty_surface_refresh(ghosttySurface)
-            }
-            lastOcclusionState = isOccluded
-            ToasttyLog.debug(
-                "Updated Ghostty surface occlusion",
-                category: .ghostty,
-                metadata: [
-                    "occluded": isOccluded ? "true" : "false",
-                    "reason": "host_view_visibility_change",
-                ]
-            )
-            return isOccluded
-        }
-
-        if forceRefreshWhenVisible, isOccluded == false {
-            ghostty_surface_refresh(ghosttySurface)
-        }
-        return isOccluded
-    }
-
-    private func computeGhosttyOcclusion() -> Bool {
-        guard window != nil else {
-            return true
-        }
-        guard superview != nil else {
-            return true
-        }
-        if isHidden {
-            return true
-        }
-        guard bounds.width >= 1, bounds.height >= 1 else {
-            return true
-        }
-        var ancestor = superview
-        while let view = ancestor {
-            if view.isHidden {
-                return true
-            }
-            ancestor = view.superview
-        }
-        return false
-    }
-
-    private func updateWindowObservation() {
-        guard observedWindow !== window else {
-            return
-        }
-
-        if let observedWindow {
-            NotificationCenter.default.removeObserver(
-                self,
-                name: NSWindow.didBecomeKeyNotification,
-                object: observedWindow
-            )
-        }
-
-        observedWindow = window
-        if let window {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(windowDidBecomeKey(_:)),
-                name: NSWindow.didBecomeKeyNotification,
-                object: window
-            )
-        }
-    }
-
-    @objc
-    private func windowDidBecomeKey(_ notification: Notification) {
-        guard notification.object as? NSWindow === window else { return }
-        attemptToBecomeFirstResponderIfNeeded()
-    }
-
-    private func attemptToBecomeFirstResponderIfNeeded() {
-        guard shouldOwnFirstResponder else { return }
-        guard let window else { return }
-        guard window.isVisible else { return }
-        guard window.isKeyWindow else { return }
-        guard window.firstResponder !== self else { return }
-        window.makeFirstResponder(self)
     }
     #endif
 

@@ -228,12 +228,20 @@ private struct PaneNodeView: View {
                         let showDivider = dividerThickness > 0 && showFirst && showSecond
 
                         HStack(spacing: 0) {
-                            splitBranch(
+                            PaneNodeView(
                                 node: first,
-                                width: firstWidth,
-                                height: geometry.size.height,
-                                show: showFirst
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
+                            .frame(width: firstWidth, height: geometry.size.height)
+                            .opacity(showFirst ? 1 : 0)
+                            .animation(nil, value: showFirst)
+                            .allowsHitTesting(showFirst)
 
                             if showDivider {
                                 Rectangle()
@@ -241,12 +249,20 @@ private struct PaneNodeView: View {
                                     .frame(width: dividerThickness, height: geometry.size.height)
                             }
 
-                            splitBranch(
+                            PaneNodeView(
                                 node: second,
-                                width: secondWidth,
-                                height: geometry.size.height,
-                                show: showSecond
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
+                            .frame(width: secondWidth, height: geometry.size.height)
+                            .opacity(showSecond ? 1 : 0)
+                            .animation(nil, value: showSecond)
+                            .allowsHitTesting(showSecond)
                         }
                         .clipped()
                     } else {
@@ -258,12 +274,20 @@ private struct PaneNodeView: View {
                         let showDivider = dividerThickness > 0 && showFirst && showSecond
 
                         VStack(spacing: 0) {
-                            splitBranch(
+                            PaneNodeView(
                                 node: first,
-                                width: geometry.size.width,
-                                height: firstHeight,
-                                show: showFirst
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
+                            .frame(width: geometry.size.width, height: firstHeight)
+                            .opacity(showFirst ? 1 : 0)
+                            .animation(nil, value: showFirst)
+                            .allowsHitTesting(showFirst)
 
                             if showDivider {
                                 Rectangle()
@@ -271,12 +295,20 @@ private struct PaneNodeView: View {
                                     .frame(width: geometry.size.width, height: dividerThickness)
                             }
 
-                            splitBranch(
+                            PaneNodeView(
                                 node: second,
-                                width: geometry.size.width,
-                                height: secondHeight,
-                                show: showSecond
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                focusedPanelModeActive: focusedPanelModeActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle
                             )
+                            .frame(width: geometry.size.width, height: secondHeight)
+                            .opacity(showSecond ? 1 : 0)
+                            .animation(nil, value: showSecond)
+                            .allowsHitTesting(showSecond)
                         }
                         .clipped()
                     }
@@ -334,36 +366,6 @@ private struct PaneNodeView: View {
             return (true, true)
         }
         return (firstContainsFocused, secondContainsFocused)
-    }
-
-    @ViewBuilder
-    private func splitBranch(node: PaneNode, width: CGFloat, height: CGFloat, show: Bool) -> some View {
-        PaneNodeView(
-            node: node,
-            workspace: workspace,
-            store: store,
-            terminalRuntimeRegistry: terminalRuntimeRegistry,
-            globalFontPoints: globalFontPoints,
-            focusedPanelID: focusedPanelID,
-            focusedPanelModeActive: focusedPanelModeActive,
-            unfocusedSplitStyle: unfocusedSplitStyle
-        )
-        .frame(width: width, height: height)
-        .modifier(SplitBranchVisibilityModifier(isVisible: show))
-        .allowsHitTesting(show)
-    }
-}
-
-private struct SplitBranchVisibilityModifier: ViewModifier {
-    let isVisible: Bool
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        if isVisible {
-            content
-        } else {
-            content.hidden()
-        }
     }
 }
 
@@ -436,7 +438,6 @@ private struct PanelCardView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
-            terminalRuntimeRegistry.requestPanelInputFocus(panelID: panelID)
         }
     }
 
