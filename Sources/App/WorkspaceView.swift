@@ -214,15 +214,18 @@ private struct PaneNodeView: View {
                 let baseRatio = min(max(ratio, 0.1), 0.9)
                 let effectiveRatio = effectiveSplitRatio(baseRatio: baseRatio, first: first, second: second)
                 let isCollapsed = effectiveRatio <= 0.0001 || effectiveRatio >= 0.9999
-                let dividerThickness: CGFloat = isCollapsed ? 0 : 1
+                let focusBranchVisibility = focusModeBranchVisibility(first: first, second: second)
+                let bothBranchesVisible = focusBranchVisibility.showFirst && focusBranchVisibility.showSecond
+                let dividerThickness: CGFloat = (isCollapsed || !bothBranchesVisible) ? 0 : 1
 
                 Group {
                     if orientation == .horizontal {
                         let availableWidth = max(geometry.size.width - dividerThickness, 0)
                         let firstWidth = availableWidth * effectiveRatio
                         let secondWidth = max(availableWidth - firstWidth, 0)
-                        let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
-                        let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
+                        let showFirst = focusBranchVisibility.showFirst && (isCollapsed ? effectiveRatio >= 0.5 : true)
+                        let showSecond = focusBranchVisibility.showSecond && (isCollapsed ? effectiveRatio < 0.5 : true)
+                        let showDivider = dividerThickness > 0 && showFirst && showSecond
 
                         HStack(spacing: 0) {
                             PaneNodeView(
@@ -237,9 +240,10 @@ private struct PaneNodeView: View {
                             )
                             .frame(width: firstWidth, height: geometry.size.height)
                             .opacity(showFirst ? 1 : 0)
+                            .animation(nil, value: showFirst)
                             .allowsHitTesting(showFirst)
 
-                            if dividerThickness > 0 {
+                            if showDivider {
                                 Rectangle()
                                     .fill(ToastyTheme.paneDivider)
                                     .frame(width: dividerThickness, height: geometry.size.height)
@@ -257,6 +261,7 @@ private struct PaneNodeView: View {
                             )
                             .frame(width: secondWidth, height: geometry.size.height)
                             .opacity(showSecond ? 1 : 0)
+                            .animation(nil, value: showSecond)
                             .allowsHitTesting(showSecond)
                         }
                         .clipped()
@@ -264,8 +269,9 @@ private struct PaneNodeView: View {
                         let availableHeight = max(geometry.size.height - dividerThickness, 0)
                         let firstHeight = availableHeight * effectiveRatio
                         let secondHeight = max(availableHeight - firstHeight, 0)
-                        let showFirst = isCollapsed ? effectiveRatio >= 0.5 : true
-                        let showSecond = isCollapsed ? effectiveRatio < 0.5 : true
+                        let showFirst = focusBranchVisibility.showFirst && (isCollapsed ? effectiveRatio >= 0.5 : true)
+                        let showSecond = focusBranchVisibility.showSecond && (isCollapsed ? effectiveRatio < 0.5 : true)
+                        let showDivider = dividerThickness > 0 && showFirst && showSecond
 
                         VStack(spacing: 0) {
                             PaneNodeView(
@@ -280,9 +286,10 @@ private struct PaneNodeView: View {
                             )
                             .frame(width: geometry.size.width, height: firstHeight)
                             .opacity(showFirst ? 1 : 0)
+                            .animation(nil, value: showFirst)
                             .allowsHitTesting(showFirst)
 
-                            if dividerThickness > 0 {
+                            if showDivider {
                                 Rectangle()
                                     .fill(ToastyTheme.paneDivider)
                                     .frame(width: geometry.size.width, height: dividerThickness)
@@ -300,6 +307,7 @@ private struct PaneNodeView: View {
                             )
                             .frame(width: geometry.size.width, height: secondHeight)
                             .opacity(showSecond ? 1 : 0)
+                            .animation(nil, value: showSecond)
                             .allowsHitTesting(showSecond)
                         }
                         .clipped()
@@ -347,6 +355,18 @@ private struct PaneNodeView: View {
         assertionFailure("PaneNodeView received an out-of-range selected index.")
         return tabPanelIDs.first
     }
+
+    private func focusModeBranchVisibility(first: PaneNode, second: PaneNode) -> (showFirst: Bool, showSecond: Bool) {
+        guard focusedPanelModeActive, let focusedPanelID else {
+            return (true, true)
+        }
+        let firstContainsFocused = first.leafContaining(panelID: focusedPanelID) != nil
+        let secondContainsFocused = second.leafContaining(panelID: focusedPanelID) != nil
+        if firstContainsFocused == secondContainsFocused {
+            return (true, true)
+        }
+        return (firstContainsFocused, secondContainsFocused)
+    }
 }
 
 private struct PanelCardView: View {
@@ -375,7 +395,7 @@ private struct PanelCardView: View {
                 .overlay(alignment: .bottom) {
                     Rectangle()
                         .fill(isFocused ? ToastyTheme.accent : ToastyTheme.hairline)
-                        .frame(height: isFocused ? 2 : 1)
+                        .frame(height: 1)
                 }
 
             switch panelState {

@@ -1071,3 +1071,20 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 83 tests)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation: focused-panel animation polish):
+- implemented:
+  - kept focus mode’s ratio-driven layout expansion (focused branch still grows to fill).
+  - changed split visibility heuristics so non-focused branches are hidden immediately when focus mode is active, preventing the previous “shrink to zero” visual artifact.
+  - suppressed branch opacity animation for those immediate hides to avoid visible panel-collapse movement.
+  - when one branch is hidden in focus mode, divider thickness is now zero so no 1px gutter is reserved.
+- reviewer follow-up:
+  - accepted:
+    - divider-space reservation fix when hidden branches remove the visual separator.
+  - rejected (with rationale):
+    - suggestion to preserve opacity fade was rejected for this iteration because the user requested the non-focused-pane shrink animation be removed; immediate hide is intentional.
+    - stale-focused assertions on branch visibility were deferred; existing focus recovery/state validation paths already guard stale IDs and this pass is UI-polish scoped.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 83 tests)
+  - `./scripts/automation/smoke-ui.sh` (pass)
+  - focused state screenshot: `artifacts/automation/ui/smoke-20260228-231629/split-workspace/focused-panel-smoke.png`
