@@ -1088,3 +1088,29 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 83 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
   - focused state screenshot: `artifacts/automation/ui/smoke-20260228-231629/split-workspace/focused-panel-smoke.png`
+
+2026-03-01 (Post-MVP continuation: Ghostty render corruption after workspace switching):
+- issue observed:
+  - after switching workspaces repeatedly, Ghostty terminal content could appear visually corrupted/distorted in Toastty.
+- implemented:
+  - added host-view Ghostty visibility lifecycle synchronization in `TerminalHostView`:
+    - track occlusion state across host view attach/detach transitions.
+    - call `ghostty_surface_set_occlusion(...)` when effective visibility changes.
+    - call `ghostty_surface_set_focus(..., false)` when the host view becomes occluded.
+    - force `ghostty_surface_refresh(...)` when becoming visible again to avoid stale frame artifacts.
+  - wired synchronization on:
+    - `viewDidMoveToWindow` (with attach/detach handling),
+    - `viewDidMoveToSuperview` (window-attached only),
+    - `viewDidChangeBackingProperties`,
+    - initial surface assignment via `setGhosttySurface(...)`.
+- reviewer follow-up:
+  - accepted:
+    - avoid high-frequency lifecycle churn by removing layout-driven sync and relying on visibility transition callbacks.
+    - avoid premature refresh on superview transitions unless attached to a window.
+  - rejected (with rationale):
+    - focus-restore warning was rejected for this patch because focus is re-applied in existing controller update flow (`ghostty_surface_set_focus(focused)`), and this change only ensures hidden surfaces do not retain focus.
+    - thread-safety warning was rejected as non-actionable in current architecture: host view lifecycle and controller update paths are AppKit-main-thread driven.
+- validation:
+  - `./scripts/automation/check.sh` (pass, 83 tests)
+  - `TOASTTY_LOG_LEVEL=debug ./scripts/automation/smoke-ui.sh` (pass)
+  - debug logs show occlusion transitions and refresh path activation during visibility changes (`Updated Ghostty surface occlusion`).

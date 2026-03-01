@@ -634,6 +634,7 @@ final class TerminalSurfaceController {
 final class TerminalHostView: NSView {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
+    private var lastOcclusionState: Bool?
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -653,18 +654,36 @@ final class TerminalHostView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        syncLayerContentsScale()
+        let attachedToWindow = window != nil
+        if attachedToWindow {
+            syncLayerContentsScale()
+        }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        synchronizeGhosttyVisibility(forceRefreshWhenVisible: attachedToWindow)
+        #endif
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         syncLayerContentsScale()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
+        #endif
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        guard window != nil else { return }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
+        #endif
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
         ghosttySurface = surface
+        lastOcclusionState = nil
+        synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -784,6 +803,56 @@ final class TerminalHostView: NSView {
         default:
             return "unknown(\(action.rawValue))"
         }
+    }
+
+    private func synchronizeGhosttyVisibility(forceRefreshWhenVisible: Bool) {
+        guard let ghosttySurface else {
+            lastOcclusionState = nil
+            return
+        }
+
+        let isOccluded = computeGhosttyOcclusion()
+        if lastOcclusionState != isOccluded {
+            ghostty_surface_set_occlusion(ghosttySurface, isOccluded)
+            if isOccluded {
+                // Detached/hidden surfaces should not keep keyboard focus.
+                ghostty_surface_set_focus(ghosttySurface, false)
+            } else {
+                // Force full redraw after reattachment to avoid stale frame artifacts.
+                ghostty_surface_refresh(ghosttySurface)
+            }
+            lastOcclusionState = isOccluded
+            ToasttyLog.debug(
+                "Updated Ghostty surface occlusion",
+                category: .ghostty,
+                metadata: [
+                    "occluded": isOccluded ? "true" : "false",
+                    "reason": "host_view_visibility_change",
+                ]
+            )
+            return
+        }
+
+        if forceRefreshWhenVisible, isOccluded == false {
+            ghostty_surface_refresh(ghosttySurface)
+        }
+    }
+
+    private func computeGhosttyOcclusion() -> Bool {
+        guard window != nil else {
+            return true
+        }
+        guard bounds.width >= 1, bounds.height >= 1 else {
+            return true
+        }
+        var current: NSView? = self
+        while let view = current {
+            if view.isHidden || view.alphaValue <= 0.001 {
+                return true
+            }
+            current = view.superview
+        }
+        return false
     }
     #endif
 
