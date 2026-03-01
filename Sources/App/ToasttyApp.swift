@@ -53,6 +53,42 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
     }
 }
 
+@MainActor
+private final class ClosePanelShortcutInterceptor {
+    private weak var store: AppStore?
+    nonisolated(unsafe) private var eventMonitor: Any?
+
+    init(store: AppStore) {
+        self.store = store
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard Self.isClosePanelShortcut(event) else { return event }
+            let didClosePanel = self.closeFocusedPanelIfPossible()
+            // If we didn't close a panel, fall back to default key handling.
+            return didClosePanel ? nil : event
+        }
+    }
+
+    deinit {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+    }
+
+    private static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags == [.command] else { return false }
+        return event.charactersIgnoringModifiers?.lowercased() == "w"
+    }
+
+    private func closeFocusedPanelIfPossible() -> Bool {
+        guard let store else { return false }
+        guard let focusedPanelID = store.selectedWorkspace?.focusedPanelID else { return false }
+        return store.send(.closePanel(panelID: focusedPanelID))
+    }
+}
+
+@MainActor
 @main
 struct ToasttyApp: App {
     private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -65,6 +101,7 @@ struct ToasttyApp: App {
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
     private let disableAnimations: Bool
+    private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
 
     init() {
         let bootstrap = AppBootstrap.make()
@@ -78,6 +115,7 @@ struct ToasttyApp: App {
         if persistTerminalFontPreference {
             Self.applyInitialTerminalFontState(to: store)
         }
+        closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
@@ -146,6 +184,11 @@ struct ToasttyApp: App {
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
                 .disabled(store.selectedWindow == nil)
+
+                Button("Close Panel") {
+                    closeFocusedPanelFromSelection()
+                }
+                .disabled(store.selectedWorkspace?.focusedPanelID == nil)
 
                 Button(store.selectedWorkspace?.focusedPanelModeActive == true ? "Restore Layout" : "Focus Panel") {
                     toggleFocusedPanelFromSelection()
@@ -216,6 +259,11 @@ struct ToasttyApp: App {
     private func toggleFocusedPanelFromSelection() {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
         store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+    }
+
+    private func closeFocusedPanelFromSelection() {
+        guard let focusedPanelID = store.selectedWorkspace?.focusedPanelID else { return }
+        store.send(.closePanel(panelID: focusedPanelID))
     }
 
     private var supportsConfigurationReload: Bool {

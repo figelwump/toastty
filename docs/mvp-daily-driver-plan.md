@@ -1057,3 +1057,17 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 83 tests)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
   - `./scripts/automation/smoke-ui.sh` (pass)
+
+2026-02-28 (Post-MVP continuation: `cmd+w` closes focused panel):
+- implemented:
+  - added `Close Panel` workspace command.
+  - installed a local key interceptor for `cmd+w` that closes the focused panel and suppresses AppKit default window-close behavior.
+  - behavior now prefers panel-close semantics over full-window close when shortcut is pressed.
+- validation:
+  - targeted automation run with synthetic `cmd+w`:
+    - baseline `panelCount=2`
+    - after shortcut `panelCount=1`
+    - app process remained running.
+  - `./scripts/automation/check.sh` (pass, 83 tests)
+  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass)
+  - `./scripts/automation/smoke-ui.sh` (pass)
