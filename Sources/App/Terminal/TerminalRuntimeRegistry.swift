@@ -302,9 +302,21 @@ final class TerminalSurfaceController {
         focused: Bool,
         fontPoints: Double,
         viewportSize: CGSize,
-        backingScaleFactor: CGFloat
+        backingScaleFactor: CGFloat,
+        sourceContainer: NSView
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        if hostedView.superview !== sourceContainer {
+            ToasttyLog.debug(
+                "Skipping terminal update from stale container callback",
+                category: .ghostty,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+            return
+        }
+
         ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
         guard let ghosttySurface else {
             hostedView.isHidden = true
@@ -382,8 +394,14 @@ final class TerminalSurfaceController {
             scale: xScale,
             measuredSize: measuredSizeForLogging
         )
-        ghostty_surface_set_focus(ghosttySurface, focused)
-        ensureFirstResponderIfNeeded(focused: focused)
+        let isOccluded: Bool
+        if let hostView = hostedView as? TerminalHostView {
+            isOccluded = hostView.synchronizeGhosttyVisibility(forceRefreshWhenVisible: hasUsableViewport)
+        } else {
+            isOccluded = false
+        }
+        ghostty_surface_set_focus(ghosttySurface, focused && !isOccluded)
+        ensureFirstResponderIfNeeded(focused: focused && !isOccluded)
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
         #endif
@@ -659,7 +677,7 @@ final class TerminalHostView: NSView {
             syncLayerContentsScale()
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        synchronizeGhosttyVisibility(forceRefreshWhenVisible: attachedToWindow)
+        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: attachedToWindow)
         #endif
     }
 
@@ -667,7 +685,7 @@ final class TerminalHostView: NSView {
         super.viewDidChangeBackingProperties()
         syncLayerContentsScale()
         #if TOASTTY_HAS_GHOSTTY_KIT
-        synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
+        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
         #endif
     }
 
@@ -675,7 +693,7 @@ final class TerminalHostView: NSView {
         super.viewDidMoveToSuperview()
         guard window != nil else { return }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
+        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
         #endif
     }
 
@@ -683,7 +701,7 @@ final class TerminalHostView: NSView {
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
         ghosttySurface = surface
         lastOcclusionState = nil
-        synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
+        _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -805,10 +823,10 @@ final class TerminalHostView: NSView {
         }
     }
 
-    private func synchronizeGhosttyVisibility(forceRefreshWhenVisible: Bool) {
+    func synchronizeGhosttyVisibility(forceRefreshWhenVisible: Bool) -> Bool {
         guard let ghosttySurface else {
             lastOcclusionState = nil
-            return
+            return true
         }
 
         let isOccluded = computeGhosttyOcclusion()
@@ -830,27 +848,34 @@ final class TerminalHostView: NSView {
                     "reason": "host_view_visibility_change",
                 ]
             )
-            return
+            return isOccluded
         }
 
         if forceRefreshWhenVisible, isOccluded == false {
             ghostty_surface_refresh(ghosttySurface)
         }
+        return isOccluded
     }
 
     private func computeGhosttyOcclusion() -> Bool {
         guard window != nil else {
             return true
         }
+        guard superview != nil else {
+            return true
+        }
+        if isHidden {
+            return true
+        }
         guard bounds.width >= 1, bounds.height >= 1 else {
             return true
         }
-        var current: NSView? = self
-        while let view = current {
-            if view.isHidden || view.alphaValue <= 0.001 {
+        var ancestor = superview
+        while let view = ancestor {
+            if view.isHidden {
                 return true
             }
-            current = view.superview
+            ancestor = view.superview
         }
         return false
     }

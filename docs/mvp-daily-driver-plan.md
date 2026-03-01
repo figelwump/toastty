@@ -1114,3 +1114,27 @@ Pending:
   - `./scripts/automation/check.sh` (pass, 83 tests)
   - `TOASTTY_LOG_LEVEL=debug ./scripts/automation/smoke-ui.sh` (pass)
   - debug logs show occlusion transitions and refresh path activation during visibility changes (`Updated Ghostty surface occlusion`).
+
+2026-03-01 (Post-MVP continuation: split-close blank terminal regression hardening):
+- issue observed:
+  - after splitting then closing the focused/right pane (`cmd+w`), the remaining pane could render as header-only with no visible Ghostty content.
+- implemented:
+  - added source-container validation for `TerminalSurfaceController.update(...)` so stale `onLayout` callbacks from replaced SwiftUI container views cannot mutate an already reattached Ghostty host view.
+  - plumbed `sourceContainer` from `TerminalPanelHostView` into controller updates.
+  - updated focus application to respect current occlusion state (`ghostty_surface_set_focus(..., focused && !isOccluded)`), so detached/hidden surfaces do not retain focus during close transitions.
+  - expanded occlusion check to include hidden ancestors (while still avoiding alpha-based occlusion checks that previously caused false positives during transitions).
+  - added automation action `workspace.close-focused-panel` for deterministic split-close validation flows.
+- reviewer follow-up (Claude second-opinion):
+  - accepted:
+    - restore ancestor hidden-state checks in occlusion computation to avoid treating hidden host trees as visible.
+  - rejected (with rationale):
+    - concern that source-container guard would permanently drop updates: rejected because `attach(into:)` runs before each update path and stale callbacks are intentionally ignored.
+    - concern about workspace scoping for automation close action: reducer/store paths are main-actor serialized and action resolves focused panel from the requested workspace snapshot before dispatch.
+- validation:
+  - `sv exec -- xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build` (pass)
+  - `sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
+  - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
+  - targeted split-close repro (`single-workspace` fixture, `1 -> split.right -> close-focused -> 1`) confirms:
+    - pane counts transition as expected,
+    - focused panel remains valid after close,
+    - terminal surface accepts input and visible-text marker probe after close.

@@ -728,6 +728,12 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.split.up":
             didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .up))
 
+        case "workspace.close-focused-panel":
+            guard let focusedPanelID = store.state.workspacesByID[workspaceID]?.focusedPanelID else {
+                throw AutomationSocketError.invalidPayload("focused panel missing")
+            }
+            didMutate = store.send(.closePanel(panelID: focusedPanelID))
+
         case "workspace.focus-pane.previous":
             didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .previous))
 
