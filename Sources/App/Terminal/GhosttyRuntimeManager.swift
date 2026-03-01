@@ -638,7 +638,8 @@ final class GhosttyRuntimeManager {
     }
 
     private static func resolveConfiguredTerminalFontPoints(_ config: ghostty_config_t) -> Double? {
-        var configuredFontPoints = AppState.defaultTerminalFontPoints
+        // ghostty_config_get writes C float values for font-size.
+        var configuredFontPoints = Float(AppState.defaultTerminalFontPoints)
         let fontSizeKey = "font-size"
         guard ghostty_config_get(
             config,
@@ -657,13 +658,14 @@ final class GhosttyRuntimeManager {
             return nil
         }
 
-        let clampedFontPoints = AppState.clampedTerminalFontPoints(configuredFontPoints)
-        if abs(clampedFontPoints - configuredFontPoints) > AppState.terminalFontComparisonEpsilon {
+        let rawConfiguredFontPoints = Double(configuredFontPoints)
+        let clampedFontPoints = AppState.clampedTerminalFontPoints(rawConfiguredFontPoints)
+        if abs(clampedFontPoints - rawConfiguredFontPoints) > AppState.terminalFontComparisonEpsilon {
             ToasttyLog.warning(
                 "Clamped Ghostty configured font size to Toastty bounds",
                 category: .ghostty,
                 metadata: [
-                    "raw_value": String(format: "%.2f", configuredFontPoints),
+                    "raw_value": String(format: "%.2f", rawConfiguredFontPoints),
                     "clamped_value": String(format: "%.2f", clampedFontPoints),
                     "min": String(format: "%.2f", AppState.minTerminalFontPoints),
                     "max": String(format: "%.2f", AppState.maxTerminalFontPoints),

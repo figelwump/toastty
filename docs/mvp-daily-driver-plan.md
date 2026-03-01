@@ -1157,3 +1157,25 @@ Pending:
   - `sv exec -- xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build` (pass)
   - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
   - `sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
+
+2026-03-01 (Post-MVP continuation: Ghostty font-size baseline parity when no Toastty override):
+- issue observed:
+  - with `~/.config/ghostty/config` set to `font-size = 13`, Toastty resolved Ghostty baseline as `12.00` in startup logs when running without Toastty override application.
+- root cause:
+  - `ghostty_config_get` for `font-size` writes a 32-bit float value, but Toastty was reading into a Swift `Double` buffer.
+  - this left stale high bytes from the default `Double` initializer and produced an incorrect near-default decoded value.
+- implemented:
+  - changed Ghostty `font-size` config read buffer to `Float` in `resolveConfiguredTerminalFontPoints(...)`.
+  - converted to `Double` only after read, then applied existing clamping/logging behavior.
+  - kept `unfocused-split-opacity` read path as `Double` after validating that forcing `Float` there triggers Ghostty alignment panic (indicating different expected ABI type for that key).
+- reviewer follow-up (Claude second-opinion):
+  - accepted:
+    - add explicit documentation comment for the `font-size` ABI expectation at the callsite.
+  - rejected (with rationale):
+    - request for additional type-discovery indirection was deferred; current fix directly addresses the reproduced mismatch and is validated against live Ghostty config read behavior.
+- validation:
+  - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
+  - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
+  - `/tmp/toastty.log` now consistently shows:
+    - `Loaded Ghostty config from user path ... ~/.config/ghostty/config`
+    - `Resolved Ghostty configured terminal font size ... points=13.00`
