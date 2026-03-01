@@ -1179,3 +1179,23 @@ Pending:
   - `/tmp/toastty.log` now consistently shows:
     - `Loaded Ghostty config from user path ... ~/.config/ghostty/config`
     - `Resolved Ghostty configured terminal font size ... points=13.00`
+
+2026-03-01 (Post-MVP continuation: non-interactive terminal regression during layout churn):
+- issue observed:
+  - occasional launch/split states rendered as near-empty Ghostty panes (cursor-like artifact, no usable prompt/input), matching a transient 1x1 viewport lock-in path.
+- implemented:
+  - in `TerminalSurfaceController.update(...)`, added a tiny-viewport guard (`<=16px` logical width/height) that skips `ghostty_surface_set_size(...)` until viewport is usable.
+  - retained occlusion/focus synchronization in that tiny-viewport branch so hidden/visible and responder state still converge while waiting for stable geometry.
+  - when host view is detached (`superview == nil`), reattach to current source container before update.
+  - tightened stale-callback protection to require direct superview identity (`hostedView.superview === sourceContainer`) before mutating Ghostty state.
+- reviewer follow-up (Claude second-opinion):
+  - accepted:
+    - direct-parent identity check is safer than ancestor-based `isDescendant(of:)` for rejecting stale container callbacks.
+  - rejected (with rationale):
+    - suggestion that attach flow is async/TOCTOU was rejected for this path; `attach(into:)` performs synchronous AppKit reparenting on main-thread update flow.
+    - suggestion to add pixel underflow guards was rejected because pixel dimensions are already clamped to `>=1` before conversion.
+- validation:
+  - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
+  - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
+  - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/shortcut-trace.sh` (pass)
+  - clean-log verification (`rm -f /tmp/toastty.log` before smoke) shows no `viewport_width=1`/`viewport_height=1` render-metrics entries in current run.

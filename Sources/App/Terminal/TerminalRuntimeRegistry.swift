@@ -306,7 +306,11 @@ final class TerminalSurfaceController {
         sourceContainer: NSView
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        if hostedView.superview !== sourceContainer {
+        if hostedView.superview == nil {
+            attach(into: sourceContainer)
+        }
+
+        guard hostedView.superview === sourceContainer else {
             ToasttyLog.debug(
                 "Skipping terminal update from stale container callback",
                 category: .ghostty,
@@ -347,40 +351,50 @@ final class TerminalSurfaceController {
         let hasUsableViewport = logicalWidth > 16 && logicalHeight > 16
         var measuredSizeForLogging: ghostty_surface_size_s?
 
+        if hasUsableViewport == false {
+            let isOccluded: Bool
+            if let hostView = hostedView as? TerminalHostView {
+                isOccluded = hostView.synchronizeGhosttyVisibility(forceRefreshWhenVisible: false)
+            } else {
+                isOccluded = false
+            }
+            ghostty_surface_set_focus(ghosttySurface, focused && !isOccluded)
+            ensureFirstResponderIfNeeded(focused: focused && !isOccluded)
+            return
+        }
+
         if hasDeterminedSurfaceSizingMode == false {
             ghostty_surface_set_size(ghosttySurface, UInt32(logicalWidth), UInt32(logicalHeight))
             let measuredSize = ghostty_surface_size(ghosttySurface)
             measuredSizeForLogging = measuredSize
 
-            if hasUsableViewport {
-                hasDeterminedSurfaceSizingMode = true
-                usesBackingPixelSurfaceSizing = shouldUseBackingPixelSurfaceSizing(
-                    measuredSize: measuredSize,
-                    logicalWidth: logicalWidth,
-                    logicalHeight: logicalHeight,
-                    expectedPixelWidth: pixelWidth,
-                    expectedPixelHeight: pixelHeight,
-                    scale: xScale
-                )
+            hasDeterminedSurfaceSizingMode = true
+            usesBackingPixelSurfaceSizing = shouldUseBackingPixelSurfaceSizing(
+                measuredSize: measuredSize,
+                logicalWidth: logicalWidth,
+                logicalHeight: logicalHeight,
+                expectedPixelWidth: pixelWidth,
+                expectedPixelHeight: pixelHeight,
+                scale: xScale
+            )
 
-                if usesBackingPixelSurfaceSizing {
-                    ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
-                    measuredSizeForLogging = ghostty_surface_size(ghosttySurface)
-                    ToasttyLog.debug(
-                        "Enabled backing-pixel Ghostty surface sizing for high-DPI rendering",
-                        category: .ghostty,
-                        metadata: [
-                            "panel_id": panelID.uuidString,
-                            "scale": String(format: "%.3f", xScale),
-                            "logical_width": String(logicalWidth),
-                            "logical_height": String(logicalHeight),
-                            "pixel_width": String(pixelWidth),
-                            "pixel_height": String(pixelHeight),
-                            "reported_width_px": String(measuredSize.width_px),
-                            "reported_height_px": String(measuredSize.height_px),
-                        ]
-                    )
-                }
+            if usesBackingPixelSurfaceSizing {
+                ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
+                measuredSizeForLogging = ghostty_surface_size(ghosttySurface)
+                ToasttyLog.debug(
+                    "Enabled backing-pixel Ghostty surface sizing for high-DPI rendering",
+                    category: .ghostty,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "scale": String(format: "%.3f", xScale),
+                        "logical_width": String(logicalWidth),
+                        "logical_height": String(logicalHeight),
+                        "pixel_width": String(pixelWidth),
+                        "pixel_height": String(pixelHeight),
+                        "reported_width_px": String(measuredSize.width_px),
+                        "reported_height_px": String(measuredSize.height_px),
+                    ]
+                )
             }
         } else if usesBackingPixelSurfaceSizing {
             ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
