@@ -1220,3 +1220,35 @@ Pending:
   - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
   - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/shortcut-trace.sh` (pass)
   - targeted real-keystroke probe in automation mode (`System Events` typing + `automation.terminal_visible_text contains`) confirms input reaches focused terminal surface (`marker_found=true`).
+
+2026-03-01 (Post-MVP continuation: terminal launch interactivity regression hardening):
+- issue observed:
+  - focused terminal panes could launch in a non-interactive state until an explicit pane interaction path re-established first responder.
+  - reproduction: automation real-keystroke probe (`System Events` -> `keystroke "echo <marker>"`) failed `automation.terminal_visible_text contains` despite shell prompt being present.
+- implemented:
+  - first-responder ownership now tracks focused/visible terminal state in `TerminalHostView`:
+    - added `setShouldOwnFirstResponder(...)` and key-window (`NSWindow.didBecomeKeyNotification`) re-acquisition logic.
+    - focused host views now reclaim first responder when the window becomes key, even without a click.
+  - pane click focus path now explicitly requests runtime input focus:
+    - `PanelCardView.onTapGesture` triggers `terminalRuntimeRegistry.requestPanelInputFocus(panelID:)` directly on main.
+  - input/render responsiveness hardening:
+    - added public `GhosttyRuntimeManager.requestImmediateTick()` with internal coalescing guard (`isTickScheduled`) to avoid tick queue spam.
+    - key events and automation text injection now request an immediate tick and surface refresh after successful dispatch.
+- reviewer follow-up:
+  - accepted:
+    - remove notification observer unconditionally in `TerminalHostView.deinit` (`NotificationCenter.default.removeObserver(self)`).
+    - remove unnecessary `DispatchQueue.main.async` hop from pane tap focus path.
+    - guard first-responder acquisition on `window.isVisible` in addition to key-window checks.
+  - rejected (with rationale):
+    - tick-coalescing thread-safety concern was rejected because `GhosttyRuntimeManager` is `@MainActor` isolated and all current callsites hop to main actor before mutation.
+    - nil-refresh concern was rejected because both refresh callsites are already protected by `guard let ghosttySurface`.
+    - focused-panel exclusivity concern was rejected as no-repro with current reducer invariant (`focusedPanelID` singular per workspace) and host update flow.
+  - deferred:
+    - dedicated first-responder regression test was deferred; existing automation probe now covers this runtime path and can be promoted into a dedicated script in a follow-up.
+- validation:
+  - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
+  - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
+  - targeted real-keystroke probe:
+    - prior to fix: `contains=false` for marker `TOASTTY_REAL_KEY_render_probe_20260301_102146`
+    - after fix: `contains=true` for marker `TOASTTY_REAL_KEY_render_probe_20260301_102303`
+    - screenshot captured at `artifacts/automation/ui/render-probe-20260301-102303/single-workspace/real-key-render-probe.png`

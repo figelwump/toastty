@@ -436,6 +436,7 @@ private struct PanelCardView: View {
         .contentShape(Rectangle())
         .onTapGesture {
             store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            terminalRuntimeRegistry.requestPanelInputFocus(panelID: panelID)
         }
     }
 

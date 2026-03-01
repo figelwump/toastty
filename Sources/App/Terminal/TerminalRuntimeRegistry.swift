@@ -74,6 +74,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return controller.automationReadVisibleText()
     }
 
+    func requestPanelInputFocus(panelID: UUID) {
+        guard let controller = controllers[panelID] else {
+            return
+        }
+        controller.requestInputFocus()
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     private func selectedWorkspaceID(state: AppState) -> UUID? {
         guard let selectedWindowID = state.selectedWindowID,
@@ -372,6 +379,7 @@ final class TerminalSurfaceController {
             let isOccluded: Bool
             if let hostView = hostedView as? TerminalHostView {
                 isOccluded = hostView.synchronizeGhosttyVisibility(forceRefreshWhenVisible: false)
+                hostView.setShouldOwnFirstResponder(focused && !isOccluded)
             } else {
                 isOccluded = false
             }
@@ -428,6 +436,7 @@ final class TerminalSurfaceController {
         let isOccluded: Bool
         if let hostView = hostedView as? TerminalHostView {
             isOccluded = hostView.synchronizeGhosttyVisibility(forceRefreshWhenVisible: hasUsableViewport)
+            hostView.setShouldOwnFirstResponder(focused && !isOccluded)
         } else {
             isOccluded = false
         }
@@ -472,6 +481,8 @@ final class TerminalSurfaceController {
             sendSurfaceText("\n", to: ghosttySurface)
         }
 
+        ghosttyManager.requestImmediateTick()
+        ghostty_surface_refresh(ghosttySurface)
         return true
         #else
         return false
@@ -679,6 +690,12 @@ final class TerminalSurfaceController {
         guard window.firstResponder !== hostedView else { return }
         window.makeFirstResponder(hostedView)
     }
+
+    func requestInputFocus() {
+        guard let window = hostedView.window else { return }
+        guard window.firstResponder !== hostedView else { return }
+        window.makeFirstResponder(hostedView)
+    }
     #endif
 }
 
@@ -686,6 +703,8 @@ final class TerminalHostView: NSView {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
     private var lastOcclusionState: Bool?
+    private var shouldOwnFirstResponder = false
+    private weak var observedWindow: NSWindow?
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -705,11 +724,13 @@ final class TerminalHostView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateWindowObservation()
         let attachedToWindow = window != nil
         if attachedToWindow {
             syncLayerContentsScale()
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
+        attemptToBecomeFirstResponderIfNeeded()
         _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: attachedToWindow)
         #endif
     }
@@ -731,10 +752,20 @@ final class TerminalHostView: NSView {
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
         ghosttySurface = surface
         lastOcclusionState = nil
+        attemptToBecomeFirstResponderIfNeeded()
         _ = synchronizeGhosttyVisibility(forceRefreshWhenVisible: true)
+    }
+
+    func setShouldOwnFirstResponder(_ ownsFirstResponder: Bool) {
+        shouldOwnFirstResponder = ownsFirstResponder
+        attemptToBecomeFirstResponderIfNeeded()
     }
 
     override func keyDown(with event: NSEvent) {
@@ -801,6 +832,11 @@ final class TerminalHostView: NSView {
                 "text_length": String(text?.count ?? 0),
             ]
         )
+
+        if handled {
+            GhosttyRuntimeManager.shared.requestImmediateTick()
+            ghostty_surface_refresh(ghosttySurface)
+        }
 
         return handled
     }
@@ -911,6 +947,45 @@ final class TerminalHostView: NSView {
             ancestor = view.superview
         }
         return false
+    }
+
+    private func updateWindowObservation() {
+        guard observedWindow !== window else {
+            return
+        }
+
+        if let observedWindow {
+            NotificationCenter.default.removeObserver(
+                self,
+                name: NSWindow.didBecomeKeyNotification,
+                object: observedWindow
+            )
+        }
+
+        observedWindow = window
+        if let window {
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(windowDidBecomeKey(_:)),
+                name: NSWindow.didBecomeKeyNotification,
+                object: window
+            )
+        }
+    }
+
+    @objc
+    private func windowDidBecomeKey(_ notification: Notification) {
+        guard notification.object as? NSWindow === window else { return }
+        attemptToBecomeFirstResponderIfNeeded()
+    }
+
+    private func attemptToBecomeFirstResponderIfNeeded() {
+        guard shouldOwnFirstResponder else { return }
+        guard let window else { return }
+        guard window.isVisible else { return }
+        guard window.isKeyWindow else { return }
+        guard window.firstResponder !== self else { return }
+        window.makeFirstResponder(self)
     }
     #endif
 

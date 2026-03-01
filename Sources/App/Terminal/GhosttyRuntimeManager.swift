@@ -303,6 +303,7 @@ final class GhosttyRuntimeManager {
     private var app: ghostty_app_t?
     private var config: ghostty_config_t?
     private(set) var configuredTerminalFontPoints: Double?
+    private var isTickScheduled = false
 
     private init() {
         guard Self.initializeGhosttyRuntime() else {
@@ -684,9 +685,17 @@ final class GhosttyRuntimeManager {
     }
 
     fileprivate func scheduleImmediateTick() {
+        guard isTickScheduled == false else { return }
+        isTickScheduled = true
         DispatchQueue.main.async { [weak self] in
-            self?.tick()
+            guard let self else { return }
+            self.isTickScheduled = false
+            self.tick()
         }
+    }
+
+    func requestImmediateTick() {
+        scheduleImmediateTick()
     }
 
     private func tick() {
