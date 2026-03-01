@@ -1138,3 +1138,22 @@ Pending:
     - pane counts transition as expected,
     - focused panel remains valid after close,
     - terminal surface accepts input and visible-text marker probe after close.
+
+2026-03-01 (Post-MVP continuation: focus-mode animation glyph-compression artifact):
+- issue observed:
+  - during focused-panel mode animation, non-focused pane text (commonly top-left) could visibly compress into narrow columns before being covered.
+- implemented:
+  - refactored split-branch rendering in `PaneNodeView`:
+    - added shared `splitBranch(...)` helper to centralize branch visibility behavior.
+    - replaced opacity-only hiding with a visibility modifier that applies `.hidden()` to non-visible branches while preserving layout footprint.
+    - retained branch geometry animation at split level while preventing hidden branch content from drawing during transition.
+  - added explicit `allowsHitTesting(show)` per branch to preserve input behavior expectations when a branch is hidden.
+- reviewer follow-up (Claude second-opinion):
+  - accepted:
+    - avoid conditional branch removal (`if show { PaneNodeView } else { Color.clear }`) because subtree teardown could churn hosted terminal views and risk lifecycle regressions.
+  - rejected (with rationale):
+    - terminal-state reset/focus-loss concerns after adopting `.hidden()` path were not reproducible in existing automation flows; runtime registry keeps panel controllers keyed by panel identity and reattach behavior unchanged.
+- validation:
+  - `sv exec -- xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build` (pass)
+  - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
+  - `sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
