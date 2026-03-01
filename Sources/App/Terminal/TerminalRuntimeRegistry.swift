@@ -11,6 +11,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
+    private var previousSelectedWorkspaceID: UUID?
+    private var visibilityPulseTask: Task<Void, Never>?
     #endif
 
     func bind(store: AppStore) {
@@ -49,6 +51,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers[panelID]?.invalidate()
             controllers.removeValue(forKey: panelID)
         }
+
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        pulseVisibleSurfacesIfWorkspaceSwitched(state: state)
+        #endif
     }
 
     func applyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
@@ -132,6 +138,82 @@ final class TerminalRuntimeRegistry: ObservableObject {
             }
         }
         return nil
+    }
+
+    private func pulseVisibleSurfacesIfWorkspaceSwitched(state: AppState) {
+        let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
+        guard currentSelectedWorkspaceID != previousSelectedWorkspaceID else { return }
+
+        visibilityPulseTask?.cancel()
+        visibilityPulseTask = nil
+
+        guard let currentSelectedWorkspaceID else {
+            previousSelectedWorkspaceID = nil
+            return
+        }
+
+        guard state.workspacesByID[currentSelectedWorkspaceID] != nil else {
+            // Do not consume the transition until workspace data is available.
+            return
+        }
+
+        previousSelectedWorkspaceID = currentSelectedWorkspaceID
+        scheduleVisibilityPulse(for: currentSelectedWorkspaceID)
+    }
+
+    private func scheduleVisibilityPulse(for workspaceID: UUID) {
+        ToasttyLog.debug(
+            "Scheduling Ghostty visibility refresh pulse after workspace switch",
+            category: .ghostty,
+            metadata: ["workspace_id": workspaceID.uuidString]
+        )
+
+        visibilityPulseTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+
+            // Defer pulses so SwiftUI/NSViewRepresentable attachment and layout can settle.
+            await Task.yield()
+            guard Task.isCancelled == false else { return }
+            self.pulseVisibleSurfaces(in: workspaceID)
+
+            await Task.yield()
+            guard Task.isCancelled == false else { return }
+            self.pulseVisibleSurfaces(in: workspaceID)
+        }
+    }
+
+    private func pulseVisibleSurfaces(in workspaceID: UUID) {
+        guard let store else { return }
+        let currentState = store.state
+        guard selectedWorkspaceID(state: currentState) == workspaceID,
+              let workspace = currentState.workspacesByID[workspaceID] else {
+            return
+        }
+
+        let panelIDs = visibleTerminalPanelIDs(in: workspace)
+        guard panelIDs.isEmpty == false else { return }
+        pulseSurfaces(panelIDs: panelIDs)
+    }
+
+    private func visibleTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
+        var panelIDs: Set<UUID> = []
+        for leaf in workspace.paneTree.allLeafInfos {
+            guard leaf.tabPanelIDs.isEmpty == false else { continue }
+            let selectedIndex = min(max(leaf.selectedIndex, 0), leaf.tabPanelIDs.count - 1)
+            let selectedPanelID = leaf.tabPanelIDs[selectedIndex]
+            guard let panelState = workspace.panels[selectedPanelID],
+                  case .terminal = panelState else {
+                continue
+            }
+            panelIDs.insert(selectedPanelID)
+        }
+        return panelIDs
+    }
+
+    private func pulseSurfaces(panelIDs: Set<UUID>) {
+        for panelID in panelIDs {
+            controllers[panelID]?.pulseVisibilityRefresh()
+        }
     }
     #endif
 }
@@ -627,6 +709,12 @@ final class TerminalSurfaceController {
         guard window.isKeyWindow else { return }
         guard window.firstResponder !== hostedView else { return }
         window.makeFirstResponder(hostedView)
+    }
+
+    func pulseVisibilityRefresh() {
+        guard let ghosttySurface else { return }
+        ghosttyManager.requestImmediateTick()
+        ghostty_surface_refresh(ghosttySurface)
     }
     #endif
 }
