@@ -331,6 +331,7 @@ final class TerminalSurfaceController {
     private let panelID: UUID
     private unowned let registry: TerminalRuntimeRegistry
     private let hostedView: NSView
+    private weak var activeSourceContainer: NSView?
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
@@ -366,6 +367,7 @@ final class TerminalSurfaceController {
     }
 
     func attach(into container: NSView) {
+        activeSourceContainer = container
         if hostedView.superview !== container {
             hostedView.removeFromSuperview()
             container.addSubview(hostedView)
@@ -384,9 +386,32 @@ final class TerminalSurfaceController {
         focused: Bool,
         fontPoints: Double,
         viewportSize: CGSize,
-        backingScaleFactor: CGFloat
+        backingScaleFactor: CGFloat,
+        sourceContainer: NSView
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        guard activeSourceContainer === sourceContainer else {
+            ToasttyLog.debug(
+                "Skipping terminal update from stale container callback",
+                category: .ghostty,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+            return
+        }
+
+        guard hostedView.superview === sourceContainer else {
+            ToasttyLog.debug(
+                "Skipping terminal update because host view is not attached to source container",
+                category: .ghostty,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+            return
+        }
+
         ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
         guard let ghosttySurface else {
             hostedView.isHidden = true
@@ -485,6 +510,7 @@ final class TerminalSurfaceController {
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
         #endif
+        activeSourceContainer = nil
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }

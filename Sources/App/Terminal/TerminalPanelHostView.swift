@@ -24,7 +24,8 @@ struct TerminalPanelHostView: NSViewRepresentable {
                 focused: focused,
                 fontPoints: globalFontPoints,
                 viewportSize: view.bounds.size,
-                backingScaleFactor: scale
+                backingScaleFactor: scale,
+                sourceContainer: view
             )
         }
 
