@@ -1199,3 +1199,24 @@ Pending:
   - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
   - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/shortcut-trace.sh` (pass)
   - clean-log verification (`rm -f /tmp/toastty.log` before smoke) shows no `viewport_width=1`/`viewport_height=1` render-metrics entries in current run.
+
+2026-03-01 (Post-MVP continuation: stale container callback robustness follow-up):
+- issue observed:
+  - panel callback routing still depended on host-view/superview shape, which could be brittle during SwiftUI/AppKit container replacement churn.
+- implemented:
+  - added explicit source-container identity tracking in `TerminalSurfaceController`:
+    - store both weak `activeSourceContainer` and `activeSourceContainerID`.
+    - reject `update(...)` callbacks unless both active references match the callback `sourceContainer`.
+  - preserved detached-view recovery (`hostedView.superview == nil -> attach(into:)`) but stopped reattaching when the host is attached to a different live container.
+  - clear active container tracking on controller invalidation.
+- reviewer follow-up (Claude second-opinion):
+  - accepted:
+    - pair `ObjectIdentifier` with weak container reference to avoid pointer-reuse false positives.
+    - avoid broad reattach behavior that can yank views between containers during transitions.
+  - rejected (with rationale):
+    - thread-barrier warnings were rejected as non-actionable in this path because controller lifecycle/update methods are `@MainActor` isolated.
+- validation:
+  - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
+  - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
+  - `TOASTTY_LOG_LEVEL=debug sv exec -- ./scripts/automation/shortcut-trace.sh` (pass)
+  - targeted real-keystroke probe in automation mode (`System Events` typing + `automation.terminal_visible_text contains`) confirms input reaches focused terminal surface (`marker_found=true`).

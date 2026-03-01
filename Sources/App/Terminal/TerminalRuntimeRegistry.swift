@@ -249,6 +249,8 @@ final class TerminalSurfaceController {
     private let panelID: UUID
     private unowned let registry: TerminalRuntimeRegistry
     private let hostedView: NSView
+    private weak var activeSourceContainer: NSView?
+    private var activeSourceContainerID: ObjectIdentifier?
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
@@ -284,6 +286,8 @@ final class TerminalSurfaceController {
     }
 
     func attach(into container: NSView) {
+        activeSourceContainer = container
+        activeSourceContainerID = ObjectIdentifier(container)
         if hostedView.superview !== container {
             hostedView.removeFromSuperview()
             container.addSubview(hostedView)
@@ -306,13 +310,26 @@ final class TerminalSurfaceController {
         sourceContainer: NSView
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        let sourceContainerID = ObjectIdentifier(sourceContainer)
+        guard activeSourceContainerID == sourceContainerID,
+              activeSourceContainer === sourceContainer else {
+            ToasttyLog.debug(
+                "Skipping terminal update from stale container callback",
+                category: .ghostty,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+            return
+        }
+
         if hostedView.superview == nil {
             attach(into: sourceContainer)
         }
 
         guard hostedView.superview === sourceContainer else {
             ToasttyLog.debug(
-                "Skipping terminal update from stale container callback",
+                "Skipping terminal update because host view is not attached to source container",
                 category: .ghostty,
                 metadata: [
                     "panel_id": panelID.uuidString,
@@ -435,6 +452,8 @@ final class TerminalSurfaceController {
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
         #endif
+        activeSourceContainer = nil
+        activeSourceContainerID = nil
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }
