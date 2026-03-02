@@ -34,6 +34,7 @@ public enum ToasttyLogCategory: String, Sendable {
     case input
     case automation
     case state
+    case notifications
 }
 
 public struct ToasttyLogConfiguration: Sendable, Equatable {

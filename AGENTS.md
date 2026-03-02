@@ -4,7 +4,7 @@
 - For any UI/runtime change, validate in the running `ToasttyApp`, not only reducer/unit tests.
 - Use both paths whenever possible: automation (`./scripts/automation/smoke-ui.sh`) and manual live interaction (launch app, interact, inspect screenshots).
 - Primary baseline smoke run: `./scripts/automation/smoke-ui.sh`
-- Ghostty-path smoke run: `./scripts/automation/smoke-ui.sh` (Ghostty checks run automatically when `Dependencies/GhosttyKit.xcframework` exists and Ghostty is not disabled via env).
+- Ghostty-path smoke run: `./scripts/automation/smoke-ui.sh` (Ghostty checks run automatically when dependency artifacts exist and Ghostty is not disabled via env).
 - Explicit fallback smoke run: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
 - Required ordering when running both paths:
   - run fallback first: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
@@ -25,9 +25,13 @@
 - If scheme settings constrain architectures, prefer invocation-scoped overrides (for example `ARCHS="${ARCH}"` and `ONLY_ACTIVE_ARCH=YES`) instead of mutating project settings.
 
 ## Ghostty Configuration Nuts and Bolts
-- Ghostty integration is default-on at `tuist generate` time when `Dependencies/GhosttyKit.xcframework` exists.
+- Ghostty integration is default-on at `tuist generate` time when at least one local Ghostty xcframework artifact exists (`GhosttyKit.Debug`, `GhosttyKit.Release`, or legacy `GhosttyKit`).
 - Opt out with either `TUIST_DISABLE_GHOSTTY=1` (preferred for Tuist flows) or compatibility alias `TOASTTY_DISABLE_GHOSTTY=1`.
-- Ghostty is linked only when both conditions are true: `Dependencies/GhosttyKit.xcframework` exists and disable env var is not set.
+- Ghostty is linked only when both conditions are true: dependency xcframework artifacts exist and disable env var is not set.
+- Variant selection behavior:
+  - `Debug` builds prefer `Dependencies/GhosttyKit.Debug.xcframework`, then fall back to legacy `Dependencies/GhosttyKit.xcframework`, then `Dependencies/GhosttyKit.Release.xcframework`.
+  - `Release` builds prefer `Dependencies/GhosttyKit.Release.xcframework`, then fall back to legacy `Dependencies/GhosttyKit.xcframework`, then `Dependencies/GhosttyKit.Debug.xcframework`.
+  - macOS slice resolution prefers `macos-arm64_x86_64`, then `macos-arm64`, then `macos-x86_64`.
 - Embedded Ghostty config loading order:
   - `TOASTTY_GHOSTTY_CONFIG_PATH` when set and file exists.
   - fallback explicit user path: `$XDG_CONFIG_HOME/ghostty/config` when present.
@@ -47,7 +51,9 @@
 - When linked, app target adds `TOASTTY_HAS_GHOSTTY_KIT` and Ghostty transitive linker flags from `Project.swift` (`-lc++`, `-framework Carbon`).
 - Default generate path falls back automatically when the xcframework is absent or integration is explicitly disabled.
 - Install/update local Ghostty artifact: `./scripts/ghostty/install-local-xcframework.sh`
-- Optional source override for installer: `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework ./scripts/ghostty/install-local-xcframework.sh`
+- Optional installer controls:
+  - source override: `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework ./scripts/ghostty/install-local-xcframework.sh`
+  - variant override: `GHOSTTY_XCFRAMEWORK_VARIANT=release ./scripts/ghostty/install-local-xcframework.sh` (accepted: `debug`, `release`, `legacy`)
 - After changing Ghostty artifacts or Ghostty settings, regenerate and rebuild before validating runtime behavior.
 
 ## Automation Nuts and Bolts
@@ -146,8 +152,8 @@ OSA
   - tabs/windows/clipboard action parity beyond current Toastty primitives
 
 ## Current Project Snapshot (as of 2026-02-28; verify against current code when in doubt)
-- Current local state supports Ghostty-enabled app builds/runs when local xcframework dependency is present (default-on, explicit opt-out available).
+- Current local state supports Ghostty-enabled app builds/runs when local Ghostty xcframework dependencies are present (default-on, explicit opt-out available).
 - Terminal focus + keyboard bridging is in place; regressions in cursor-follow/scrolling still need manual visual validation.
 - Smoke automation validates layout actions (split, aux toggles, focused panel, font HUD), deterministic Ghostty terminal send/read marker flow (when Ghostty is enabled), and captures artifacts.
 - Viewport scrolling smoothness still requires manual visual validation in the running app.
-- Ghostty xcframework remains a local dependency (`Dependencies/GhosttyKit.xcframework`), not a fully managed/pinned remote artifact.
+- Ghostty xcframeworks remain local dependencies (`Dependencies/GhosttyKit.Debug.xcframework`, `Dependencies/GhosttyKit.Release.xcframework`, with legacy fallback `Dependencies/GhosttyKit.xcframework`), not a fully managed/pinned remote artifact.

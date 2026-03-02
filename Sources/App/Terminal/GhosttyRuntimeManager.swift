@@ -20,6 +20,7 @@ struct GhosttyRuntimeAction: Sendable {
         case setTerminalTitle(String)
         case setTerminalCWD(String)
         case commandFinished(exitCode: Int?)
+        case desktopNotification(title: String, body: String)
     }
 
     let surfaceHandle: UInt?
@@ -43,6 +44,8 @@ struct GhosttyRuntimeAction: Sendable {
             return "set_terminal_cwd"
         case .commandFinished:
             return "command_finished"
+        case .desktopNotification:
+            return "desktop_notification"
         }
     }
 }
@@ -80,6 +83,8 @@ private func ghosttyActionName(_ action: ghostty_action_s) -> String {
         return "pwd"
     case GHOSTTY_ACTION_COMMAND_FINISHED:
         return "command_finished"
+    case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+        return "desktop_notification"
     default:
         return "unknown(\(action.tag.rawValue))"
     }
@@ -128,12 +133,10 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         intent = .toggleFocusedPanelMode
 
     case GHOSTTY_ACTION_SET_TITLE:
-        // SAFETY: Ghostty guarantees these pointers are valid for the duration of the callback.
         let title = action.action.set_title.title.map { String(cString: $0) } ?? ""
         intent = .setTerminalTitle(title)
 
     case GHOSTTY_ACTION_PWD:
-        // SAFETY: Ghostty guarantees these pointers are valid for the duration of the callback.
         let pwd = action.action.pwd.pwd.map { String(cString: $0) } ?? ""
         intent = .setTerminalCWD(pwd)
 
@@ -141,6 +144,12 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         let rawExitCode = Int(action.action.command_finished.exit_code)
         let exitCode = rawExitCode >= 0 ? rawExitCode : nil
         intent = .commandFinished(exitCode: exitCode)
+
+    case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
+        let notification = action.action.desktop_notification
+        let title = notification.title.map { String(cString: $0) } ?? ""
+        let body = notification.body.map { String(cString: $0) } ?? ""
+        intent = .desktopNotification(title: title, body: body)
 
     default:
         return nil

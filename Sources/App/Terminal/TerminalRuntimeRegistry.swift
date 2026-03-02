@@ -406,6 +406,18 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             workspaceIDForAction = selectedWorkspaceID
         }
 
+        // Desktop notifications are handled separately — they should not steal focus.
+        if case .desktopNotification(let title, let body) = action.intent {
+            return handleDesktopNotification(
+                title: title,
+                body: body,
+                workspaceID: workspaceIDForAction,
+                panelID: panelID,
+                state: state,
+                store: store
+            )
+        }
+
         // Metadata updates should not steal focus.
         switch action.intent {
         case .setTerminalTitle(let title):
@@ -481,7 +493,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             handled = store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
 
         case .setTerminalTitle, .setTerminalCWD, .commandFinished:
-            assertionFailure("Metadata intents should be handled before focus dispatch")
+            // Already handled above; unreachable.
+            handled = false
+
+        case .desktopNotification:
+            // Already handled above; unreachable.
             handled = false
         }
 
@@ -507,6 +523,62 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             )
         }
         return handled
+    }
+
+    private func handleDesktopNotification(
+        title: String,
+        body: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState,
+        store: AppStore
+    ) -> Bool {
+        let appIsActive = NSApplication.shared.isActive
+        let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
+        let panelIsFocused: Bool
+        if currentSelectedWorkspaceID == workspaceID,
+           let workspace = state.workspacesByID[workspaceID] {
+            panelIsFocused = workspace.focusedPanelID == panelID
+                && workspace.paneTree.leafContaining(panelID: panelID) != nil
+        } else {
+            panelIsFocused = false
+        }
+
+        if appIsActive && panelIsFocused {
+            ToasttyLog.debug(
+                "Suppressed desktop notification for focused panel",
+                category: .notifications,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "title": title,
+                ]
+            )
+            return true
+        }
+
+        store.send(.recordDesktopNotification(workspaceID: workspaceID))
+
+        Task {
+            await SystemNotificationSender.send(
+                title: title,
+                body: body,
+                workspaceID: workspaceID,
+                panelID: panelID
+            )
+        }
+
+        ToasttyLog.info(
+            "Delivered desktop notification from Ghostty",
+            category: .notifications,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "title": title,
+                "app_active": appIsActive ? "true" : "false",
+            ]
+        )
+        return true
     }
 
     private func handleCommandFinished(
@@ -561,7 +633,17 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
               let predictedCWD = Self.predictedCWD(fromCDCommandTitle: title, currentCWD: terminalState.cwd) else {
             return
         }
+
         pendingCWDByPanelID[panelID, default: []].append(predictedCWD)
+        ToasttyLog.debug(
+            "Queued inferred cwd update from cd command title",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "cwd_sample": String(predictedCWD.prefix(80)),
+            ]
+        )
     }
 
     private func handleTerminalMetadataUpdate(
@@ -609,6 +691,8 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             )
         )
         if handled {
+            let titleSample = normalizedTitle.map { String($0.prefix(80)) } ?? "nil"
+            let cwdSample = normalizedCWD.map { String($0.prefix(80)) } ?? "nil"
             ToasttyLog.debug(
                 "Applied terminal metadata update from Ghostty",
                 category: .terminal,
@@ -617,6 +701,8 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                     "panel_id": panelID.uuidString,
                     "title_updated": normalizedTitle == nil ? "false" : "true",
                     "cwd_updated": normalizedCWD == nil ? "false" : "true",
+                    "title_sample": titleSample,
+                    "cwd_sample": cwdSample,
                 ]
             )
         } else {
@@ -643,23 +729,14 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 
     private static func normalizedCWDValue(_ value: String?) -> String? {
         guard let normalized = normalizedMetadataValue(value) else { return nil }
-        let localhostPrefix = "file://localhost"
-        let filePrefix = "file://"
-        guard normalized.hasPrefix(filePrefix) else { return normalized }
-
-        let rawPath: String
-        if normalized.hasPrefix(localhostPrefix) {
-            rawPath = String(normalized.dropFirst(localhostPrefix.count))
-        } else {
-            rawPath = String(normalized.dropFirst(filePrefix.count))
+        if normalized.hasPrefix("file://"),
+           let url = URL(string: normalized),
+           url.isFileURL {
+            let path = url.path
+            guard path.isEmpty == false else { return nil }
+            return path
         }
-
-        // Preserve non-local file URLs (e.g. file://remotehost/path) as-is.
-        guard rawPath.hasPrefix("/") else { return normalized }
-
-        let decodedPath = rawPath.removingPercentEncoding ?? rawPath
-        guard decodedPath.isEmpty == false else { return nil }
-        return decodedPath
+        return normalized
     }
 
     private static func predictedCWD(fromCDCommandTitle title: String, currentCWD: String) -> String? {
@@ -1808,10 +1885,13 @@ final class TerminalHostView: NSView {
         }
 
         let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
+        // Translation mods are only for keyboard-layout text translation (for example
+        // option-as-alt) and should not strip control/command from the actual key event.
+        let translationMods = ghostty_surface_key_translation_mods(ghosttySurface, mods)
         var keyEvent = ghostty_input_key_s(
             action: action,
             mods: mods,
-            consumed_mods: ghostty_surface_key_translation_mods(ghosttySurface, mods),
+            consumed_mods: Self.ghosttyConsumedModifierFlags(forTranslationMods: translationMods),
             keycode: UInt32(event.keyCode),
             text: nil,
             unshifted_codepoint: 0,
@@ -1974,6 +2054,19 @@ final class TerminalHostView: NSView {
         if rawFlags & UInt(NX_DEVICERCTLKEYMASK) != 0 { raw |= GHOSTTY_MODS_CTRL_RIGHT.rawValue }
         if rawFlags & UInt(NX_DEVICERALTKEYMASK) != 0 { raw |= GHOSTTY_MODS_ALT_RIGHT.rawValue }
         if rawFlags & UInt(NX_DEVICERCMDKEYMASK) != 0 { raw |= GHOSTTY_MODS_SUPER_RIGHT.rawValue }
+        return ghostty_input_mods_e(rawValue: raw)
+    }
+
+    private static func ghosttyConsumedModifierFlags(
+        forTranslationMods translationMods: ghostty_input_mods_e
+    ) -> ghostty_input_mods_e {
+        var raw = translationMods.rawValue
+        // These never participate in text translation, so keep them active on the
+        // key event instead of marking them consumed.
+        raw &= ~GHOSTTY_MODS_CTRL.rawValue
+        raw &= ~GHOSTTY_MODS_CTRL_RIGHT.rawValue
+        raw &= ~GHOSTTY_MODS_SUPER.rawValue
+        raw &= ~GHOSTTY_MODS_SUPER_RIGHT.rawValue
         return ghostty_input_mods_e(rawValue: raw)
     }
 

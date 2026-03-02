@@ -62,11 +62,21 @@ Next actions:
 
 ## Toastty manifest wiring notes
 
-- Ghostty linking in `Project.swift` is default-on when `Dependencies/GhosttyKit.xcframework` exists.
+- Ghostty linking in `Project.swift` is default-on when at least one local Ghostty xcframework artifact exists:
+  - `Dependencies/GhosttyKit.Debug.xcframework`
+  - `Dependencies/GhosttyKit.Release.xcframework`
+  - `Dependencies/GhosttyKit.xcframework` (legacy fallback)
 - Disable linking explicitly with `TUIST_DISABLE_GHOSTTY=1` (preferred for Tuist flows) or compatibility alias `TOASTTY_DISABLE_GHOSTTY=1`.
   - after generate, verify `TOASTTY_HAS_GHOSTTY_KIT` appears in `SWIFT_ACTIVE_COMPILATION_CONDITIONS` for `ToasttyApp` when Ghostty is enabled.
 - Current local integration status:
-  - generated project correctly links `Dependencies/GhosttyKit.xcframework` when enabled.
+  - when available, `Debug` builds prefer `GhosttyKit.Debug.xcframework` and `Release` builds prefer `GhosttyKit.Release.xcframework`.
+  - per-config fallback order is:
+    - `Debug`: `GhosttyKit.Debug` -> `GhosttyKit` (legacy) -> `GhosttyKit.Release`
+    - `Release`: `GhosttyKit.Release` -> `GhosttyKit` (legacy) -> `GhosttyKit.Debug`
+  - manifest resolves the first matching macOS slice from:
+    - `macos-arm64_x86_64`
+    - `macos-arm64`
+    - `macos-x86_64`
   - app target must add Ghostty transitive linker flags:
     - `-lc++`
     - `-framework Carbon`
@@ -77,6 +87,17 @@ Next actions:
     - run: `./scripts/automation/smoke-ui.sh`
     - fallback verification: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
   - generate path falls back automatically (no Ghostty compile condition) when the xcframework is absent or integration is disabled.
+
+### Installing local Ghostty artifacts
+
+- Default installer behavior now targets the Debug variant:
+  - `./scripts/ghostty/install-local-xcframework.sh`
+- Install a Release variant:
+  - `GHOSTTY_XCFRAMEWORK_VARIANT=release ./scripts/ghostty/install-local-xcframework.sh`
+- Install legacy single-path artifact (fallback mode):
+  - `GHOSTTY_XCFRAMEWORK_VARIANT=legacy ./scripts/ghostty/install-local-xcframework.sh`
+- Optional source override for all modes:
+  - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework ./scripts/ghostty/install-local-xcframework.sh`
 
 ## Current action parity (MVP snapshot)
 

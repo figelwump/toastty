@@ -101,7 +101,7 @@ struct SidebarView: View {
                 confirmWorkspaceClose(closeTarget.workspaceID)
             }
         } message: { _ in
-            Text("Close this workspace and all of the stuff inside it.")
+            Text("Closing this workspace will close all terminals and panels within it.")
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
