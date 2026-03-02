@@ -16,11 +16,20 @@ enum SystemNotificationSender {
     private static var userExplicitlyDeniedPermission = false
     private static var useAppleScriptFallback = false
 
-    static func send(title: String, body: String, workspaceID: UUID, panelID: UUID?) async {
-        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
-        let finalTitle = normalizedTitle.isEmpty ? "Toastty" : normalizedTitle
-        let finalBody = normalizedBody.isEmpty ? "Notification" : normalizedBody
+    static func send(
+        title: String,
+        body: String,
+        workspaceID: UUID,
+        panelID: UUID?,
+        context: DesktopNotificationContext = DesktopNotificationContext()
+    ) async {
+        let resolvedContent = DesktopNotificationContentResolver.resolve(
+            title: title,
+            body: body,
+            context: context
+        )
+        let finalTitle = resolvedContent.title
+        let finalBody = resolvedContent.body
 
         if useAppleScriptFallback {
             await sendViaAppleScript(

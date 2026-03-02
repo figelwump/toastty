@@ -533,6 +533,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState,
         store: AppStore
     ) -> Bool {
+        let notificationContext = DesktopNotificationContext(
+            workspaceTitle: state.workspacesByID[workspaceID]?.title,
+            panelLabel: state.workspacesByID[workspaceID]?.panels[panelID]?.notificationLabel
+        )
+
         let appIsActive = NSApplication.shared.isActive
         let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
         let panelIsFocused: Bool
@@ -564,7 +569,8 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                 title: title,
                 body: body,
                 workspaceID: workspaceID,
-                panelID: panelID
+                panelID: panelID,
+                context: notificationContext
             )
         }
 

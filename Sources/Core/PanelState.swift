@@ -204,6 +204,19 @@ public enum PanelState: Equatable, Sendable {
             return .scratchpad
         }
     }
+
+    public var notificationLabel: String {
+        switch self {
+        case .terminal(let terminalState):
+            return terminalState.displayPanelLabel
+        case .diff:
+            return "Diff"
+        case .markdown:
+            return "Markdown"
+        case .scratchpad:
+            return "Scratchpad"
+        }
+    }
 }
 
 extension PanelState: Codable {

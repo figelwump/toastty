@@ -1104,14 +1104,26 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return
         }
 
+        let notificationContext = desktopNotificationContext(workspaceID: workspaceID, panelID: panelID)
+
         Task {
             await SystemNotificationSender.send(
                 title: title,
                 body: body,
                 workspaceID: workspaceID,
-                panelID: panelID
+                panelID: panelID,
+                context: notificationContext
             )
         }
+    }
+
+    @MainActor
+    private func desktopNotificationContext(workspaceID: UUID, panelID: UUID?) -> DesktopNotificationContext {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            return DesktopNotificationContext()
+        }
+        let panelLabel = panelID.flatMap { workspace.panels[$0]?.notificationLabel }
+        return DesktopNotificationContext(workspaceTitle: workspace.title, panelLabel: panelLabel)
     }
 
     private func normalizeFiles(_ files: [String], cwd: String?) throws -> [String] {
