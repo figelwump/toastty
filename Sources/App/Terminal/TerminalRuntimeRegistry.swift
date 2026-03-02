@@ -344,7 +344,6 @@ final class TerminalSurfaceController {
     private var lastSurfaceCreationSignature: SurfaceCreationSignature?
     private var lastSurfaceDeferralReason: SurfaceCreationDeferralReason?
     private var lastViewportDeferralReason: SurfaceCreationDeferralReason?
-    private var lastOcclusionState: Bool?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 16
@@ -506,9 +505,6 @@ final class TerminalSurfaceController {
             width: logicalWidth,
             height: logicalHeight
         ) {
-            setSurfaceOcclusionIfNeeded(surface: ghosttySurface, occluded: true)
-            // Detached/hidden/tiny hosts should not retain Ghostty focus while deferred.
-            ghostty_surface_set_focus(ghosttySurface, false)
             diagnostics.viewportDeferredCount += 1
             let reasonChanged = lastViewportDeferralReason != viewportDeferralReason
             lastViewportDeferralReason = viewportDeferralReason
@@ -579,7 +575,6 @@ final class TerminalSurfaceController {
             scale: xScale,
             measuredSize: measuredSizeForLogging
         )
-        setSurfaceOcclusionIfNeeded(surface: ghosttySurface, occluded: false)
         ghostty_surface_set_focus(ghosttySurface, focused)
         ensureFirstResponderIfNeeded(focused: focused)
         #else
@@ -601,7 +596,6 @@ final class TerminalSurfaceController {
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
         lastDisplayID = nil
-        lastOcclusionState = nil
         surfaceCreationStabilityPasses = 0
         lastSurfaceCreationSignature = nil
         lastSurfaceDeferralReason = nil
@@ -874,16 +868,6 @@ final class TerminalSurfaceController {
             metadata[key] = value
         }
         ToasttyLog.debug(message, category: .ghostty, metadata: metadata)
-    }
-
-    private func setSurfaceOcclusionIfNeeded(surface: ghostty_surface_t, occluded: Bool) {
-        guard lastOcclusionState != occluded else { return }
-        ghostty_surface_set_occlusion(surface, occluded)
-        lastOcclusionState = occluded
-        if occluded == false {
-            // Force a repaint when a pane becomes visible again so stale black frames do not persist.
-            ghostty_surface_refresh(surface)
-        }
     }
 
     #endif
