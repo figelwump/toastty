@@ -23,7 +23,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
-    private var pendingCWDByPanelID: [UUID: [String]] = [:]
+    private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     #endif
@@ -33,7 +33,24 @@ final class TerminalRuntimeRegistry: ObservableObject {
             precondition(existingStore === store, "TerminalRuntimeRegistry cannot be rebound to a different AppStore.")
         }
         self.store = store
+        store.onActionApplied = { [weak self] action, previousState, nextState in
+            self?.handleAppliedStoreAction(
+                action,
+                previousState: previousState,
+                nextState: nextState
+            )
+        }
         configureGhosttyActionHandler()
+    }
+
+    @discardableResult
+    func splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation) -> Bool {
+        sendSplitAction(.splitFocusedPane(workspaceID: workspaceID, orientation: orientation))
+    }
+
+    @discardableResult
+    func splitFocusedPaneInDirection(workspaceID: UUID, direction: PaneSplitDirection) -> Bool {
+        sendSplitAction(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: direction))
     }
 
     func controller(for panelID: UUID) -> TerminalSurfaceController {
@@ -63,7 +80,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers.removeValue(forKey: panelID)
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        pendingCWDByPanelID = pendingCWDByPanelID.filter { livePanelIDs.contains($0.key) && !$0.value.isEmpty }
+        pendingSplitSourcePanelByNewPanelID = pendingSplitSourcePanelByNewPanelID.filter {
+            livePanelIDs.contains($0.key) && livePanelIDs.contains($0.value)
+        }
         #endif
 
         handleGhosttyWorkspaceSelectionPulseIfNeeded(state: state)
@@ -155,8 +174,44 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 }
 
+private extension TerminalRuntimeRegistry {
+    @discardableResult
+    func sendSplitAction(_ action: AppAction) -> Bool {
+        guard let store else { return false }
+        return store.send(action)
+    }
+}
+
 #if TOASTTY_HAS_GHOSTTY_KIT
 private extension TerminalRuntimeRegistry {
+    enum SplitSourceSurfaceState {
+        case none
+        case pending
+        case ready(sourcePanelID: UUID, surface: ghostty_surface_t)
+    }
+
+    func handleAppliedStoreAction(
+        _ action: AppAction,
+        previousState: AppState,
+        nextState: AppState
+    ) {
+        let splitWorkspaceID: UUID
+        switch action {
+        case .splitFocusedPane(workspaceID: let workspaceID, orientation: _):
+            splitWorkspaceID = workspaceID
+        case .splitFocusedPaneInDirection(workspaceID: let workspaceID, direction: _):
+            splitWorkspaceID = workspaceID
+        default:
+            return
+        }
+
+        registerPendingSplitSourceIfNeeded(
+            workspaceID: splitWorkspaceID,
+            previousState: previousState,
+            nextState: nextState
+        )
+    }
+
     func configureGhosttyActionHandler() {
         GhosttyRuntimeManager.shared.actionHandler = self
     }
@@ -171,9 +226,75 @@ private extension TerminalRuntimeRegistry {
             controller.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
         }
     }
+
+    func registerPendingSplitSourceIfNeeded(workspaceID: UUID, previousState: AppState, nextState: AppState) {
+        guard let previousWorkspace = previousState.workspacesByID[workspaceID],
+              let nextWorkspace = nextState.workspacesByID[workspaceID],
+              let sourcePanelID = resolveSplitSourcePanelID(in: previousWorkspace) else {
+            return
+        }
+
+        let createdPanelIDs = Set(nextWorkspace.panels.keys).subtracting(previousWorkspace.panels.keys)
+        guard createdPanelIDs.count == 1,
+              let newPanelID = createdPanelIDs.first,
+              case .terminal = nextWorkspace.panels[newPanelID],
+              case .terminal = nextWorkspace.panels[sourcePanelID] else {
+            return
+        }
+
+        pendingSplitSourcePanelByNewPanelID[newPanelID] = sourcePanelID
+        ToasttyLog.debug(
+            "Registered split source panel for Ghostty surface inheritance",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "source_panel_id": sourcePanelID.uuidString,
+                "new_panel_id": newPanelID.uuidString,
+            ]
+        )
+    }
+
+    func splitSourceSurfaceState(for newPanelID: UUID) -> SplitSourceSurfaceState {
+        guard let sourcePanelID = pendingSplitSourcePanelByNewPanelID[newPanelID] else {
+            return .none
+        }
+        guard let sourceSurface = controllers[sourcePanelID]?.currentGhosttySurface() else {
+            return .pending
+        }
+        return .ready(sourcePanelID: sourcePanelID, surface: sourceSurface)
+    }
+
+    func consumeSplitSource(for newPanelID: UUID) {
+        pendingSplitSourcePanelByNewPanelID.removeValue(forKey: newPanelID)
+    }
+
+    private func resolveSplitSourcePanelID(in workspace: WorkspaceState) -> UUID? {
+        if let focusedPanelID = workspace.focusedPanelID,
+           workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil,
+           let focusedPanelState = workspace.panels[focusedPanelID],
+           focusedPanelState.kind == .terminal {
+            return focusedPanelID
+        }
+
+        for leaf in workspace.paneTree.allLeafInfos {
+            for panelID in leaf.tabPanelIDs where workspace.paneTree.leafContaining(panelID: panelID) != nil {
+                guard let panelState = workspace.panels[panelID] else { continue }
+                if panelState.kind == .terminal {
+                    return panelID
+                }
+            }
+        }
+        return nil
+    }
 }
 #else
 private extension TerminalRuntimeRegistry {
+    func handleAppliedStoreAction(
+        _: AppAction,
+        previousState _: AppState,
+        nextState _: AppState
+    ) {}
+
     func configureGhosttyActionHandler() {}
 
     func handleGhosttyWorkspaceSelectionPulseIfNeeded(state _: AppState) {}
@@ -421,12 +542,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         // Metadata updates should not steal focus.
         switch action.intent {
         case .setTerminalTitle(let title):
-            trackPotentialCDCommand(
-                fromTitle: title,
-                panelID: panelID,
-                workspaceID: workspaceIDForAction,
-                state: state
-            )
             return handleTerminalMetadataUpdate(
                 title: title,
                 cwd: nil,
@@ -445,7 +560,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                 store: store
             )
         case .commandFinished(let exitCode):
-            return handleCommandFinished(
+            return handleCommandFinishedMetadataUpdate(
                 exitCode: exitCode,
                 workspaceID: workspaceIDForAction,
                 panelID: panelID,
@@ -472,7 +587,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         let handled: Bool
         switch action.intent {
         case .split(let direction):
-            handled = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceIDForAction, direction: direction))
+            handled = splitFocusedPaneInDirection(workspaceID: workspaceIDForAction, direction: direction)
 
         case .focus(let direction):
             handled = store.send(.focusPane(workspaceID: workspaceIDForAction, direction: direction))
@@ -533,9 +648,10 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState,
         store: AppStore
     ) -> Bool {
-        let notificationContext = DesktopNotificationContext(
-            workspaceTitle: state.workspacesByID[workspaceID]?.title,
-            panelLabel: state.workspacesByID[workspaceID]?.panels[panelID]?.notificationLabel
+        let notificationContext = desktopNotificationContext(
+            workspaceID: workspaceID,
+            panelID: panelID,
+            state: state
         )
 
         let appIsActive = NSApplication.shared.isActive
@@ -587,68 +703,17 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return true
     }
 
-    private func handleCommandFinished(
-        exitCode: Int?,
+    private func desktopNotificationContext(
         workspaceID: UUID,
         panelID: UUID,
-        state: AppState,
-        store: AppStore
-    ) -> Bool {
-        guard var pendingQueue = pendingCWDByPanelID[panelID], pendingQueue.isEmpty == false else {
-            return true
-        }
-        let pendingCWD = pendingQueue.removeFirst()
-        if pendingQueue.isEmpty {
-            pendingCWDByPanelID.removeValue(forKey: panelID)
-        } else {
-            pendingCWDByPanelID[panelID] = pendingQueue
-        }
-
-        guard exitCode == nil || exitCode == 0 else {
-            ToasttyLog.debug(
-                "Skipping inferred cwd update because cd command did not exit cleanly",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "exit_code": exitCode.map(String.init) ?? "nil",
-                ]
-            )
-            return true
-        }
-
-        return handleTerminalMetadataUpdate(
-            title: nil,
-            cwd: pendingCWD,
-            workspaceID: workspaceID,
-            panelID: panelID,
-            state: state,
-            store: store
-        )
-    }
-
-    private func trackPotentialCDCommand(
-        fromTitle title: String,
-        panelID: UUID,
-        workspaceID: UUID,
         state: AppState
-    ) {
-        guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
-              case .terminal(let terminalState) = panelState,
-              let predictedCWD = Self.predictedCWD(fromCDCommandTitle: title, currentCWD: terminalState.cwd) else {
-            return
+    ) -> DesktopNotificationContext {
+        guard let workspace = state.workspacesByID[workspaceID] else {
+            return DesktopNotificationContext()
         }
-
-        pendingCWDByPanelID[panelID, default: []].append(predictedCWD)
-        ToasttyLog.debug(
-            "Queued inferred cwd update from cd command title",
-            category: .terminal,
-            metadata: [
-                "workspace_id": workspaceID.uuidString,
-                "panel_id": panelID.uuidString,
-                "cwd_sample": String(predictedCWD.prefix(80)),
-            ]
+        return DesktopNotificationContext(
+            workspaceTitle: workspace.title,
+            panelLabel: workspace.panels[panelID]?.notificationLabel
         )
     }
 
@@ -675,7 +740,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         let normalizedTitle = Self.normalizedMetadataValue(title)
-        let normalizedCWD = Self.normalizedCWDValue(cwd)
+        var normalizedCWD = Self.normalizedCWDValue(cwd)
+        if normalizedCWD == nil,
+           let normalizedTitle {
+            normalizedCWD = Self.inferredCWDFromTitle(normalizedTitle, currentCWD: terminalState.cwd)
+        }
 
         var hasChanges = false
         if let normalizedTitle, normalizedTitle != terminalState.title {
@@ -726,6 +795,45 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return handled
     }
 
+    private func handleCommandFinishedMetadataUpdate(
+        exitCode: Int?,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState,
+        store: AppStore
+    ) -> Bool {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let panelState = workspace.panels[panelID],
+              case .terminal(let terminalState) = panelState else {
+            return false
+        }
+
+        guard exitCode == nil || exitCode == 0 else {
+            return true
+        }
+
+        guard let visibleText = automationReadVisibleText(panelID: panelID),
+              let inferredCWD = Self.inferredCWDFromVisibleTerminalText(
+                  visibleText,
+                  currentCWD: terminalState.cwd
+              ) else {
+            return true
+        }
+
+        guard inferredCWD != terminalState.cwd else {
+            return true
+        }
+
+        return handleTerminalMetadataUpdate(
+            title: nil,
+            cwd: inferredCWD,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            state: state,
+            store: store
+        )
+    }
+
     private static func normalizedMetadataValue(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -743,6 +851,92 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return path
         }
         return normalized
+    }
+
+    private static func inferredCWDFromTitle(_ title: String, currentCWD: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+
+        if trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.hasPrefix("file://") {
+            if let normalized = normalizedCWDValue(trimmed) {
+                let expanded = (normalized as NSString).expandingTildeInPath
+                return URL(fileURLWithPath: expanded)
+                    .standardizedFileURL
+                    .resolvingSymlinksInPath()
+                    .path
+            }
+        }
+
+        return predictedCWD(fromCDCommandTitle: trimmed, currentCWD: currentCWD)
+    }
+
+    private static func inferredCWDFromVisibleTerminalText(_ visibleText: String, currentCWD: String) -> String? {
+        let lines = sanitizedVisibleTerminalLines(visibleText)
+        guard lines.isEmpty == false else { return nil }
+
+        for line in lines.reversed() {
+            guard let promptLine = parsedPromptLine(line) else {
+                continue
+            }
+
+            if let command = promptLine.command,
+               let predicted = predictedCWD(fromCDCommandTitle: command, currentCWD: currentCWD) {
+                return predicted
+            }
+
+            if let normalizedPromptCWD = normalizedPromptPathToken(promptLine.cwdToken) {
+                return normalizedPromptCWD
+            }
+        }
+
+        return nil
+    }
+
+    private static func sanitizedVisibleTerminalLines(_ visibleText: String) -> [String] {
+        let filteredScalars = visibleText.unicodeScalars.filter { scalar in
+            switch scalar.value {
+            case 0x0A, 0x0D:
+                return true
+            default:
+                return scalar.value >= 0x20 && scalar.value != 0x7F
+            }
+        }
+        let sanitized = String(String.UnicodeScalarView(filteredScalars))
+        return sanitized
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false }
+    }
+
+    private static func parsedPromptLine(_ line: String) -> (cwdToken: String, command: String?)? {
+        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.count >= 3 else { return nil }
+        guard parts[0].contains("@") else { return nil }
+        let promptMarker = parts[2]
+        guard promptMarker == "%" || promptMarker == "#" || promptMarker == "$" else {
+            return nil
+        }
+
+        let cwdToken = parts[1]
+        let command: String?
+        if parts.count > 3 {
+            command = parts.dropFirst(3).joined(separator: " ")
+        } else {
+            command = nil
+        }
+        return (cwdToken: cwdToken, command: command)
+    }
+
+    private static func normalizedPromptPathToken(_ token: String) -> String? {
+        guard token.hasPrefix("/") || token.hasPrefix("~") || token.hasPrefix("file://") else {
+            return nil
+        }
+        guard let normalized = normalizedCWDValue(token) else { return nil }
+        let expanded = (normalized as NSString).expandingTildeInPath
+        return URL(fileURLWithPath: expanded)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
     }
 
     private static func predictedCWD(fromCDCommandTitle title: String, currentCWD: String) -> String? {
@@ -1213,6 +1407,10 @@ final class TerminalSurfaceController {
         _ = invokeGhosttyBindingAction(action, on: ghosttySurface)
     }
 
+    func currentGhosttySurface() -> ghostty_surface_t? {
+        ghosttySurface
+    }
+
     @discardableResult
     private func invokeGhosttyBindingAction(_ action: String, on surface: ghostty_surface_t) -> Bool {
         let cString = action.utf8CString
@@ -1264,11 +1462,37 @@ final class TerminalSurfaceController {
             return
         }
 
+        let inheritedSourceSurface: ghostty_surface_t?
+        switch registry.splitSourceSurfaceState(for: panelID) {
+        case .none:
+            inheritedSourceSurface = nil
+        case .pending:
+            diagnostics.surfaceDeferredCount += 1
+            if diagnostics.surfaceDeferredCount <= 2 || diagnostics.surfaceDeferredCount.isMultiple(of: 60) {
+                logSurfaceDiagnostics(
+                    message: "Deferring split surface creation until source surface is available",
+                    extra: ["reason": "pending_split_source_surface"]
+                )
+            }
+            return
+        case .ready(let sourcePanelID, let sourceSurface):
+            inheritedSourceSurface = sourceSurface
+            ToasttyLog.debug(
+                "Using source Ghostty surface for split inheritance",
+                category: .terminal,
+                metadata: [
+                    "source_panel_id": sourcePanelID.uuidString,
+                    "new_panel_id": panelID.uuidString,
+                ]
+            )
+        }
+
         diagnostics.surfaceAttemptCount += 1
         guard let surface = ghosttyManager.makeSurface(
             hostView: hostView,
             workingDirectory: terminalState.cwd,
-            fontPoints: fontPoints
+            fontPoints: fontPoints,
+            inheritFrom: inheritedSourceSurface
         ) else {
             diagnostics.surfaceFailureCount += 1
             if diagnostics.surfaceFailureCount <= 5 || diagnostics.surfaceFailureCount.isMultiple(of: 20) {
@@ -1286,6 +1510,9 @@ final class TerminalSurfaceController {
             return
         }
         diagnostics.surfaceSuccessCount += 1
+        if inheritedSourceSurface != nil {
+            registry.consumeSplitSource(for: panelID)
+        }
         lastSurfaceDeferralReason = nil
         lastViewportDeferralReason = nil
         surfaceCreationStabilityPasses = 0
