@@ -20,9 +20,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             precondition(existingStore === store, "TerminalRuntimeRegistry cannot be rebound to a different AppStore.")
         }
         self.store = store
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        GhosttyRuntimeManager.shared.actionHandler = self
-        #endif
+        configureGhosttyActionHandler()
     }
 
     func controller(for panelID: UUID) -> TerminalSurfaceController {
@@ -52,18 +50,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers.removeValue(forKey: panelID)
         }
 
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        pulseVisibleSurfacesIfWorkspaceSwitched(state: state)
-        #endif
+        handleGhosttyWorkspaceSelectionPulseIfNeeded(state: state)
     }
 
     func applyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        guard previousPoints != nextPoints else { return }
-        for controller in controllers.values {
-            controller.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
-        }
-        #endif
+        applyGhosttyGlobalFontChangeIfNeeded(from: previousPoints, to: nextPoints)
     }
 
     func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
@@ -79,9 +70,38 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
         return controller.automationReadVisibleText()
     }
+}
 
-    #if TOASTTY_HAS_GHOSTTY_KIT
-    private func selectedWorkspaceID(state: AppState) -> UUID? {
+#if TOASTTY_HAS_GHOSTTY_KIT
+private extension TerminalRuntimeRegistry {
+    func configureGhosttyActionHandler() {
+        GhosttyRuntimeManager.shared.actionHandler = self
+    }
+
+    func handleGhosttyWorkspaceSelectionPulseIfNeeded(state: AppState) {
+        pulseVisibleSurfacesIfWorkspaceSwitched(state: state)
+    }
+
+    func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
+        guard previousPoints != nextPoints else { return }
+        for controller in controllers.values {
+            controller.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+        }
+    }
+}
+#else
+private extension TerminalRuntimeRegistry {
+    func configureGhosttyActionHandler() {}
+
+    func handleGhosttyWorkspaceSelectionPulseIfNeeded(state _: AppState) {}
+
+    func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
+}
+#endif
+
+#if TOASTTY_HAS_GHOSTTY_KIT
+private extension TerminalRuntimeRegistry {
+    func selectedWorkspaceID(state: AppState) -> UUID? {
         guard let selectedWindowID = state.selectedWindowID,
               let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) else {
             return nil
@@ -89,7 +109,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return selectedWindow.selectedWorkspaceID ?? selectedWindow.workspaceIDs.first
     }
 
-    private func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
+    func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
            workspace.panels[focusedPanelID] != nil,
            workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil {
@@ -112,22 +132,22 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return nil
     }
 
-    fileprivate func register(surface: ghostty_surface_t, for panelID: UUID) {
+    func register(surface: ghostty_surface_t, for panelID: UUID) {
         panelIDBySurfaceHandle[UInt(bitPattern: surface)] = panelID
     }
 
-    fileprivate func unregister(surface: ghostty_surface_t, for panelID: UUID) {
+    func unregister(surface: ghostty_surface_t, for panelID: UUID) {
         let key = UInt(bitPattern: surface)
         if panelIDBySurfaceHandle[key] == panelID {
             panelIDBySurfaceHandle.removeValue(forKey: key)
         }
     }
 
-    private func panelID(for surface: ghostty_surface_t) -> UUID? {
+    func panelID(for surface: ghostty_surface_t) -> UUID? {
         panelIDBySurfaceHandle[UInt(bitPattern: surface)]
     }
 
-    private func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
+    func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
@@ -140,7 +160,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return nil
     }
 
-    private func pulseVisibleSurfacesIfWorkspaceSwitched(state: AppState) {
+    func pulseVisibleSurfacesIfWorkspaceSwitched(state: AppState) {
         let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
         guard currentSelectedWorkspaceID != previousSelectedWorkspaceID else { return }
 
@@ -161,7 +181,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         scheduleVisibilityPulse(for: currentSelectedWorkspaceID)
     }
 
-    private func scheduleVisibilityPulse(for workspaceID: UUID) {
+    func scheduleVisibilityPulse(for workspaceID: UUID) {
         ToasttyLog.debug(
             "Scheduling Ghostty visibility refresh pulse after workspace switch",
             category: .ghostty,
@@ -182,7 +202,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
     }
 
-    private func pulseVisibleSurfaces(in workspaceID: UUID) {
+    func pulseVisibleSurfaces(in workspaceID: UUID) {
         guard let store else { return }
         let currentState = store.state
         guard selectedWorkspaceID(state: currentState) == workspaceID,
@@ -195,7 +215,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         pulseSurfaces(panelIDs: panelIDs)
     }
 
-    private func visibleTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
+    func visibleTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
         var panelIDs: Set<UUID> = []
         for leaf in workspace.paneTree.allLeafInfos {
             guard leaf.tabPanelIDs.isEmpty == false else { continue }
@@ -210,13 +230,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return panelIDs
     }
 
-    private func pulseSurfaces(panelIDs: Set<UUID>) {
+    func pulseSurfaces(panelIDs: Set<UUID>) {
         for panelID in panelIDs {
             controllers[panelID]?.pulseVisibilityRefresh()
         }
     }
-    #endif
 }
+#endif
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
@@ -334,6 +354,7 @@ final class TerminalSurfaceController {
     private weak var activeSourceContainer: NSView?
 
     #if TOASTTY_HAS_GHOSTTY_KIT
+    private let terminalHostView: TerminalHostView
     private var ghosttySurface: ghostty_surface_t?
     private let ghosttyManager = GhosttyRuntimeManager.shared
     private var usesBackingPixelSurfaceSizing = false
@@ -392,7 +413,9 @@ final class TerminalSurfaceController {
         self.panelID = panelID
         self.registry = registry
         #if TOASTTY_HAS_GHOSTTY_KIT
-        hostedView = TerminalHostView()
+        let hostView = TerminalHostView()
+        terminalHostView = hostView
+        hostedView = hostView
         #else
         hostedView = fallbackView
         #endif
@@ -477,18 +500,14 @@ final class TerminalSurfaceController {
         guard let ghosttySurface else {
             // Keep the host visible while retrying Ghostty surface creation.
             hostedView.isHidden = false
-            if let hostView = hostedView as? TerminalHostView {
-                hostView.setGhosttySurface(nil)
-            }
+            terminalHostView.setGhosttySurface(nil)
             fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty surface unavailable")
             swapToFallbackIfNeeded()
             return
         }
 
         hostedView.isHidden = false
-        if let hostView = hostedView as? TerminalHostView {
-            hostView.setGhosttySurface(ghosttySurface)
-        }
+        terminalHostView.setGhosttySurface(ghosttySurface)
         if fallbackView.superview != nil {
             fallbackView.removeFromSuperview()
         }
@@ -497,9 +516,7 @@ final class TerminalSurfaceController {
         let yScale = max(Double(backingScaleFactor), 1)
         let logicalWidth = max(Int(viewportSize.width.rounded(.down)), 1)
         let logicalHeight = max(Int(viewportSize.height.rounded(.down)), 1)
-        guard let hostView = hostedView as? TerminalHostView else {
-            return
-        }
+        let hostView = terminalHostView
         if let viewportDeferralReason = evaluateViewportUpdateReadiness(
             for: hostView,
             width: logicalWidth,
@@ -584,10 +601,9 @@ final class TerminalSurfaceController {
 
     func invalidate() {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        if let hostView = hostedView as? TerminalHostView {
-            hostView.setGhosttySurface(nil)
-        }
+        terminalHostView.setGhosttySurface(nil)
         if let ghosttySurface {
+            ghosttyManager.unregisterClipboardSurface(forHostView: terminalHostView, surface: ghosttySurface)
             registry.unregister(surface: ghosttySurface, for: panelID)
             ghostty_surface_free(ghosttySurface)
             self.ghosttySurface = nil
@@ -726,7 +742,7 @@ final class TerminalSurfaceController {
     private func ensureGhosttySurface(terminalState: TerminalPanelState, fontPoints: Double) {
         guard ghosttySurface == nil else { return }
 
-        guard let hostView = hostedView as? TerminalHostView else { return }
+        let hostView = terminalHostView
 
         switch evaluateSurfaceCreationReadiness(for: hostView) {
         case .ready:
@@ -1086,6 +1102,140 @@ final class TerminalHostView: NSView {
         ghosttySurface = surface
     }
 
+    override func mouseDown(with event: NSEvent) {
+        focusHostViewIfNeeded()
+        guard forwardMouseButton(
+            event,
+            state: GHOSTTY_MOUSE_PRESS,
+            button: GHOSTTY_MOUSE_LEFT
+        ) else {
+            super.mouseDown(with: event)
+            return
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let handled = forwardMouseButton(
+            event,
+            state: GHOSTTY_MOUSE_RELEASE,
+            button: GHOSTTY_MOUSE_LEFT
+        )
+        if let ghosttySurface {
+            ghostty_surface_mouse_pressure(ghosttySurface, 0, 0)
+        }
+        guard handled else {
+            super.mouseUp(with: event)
+            return
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        focusHostViewIfNeeded()
+        guard forwardMouseButton(
+            event,
+            state: GHOSTTY_MOUSE_PRESS,
+            button: GHOSTTY_MOUSE_RIGHT
+        ) else {
+            super.rightMouseDown(with: event)
+            return
+        }
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        guard forwardMouseButton(
+            event,
+            state: GHOSTTY_MOUSE_RELEASE,
+            button: GHOSTTY_MOUSE_RIGHT
+        ) else {
+            super.rightMouseUp(with: event)
+            return
+        }
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        focusHostViewIfNeeded()
+        let button = Self.ghosttyMouseButton(for: event.buttonNumber)
+        guard forwardMouseButton(event, state: GHOSTTY_MOUSE_PRESS, button: button) else {
+            super.otherMouseDown(with: event)
+            return
+        }
+    }
+
+    override func otherMouseUp(with event: NSEvent) {
+        let button = Self.ghosttyMouseButton(for: event.buttonNumber)
+        guard forwardMouseButton(event, state: GHOSTTY_MOUSE_RELEASE, button: button) else {
+            super.otherMouseUp(with: event)
+            return
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard forwardMousePosition(event) else {
+            super.mouseMoved(with: event)
+            return
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard forwardMousePosition(event) else {
+            super.mouseDragged(with: event)
+            return
+        }
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        guard forwardMousePosition(event) else {
+            super.rightMouseDragged(with: event)
+            return
+        }
+    }
+
+    override func otherMouseDragged(with event: NSEvent) {
+        guard forwardMousePosition(event) else {
+            super.otherMouseDragged(with: event)
+            return
+        }
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let ghosttySurface else {
+            super.scrollWheel(with: event)
+            return
+        }
+        var deltaX = event.scrollingDeltaX
+        var deltaY = event.scrollingDeltaY
+        let hasPrecision = event.hasPreciseScrollingDeltas
+
+        if hasPrecision {
+            // Match Ghostty's native host behavior to preserve trackpad scroll feel.
+            deltaX *= 2
+            deltaY *= 2
+        }
+
+        let mods = Self.ghosttyScrollModifierFlags(
+            precision: hasPrecision,
+            momentumPhase: event.momentumPhase
+        )
+        ghostty_surface_mouse_scroll(
+            ghosttySurface,
+            Double(deltaX),
+            Double(deltaY),
+            mods
+        )
+    }
+
+    override func pressureChange(with event: NSEvent) {
+        guard let ghosttySurface else {
+            super.pressureChange(with: event)
+            return
+        }
+        ghostty_surface_mouse_pressure(
+            ghosttySurface,
+            UInt32(max(event.stage, 0)),
+            Double(event.pressure)
+        )
+    }
+
     override func keyDown(with event: NSEvent) {
         guard handleKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS) else {
             super.keyDown(with: event)
@@ -1154,6 +1304,38 @@ final class TerminalHostView: NSView {
         return handled
     }
 
+    private func focusHostViewIfNeeded() {
+        guard let window else { return }
+        guard window.firstResponder !== self else { return }
+        window.makeFirstResponder(self)
+    }
+
+    @discardableResult
+    private func forwardMouseButton(
+        _ event: NSEvent,
+        state: ghostty_input_mouse_state_e,
+        button: ghostty_input_mouse_button_e
+    ) -> Bool {
+        guard let ghosttySurface else { return false }
+        forwardMousePosition(event, surface: ghosttySurface)
+        let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
+        return ghostty_surface_mouse_button(ghosttySurface, state, button, mods)
+    }
+
+    @discardableResult
+    private func forwardMousePosition(_ event: NSEvent) -> Bool {
+        guard let ghosttySurface else { return false }
+        forwardMousePosition(event, surface: ghosttySurface)
+        return true
+    }
+
+    private func forwardMousePosition(_ event: NSEvent, surface: ghostty_surface_t) {
+        let point = convert(event.locationInWindow, from: nil)
+        let y = bounds.height - point.y
+        let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
+        ghostty_surface_mouse_pos(surface, point.x, y, mods)
+    }
+
     private static func ghosttyModifierFlags(for flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
         var raw = GHOSTTY_MODS_NONE.rawValue
         if flags.contains(.shift) { raw |= GHOSTTY_MODS_SHIFT.rawValue }
@@ -1162,7 +1344,72 @@ final class TerminalHostView: NSView {
         if flags.contains(.command) { raw |= GHOSTTY_MODS_SUPER.rawValue }
         if flags.contains(.capsLock) { raw |= GHOSTTY_MODS_CAPS.rawValue }
         if flags.contains(.numericPad) { raw |= GHOSTTY_MODS_NUM.rawValue }
+        let rawFlags = flags.rawValue
+        if rawFlags & UInt(NX_DEVICERSHIFTKEYMASK) != 0 { raw |= GHOSTTY_MODS_SHIFT_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERCTLKEYMASK) != 0 { raw |= GHOSTTY_MODS_CTRL_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERALTKEYMASK) != 0 { raw |= GHOSTTY_MODS_ALT_RIGHT.rawValue }
+        if rawFlags & UInt(NX_DEVICERCMDKEYMASK) != 0 { raw |= GHOSTTY_MODS_SUPER_RIGHT.rawValue }
         return ghostty_input_mods_e(rawValue: raw)
+    }
+
+    private static func ghosttyMouseButton(for buttonNumber: Int) -> ghostty_input_mouse_button_e {
+        switch buttonNumber {
+        case 0:
+            return GHOSTTY_MOUSE_LEFT
+        case 1:
+            return GHOSTTY_MOUSE_RIGHT
+        case 2:
+            return GHOSTTY_MOUSE_MIDDLE
+        case 3:
+            return GHOSTTY_MOUSE_EIGHT
+        case 4:
+            return GHOSTTY_MOUSE_NINE
+        case 5:
+            return GHOSTTY_MOUSE_SIX
+        case 6:
+            return GHOSTTY_MOUSE_SEVEN
+        case 7:
+            return GHOSTTY_MOUSE_FOUR
+        case 8:
+            return GHOSTTY_MOUSE_FIVE
+        case 9:
+            return GHOSTTY_MOUSE_TEN
+        case 10:
+            return GHOSTTY_MOUSE_ELEVEN
+        default:
+            return GHOSTTY_MOUSE_UNKNOWN
+        }
+    }
+
+    private static func ghosttyScrollModifierFlags(
+        precision: Bool,
+        momentumPhase: NSEvent.Phase
+    ) -> ghostty_input_scroll_mods_t {
+        var rawValue: Int32 = 0
+        if precision {
+            rawValue |= 0b0000_0001
+        }
+        rawValue |= ghosttyMouseMomentumRawValue(for: momentumPhase) << 1
+        return ghostty_input_scroll_mods_t(rawValue)
+    }
+
+    private static func ghosttyMouseMomentumRawValue(for phase: NSEvent.Phase) -> Int32 {
+        switch phase {
+        case .began:
+            return Int32(GHOSTTY_MOUSE_MOMENTUM_BEGAN.rawValue)
+        case .stationary:
+            return Int32(GHOSTTY_MOUSE_MOMENTUM_STATIONARY.rawValue)
+        case .changed:
+            return Int32(GHOSTTY_MOUSE_MOMENTUM_CHANGED.rawValue)
+        case .ended:
+            return Int32(GHOSTTY_MOUSE_MOMENTUM_ENDED.rawValue)
+        case .cancelled:
+            return Int32(GHOSTTY_MOUSE_MOMENTUM_CANCELLED.rawValue)
+        case .mayBegin:
+            return Int32(GHOSTTY_MOUSE_MOMENTUM_MAY_BEGIN.rawValue)
+        default:
+            return Int32(GHOSTTY_MOUSE_MOMENTUM_NONE.rawValue)
+        }
     }
 
     private static func ghosttyText(for event: NSEvent) -> String? {
