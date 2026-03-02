@@ -87,6 +87,8 @@ toastty panel close [--panel <id>]
 toastty panel reopen
 toastty panel focus <id>
 toastty panel create terminal [--workspace <id>]
+toastty panel create builtin <kind> [--workspace <id>]      # e.g. diff|markdown|scratchpad
+toastty panel toggle builtin <kind> [--workspace <id>]      # open if hidden, close if visible
 toastty panel create extension <extension-id> [--workspace <id>]
 
 toastty zoom toggle
@@ -97,12 +99,6 @@ toastty zoom toggle
 ```bash
 toastty send "ls -la" [--panel <id>] [--submit]
 toastty read [--panel <id>] [--contains "pattern"]
-```
-
-**aux panel toggles:**
-
-```bash
-toastty toggle diff|markdown|scratchpad
 ```
 
 **font:**
@@ -130,7 +126,7 @@ toastty notify "title" "body" [--workspace <id>]
 **feed (see section 4):**
 
 ```bash
-toastty feed post "markdown content" [--context session.json]
+toastty feed post "markdown content" [--agent claude|codex] [--session <id>] [--cwd <path>]
 toastty feed list [--limit 20]
 toastty feed inject <content-id> "feedback text"    # simulate user comment
 ```
@@ -149,22 +145,22 @@ $ toastty status --json
 
 ### CLI extensibility
 
-When the CLI receives an unrecognized top-level command, it checks for installed extensions that declare CLI commands. Extension commands are routed through the socket as `extension.command` requests.
+Extension commands are explicit under the `extension` command group. This avoids ambiguity with built-in commands and keeps intent obvious in scripts.
 
 ```bash
 # built-in command — handled directly
 toastty split right
 
 # extension command — routed to extension
-toastty ci-status refresh
-toastty ci-status get-pipeline --id 123
+toastty extension ci-status refresh
+toastty extension ci-status get-pipeline --id 123
 ```
 
-Resolution order for a command like `toastty ci-status refresh`:
+Resolution order for a command like `toastty extension ci-status refresh`:
 
-1. Is `ci-status` a built-in command group? No.
-2. Is `ci-status` an installed extension with declared commands? Check `~/.config/toastty/extensions/ci-status/manifest.json`.
-3. If yes, send to socket: `{"command": "extension.command", "payload": {"extensionID": "ci-status", "command": "refresh", "args": {"id": "123"}}}`.
+1. Is `ci-status` an installed extension with declared commands? Check `~/.toastty/extensions/ci-status/manifest.json`.
+2. Is `refresh` declared in that extension's `commands` map? If no, return a CLI validation error.
+3. If yes, send to socket: `{"command": "extension.command", "payload": {"extensionID": "ci-status", "command": "refresh", "args": {}}}`.
 4. The app routes it to the extension's WebView via the JS bridge.
 5. The extension processes it and returns a result.
 
@@ -183,13 +179,13 @@ Extensions are directories containing a manifest, an HTML entry point, and optio
 ### extension directory layout
 
 ```
-~/.config/toastty/extensions/
+~/.toastty/extensions/
   ci-status/
     manifest.json
     index.html
     panel.js          # optional, or inline in HTML
     styles.css         # optional
-    icon.svg           # optional, shown in panel tab and sidebar
+    icon.svg           # optional, shown in panel tab
   my-feed-viewer/
     manifest.json
     index.html
@@ -224,33 +220,26 @@ Extensions are directories containing a manifest, an HTML entry point, and optio
     }
   },
 
-  "sidebar": {
-    "title": "CI",
-    "icon": "icon.svg",
-    "position": "below-workspaces"
-  },
-
   "permissions": []
 }
 ```
 
 Fields:
 
-- `id`: unique identifier, matches directory name. Used as the CLI subcommand namespace.
+- `id`: unique identifier, matches directory name. Used as the CLI extension identifier (`toastty extension <id> ...`).
 - `name`: human-readable display name.
 - `version`: semver string.
 - `entryPoint`: path to HTML file relative to extension directory.
-- `icon`: optional SVG/PNG icon for panel tabs and sidebar.
+- `icon`: optional SVG/PNG icon for panel tabs.
 - `panel`: sizing hints for the panel host.
 - `commands`: CLI commands this extension handles (see CLI extensibility above).
-- `sidebar`: optional sidebar section registration (see section 5).
 - `permissions`: reserved for future permission model. Empty array for now.
 
 ### panel lifecycle
 
 1. User (or agent via CLI/socket) creates an extension panel: `toastty panel create extension ci-status`.
 2. App adds `PanelState.extension(ExtensionPanelState)` to the workspace.
-3. App creates a `WKWebView`, loads `~/.config/toastty/extensions/ci-status/index.html`.
+3. App creates a `WKWebView`, loads `~/.toastty/extensions/ci-status/index.html`.
 4. App injects the `toastty` JS bridge object before the page loads.
 5. The extension renders its UI and communicates via the bridge.
 6. On panel close, the WebView is torn down. The extension can persist its own state via the bridge.
@@ -304,7 +293,7 @@ toastty.on("message", ({ from, data }) => {
 });
 ```
 
-**Implementation:** `toastty.command()` and `toastty.postToFeed()` use `WKScriptMessageHandler` (extension -> app). Event delivery uses `evaluateJavaScript` (app -> extension). State persistence uses a JSON file at `~/.config/toastty/extensions/<id>/state.json`.
+**Implementation:** `toastty.command()` and `toastty.postToFeed()` use `WKScriptMessageHandler` (extension -> app). Event delivery uses `evaluateJavaScript` (app -> extension). State persistence uses a JSON file at `~/.toastty/state/extensions/<extension-id>/<panel-id>.json` (outside the watched extension source directory). `saveState()`/`loadState()` are scoped to the current panel instance (`panel-id`), so multiple open panels from the same extension do not overwrite each other.
 
 ### hot reload
 
@@ -421,7 +410,9 @@ This metadata is persisted with the feed state. It survives app restarts.
 
 The feed is a built-in panel type (not an extension) that serves as a shared communication channel between agents and users. Agents post content, users read and comment, comments route back to agents.
 
-The feed is global — all connected agents can post to it, and all posts are visible to everyone. This makes it a natural coordination layer: one agent posts a summary, another sees it and responds if relevant, the user watches and intervenes when needed.
+The feed is global within the app. All posts are visible in the shared timeline, and comments can route back to the originating agent session (or trigger a resumed/new session when needed).
+
+In v1, feed access is request/response (no push subscription for external clients). Agent/tooling clients that need updates poll via `toastty feed list` or `feed.list`.
 
 ### feed item model
 
@@ -501,51 +492,7 @@ The feed panel renders an inline comment input on each feedback-enabled item. Wh
 2. If the originating agent's terminal session is still running (session is in `SessionRegistry`), inject the comment as terminal input (case 1 from section 3).
 3. If the session has ended, invoke a new agent session with the comment as context (case 2 from section 3).
 
-### feed as coordination layer
-
-Because the feed is visible to all connected agents, it can serve as a broadcast channel:
-
-- Agent A posts: "Refactored auth module, 3 files changed"
-- Agent B (monitoring the feed via socket events) sees it: "I depend on auth — re-running my tests"
-- User comments: "Hold off on deploying until B confirms"
-- Both agents see the user's comment
-
-For agents that want to monitor the feed programmatically, the socket protocol adds a `feed.new_item` event type that is sent to all connected clients when a new item is posted.
-
-## 5) sidebar extensibility
-
-Extensions can register sidebar sections via the `sidebar` field in their manifest. The sidebar stays native SwiftUI — extensions contribute data, not views.
-
-A sidebar section declared by an extension shows:
-
-- An icon and title
-- A list of items (provided by the extension via the JS bridge)
-- Click actions that route to the extension
-
-```json
-{
-  "sidebar": {
-    "title": "CI",
-    "icon": "icon.svg",
-    "position": "below-workspaces"
-  }
-}
-```
-
-The extension provides sidebar content via the bridge:
-
-```js
-toastty.setSidebarItems([
-  { id: "pipeline-main", label: "main", subtitle: "3 failing", status: "error" },
-  { id: "pipeline-dev", label: "dev", subtitle: "passing", status: "ok" }
-]);
-```
-
-Clicking a sidebar item sends an event to the extension: `toastty.on("sidebar.itemClicked", ({ itemId }) => { ... })`.
-
-The sidebar renders built-in sections first (workspaces), then extension-contributed sections in manifest-declared order.
-
-## 6) phased implementation
+## 5) phased implementation
 
 ### phase 1: always-on socket + CLI
 
@@ -554,7 +501,8 @@ The sidebar renders built-in sections first (workspaces), then extension-contrib
 - Remove automation gate for non-destructive commands (splits, focus, font, terminal I/O, state inspection, notifications).
 - Keep `automation.reset`, `automation.load_fixture`, `automation.capture_screenshot`, `automation.dump_state` gated behind `--automation`.
 - Build `toastty` CLI binary (`Sources/CLI/`) that wraps socket communication.
-- Implement command groups: `workspace`, `split`, `focus`, `resize`, `equalize`, `panel`, `send`, `read`, `toggle`, `font`, `status`, `notify`.
+- Implement command groups: `workspace`, `split`, `focus`, `resize`, `equalize`, `panel`, `send`, `read`, `font`, `status`, `notify`.
+- Panel command surface includes `panel create`, `panel toggle builtin`, `panel focus`, `panel close`, and `panel reopen`.
 - JSON output mode (`--json`) for programmatic use.
 - Socket discovery, error handling, timeout.
 
@@ -564,12 +512,12 @@ The sidebar renders built-in sections first (workspaces), then extension-contrib
 
 - Add `PanelKind.extension` and `ExtensionPanelState`.
 - Build extension host: `WKWebView` management, JS bridge injection, lifecycle.
-- Manifest parsing from `~/.config/toastty/extensions/*/manifest.json`.
+- Manifest parsing from `~/.toastty/extensions/*/manifest.json`.
 - Extension panel creation via CLI and socket (`panel.create.extension`).
 - Extension state persistence (`saveState`/`loadState`).
 - Hot reload on file changes.
 - Extension panel participates in all panel mobility operations.
-- CLI extensibility: unrecognized commands route to extensions.
+- CLI extensibility: explicit `toastty extension <extension-id> <command> ...` routes to extensions.
 
 ### phase 3: feed panel + agent feedback
 
@@ -583,18 +531,15 @@ The sidebar renders built-in sections first (workspaces), then extension-contrib
 - Agent invocation for exited-agent feedback (case 2): `agents.toml` config, template resolution, terminal pane creation.
 - Feed UI: feed panel with markdown rendering, inline comment input.
 
-### phase 4: sidebar extensibility + polish
+### phase 4: extension tooling + polish
 
-**Goal:** Extensions can contribute sidebar sections. Extension development workflow is smooth.
+**Goal:** Extension development workflow is smooth.
 
-- Data-driven sidebar with built-in + extension-contributed sections.
-- `setSidebarItems` JS bridge API.
-- Sidebar click routing to extensions.
 - Extension scaffolding command: `toastty extension create <name>` generates manifest + boilerplate HTML.
 - Extension listing: `toastty extension list`, `toastty extension info <id>`.
 - Documentation and examples for extension authors.
 
-## 7) open questions and future considerations
+## 6) open questions and future considerations
 
 ### permissions model
 
@@ -610,7 +555,7 @@ MCP could be added as an alternative interface to the same dispatch layer. The s
 
 ### extension-authored extensions
 
-An agent running in a terminal pane can create an extension at runtime: write files to `~/.config/toastty/extensions/<name>/`, then `toastty panel create extension <name>`. The hot-reload system picks up the new extension automatically. No special "self-modification" mechanism needed — the file system and the CLI are the interface.
+An agent running in a terminal pane can create an extension at runtime: write files to `~/.toastty/extensions/<name>/`, then `toastty panel create extension <name>`. The hot-reload system picks up the new extension automatically. No special "self-modification" mechanism needed — the file system and the CLI are the interface.
 
 ### cross-extension communication
 
