@@ -224,6 +224,70 @@ struct AppReducerTests {
     }
 
     @Test
+    func renameWorkspaceUpdatesWorkspaceTitle() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.renameWorkspace(workspaceID: workspaceID, title: "Infra"), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.title == "Infra")
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func renameWorkspaceRejectsEmptyTitle() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let originalWorkspace = try #require(state.workspacesByID[workspaceID])
+
+        #expect(reducer.send(.renameWorkspace(workspaceID: workspaceID, title: "   "), state: &state) == false)
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.title == originalWorkspace.title)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func renameWorkspaceWithUnchangedTitleIsNoOp() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let title = try #require(state.workspacesByID[workspaceID]?.title)
+
+        #expect(reducer.send(.renameWorkspace(workspaceID: workspaceID, title: title), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeWorkspaceRemovesWorkspaceAndSelectsAdjacentWorkspace() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.workspaceIDs.first)
+        let secondWorkspaceID = try #require(state.windows.first?.workspaceIDs.last)
+
+        #expect(reducer.send(.closeWorkspace(workspaceID: firstWorkspaceID), state: &state))
+
+        #expect(state.workspacesByID[firstWorkspaceID] == nil)
+        let updatedWindow = try #require(state.windows.first(where: { $0.id == windowID }))
+        #expect(updatedWindow.workspaceIDs == [secondWorkspaceID])
+        #expect(updatedWindow.selectedWorkspaceID == secondWorkspaceID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeWorkspaceWithUnknownIDIsNoOp() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.closeWorkspace(workspaceID: UUID()), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func reorderPanelRepositionsTabWithinPane() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

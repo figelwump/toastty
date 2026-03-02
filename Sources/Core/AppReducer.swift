@@ -34,6 +34,19 @@ public struct AppReducer {
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
             return true
 
+        case .renameWorkspace(let workspaceID, let title):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmedTitle.isEmpty == false else { return false }
+            guard workspace.title != trimmedTitle else { return false }
+            workspace.title = trimmedTitle
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
+        case .closeWorkspace(let workspaceID):
+            guard let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) else { return false }
+            return removeWorkspace(workspaceID, windowID: windowID, state: &state)
+
         case .focusPanel(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.panels[panelID] != nil else { return false }
@@ -1039,10 +1052,11 @@ public struct AppReducer {
         })?.paneID
     }
 
-    private static func removeWorkspace(_ workspaceID: UUID, windowID: UUID, state: inout AppState) {
-        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return }
+    @discardableResult
+    private static func removeWorkspace(_ workspaceID: UUID, windowID: UUID, state: inout AppState) -> Bool {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
         var window = state.windows[windowIndex]
-        guard let workspaceIndex = window.workspaceIDs.firstIndex(of: workspaceID) else { return }
+        guard let workspaceIndex = window.workspaceIDs.firstIndex(of: workspaceID) else { return false }
 
         state.workspacesByID.removeValue(forKey: workspaceID)
         window.workspaceIDs.remove(at: workspaceIndex)
@@ -1053,7 +1067,7 @@ public struct AppReducer {
             if state.selectedWindowID == removedWindowID {
                 state.selectedWindowID = state.windows.first?.id
             }
-            return
+            return true
         }
 
         if window.selectedWorkspaceID == workspaceID {
@@ -1065,6 +1079,7 @@ public struct AppReducer {
         if state.selectedWindowID == nil {
             state.selectedWindowID = window.id
         }
+        return true
     }
 
     private static func nextTerminalTitle(in workspace: WorkspaceState) -> String {

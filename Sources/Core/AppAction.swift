@@ -27,6 +27,8 @@ public enum AppAction: Equatable, Sendable {
     case selectWindow(windowID: UUID)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
     case createWorkspace(windowID: UUID, title: String?)
+    case renameWorkspace(workspaceID: UUID, title: String)
+    case closeWorkspace(workspaceID: UUID)
     case focusPanel(workspaceID: UUID, panelID: UUID)
     case reorderPanel(panelID: UUID, toIndex: Int, inPaneID: UUID)
     case movePanelToPane(panelID: UUID, targetPaneID: UUID, index: Int?)
@@ -58,6 +60,10 @@ public extension AppAction {
             return "selectWorkspace"
         case .createWorkspace:
             return "createWorkspace"
+        case .renameWorkspace:
+            return "renameWorkspace"
+        case .closeWorkspace:
+            return "closeWorkspace"
         case .focusPanel:
             return "focusPanel"
         case .reorderPanel:
