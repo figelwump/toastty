@@ -126,7 +126,7 @@ toastty notify "title" "body" [--workspace <id>]
 **feed (see section 4):**
 
 ```bash
-toastty feed post "markdown content" [--agent claude|codex] [--session <id>] [--cwd <path>]
+toastty feed post "markdown content" [--agent claude|codex] [--session <id>] [--cwd <path>] [--repo-root <path>]
 toastty feed list [--limit 20]
 toastty feed inject <content-id> "feedback text"    # simulate user comment
 ```
@@ -154,15 +154,31 @@ toastty split right
 # extension command — routed to extension
 toastty extension ci-status refresh
 toastty extension ci-status get-pipeline --id 123
+toastty extension ci-status refresh --panel <panel-id>
+toastty extension ci-status refresh --ensure-panel
 ```
 
 Resolution order for a command like `toastty extension ci-status refresh`:
 
-1. Is `ci-status` an installed extension with declared commands? Check `~/.toastty/extensions/ci-status/manifest.json`.
+1. Is `ci-status` an installed extension (`manifest.id`)? Check `~/.toastty/extensions/ci-status/manifest.json`.
 2. Is `refresh` declared in that extension's `commands` map? If no, return a CLI validation error.
-3. If yes, send to socket: `{"command": "extension.command", "payload": {"extensionID": "ci-status", "command": "refresh", "args": {}}}`.
-4. The app routes it to the extension's WebView via the JS bridge.
-5. The extension processes it and returns a result.
+3. Resolve a target extension panel:
+   - if `--panel <id>` is provided, validate that panel exists and matches `extensionID`.
+   - otherwise, use focused matching extension panel in the currently selected workspace; fallback to first matching panel in that workspace.
+   - if none exists, return `NO_EXTENSION_PANEL` unless `--ensure-panel` is set.
+   - if `--panel <id>` is provided but not found (or points to a different extension), return `INVALID_EXTENSION_PANEL`.
+4. If `--ensure-panel` is set and no matching panel exists, create one (`panel create extension <extension-id>`) and target it.
+5. Send to socket: `{"command": "extension.command", "payload": {"extensionID": "ci-status", "panelID": "<resolved-panel-id>", "command": "refresh", "args": {}}}`.
+6. The app routes it to the target extension WebView via the JS bridge.
+7. The extension processes it and returns a result.
+
+Argument mapping example (`toastty extension ci-status get-pipeline --id 123`):
+
+```json
+{"command": "extension.command", "payload": {"extensionID": "ci-status", "panelID": "<resolved-panel-id>", "command": "get-pipeline", "args": {"id": "123"}}}
+```
+
+CLI-provided extension args are serialized as strings in the outgoing payload; extension-side validation/coercion follows manifest-declared arg types.
 
 Extensions declare their CLI commands in the manifest (see section 2). The CLI reads manifests from disk to build help text and tab completions — it does not need the app to be running for `--help` to work.
 
@@ -359,14 +375,14 @@ Toastty invokes a new agent session with the feedback as prompt context. The new
 Agent invocation is configured per agent type:
 
 ```toml
-# ~/.config/toastty/agents.toml
+# ~/.toastty/agents.toml
 
-[claude-code]
-invoke = "claude --resume {sessionID} --print '{message}'"
-fallback = "claude -p '{message}' --cwd '{cwd}'"
+[claude]
+invokeArgs = ["claude", "--resume", "{sessionID}", "--print", "{message}"]
+fallbackArgs = ["claude", "-p", "{message}", "--cwd", "{cwd}"]
 
 [codex]
-invoke = "codex --message '{message}' --cwd '{cwd}'"
+invokeArgs = ["codex", "--message", "{message}", "--cwd", "{cwd}"]
 ```
 
 Template variables available:
@@ -376,6 +392,10 @@ Template variables available:
 - `{cwd}`: working directory from the original session
 - `{repoRoot}`: repo root from the original session
 - `{contentID}`: ID of the feed item or annotation being commented on
+
+Templates can use any subset of variables. Unused variables do not need to appear in every `invokeArgs`/`fallbackArgs` entry.
+
+Commands are executed as argv arrays (`Process.executableURL` + `Process.arguments`) rather than interpolated shell strings. This avoids quote-escaping bugs and command injection.
 
 When feedback arrives for a dead session:
 
@@ -393,7 +413,7 @@ Every feed item and annotation stores the metadata needed to restart the convers
 {
   "contentID": "feed-abc-123",
   "sessionID": "sess_xyz",
-  "agent": "claude-code",
+  "agent": "claude",
   "cwd": "/Users/vishal/repos/toastty",
   "repoRoot": "/Users/vishal/repos/toastty",
   "timestamp": "2026-03-02T14:30:00Z",
@@ -403,6 +423,8 @@ Every feed item and annotation stores the metadata needed to restart the convers
 ```
 
 This metadata is persisted with the feed state. It survives app restarts.
+
+Backward compatibility: legacy stored metadata values like `"agent": "claude-code"` are normalized to canonical `"claude"` during load.
 
 ## 4) feed panel
 
@@ -455,7 +477,7 @@ struct AgentInvocationContext: Codable {
 Via CLI:
 
 ```bash
-toastty feed post "## Refactored auth\n3 files changed." --agent claude-code --session sess_xyz
+toastty feed post "## Refactored auth\n3 files changed." --agent claude --session sess_xyz --cwd /Users/vishal/repos/toastty --repo-root /Users/vishal/repos/toastty
 ```
 
 Via socket:
@@ -467,13 +489,21 @@ Via socket:
     "content": { "type": "markdown", "body": "## Refactored auth\n3 files changed." },
     "feedbackEnabled": true,
     "agentContext": {
-      "agent": "claude-code",
+      "agent": "claude",
       "sessionID": "sess_xyz",
-      "cwd": "/Users/vishal/repos/toastty"
+      "cwd": "/Users/vishal/repos/toastty",
+      "repoRoot": "/Users/vishal/repos/toastty"
     }
   }
 }
 ```
+
+CLI flag mapping for `feed post`:
+
+- `--agent` -> `agentContext.agent`
+- `--session` -> `agentContext.sessionID`
+- `--cwd` -> `agentContext.cwd`
+- `--repo-root` -> `agentContext.repoRoot`
 
 Via extension JS bridge:
 
@@ -500,6 +530,7 @@ The feed panel renders an inline comment input on each feedback-enabled item. Wh
 
 - Remove automation gate for non-destructive commands (splits, focus, font, terminal I/O, state inspection, notifications).
 - Keep `automation.reset`, `automation.load_fixture`, `automation.capture_screenshot`, `automation.dump_state` gated behind `--automation`.
+- Automation commands remain socket/internal in this phase; they are not part of the standard end-user `toastty` CLI command surface.
 - Build `toastty` CLI binary (`Sources/CLI/`) that wraps socket communication.
 - Implement command groups: `workspace`, `split`, `focus`, `resize`, `equalize`, `panel`, `send`, `read`, `font`, `status`, `notify`.
 - Panel command surface includes `panel create`, `panel toggle builtin`, `panel focus`, `panel close`, and `panel reopen`.
