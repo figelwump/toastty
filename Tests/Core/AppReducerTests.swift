@@ -172,6 +172,78 @@ struct AppReducerTests {
     }
 
     @Test
+    func updateTerminalPanelMetadataUpdatesTerminalTitleAndCWD() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelMetadata(
+                    panelID: panelID,
+                    title: "Dev Server",
+                    cwd: "/tmp/toastty"
+                ),
+                state: &state
+            )
+        )
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        guard case .terminal(let terminalState) = try #require(updatedWorkspace.panels[panelID]) else {
+            Issue.record("expected focused panel to remain terminal")
+            return
+        }
+
+        #expect(terminalState.title == "Dev Server")
+        #expect(terminalState.cwd == "/tmp/toastty")
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func updateTerminalPanelMetadataRejectsUnknownPanelAndNoOpPayload() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelMetadata(
+                    panelID: UUID(),
+                    title: "Dev Server",
+                    cwd: "/tmp/toastty"
+                ),
+                state: &state
+            ) == false
+        )
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelMetadata(
+                    panelID: panelID,
+                    title: "   ",
+                    cwd: nil
+                ),
+                state: &state
+            ) == false
+        )
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelMetadata(
+                    panelID: panelID,
+                    title: nil,
+                    cwd: "   "
+                ),
+                state: &state
+            ) == false
+        )
+    }
+
+    @Test
     func createWorkspaceAppendsWorkspaceAndSelectsIt() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -1128,4 +1200,34 @@ struct AppReducerTests {
 
         try StateValidator.validate(state)
     }
+
+    @Test
+    func recordDesktopNotificationIncrementsUnreadCount() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        let countBefore = try #require(state.workspacesByID[workspaceID]).unreadNotificationCount
+        #expect(countBefore == 0)
+
+        #expect(reducer.send(.recordDesktopNotification(workspaceID: workspaceID), state: &state))
+
+        let countAfter = try #require(state.workspacesByID[workspaceID]).unreadNotificationCount
+        #expect(countAfter == 1)
+
+        #expect(reducer.send(.recordDesktopNotification(workspaceID: workspaceID), state: &state))
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 2)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func recordDesktopNotificationReturnsFalseForUnknownWorkspace() {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let bogusWorkspaceID = UUID()
+
+        #expect(reducer.send(.recordDesktopNotification(workspaceID: bogusWorkspaceID), state: &state) == false)
+    }
+
 }

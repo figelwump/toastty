@@ -416,6 +416,35 @@ public struct AppReducer {
             workspace.focusedPanelID = panelID
             state.workspacesByID[workspaceID] = workspace
             return true
+
+        case .updateTerminalPanelMetadata(let panelID, let title, let cwd):
+            guard let location = locatePanel(panelID, in: state) else { return false }
+            guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
+            guard case .terminal(var terminalState) = workspace.panels[panelID] else { return false }
+
+            var didMutate = false
+
+            if let normalizedTitle = normalizedMetadataValue(title),
+               terminalState.title != normalizedTitle {
+                terminalState.title = normalizedTitle
+                didMutate = true
+            }
+
+            if let normalizedCWD = normalizedMetadataValue(cwd),
+               terminalState.cwd != normalizedCWD {
+                terminalState.cwd = normalizedCWD
+                didMutate = true
+            }
+
+            guard didMutate else { return false }
+            workspace.panels[panelID] = .terminal(terminalState)
+            state.workspacesByID[location.workspaceID] = workspace
+            return true
+
+        case .recordDesktopNotification(let workspaceID):
+            guard state.workspacesByID[workspaceID] != nil else { return false }
+            state.workspacesByID[workspaceID]!.unreadNotificationCount += 1
+            return true
         }
     }
 
@@ -1104,6 +1133,13 @@ public struct AppReducer {
         }.max() ?? 0
 
         return "Workspace \(currentMax + 1)"
+    }
+
+    private static func normalizedMetadataValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        return trimmed
     }
 
     private static func makeAuxPanelState(for kind: PanelKind) -> PanelState? {

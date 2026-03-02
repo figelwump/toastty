@@ -402,6 +402,30 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             workspaceIDForAction = selectedWorkspaceID
         }
 
+        // Metadata updates should not steal focus.
+        switch action.intent {
+        case .setTerminalTitle(let title):
+            return handleTerminalMetadataUpdate(
+                title: title,
+                cwd: nil,
+                workspaceID: workspaceIDForAction,
+                panelID: panelID,
+                state: state,
+                store: store
+            )
+        case .setTerminalCWD(let cwd):
+            return handleTerminalMetadataUpdate(
+                title: nil,
+                cwd: cwd,
+                workspaceID: workspaceIDForAction,
+                panelID: panelID,
+                state: state,
+                store: store
+            )
+        default:
+            break
+        }
+
         guard store.send(.focusPanel(workspaceID: workspaceIDForAction, panelID: panelID)) else {
             ToasttyLog.warning(
                 "Ghostty action failed to focus resolved panel",
@@ -437,6 +461,10 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
+
+        case .setTerminalTitle, .setTerminalCWD:
+            assertionFailure("Metadata intents should be handled before focus dispatch")
+            handled = false
         }
 
         if handled {
@@ -461,6 +489,104 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             )
         }
         return handled
+    }
+
+    private func handleTerminalMetadataUpdate(
+        title: String?,
+        cwd: String?,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState,
+        store: AppStore
+    ) -> Bool {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let panelState = workspace.panels[panelID],
+              case .terminal(let terminalState) = panelState else {
+            ToasttyLog.debug(
+                "Skipping terminal metadata update for non-terminal panel",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+            return false
+        }
+
+        let normalizedTitle = Self.normalizedMetadataValue(title)
+        let normalizedCWD = Self.normalizedCWDValue(cwd)
+
+        var hasChanges = false
+        if let normalizedTitle, normalizedTitle != terminalState.title {
+            hasChanges = true
+        }
+        if let normalizedCWD, normalizedCWD != terminalState.cwd {
+            hasChanges = true
+        }
+
+        guard hasChanges else {
+            return true
+        }
+
+        let handled = store.send(
+            .updateTerminalPanelMetadata(
+                panelID: panelID,
+                title: normalizedTitle,
+                cwd: normalizedCWD
+            )
+        )
+        if handled {
+            ToasttyLog.debug(
+                "Applied terminal metadata update from Ghostty",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "title_updated": normalizedTitle == nil ? "false" : "true",
+                    "cwd_updated": normalizedCWD == nil ? "false" : "true",
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Reducer rejected terminal metadata update from Ghostty",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "title_updated": normalizedTitle == nil ? "false" : "true",
+                    "cwd_updated": normalizedCWD == nil ? "false" : "true",
+                ]
+            )
+        }
+        return handled
+    }
+
+    private static func normalizedMetadataValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        return trimmed
+    }
+
+    private static func normalizedCWDValue(_ value: String?) -> String? {
+        guard let normalized = normalizedMetadataValue(value) else { return nil }
+        let localhostPrefix = "file://localhost"
+        let filePrefix = "file://"
+        guard normalized.hasPrefix(filePrefix) else { return normalized }
+
+        let rawPath: String
+        if normalized.hasPrefix(localhostPrefix) {
+            rawPath = String(normalized.dropFirst(localhostPrefix.count))
+        } else {
+            rawPath = String(normalized.dropFirst(filePrefix.count))
+        }
+
+        // Preserve non-local file URLs (e.g. file://remotehost/path) as-is.
+        guard rawPath.hasPrefix("/") else { return normalized }
+
+        let decodedPath = rawPath.removingPercentEncoding ?? rawPath
+        guard decodedPath.isEmpty == false else { return nil }
+        return decodedPath
     }
 }
 #endif

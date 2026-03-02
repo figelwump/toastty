@@ -17,6 +17,8 @@ struct GhosttyRuntimeAction: Sendable {
         case resizeSplit(PaneResizeDirection, amount: Int)
         case equalizeSplits
         case toggleFocusedPanelMode
+        case setTerminalTitle(String)
+        case setTerminalCWD(String)
     }
 
     let surfaceHandle: UInt?
@@ -34,6 +36,10 @@ struct GhosttyRuntimeAction: Sendable {
             return "equalize_splits"
         case .toggleFocusedPanelMode:
             return "toggle_focused_panel_mode"
+        case .setTerminalTitle:
+            return "set_terminal_title"
+        case .setTerminalCWD:
+            return "set_terminal_cwd"
         }
     }
 }
@@ -65,6 +71,10 @@ private func ghosttyActionName(_ action: ghostty_action_s) -> String {
         return "equalize_splits"
     case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
         return "toggle_split_zoom"
+    case GHOSTTY_ACTION_SET_TITLE:
+        return "set_title"
+    case GHOSTTY_ACTION_PWD:
+        return "pwd"
     default:
         return "unknown(\(action.tag.rawValue))"
     }
@@ -111,6 +121,16 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
 
     case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
         intent = .toggleFocusedPanelMode
+
+    case GHOSTTY_ACTION_SET_TITLE:
+        // SAFETY: Ghostty guarantees these pointers are valid for the duration of the callback.
+        let title = action.action.set_title.title.map { String(cString: $0) } ?? ""
+        intent = .setTerminalTitle(title)
+
+    case GHOSTTY_ACTION_PWD:
+        // SAFETY: Ghostty guarantees these pointers are valid for the duration of the callback.
+        let pwd = action.action.pwd.pwd.map { String(cString: $0) } ?? ""
+        intent = .setTerminalCWD(pwd)
 
     default:
         return nil
