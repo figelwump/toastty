@@ -340,10 +340,10 @@ final class TerminalSurfaceController {
     private var hasDeterminedSurfaceSizingMode = false
     private var lastRenderMetrics: GhosttyRenderMetrics?
     private var lastDisplayID: UInt32?
-    private var hasLoggedTinyViewportSuppression = false
     private var surfaceCreationStabilityPasses = 0
     private var lastSurfaceCreationSignature: SurfaceCreationSignature?
     private var lastSurfaceDeferralReason: SurfaceCreationDeferralReason?
+    private var lastViewportDeferralReason: SurfaceCreationDeferralReason?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 16
@@ -382,6 +382,7 @@ final class TerminalSurfaceController {
         var surfaceSuccessCount = 0
         var surfaceFailureCount = 0
         var surfaceDeferredCount = 0
+        var viewportDeferredCount = 0
     }
     #endif
 
@@ -496,22 +497,30 @@ final class TerminalSurfaceController {
         let yScale = max(Double(backingScaleFactor), 1)
         let logicalWidth = max(Int(viewportSize.width.rounded(.down)), 1)
         let logicalHeight = max(Int(viewportSize.height.rounded(.down)), 1)
-        if logicalWidth <= tinyViewportSuppressionThreshold || logicalHeight <= tinyViewportSuppressionThreshold {
-            if !hasLoggedTinyViewportSuppression {
-                ToasttyLog.debug(
-                    "Skipping tiny transient terminal viewport update during hierarchy churn",
-                    category: .ghostty,
-                    metadata: [
-                        "panel_id": panelID.uuidString,
+        guard let hostView = hostedView as? TerminalHostView else {
+            return
+        }
+        if let viewportDeferralReason = evaluateViewportUpdateReadiness(
+            for: hostView,
+            width: logicalWidth,
+            height: logicalHeight
+        ) {
+            diagnostics.viewportDeferredCount += 1
+            let reasonChanged = lastViewportDeferralReason != viewportDeferralReason
+            lastViewportDeferralReason = viewportDeferralReason
+            if reasonChanged || diagnostics.viewportDeferredCount <= 2 || diagnostics.viewportDeferredCount.isMultiple(of: 60) {
+                logSurfaceDiagnostics(
+                    message: "Deferring Ghostty viewport update until host is stable",
+                    extra: [
+                        "reason": viewportDeferralReason.rawValue,
                         "viewport_width": String(logicalWidth),
                         "viewport_height": String(logicalHeight),
                     ]
                 )
             }
-            hasLoggedTinyViewportSuppression = true
             return
         }
-        hasLoggedTinyViewportSuppression = false
+        lastViewportDeferralReason = nil
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
         ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
         let pixelWidth = max(Int((viewportSize.width * backingScaleFactor).rounded()), 1)
@@ -587,10 +596,10 @@ final class TerminalSurfaceController {
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
         lastDisplayID = nil
-        hasLoggedTinyViewportSuppression = false
         surfaceCreationStabilityPasses = 0
         lastSurfaceCreationSignature = nil
         lastSurfaceDeferralReason = nil
+        lastViewportDeferralReason = nil
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -764,6 +773,7 @@ final class TerminalSurfaceController {
         }
         diagnostics.surfaceSuccessCount += 1
         lastSurfaceDeferralReason = nil
+        lastViewportDeferralReason = nil
         surfaceCreationStabilityPasses = 0
         lastSurfaceCreationSignature = nil
         logSurfaceDiagnostics(message: "Ghostty surface creation succeeded")
@@ -771,7 +781,6 @@ final class TerminalSurfaceController {
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
         lastDisplayID = nil
-        hasLoggedTinyViewportSuppression = false
         ghosttySurface = surface
         registry.register(surface: surface, for: panelID)
     }
@@ -823,6 +832,27 @@ final class TerminalSurfaceController {
         return .ready
     }
 
+    private func evaluateViewportUpdateReadiness(
+        for hostView: NSView,
+        width: Int,
+        height: Int
+    ) -> SurfaceCreationDeferralReason? {
+        guard hostView.window != nil else {
+            return .noWindow
+        }
+
+        guard hostView.isHidden == false, hostView.hasHiddenAncestor == false else {
+            return .hiddenHost
+        }
+
+        guard width >= minimumSurfaceHostDimension,
+              height >= minimumSurfaceHostDimension else {
+            return .tinyBounds
+        }
+
+        return nil
+    }
+
     private func logSurfaceDiagnostics(message: String, extra: [String: String] = [:]) {
         var metadata: [String: String] = [
             "panel_id": panelID.uuidString,
@@ -832,6 +862,7 @@ final class TerminalSurfaceController {
             "surface_success_count": String(diagnostics.surfaceSuccessCount),
             "surface_failure_count": String(diagnostics.surfaceFailureCount),
             "surface_deferred_count": String(diagnostics.surfaceDeferredCount),
+            "viewport_deferred_count": String(diagnostics.viewportDeferredCount),
         ]
         for (key, value) in extra {
             metadata[key] = value
@@ -922,8 +953,6 @@ extension TerminalSurfaceController {
     private func resolvedDisplayID(sourceContainer: NSView) -> UInt32? {
         sourceContainer.window?.screen?.ghosttyDisplayID
     }
-
-    private var tinyViewportSuppressionThreshold: Int { 1 }
 
     private func shouldUseBackingPixelSurfaceSizing(
         measuredSize: ghostty_surface_size_s,
