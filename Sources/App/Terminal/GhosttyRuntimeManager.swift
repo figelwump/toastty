@@ -19,6 +19,7 @@ struct GhosttyRuntimeAction: Sendable {
         case toggleFocusedPanelMode
         case setTerminalTitle(String)
         case setTerminalCWD(String)
+        case commandFinished(exitCode: Int?)
     }
 
     let surfaceHandle: UInt?
@@ -40,6 +41,8 @@ struct GhosttyRuntimeAction: Sendable {
             return "set_terminal_title"
         case .setTerminalCWD:
             return "set_terminal_cwd"
+        case .commandFinished:
+            return "command_finished"
         }
     }
 }
@@ -75,6 +78,8 @@ private func ghosttyActionName(_ action: ghostty_action_s) -> String {
         return "set_title"
     case GHOSTTY_ACTION_PWD:
         return "pwd"
+    case GHOSTTY_ACTION_COMMAND_FINISHED:
+        return "command_finished"
     default:
         return "unknown(\(action.tag.rawValue))"
     }
@@ -131,6 +136,11 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         // SAFETY: Ghostty guarantees these pointers are valid for the duration of the callback.
         let pwd = action.action.pwd.pwd.map { String(cString: $0) } ?? ""
         intent = .setTerminalCWD(pwd)
+
+    case GHOSTTY_ACTION_COMMAND_FINISHED:
+        let rawExitCode = Int(action.action.command_finished.exit_code)
+        let exitCode = rawExitCode >= 0 ? rawExitCode : nil
+        intent = .commandFinished(exitCode: exitCode)
 
     default:
         return nil

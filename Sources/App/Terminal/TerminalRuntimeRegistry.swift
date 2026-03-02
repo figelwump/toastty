@@ -23,6 +23,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
+    private var pendingCWDByPanelID: [UUID: String] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     #endif
@@ -61,6 +62,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers[panelID]?.invalidate()
             controllers.removeValue(forKey: panelID)
         }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        pendingCWDByPanelID = pendingCWDByPanelID.filter { livePanelIDs.contains($0.key) }
+        #endif
 
         handleGhosttyWorkspaceSelectionPulseIfNeeded(state: state)
     }
@@ -405,6 +409,12 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         // Metadata updates should not steal focus.
         switch action.intent {
         case .setTerminalTitle(let title):
+            trackPotentialCDCommand(
+                fromTitle: title,
+                panelID: panelID,
+                workspaceID: workspaceIDForAction,
+                state: state
+            )
             return handleTerminalMetadataUpdate(
                 title: title,
                 cwd: nil,
@@ -417,6 +427,14 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return handleTerminalMetadataUpdate(
                 title: nil,
                 cwd: cwd,
+                workspaceID: workspaceIDForAction,
+                panelID: panelID,
+                state: state,
+                store: store
+            )
+        case .commandFinished(let exitCode):
+            return handleCommandFinished(
+                exitCode: exitCode,
                 workspaceID: workspaceIDForAction,
                 panelID: panelID,
                 state: state,
@@ -462,7 +480,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
 
-        case .setTerminalTitle, .setTerminalCWD:
+        case .setTerminalTitle, .setTerminalCWD, .commandFinished:
             assertionFailure("Metadata intents should be handled before focus dispatch")
             handled = false
         }
@@ -489,6 +507,54 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             )
         }
         return handled
+    }
+
+    private func handleCommandFinished(
+        exitCode: Int?,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState,
+        store: AppStore
+    ) -> Bool {
+        guard let pendingCWD = pendingCWDByPanelID.removeValue(forKey: panelID) else {
+            return true
+        }
+        guard exitCode == 0 else {
+            ToasttyLog.debug(
+                "Skipping inferred cwd update because cd command did not exit cleanly",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "exit_code": exitCode.map(String.init) ?? "nil",
+                ]
+            )
+            return true
+        }
+
+        return handleTerminalMetadataUpdate(
+            title: nil,
+            cwd: pendingCWD,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            state: state,
+            store: store
+        )
+    }
+
+    private func trackPotentialCDCommand(
+        fromTitle title: String,
+        panelID: UUID,
+        workspaceID: UUID,
+        state: AppState
+    ) {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let panelState = workspace.panels[panelID],
+              case .terminal(let terminalState) = panelState,
+              let predictedCWD = Self.predictedCWD(fromCDCommandTitle: title, currentCWD: terminalState.cwd) else {
+            return
+        }
+        pendingCWDByPanelID[panelID] = predictedCWD
     }
 
     private func handleTerminalMetadataUpdate(
@@ -587,6 +653,60 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         let decodedPath = rawPath.removingPercentEncoding ?? rawPath
         guard decodedPath.isEmpty == false else { return nil }
         return decodedPath
+    }
+
+    private static func predictedCWD(fromCDCommandTitle title: String, currentCWD: String) -> String? {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedTitle.isEmpty == false else { return nil }
+
+        var command = trimmedTitle
+        if command.hasPrefix("builtin ") {
+            command = String(command.dropFirst("builtin ".count)).trimmingCharacters(in: .whitespaces)
+        }
+
+        guard command == "cd" || command.hasPrefix("cd ") else { return nil }
+
+        let rawArgument = command == "cd"
+            ? "~"
+            : String(command.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+        guard rawArgument.isEmpty == false else {
+            return (NSHomeDirectory() as NSString).standardizingPath
+        }
+        guard rawArgument != "-" else { return nil }
+
+        let argument: String
+        if rawArgument.hasPrefix("\""), rawArgument.hasSuffix("\""), rawArgument.count >= 2 {
+            argument = String(rawArgument.dropFirst().dropLast())
+        } else if rawArgument.hasPrefix("'"), rawArgument.hasSuffix("'"), rawArgument.count >= 2 {
+            argument = String(rawArgument.dropFirst().dropLast())
+        } else {
+            let pieces = rawArgument.split(whereSeparator: \.isWhitespace)
+            guard pieces.count == 1, let first = pieces.first else { return nil }
+            argument = String(first)
+        }
+        guard argument.isEmpty == false else { return nil }
+
+        let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
+        let baseDirectory = (currentCWD as NSString).standardizingPath
+        let resolvedPath: String
+        if argument == "~" {
+            resolvedPath = homeDirectory
+        } else if argument.hasPrefix("~/") {
+            resolvedPath = homeDirectory + "/" + String(argument.dropFirst(2))
+        } else if argument.hasPrefix("/") {
+            resolvedPath = argument
+        } else {
+            let fallbackBase = baseDirectory.isEmpty ? homeDirectory : baseDirectory
+            let candidate = URL(
+                fileURLWithPath: argument,
+                relativeTo: URL(fileURLWithPath: fallbackBase, isDirectory: true)
+            )
+            resolvedPath = candidate.standardizedFileURL.path
+        }
+
+        let normalizedPath = (resolvedPath as NSString).standardizingPath
+        guard normalizedPath.isEmpty == false else { return nil }
+        return normalizedPath
     }
 }
 #endif

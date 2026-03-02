@@ -21,6 +21,7 @@ public struct AppReducer {
             guard state.windows[index].workspaceIDs.contains(workspaceID) else { return false }
             state.selectedWindowID = windowID
             state.windows[index].selectedWorkspaceID = workspaceID
+            markWorkspaceNotificationsRead(workspaceID: workspaceID, state: &state)
             return true
 
         case .createWorkspace(let windowID, let title):
@@ -52,6 +53,7 @@ public struct AppReducer {
             guard workspace.panels[panelID] != nil else { return false }
             workspace.focusedPanelID = panelID
             state.workspacesByID[workspaceID] = workspace
+            markWorkspaceNotificationsRead(workspaceID: workspaceID, state: &state)
             return true
 
         case .reorderPanel(let panelID, let toIndex, let paneID):
@@ -552,7 +554,15 @@ public struct AppReducer {
 
         workspace.focusedPanelID = targetPanelID
         state.workspacesByID[workspaceID] = workspace
+        markWorkspaceNotificationsRead(workspaceID: workspaceID, state: &state)
         return true
+    }
+
+    private static func markWorkspaceNotificationsRead(workspaceID: UUID, state: inout AppState) {
+        guard var workspace = state.workspacesByID[workspaceID] else { return }
+        guard workspace.unreadNotificationCount > 0 else { return }
+        workspace.unreadNotificationCount = 0
+        state.workspacesByID[workspaceID] = workspace
     }
 
     private static func resizeFocusedPaneSplit(

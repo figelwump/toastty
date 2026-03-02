@@ -1230,4 +1230,96 @@ struct AppReducerTests {
         #expect(reducer.send(.recordDesktopNotification(workspaceID: bogusWorkspaceID), state: &state) == false)
     }
 
+    @Test
+    func focusPanelClearsWorkspaceUnreadNotificationCount() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+        workspace.unreadNotificationCount = 2
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: panelID), state: &state))
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 0)
+    }
+
+    @Test
+    func focusPanelClearsUnreadCountAfterRecordingDesktopNotification() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let panelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.recordDesktopNotification(workspaceID: workspaceID), state: &state))
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 1)
+
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: panelID), state: &state))
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 0)
+    }
+
+    @Test
+    func selectWorkspaceClearsUnreadNotificationCount() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        workspace.unreadNotificationCount = 3
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID), state: &state))
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 0)
+    }
+
+    @Test
+    func selectWorkspaceOnlyClearsSelectedWorkspaceUnreadCount() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state))
+        let secondWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        var firstWorkspace = try #require(state.workspacesByID[firstWorkspaceID])
+        var secondWorkspace = try #require(state.workspacesByID[secondWorkspaceID])
+        firstWorkspace.unreadNotificationCount = 5
+        secondWorkspace.unreadNotificationCount = 3
+        state.workspacesByID[firstWorkspaceID] = firstWorkspace
+        state.workspacesByID[secondWorkspaceID] = secondWorkspace
+
+        #expect(reducer.send(.selectWorkspace(windowID: windowID, workspaceID: firstWorkspaceID), state: &state))
+        #expect(try #require(state.workspacesByID[firstWorkspaceID]).unreadNotificationCount == 0)
+        #expect(try #require(state.workspacesByID[secondWorkspaceID]).unreadNotificationCount == 3)
+
+        #expect(reducer.send(.selectWorkspace(windowID: windowID, workspaceID: secondWorkspaceID), state: &state))
+        #expect(try #require(state.workspacesByID[secondWorkspaceID]).unreadNotificationCount == 0)
+    }
+
+    @Test
+    func focusPaneClearsUnreadNotificationCount() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        workspace.unreadNotificationCount = 4
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .next), state: &state))
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 0)
+    }
+
+    @Test
+    func focusPaneNoopDoesNotClearUnreadNotificationCount() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        workspace.unreadNotificationCount = 2
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .next), state: &state) == false)
+        #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 2)
+    }
 }
