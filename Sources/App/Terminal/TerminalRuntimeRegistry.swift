@@ -341,6 +341,13 @@ final class TerminalSurfaceController {
     private var lastRenderMetrics: GhosttyRenderMetrics?
     private var lastDisplayID: UInt32?
     private var hasLoggedTinyViewportSuppression = false
+    private var surfaceCreationStabilityPasses = 0
+    private var lastSurfaceCreationSignature: SurfaceCreationSignature?
+    private var lastSurfaceDeferralReason: SurfaceCreationDeferralReason?
+    private var diagnostics = SurfaceDiagnostics()
+
+    private let minimumSurfaceHostDimension = 16
+    private let requiredStableSurfaceCreationPasses = 2
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -353,6 +360,28 @@ final class TerminalSurfaceController {
         let cellWidthPx: Int
         let cellHeightPx: Int
         let pixelSizingEnabled: Bool
+    }
+
+    private struct SurfaceCreationSignature: Equatable {
+        let windowID: ObjectIdentifier
+        let width: Int
+        let height: Int
+    }
+
+    private enum SurfaceCreationDeferralReason: String {
+        case noWindow = "no_window"
+        case hiddenHost = "hidden_host"
+        case tinyBounds = "tiny_bounds"
+        case unstableBounds = "unstable_bounds"
+    }
+
+    private struct SurfaceDiagnostics {
+        var attachCount = 0
+        var updateCount = 0
+        var surfaceAttemptCount = 0
+        var surfaceSuccessCount = 0
+        var surfaceFailureCount = 0
+        var surfaceDeferredCount = 0
     }
     #endif
 
@@ -369,6 +398,9 @@ final class TerminalSurfaceController {
     }
 
     func attach(into container: NSView) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        diagnostics.attachCount += 1
+        #endif
         let sourceContainerChanged = activeSourceContainer !== container
         #if TOASTTY_HAS_GHOSTTY_KIT
         if shouldIgnoreAttach(to: container) {
@@ -396,6 +428,9 @@ final class TerminalSurfaceController {
 
         #if TOASTTY_HAS_GHOSTTY_KIT
         if sourceContainerChanged {
+            surfaceCreationStabilityPasses = 0
+            lastSurfaceCreationSignature = nil
+            lastSurfaceDeferralReason = nil
             refreshSurfaceAfterContainerMove(sourceContainer: container)
         }
         #endif
@@ -410,6 +445,7 @@ final class TerminalSurfaceController {
         sourceContainer: NSView
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        diagnostics.updateCount += 1
         if activeSourceContainer !== sourceContainer {
             if shouldPromoteSourceContainer(to: sourceContainer) {
                 attach(into: sourceContainer)
@@ -438,7 +474,8 @@ final class TerminalSurfaceController {
 
         ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
         guard let ghosttySurface else {
-            hostedView.isHidden = true
+            // Keep the host visible while retrying Ghostty surface creation.
+            hostedView.isHidden = false
             if let hostView = hostedView as? TerminalHostView {
                 hostView.setGhosttySurface(nil)
             }
@@ -551,6 +588,10 @@ final class TerminalSurfaceController {
         lastRenderMetrics = nil
         lastDisplayID = nil
         hasLoggedTinyViewportSuppression = false
+        surfaceCreationStabilityPasses = 0
+        lastSurfaceCreationSignature = nil
+        lastSurfaceDeferralReason = nil
+        diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
         fallbackView.removeFromSuperview()
@@ -677,13 +718,55 @@ final class TerminalSurfaceController {
         guard ghosttySurface == nil else { return }
 
         guard let hostView = hostedView as? TerminalHostView else { return }
+
+        switch evaluateSurfaceCreationReadiness(for: hostView) {
+        case .ready:
+            break
+
+        case .deferred(let reason, let width, let height):
+            diagnostics.surfaceDeferredCount += 1
+            let reasonChanged = lastSurfaceDeferralReason != reason
+            lastSurfaceDeferralReason = reason
+            if reasonChanged || diagnostics.surfaceDeferredCount <= 2 || diagnostics.surfaceDeferredCount.isMultiple(of: 60) {
+                logSurfaceDiagnostics(
+                    message: "Deferring Ghostty surface creation until host is stable",
+                    extra: [
+                        "reason": reason.rawValue,
+                        "host_width": String(width),
+                        "host_height": String(height),
+                        "stability_passes": String(surfaceCreationStabilityPasses),
+                    ]
+                )
+            }
+            return
+        }
+
+        diagnostics.surfaceAttemptCount += 1
         guard let surface = ghosttyManager.makeSurface(
             hostView: hostView,
             workingDirectory: terminalState.cwd,
             fontPoints: fontPoints
         ) else {
+            diagnostics.surfaceFailureCount += 1
+            if diagnostics.surfaceFailureCount <= 5 || diagnostics.surfaceFailureCount.isMultiple(of: 20) {
+                logSurfaceDiagnostics(
+                    message: "Ghostty surface creation attempt failed",
+                    extra: [
+                        "host_has_window": hostView.window == nil ? "false" : "true",
+                        "host_hidden": hostView.isHidden ? "true" : "false",
+                        "host_hidden_ancestor": hostView.hasHiddenAncestor ? "true" : "false",
+                        "host_width": String(format: "%.1f", hostView.bounds.width),
+                        "host_height": String(format: "%.1f", hostView.bounds.height),
+                    ]
+                )
+            }
             return
         }
+        diagnostics.surfaceSuccessCount += 1
+        lastSurfaceDeferralReason = nil
+        surfaceCreationStabilityPasses = 0
+        lastSurfaceCreationSignature = nil
+        logSurfaceDiagnostics(message: "Ghostty surface creation succeeded")
         usesBackingPixelSurfaceSizing = false
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
@@ -693,6 +776,89 @@ final class TerminalSurfaceController {
         registry.register(surface: surface, for: panelID)
     }
 
+    private enum SurfaceCreationReadiness {
+        case ready
+        case deferred(reason: SurfaceCreationDeferralReason, width: Int, height: Int)
+    }
+
+    private func evaluateSurfaceCreationReadiness(for hostView: NSView) -> SurfaceCreationReadiness {
+        let width = max(Int(hostView.bounds.width.rounded(.down)), 0)
+        let height = max(Int(hostView.bounds.height.rounded(.down)), 0)
+
+        guard let window = hostView.window else {
+            surfaceCreationStabilityPasses = 0
+            lastSurfaceCreationSignature = nil
+            return .deferred(reason: .noWindow, width: width, height: height)
+        }
+
+        guard hostView.isHidden == false, hostView.hasHiddenAncestor == false else {
+            surfaceCreationStabilityPasses = 0
+            lastSurfaceCreationSignature = nil
+            return .deferred(reason: .hiddenHost, width: width, height: height)
+        }
+
+        guard width >= minimumSurfaceHostDimension,
+              height >= minimumSurfaceHostDimension else {
+            surfaceCreationStabilityPasses = 0
+            lastSurfaceCreationSignature = nil
+            return .deferred(reason: .tinyBounds, width: width, height: height)
+        }
+
+        let signature = SurfaceCreationSignature(
+            windowID: ObjectIdentifier(window),
+            width: width,
+            height: height
+        )
+        if lastSurfaceCreationSignature == signature {
+            surfaceCreationStabilityPasses += 1
+        } else {
+            lastSurfaceCreationSignature = signature
+            surfaceCreationStabilityPasses = 1
+        }
+
+        guard surfaceCreationStabilityPasses >= requiredStableSurfaceCreationPasses else {
+            return .deferred(reason: .unstableBounds, width: width, height: height)
+        }
+
+        return .ready
+    }
+
+    private func logSurfaceDiagnostics(message: String, extra: [String: String] = [:]) {
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "attach_count": String(diagnostics.attachCount),
+            "update_count": String(diagnostics.updateCount),
+            "surface_attempt_count": String(diagnostics.surfaceAttemptCount),
+            "surface_success_count": String(diagnostics.surfaceSuccessCount),
+            "surface_failure_count": String(diagnostics.surfaceFailureCount),
+            "surface_deferred_count": String(diagnostics.surfaceDeferredCount),
+        ]
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        ToasttyLog.debug(message, category: .ghostty, metadata: metadata)
+    }
+
+    #endif
+}
+
+private extension NSView {
+    var hasHiddenAncestor: Bool {
+        var ancestor = superview
+        while let current = ancestor {
+            if current.isHidden {
+                return true
+            }
+            ancestor = current.superview
+        }
+        return false
+    }
+
+}
+
+@MainActor
+extension TerminalSurfaceController {
+    #if TOASTTY_HAS_GHOSTTY_KIT
     private func shouldIgnoreAttach(to candidate: NSView) -> Bool {
         guard let activeSourceContainer else { return false }
         guard activeSourceContainer !== candidate else { return false }
@@ -757,7 +923,7 @@ final class TerminalSurfaceController {
         sourceContainer.window?.screen?.ghosttyDisplayID
     }
 
-    private let tinyViewportSuppressionThreshold = 1
+    private var tinyViewportSuppressionThreshold: Int { 1 }
 
     private func shouldUseBackingPixelSurfaceSizing(
         measuredSize: ghostty_surface_size_s,
