@@ -59,7 +59,7 @@ struct WorkspaceView: View {
 
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
-        store.send(.splitFocusedPane(workspaceID: workspaceID, orientation: orientation))
+        terminalRuntimeRegistry.splitFocusedPane(workspaceID: workspaceID, orientation: orientation)
     }
 
     @ViewBuilder

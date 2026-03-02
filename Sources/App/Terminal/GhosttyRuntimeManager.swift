@@ -605,11 +605,25 @@ final class GhosttyRuntimeManager {
     func makeSurface(
         hostView: NSView,
         workingDirectory: String,
-        fontPoints: Double
+        fontPoints: Double,
+        inheritFrom sourceSurface: ghostty_surface_t? = nil
     ) -> ghostty_surface_t? {
         guard let app else { return nil }
 
-        var surfaceConfig = ghostty_surface_config_new()
+        var surfaceConfig: ghostty_surface_config_s
+        var inheritedWorkingDirectory: String?
+        if let sourceSurface {
+            surfaceConfig = ghostty_surface_inherited_config(sourceSurface, GHOSTTY_SURFACE_CONTEXT_SPLIT)
+            if let inheritedPointer = surfaceConfig.working_directory {
+                let candidate = String(cString: inheritedPointer).trimmingCharacters(in: .whitespacesAndNewlines)
+                if candidate.isEmpty == false {
+                    inheritedWorkingDirectory = candidate
+                }
+            }
+        } else {
+            surfaceConfig = ghostty_surface_config_new()
+        }
+
         surfaceConfig.platform_tag = GHOSTTY_PLATFORM_MACOS
         surfaceConfig.platform.macos.nsview = Unmanaged.passUnretained(hostView).toOpaque()
         surfaceConfig.userdata = Unmanaged.passUnretained(hostView).toOpaque()
@@ -621,7 +635,16 @@ final class GhosttyRuntimeManager {
         surfaceConfig.font_size = Float(fontPoints)
         surfaceConfig.context = GHOSTTY_SURFACE_CONTEXT_SPLIT
 
-        let surface = workingDirectory.withCString { cwdPointer in
+        let trimmedWorkingDirectory = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedWorkingDirectory: String
+        if trimmedWorkingDirectory.isEmpty {
+            resolvedWorkingDirectory = inheritedWorkingDirectory ?? workingDirectory
+        } else {
+            // App state is the source of truth for split cwd inheritance; only fall back to inherited
+            // config when the state value is unavailable.
+            resolvedWorkingDirectory = trimmedWorkingDirectory
+        }
+        let surface = resolvedWorkingDirectory.withCString { cwdPointer in
             surfaceConfig.working_directory = cwdPointer
             return ghostty_surface_new(app, &surfaceConfig)
         }

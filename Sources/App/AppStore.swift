@@ -7,6 +7,7 @@ final class AppStore: ObservableObject {
 
     private let reducer = AppReducer()
     private let persistTerminalFontPreference: Bool
+    var onActionApplied: ((AppAction, AppState, AppState) -> Void)?
 
     init(
         state: AppState = .bootstrap(),
@@ -36,6 +37,7 @@ final class AppStore: ObservableObject {
         }
         state = next
         persistTerminalFontPreferenceIfNeeded(action: action, previousState: previousState, nextState: next)
+        onActionApplied?(action, previousState, next)
         ToasttyLog.debug(
             "Applied app action",
             category: .store,
