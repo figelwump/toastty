@@ -55,6 +55,14 @@ if ! command -v osascript >/dev/null 2>&1; then
   exit 1
 fi
 
+run_tuist() {
+  if command -v sv >/dev/null 2>&1; then
+    sv exec -- tuist "$@"
+  else
+    tuist "$@"
+  fi
+}
+
 cleanup() {
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" >/dev/null 2>&1 || true
@@ -158,7 +166,7 @@ send_equalize_shortcut() {
 
 cd "$ROOT_DIR"
 
-tuist generate --no-open >/dev/null
+run_tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \

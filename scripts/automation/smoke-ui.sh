@@ -26,6 +26,14 @@ if ! command -v nc >/dev/null 2>&1; then
   exit 1
 fi
 
+run_tuist() {
+  if command -v sv >/dev/null 2>&1; then
+    sv exec -- tuist "$@"
+  else
+    tuist "$@"
+  fi
+}
+
 cleanup() {
   if [[ -n "$DROP_IMAGE_PATH_TO_CLEANUP" && -f "$DROP_IMAGE_PATH_TO_CLEANUP" ]]; then
     rm -f "$DROP_IMAGE_PATH_TO_CLEANUP"
@@ -39,7 +47,7 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
-tuist generate --no-open >/dev/null
+run_tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \
