@@ -449,7 +449,7 @@ private struct PanelCardView: View {
     private var panelLabel: String {
         switch panelState {
         case .terminal(let terminal):
-            return "\(terminal.title) · \(terminal.shell)"
+            return terminal.displayPanelLabel
         case .diff:
             return "Diff Panel"
         case .markdown:

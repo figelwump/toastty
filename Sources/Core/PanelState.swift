@@ -52,11 +52,105 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     public var title: String
     public var shell: String
     public var cwd: String
+    private static let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
 
     public init(title: String, shell: String, cwd: String) {
         self.title = title
         self.shell = shell
         self.cwd = cwd
+    }
+
+    public var displayPanelLabel: String {
+        if let customTitle = normalizedCustomTitle {
+            if let directory = directoryLabel,
+               directory.caseInsensitiveCompare(customTitle) != .orderedSame {
+                return "\(customTitle) · \(directory)"
+            }
+            return customTitle
+        }
+
+        if let directory = directoryLabel {
+            if let shell = shellName {
+                return "\(directory) · \(shell)"
+            }
+            return directory
+        }
+
+        if let shell = shellName {
+            return shell
+        }
+
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedTitle.isEmpty ? "Terminal" : trimmedTitle
+    }
+
+    private var normalizedCustomTitle: String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        guard Self.isDefaultTerminalTitle(trimmed) == false else { return nil }
+        return trimmed
+    }
+
+    private var directoryLabel: String? {
+        let trimmed = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let normalizedPath = (trimmed as NSString).standardizingPath
+        guard normalizedPath.isEmpty == false else { return nil }
+
+        if normalizedPath == "/" {
+            return "/"
+        }
+        if normalizedPath == Self.homeDirectory {
+            return "~"
+        }
+        let homePrefix = Self.homeDirectory + "/"
+        if normalizedPath.hasPrefix(homePrefix) {
+            let relativePath = String(normalizedPath.dropFirst(homePrefix.count))
+            return Self.homeRelativeLabel(for: relativePath)
+        }
+
+        let components = normalizedPath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        if components.isEmpty {
+            return normalizedPath
+        }
+        return Self.compactPathLabel(from: components)
+    }
+
+    private var shellName: String? {
+        let trimmed = shell.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let lastComponent = URL(fileURLWithPath: trimmed).lastPathComponent
+        if lastComponent.isEmpty == false {
+            return lastComponent
+        }
+        return trimmed
+    }
+
+    private static func isDefaultTerminalTitle(_ title: String) -> Bool {
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == "terminal" {
+            return true
+        }
+        let components = normalized.split(separator: " ", omittingEmptySubsequences: true)
+        guard components.count == 2 else { return false }
+        guard components[0] == "terminal" else { return false }
+        return Int(components[1]) != nil
+    }
+
+    private static func homeRelativeLabel(for relativePath: String) -> String {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        guard components.isEmpty == false else { return "~" }
+        if components.count <= 2 {
+            return "~/" + components.joined(separator: "/")
+        }
+        return "~/.../" + components.suffix(2).joined(separator: "/")
+    }
+
+    private static func compactPathLabel(from components: [String]) -> String {
+        if components.count <= 2 {
+            return components.joined(separator: "/")
+        }
+        return ".../" + components.suffix(2).joined(separator: "/")
     }
 }
 
