@@ -139,6 +139,19 @@ json_escape_string() {
   printf '%s' "$value"
 }
 
+canonicalize_path() {
+  local path="$1"
+  if [[ -z "$path" ]]; then
+    printf ''
+    return
+  fi
+  if [[ -d "$path" ]]; then
+    (cd "$path" && pwd -P) || printf '%s' "$path"
+    return
+  fi
+  printf '%s' "$path"
+}
+
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
 
@@ -281,6 +294,87 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
   if [[ "$TERMINAL_SEND_READY" -ne 1 ]]; then
     echo "error: terminal surface unavailable for send_text during smoke run" >&2
     echo "candidate panel ids: ${TERMINAL_CANDIDATE_PANEL_IDS[*]}" >&2
+    echo "last terminal probe response: ${TERMINAL_PROBE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  send_request "automation.perform_action" "{\"action\":\"workspace.focus-panel\",\"args\":{\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}}" >/dev/null
+
+  CWD_ASSERTION_DIR="/tmp/toastty-smoke-cwd-${RUN_ID//[^A-Za-z0-9_-]/_}"
+  mkdir -p "$CWD_ASSERTION_DIR"
+  CWD_ASSERTION_COMMAND="cd \"${CWD_ASSERTION_DIR}\"; pwd"
+  CWD_ASSERTION_COMMAND_JSON="$(json_escape_string "$CWD_ASSERTION_COMMAND")"
+  send_request "automation.terminal_send_text" "{\"text\":\"${CWD_ASSERTION_COMMAND_JSON}\",\"submit\":true,\"allowUnavailable\":false,\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}" >/dev/null
+
+  EXPECTED_CWD_CANONICAL="$(canonicalize_path "$CWD_ASSERTION_DIR")"
+  CWD_SYNCED=0
+  TERMINAL_STATE_RESPONSE=""
+  TERMINAL_STATE_CWD=""
+  TERMINAL_STATE_CWD_CANONICAL=""
+  for _ in $(seq 1 40); do
+    TERMINAL_STATE_RESPONSE="$(send_request "automation.terminal_state" "{\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
+    TERMINAL_STATE_CWD="$(extract_string_field "$TERMINAL_STATE_RESPONSE" "cwd")"
+    TERMINAL_STATE_CWD_CANONICAL="$(canonicalize_path "$TERMINAL_STATE_CWD")"
+    if [[ "$TERMINAL_STATE_CWD_CANONICAL" == "$EXPECTED_CWD_CANONICAL" ]]; then
+      CWD_SYNCED=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$CWD_SYNCED" -ne 1 ]]; then
+    echo "error: terminal cwd did not update after cd command" >&2
+    echo "target panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
+    echo "expected cwd: ${EXPECTED_CWD_CANONICAL}" >&2
+    echo "last terminal_state response: ${TERMINAL_STATE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  send_request "automation.perform_action" '{"action":"workspace.split.right"}' >/dev/null
+  CWD_SPLIT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+  SPLIT_INHERITED_PANEL_ID="$(extract_string_field "$CWD_SPLIT_RESPONSE" "focusedPanelID")"
+  if [[ -z "$SPLIT_INHERITED_PANEL_ID" ]]; then
+    echo "error: focused panel missing after cwd split assertion" >&2
+    echo "snapshot response: ${CWD_SPLIT_RESPONSE}" >&2
+    exit 1
+  fi
+
+  SPLIT_TERMINAL_STATE_RESPONSE=""
+  SPLIT_TERMINAL_CWD=""
+  SPLIT_TERMINAL_CWD_CANONICAL=""
+  SPLIT_CWD_SYNCED=0
+  for _ in $(seq 1 40); do
+    SPLIT_TERMINAL_STATE_RESPONSE="$(send_request "automation.terminal_state" "{\"panelID\":\"${SPLIT_INHERITED_PANEL_ID}\"}")"
+    SPLIT_TERMINAL_CWD="$(extract_string_field "$SPLIT_TERMINAL_STATE_RESPONSE" "cwd")"
+    SPLIT_TERMINAL_CWD_CANONICAL="$(canonicalize_path "$SPLIT_TERMINAL_CWD")"
+    if [[ "$SPLIT_TERMINAL_CWD_CANONICAL" == "$EXPECTED_CWD_CANONICAL" ]]; then
+      SPLIT_CWD_SYNCED=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$SPLIT_CWD_SYNCED" -ne 1 ]]; then
+    echo "error: split panel did not inherit cwd from source panel" >&2
+    echo "source panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
+    echo "new panel id: ${SPLIT_INHERITED_PANEL_ID}" >&2
+    echo "expected cwd: ${EXPECTED_CWD_CANONICAL}" >&2
+    echo "terminal_state response: ${SPLIT_TERMINAL_STATE_RESPONSE}" >&2
+    exit 1
+  fi
+  TERMINAL_TARGET_PANEL_ID="$SPLIT_INHERITED_PANEL_ID"
+
+  TERMINAL_SEND_READY=0
+  TERMINAL_PROBE_RESPONSE=""
+  for _ in $(seq 1 "$TERMINAL_READY_ATTEMPTS"); do
+    TERMINAL_PROBE_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
+    if [[ "$(extract_bool_field "$TERMINAL_PROBE_RESPONSE" "available")" == "true" ]]; then
+      TERMINAL_SEND_READY=1
+      break
+    fi
+    sleep "$TERMINAL_READY_INTERVAL_SEC"
+  done
+  if [[ "$TERMINAL_SEND_READY" -ne 1 ]]; then
+    echo "error: split-created terminal surface unavailable for send_text during smoke run" >&2
+    echo "target panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
     echo "last terminal probe response: ${TERMINAL_PROBE_RESPONSE}" >&2
     exit 1
   fi

@@ -525,6 +525,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
             return result
 
+        case "automation.terminal_state":
+            let resolved = try resolveTerminalTarget(payload: payload)
+            return try terminalStateSnapshot(
+                workspaceID: resolved.workspaceID,
+                panelID: resolved.panelID
+            )
+
         case "automation.dump_state":
             flushCoalescedUpdates(at: Date())
             let includeRuntime = payload.bool("includeRuntime") ?? false
@@ -818,6 +825,12 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.focus-pane.down":
             didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .down))
 
+        case "workspace.focus-panel":
+            guard let panelID = args.uuid("panelID") else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            didMutate = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+
         case "workspace.resize-split.left":
             didMutate = store.send(
                 .resizeFocusedPaneSplit(
@@ -974,6 +987,27 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return try encoder.encode(snapshot)
         }
         return try encoder.encode(store.state)
+    }
+
+    @MainActor
+    private func terminalStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID
+    ) throws -> [String: AutomationJSONValue] {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+        guard let panelState = workspace.panels[panelID],
+              case .terminal(let terminalState) = panelState else {
+            throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
+        }
+        return [
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "title": .string(terminalState.title),
+            "cwd": .string(terminalState.cwd),
+            "shell": .string(terminalState.shell),
+        ]
     }
 
     @MainActor

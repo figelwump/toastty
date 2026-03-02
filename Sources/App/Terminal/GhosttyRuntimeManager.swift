@@ -560,6 +560,11 @@ private enum GhosttyConfigSource: String {
 
 @MainActor
 final class GhosttyRuntimeManager {
+    struct SurfaceCreationResult {
+        let surface: ghostty_surface_t
+        let workingDirectory: String
+    }
+
     static let shared = GhosttyRuntimeManager()
 
     private static let ghosttyConfigPathEnvironmentKey = "TOASTTY_GHOSTTY_CONFIG_PATH"
@@ -607,7 +612,7 @@ final class GhosttyRuntimeManager {
         workingDirectory: String,
         fontPoints: Double,
         inheritFrom sourceSurface: ghostty_surface_t? = nil
-    ) -> ghostty_surface_t? {
+    ) -> SurfaceCreationResult? {
         guard let app else { return nil }
 
         var surfaceConfig: ghostty_surface_config_s
@@ -615,8 +620,7 @@ final class GhosttyRuntimeManager {
         if let sourceSurface {
             surfaceConfig = ghostty_surface_inherited_config(sourceSurface, GHOSTTY_SURFACE_CONTEXT_SPLIT)
             if let inheritedPointer = surfaceConfig.working_directory {
-                let candidate = String(cString: inheritedPointer).trimmingCharacters(in: .whitespacesAndNewlines)
-                if candidate.isEmpty == false {
+                if let candidate = Self.normalizedWorkingDirectoryValue(String(cString: inheritedPointer)) {
                     inheritedWorkingDirectory = candidate
                 }
             }
@@ -635,14 +639,25 @@ final class GhosttyRuntimeManager {
         surfaceConfig.font_size = Float(fontPoints)
         surfaceConfig.context = GHOSTTY_SURFACE_CONTEXT_SPLIT
 
-        let trimmedWorkingDirectory = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
+        let requestedWorkingDirectory = Self.normalizedWorkingDirectoryValue(workingDirectory)
         let resolvedWorkingDirectory: String
-        if trimmedWorkingDirectory.isEmpty {
-            resolvedWorkingDirectory = inheritedWorkingDirectory ?? workingDirectory
+        if let inheritedWorkingDirectory {
+            if let requestedWorkingDirectory,
+               requestedWorkingDirectory != inheritedWorkingDirectory {
+                ToasttyLog.info(
+                    "Split surface inherited cwd differed from app state; using inherited cwd",
+                    category: .terminal,
+                    metadata: [
+                        "requested_cwd": requestedWorkingDirectory,
+                        "inherited_cwd": inheritedWorkingDirectory,
+                    ]
+                )
+            }
+            resolvedWorkingDirectory = inheritedWorkingDirectory
+        } else if let requestedWorkingDirectory {
+            resolvedWorkingDirectory = requestedWorkingDirectory
         } else {
-            // App state is the source of truth for split cwd inheritance; only fall back to inherited
-            // config when the state value is unavailable.
-            resolvedWorkingDirectory = trimmedWorkingDirectory
+            resolvedWorkingDirectory = NSHomeDirectory()
         }
         let surface = resolvedWorkingDirectory.withCString { cwdPointer in
             surfaceConfig.working_directory = cwdPointer
@@ -650,9 +665,14 @@ final class GhosttyRuntimeManager {
         }
         if let surface {
             registerClipboardSurface(surface, forHostView: hostView)
+            scheduleImmediateTick()
+            return SurfaceCreationResult(
+                surface: surface,
+                workingDirectory: resolvedWorkingDirectory
+            )
         }
         scheduleImmediateTick()
-        return surface
+        return nil
     }
 
     func unregisterClipboardSurface(forHostView hostView: NSView, surface: ghostty_surface_t?) {
@@ -996,6 +1016,19 @@ final class GhosttyRuntimeManager {
             ]
         )
         return clampedFontPoints
+    }
+
+    private static func normalizedWorkingDirectoryValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        if trimmed.hasPrefix("file://"),
+           let url = URL(string: trimmed),
+           url.isFileURL {
+            let path = url.path
+            return path.isEmpty ? nil : path
+        }
+        return trimmed
     }
 
     fileprivate func scheduleImmediateTick() {

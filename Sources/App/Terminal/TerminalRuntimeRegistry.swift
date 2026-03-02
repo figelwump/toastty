@@ -404,6 +404,56 @@ private extension TerminalRuntimeRegistry {
         return nil
     }
 
+    func reconcileSurfaceWorkingDirectory(panelID: UUID, workingDirectory: String?, source: String) {
+        guard let normalizedWorkingDirectory = Self.normalizedCWDValue(workingDirectory) else {
+            return
+        }
+        guard let store else {
+            return
+        }
+
+        let state = store.state
+        guard let workspaceID = workspaceID(containing: panelID, state: state),
+              let workspace = state.workspacesByID[workspaceID],
+              let panelState = workspace.panels[panelID],
+              case .terminal(let terminalState) = panelState else {
+            return
+        }
+        guard Self.cwdValuesDiffer(normalizedWorkingDirectory, terminalState.cwd) else {
+            return
+        }
+
+        let handled = store.send(
+            .updateTerminalPanelMetadata(
+                panelID: panelID,
+                title: nil,
+                cwd: normalizedWorkingDirectory
+            )
+        )
+        if handled {
+            ToasttyLog.debug(
+                "Synchronized terminal cwd from Ghostty surface state",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "source": source,
+                    "cwd_sample": String(normalizedWorkingDirectory.prefix(120)),
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Reducer rejected terminal cwd sync from Ghostty surface state",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "source": source,
+                ]
+            )
+        }
+    }
+
     func pulseVisibleSurfacesIfWorkspaceSwitched(state: AppState) {
         let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
         guard currentSelectedWorkspaceID != previousSelectedWorkspaceID else { return }
@@ -741,20 +791,53 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 
         let normalizedTitle = Self.normalizedMetadataValue(title)
         var normalizedCWD = Self.normalizedCWDValue(cwd)
+        var cwdSource = "explicit"
         if normalizedCWD == nil,
            let normalizedTitle {
             normalizedCWD = Self.inferredCWDFromTitle(normalizedTitle, currentCWD: terminalState.cwd)
+            if normalizedCWD != nil {
+                cwdSource = "title_inference"
+            }
+        }
+        if normalizedCWD == nil,
+           cwd == nil,
+           let normalizedTitle,
+           normalizedTitle != terminalState.title,
+           let visibleText = automationReadVisibleText(panelID: panelID),
+           let inferredCWD = Self.inferredCWDFromVisibleTerminalText(
+               visibleText,
+               currentCWD: terminalState.cwd
+           ) {
+            normalizedCWD = inferredCWD
+            cwdSource = "visible_text_inference"
+        }
+        if normalizedCWD == nil {
+            cwdSource = "none"
         }
 
         var hasChanges = false
         if let normalizedTitle, normalizedTitle != terminalState.title {
             hasChanges = true
         }
-        if let normalizedCWD, normalizedCWD != terminalState.cwd {
+        if let normalizedCWD,
+           Self.cwdValuesDiffer(normalizedCWD, terminalState.cwd) {
             hasChanges = true
         }
 
         guard hasChanges else {
+            if normalizedTitle != nil || normalizedCWD != nil {
+                ToasttyLog.debug(
+                    "Ignoring terminal metadata update because values are unchanged",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "title_present": normalizedTitle == nil ? "false" : "true",
+                        "cwd_present": normalizedCWD == nil ? "false" : "true",
+                        "cwd_source": cwdSource,
+                    ]
+                )
+            }
             return true
         }
 
@@ -778,6 +861,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                     "cwd_updated": normalizedCWD == nil ? "false" : "true",
                     "title_sample": titleSample,
                     "cwd_sample": cwdSample,
+                    "cwd_source": cwdSource,
                 ]
             )
         } else {
@@ -820,7 +904,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return true
         }
 
-        guard inferredCWD != terminalState.cwd else {
+        guard Self.cwdValuesDiffer(inferredCWD, terminalState.cwd) else {
             return true
         }
 
@@ -853,6 +937,27 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return normalized
     }
 
+    private static func cwdValuesDiffer(_ lhs: String, _ rhs: String) -> Bool {
+        if lhs == rhs {
+            return false
+        }
+        return canonicalCWDForComparison(lhs) != canonicalCWDForComparison(rhs)
+    }
+
+    private static func canonicalCWDForComparison(_ value: String) -> String {
+        guard let normalized = normalizedCWDValue(value) else {
+            return value
+        }
+        let expanded = (normalized as NSString).expandingTildeInPath
+        guard expanded.isEmpty == false else {
+            return normalized
+        }
+        return URL(fileURLWithPath: expanded)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+            .path
+    }
+
     private static func inferredCWDFromTitle(_ title: String, currentCWD: String) -> String? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
@@ -875,17 +980,19 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         guard lines.isEmpty == false else { return nil }
 
         for line in lines.reversed() {
-            guard let promptLine = parsedPromptLine(line) else {
-                continue
+            if let promptLine = parsedPromptLine(line) {
+                if let command = promptLine.command,
+                   let predicted = predictedCWD(fromCDCommandTitle: command, currentCWD: currentCWD) {
+                    return predicted
+                }
+
+                if let normalizedPromptCWD = normalizedPromptPathToken(promptLine.cwdToken) {
+                    return normalizedPromptCWD
+                }
             }
 
-            if let command = promptLine.command,
-               let predicted = predictedCWD(fromCDCommandTitle: command, currentCWD: currentCWD) {
-                return predicted
-            }
-
-            if let normalizedPromptCWD = normalizedPromptPathToken(promptLine.cwdToken) {
-                return normalizedPromptCWD
+            if let loosePromptCWD = inferredCWDFromLoosePromptLine(line) {
+                return loosePromptCWD
             }
         }
 
@@ -925,6 +1032,62 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             command = nil
         }
         return (cwdToken: cwdToken, command: command)
+    }
+
+    private static func inferredCWDFromLoosePromptLine(_ line: String) -> String? {
+        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.isEmpty == false else { return nil }
+
+        for index in stride(from: parts.count - 1, through: 0, by: -1) {
+            let token = parts[index]
+            if promptMarkerTokens.contains(token) {
+                if index > 0,
+                   let normalized = normalizedPromptPathCandidate(parts[index - 1]) {
+                    return normalized
+                }
+                continue
+            }
+
+            guard token.count > 1,
+                  let trailingCharacter = token.last,
+                  promptMarkerTokens.contains(String(trailingCharacter)) else {
+                continue
+            }
+            let tokenWithoutPromptMarker = String(token.dropLast())
+            if let normalized = normalizedPromptPathCandidate(tokenWithoutPromptMarker) {
+                return normalized
+            }
+        }
+
+        return nil
+    }
+
+    private static func normalizedPromptPathCandidate(_ token: String) -> String? {
+        var candidate = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate.isEmpty == false else { return nil }
+
+        while let firstScalar = candidate.unicodeScalars.first,
+              promptPathWrapperCharacters.contains(firstScalar) {
+            candidate.removeFirst()
+        }
+        while let lastScalar = candidate.unicodeScalars.last,
+              promptPathWrapperCharacters.contains(lastScalar)
+                || promptPathTrailingPunctuationCharacters.contains(lastScalar) {
+            candidate.removeLast()
+        }
+        guard candidate.isEmpty == false else { return nil }
+
+        if candidate.hasPrefix("/") || candidate.hasPrefix("~") || candidate.hasPrefix("file://") {
+            return normalizedPromptPathToken(candidate)
+        }
+        if let colonIndex = candidate.lastIndex(of: ":") {
+            let suffix = String(candidate[candidate.index(after: colonIndex)...])
+            if suffix.hasPrefix("/") || suffix.hasPrefix("~") || suffix.hasPrefix("file://") {
+                return normalizedPromptPathToken(suffix)
+            }
+        }
+
+        return nil
     }
 
     private static func normalizedPromptPathToken(_ token: String) -> String? {
@@ -992,6 +1155,10 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         guard normalizedPath.isEmpty == false else { return nil }
         return normalizedPath
     }
+
+    private static let promptMarkerTokens: Set<String> = ["%", "#", "$", ">"]
+    private static let promptPathWrapperCharacters = CharacterSet(charactersIn: "\"'`()[]{}<>")
+    private static let promptPathTrailingPunctuationCharacters = CharacterSet(charactersIn: ",;")
 }
 #endif
 
@@ -1411,6 +1578,18 @@ final class TerminalSurfaceController {
         ghosttySurface
     }
 
+    private static func currentWorkingDirectory(for surface: ghostty_surface_t) -> String? {
+        let inheritedConfig = ghostty_surface_inherited_config(surface, GHOSTTY_SURFACE_CONTEXT_SPLIT)
+        guard let rawPointer = inheritedConfig.working_directory else {
+            return nil
+        }
+        let candidate = String(cString: rawPointer).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard candidate.isEmpty == false else {
+            return nil
+        }
+        return candidate
+    }
+
     @discardableResult
     private func invokeGhosttyBindingAction(_ action: String, on surface: ghostty_surface_t) -> Bool {
         let cString = action.utf8CString
@@ -1488,7 +1667,7 @@ final class TerminalSurfaceController {
         }
 
         diagnostics.surfaceAttemptCount += 1
-        guard let surface = ghosttyManager.makeSurface(
+        guard let createdSurface = ghosttyManager.makeSurface(
             hostView: hostView,
             workingDirectory: terminalState.cwd,
             fontPoints: fontPoints,
@@ -1509,6 +1688,7 @@ final class TerminalSurfaceController {
             }
             return
         }
+        let surface = createdSurface.surface
         diagnostics.surfaceSuccessCount += 1
         if inheritedSourceSurface != nil {
             registry.consumeSplitSource(for: panelID)
@@ -1524,6 +1704,11 @@ final class TerminalSurfaceController {
         lastDisplayID = nil
         ghosttySurface = surface
         registry.register(surface: surface, for: panelID)
+        registry.reconcileSurfaceWorkingDirectory(
+            panelID: panelID,
+            workingDirectory: Self.currentWorkingDirectory(for: surface) ?? createdSurface.workingDirectory,
+            source: "surface_create"
+        )
     }
 
     private enum SurfaceCreationReadiness {
