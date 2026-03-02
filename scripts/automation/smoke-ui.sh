@@ -16,6 +16,7 @@ READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
 APP_BINARY="$DERIVED_PATH/Build/Products/Debug/ToasttyApp.app/Contents/MacOS/ToasttyApp"
 LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
+DROP_IMAGE_PATH_TO_CLEANUP=""
 
 mkdir -p "$ARTIFACTS_DIR"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$LOG_FILE"
@@ -26,6 +27,9 @@ if ! command -v nc >/dev/null 2>&1; then
 fi
 
 cleanup() {
+  if [[ -n "$DROP_IMAGE_PATH_TO_CLEANUP" && -f "$DROP_IMAGE_PATH_TO_CLEANUP" ]]; then
+    rm -f "$DROP_IMAGE_PATH_TO_CLEANUP"
+  fi
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" >/dev/null 2>&1 || true
     wait "$APP_PID" >/dev/null 2>&1 || true
@@ -288,6 +292,43 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
     echo "error: terminal viewport marker not observed during smoke run" >&2
     echo "target panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
     echo "last terminal response: ${TERMINAL_VISIBLE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  DROP_IMAGE_PATH="$(mktemp "/tmp/toastty drop ${RUN_ID} XXXXXX.png")"
+  DROP_IMAGE_PATH_TO_CLEANUP="$DROP_IMAGE_PATH"
+  DROP_IMAGE_PATH_JSON="$(json_escape_string "$DROP_IMAGE_PATH")"
+  DROP_IMAGE_RESPONSE="$(send_request "automation.terminal_drop_image_files" "{\"files\":[\"${DROP_IMAGE_PATH_JSON}\"],\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\",\"allowUnavailable\":false}")"
+  if [[ "$(extract_bool_field "$DROP_IMAGE_RESPONSE" "available")" != "true" ]]; then
+    echo "error: terminal_drop_image_files reported unavailable surface" >&2
+    echo "response: ${DROP_IMAGE_RESPONSE}" >&2
+    exit 1
+  fi
+  DROP_ACCEPTED_COUNT="$(extract_int_field "$DROP_IMAGE_RESPONSE" "acceptedImageCount")"
+  if [[ -z "$DROP_ACCEPTED_COUNT" || "$DROP_ACCEPTED_COUNT" -lt 1 ]]; then
+    echo "error: terminal_drop_image_files did not accept image file" >&2
+    echo "response: ${DROP_IMAGE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  DROP_EXPECTED_INPUT="'${DROP_IMAGE_PATH}'"
+  DROP_EXPECTED_INPUT_JSON="$(json_escape_string "$DROP_EXPECTED_INPUT")"
+  DROP_FOUND=0
+  DROP_VISIBLE_RESPONSE=""
+  for _ in $(seq 1 30); do
+    DROP_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${DROP_EXPECTED_INPUT_JSON}\",\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
+    if echo "$DROP_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
+      DROP_FOUND=1
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ "$DROP_FOUND" -ne 1 ]]; then
+    echo "error: dropped image path not observed in terminal viewport during smoke run" >&2
+    echo "target panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
+    echo "expected input: ${DROP_EXPECTED_INPUT}" >&2
+    echo "last terminal response: ${DROP_VISIBLE_RESPONSE}" >&2
     exit 1
   fi
 

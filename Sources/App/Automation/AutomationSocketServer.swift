@@ -455,6 +455,58 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
             throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
 
+        case "automation.terminal_drop_image_files":
+            guard payload["files"] != nil else {
+                throw AutomationSocketError.invalidPayload("files is required")
+            }
+            let rawFiles = payload.stringArray("files")
+            guard rawFiles.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("files must include at least one path")
+            }
+
+            let normalizedFiles: [String]
+            do {
+                normalizedFiles = try SocketEventNormalizer.normalizeFiles(rawFiles, cwd: payload.string("cwd"))
+            } catch let normalizationError as SocketEventNormalizationError {
+                switch normalizationError {
+                case .missingCWDForRelativePath(let path):
+                    throw AutomationSocketError.invalidPayload(
+                        "cwd is required when files include relative path: \(path)"
+                    )
+                }
+            }
+
+            let allowUnavailable = payload.bool("allowUnavailable") ?? false
+            let resolved = try resolveTerminalTarget(payload: payload)
+            switch terminalRuntimeRegistry.automationDropImageFiles(
+                normalizedFiles,
+                panelID: resolved.panelID
+            ) {
+            case .sent(let imageCount):
+                return [
+                    "workspaceID": .string(resolved.workspaceID.uuidString),
+                    "panelID": .string(resolved.panelID.uuidString),
+                    "requestedFileCount": .int(normalizedFiles.count),
+                    "acceptedImageCount": .int(imageCount),
+                    "available": .bool(true),
+                ]
+
+            case .noImageFiles:
+                throw AutomationSocketError.invalidPayload("files payload did not contain any image paths")
+
+            case .unavailableSurface:
+                if allowUnavailable {
+                    return [
+                        "workspaceID": .string(resolved.workspaceID.uuidString),
+                        "panelID": .string(resolved.panelID.uuidString),
+                        "requestedFileCount": .int(normalizedFiles.count),
+                        "acceptedImageCount": .int(0),
+                        "available": .bool(false),
+                    ]
+                }
+                throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
+            }
+
         case "automation.terminal_visible_text":
             let resolved = try resolveTerminalTarget(payload: payload)
             guard let text = terminalRuntimeRegistry.automationReadVisibleText(panelID: resolved.panelID) else {

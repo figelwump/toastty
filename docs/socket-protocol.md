@@ -287,6 +287,91 @@ Result:
 - `stateVersion: Int`
 - `warnings?: [String]`
 
+### `automation.terminal_send_text`
+
+Sends raw terminal input text to a resolved terminal panel.
+
+Request payload:
+
+- `text: String` (required; empty string allowed)
+- `submit?: Bool` (default `false`; appends newline when `true`)
+- `panelID?: UUID` (optional explicit terminal panel target)
+- `workspaceID?: UUID` (optional; used when `panelID` is omitted)
+- `allowUnavailable?: Bool` (default `false`)
+
+Result:
+
+- `workspaceID: UUID`
+- `panelID: UUID`
+- `submitted: Bool`
+- `available: Bool`
+
+Validation:
+
+- rejects deprecated `waitForSurfaceMs` payload key.
+- when `allowUnavailable=false`, unavailable terminal surfaces return `INVALID_PAYLOAD`.
+
+### `automation.terminal_drop_image_files`
+
+Simulates dropping image files into a resolved terminal panel.
+
+Request payload:
+
+- `files: [String]` (required; absolute paths preferred)
+- `cwd?: String` (required when any file path is relative)
+- `panelID?: UUID` (optional explicit terminal panel target)
+- `workspaceID?: UUID` (optional; used when `panelID` is omitted)
+- `allowUnavailable?: Bool` (default `false`)
+
+Result:
+
+- `workspaceID: UUID`
+- `panelID: UUID`
+- `requestedFileCount: Int`
+- `acceptedImageCount: Int`
+- `available: Bool`
+
+Validation:
+
+- normalizes paths using `cwd` for relative inputs.
+- returns `INVALID_PAYLOAD` when no image file paths remain after normalization/filtering.
+- when `allowUnavailable=false`, unavailable terminal surfaces return `INVALID_PAYLOAD`.
+
+### `automation.terminal_visible_text`
+
+Reads visible text from a resolved terminal panel.
+
+Request payload:
+
+- `panelID?: UUID`
+- `workspaceID?: UUID`
+- `contains?: String`
+
+Result:
+
+- `workspaceID: UUID`
+- `panelID: UUID`
+- `text: String`
+- `contains?: Bool` (present when `contains` was requested)
+
+### `automation.workspace_snapshot`
+
+Returns deterministic workspace layout metrics for assertions.
+
+Request payload:
+
+- `workspaceID?: UUID` (defaults to selected workspace)
+
+Result:
+
+- `workspaceID: UUID`
+- `paneCount: Int`
+- `panelCount: Int`
+- `focusedPanelID: UUID | null`
+- `rootSplitRatio: Double | null`
+- `leafPaneIDs: [UUID]`
+- `leafPanelIDs: [UUID]`
+
 ### `automation.capture_screenshot`
 
 Request payload:

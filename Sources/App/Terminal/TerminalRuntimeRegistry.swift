@@ -1,9 +1,21 @@
 import AppKit
 import CoreState
 import Foundation
+import UniformTypeIdentifiers
 #if TOASTTY_HAS_GHOSTTY_KIT
 import GhosttyKit
 #endif
+
+struct PreparedImageFileDrop {
+    let targetPanelID: UUID
+    let imageFileURLs: [URL]
+}
+
+enum AutomationImageFileDropResult {
+    case sent(imageCount: Int)
+    case noImageFiles
+    case unavailableSurface
+}
 
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
@@ -70,6 +82,73 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
         return controller.automationReadVisibleText()
     }
+
+    func automationDropImageFiles(_ filePaths: [String], panelID: UUID) -> AutomationImageFileDropResult {
+        guard let controller = controllers[panelID] else {
+            return .unavailableSurface
+        }
+
+        let candidateURLs = filePaths.map { URL(fileURLWithPath: $0).standardizedFileURL }
+        let imageFileURLs = Self.normalizedImageFileURLs(from: candidateURLs)
+        guard imageFileURLs.isEmpty == false else {
+            return .noImageFiles
+        }
+
+        if controller.handleImageFileDrop(imageFileURLs) {
+            return .sent(imageCount: imageFileURLs.count)
+        }
+        return .unavailableSurface
+    }
+
+    func prepareImageFileDrop(from urls: [URL]) -> PreparedImageFileDrop? {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let store else { return nil }
+        let imageFileURLs = Self.normalizedImageFileURLs(from: urls)
+        guard imageFileURLs.isEmpty == false else { return nil }
+        guard let targetPanelID = focusedTerminalPanelIDForDrop(state: store.state) else {
+            return nil
+        }
+        let targetController = controller(for: targetPanelID)
+        guard targetController.canAcceptImageFileDrop() else {
+            return nil
+        }
+        return PreparedImageFileDrop(targetPanelID: targetPanelID, imageFileURLs: imageFileURLs)
+        #else
+        _ = urls
+        return nil
+        #endif
+    }
+
+    @discardableResult
+    func handlePreparedImageFileDrop(_ drop: PreparedImageFileDrop) -> Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let targetController = controller(for: drop.targetPanelID)
+        let handled = targetController.handleImageFileDrop(drop.imageFileURLs)
+        if handled {
+            ToasttyLog.debug(
+                "Forwarded image file drop to focused terminal",
+                category: .input,
+                metadata: [
+                    "panel_id": drop.targetPanelID.uuidString,
+                    "image_count": String(drop.imageFileURLs.count),
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Failed to forward image file drop to focused terminal",
+                category: .input,
+                metadata: [
+                    "panel_id": drop.targetPanelID.uuidString,
+                    "image_count": String(drop.imageFileURLs.count),
+                ]
+            )
+        }
+        return handled
+        #else
+        _ = drop
+        return false
+        #endif
+    }
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -98,6 +177,34 @@ private extension TerminalRuntimeRegistry {
     func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
 }
 #endif
+
+private extension TerminalRuntimeRegistry {
+    static func normalizedImageFileURLs(from urls: [URL]) -> [URL] {
+        var normalized: [URL] = []
+        var seenPaths: Set<String> = []
+
+        for url in urls {
+            let fileURL = url.standardizedFileURL
+            guard fileURL.isFileURL else { continue }
+            guard isImageFileURL(fileURL) else { continue }
+            let path = fileURL.path
+            guard seenPaths.insert(path).inserted else { continue }
+            normalized.append(fileURL)
+        }
+
+        return normalized
+    }
+
+    static func isImageFileURL(_ fileURL: URL) -> Bool {
+        if let contentType = try? fileURL.resourceValues(forKeys: [.contentTypeKey]).contentType {
+            return contentType.conforms(to: .image)
+        }
+        if let inferredType = UTType(filenameExtension: fileURL.pathExtension) {
+            return inferredType.conforms(to: .image)
+        }
+        return false
+    }
+}
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 private extension TerminalRuntimeRegistry {
@@ -130,6 +237,18 @@ private extension TerminalRuntimeRegistry {
         }
 
         return nil
+    }
+
+    func focusedTerminalPanelIDForDrop(state: AppState) -> UUID? {
+        guard let workspaceID = selectedWorkspaceID(state: state),
+              let workspace = state.workspacesByID[workspaceID],
+              let focusedPanelID = workspace.focusedPanelID,
+              let panelState = workspace.panels[focusedPanelID],
+              case .terminal = panelState,
+              workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil else {
+            return nil
+        }
+        return focusedPanelID
     }
 
     func register(surface: ghostty_surface_t, for panelID: UUID) {
@@ -416,6 +535,14 @@ final class TerminalSurfaceController {
         let hostView = TerminalHostView()
         terminalHostView = hostView
         hostedView = hostView
+        terminalHostView.resolveImageFileDrop = { [weak self] urls in
+            guard let self else { return nil }
+            return self.registry.prepareImageFileDrop(from: urls)
+        }
+        terminalHostView.performImageFileDrop = { [weak self] drop in
+            guard let self else { return false }
+            return self.registry.handlePreparedImageFileDrop(drop)
+        }
         #else
         hostedView = fallbackView
         #endif
@@ -681,6 +808,41 @@ final class TerminalSurfaceController {
         return String(decoding: buffer, as: UTF8.self)
         #else
         return nil
+        #endif
+    }
+
+    func canAcceptImageFileDrop() -> Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        return ghosttySurface != nil
+        #else
+        return false
+        #endif
+    }
+
+    func handleImageFileDrop(_ imageFileURLs: [URL]) -> Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else {
+            return false
+        }
+        let filePaths = imageFileURLs.map { $0.path(percentEncoded: false) }
+        guard let payload = TerminalDropPayloadBuilder.shellEscapedPathPayload(
+            forFilePaths: filePaths
+        ) else {
+            ToasttyLog.warning(
+                "Rejected image file drop due to invalid file path payload",
+                category: .input,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "image_count": String(imageFileURLs.count),
+                ]
+            )
+            return false
+        }
+        sendSurfaceText(payload, to: ghosttySurface)
+        return true
+        #else
+        _ = imageFileURLs
+        return false
         #endif
     }
 
@@ -1067,6 +1229,15 @@ extension TerminalSurfaceController {
 }
 
 final class TerminalHostView: NSView {
+    var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
+    var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
+    private var pendingImageFileDrop: PreparedImageFileDrop?
+
+    private static let imageFileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
+        .urlReadingFileURLsOnly: true,
+        .urlReadingContentsConformToTypes: [UTType.image.identifier],
+    ]
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
     private var rightMousePressWasForwarded = false
@@ -1077,6 +1248,7 @@ final class TerminalHostView: NSView {
         wantsLayer = true
         layer?.backgroundColor = NSColor.black.cgColor
         syncLayerContentsScale()
+        registerForDraggedTypes([.fileURL])
     }
 
     required init?(coder: NSCoder) {
@@ -1102,6 +1274,49 @@ final class TerminalHostView: NSView {
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
         ghosttySurface = surface
         rightMousePressWasForwarded = false
+        pendingImageFileDrop = nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let imageFileURLs = Self.imageFileURLs(from: sender.draggingPasteboard)
+        guard imageFileURLs.isEmpty == false else {
+            pendingImageFileDrop = nil
+            return []
+        }
+        guard let preparedDrop = resolveImageFileDrop?(imageFileURLs) else {
+            pendingImageFileDrop = nil
+            return []
+        }
+        pendingImageFileDrop = preparedDrop
+        return .copy
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingEntered(sender)
+    }
+
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        pendingImageFileDrop != nil
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let pendingImageFileDrop else {
+            return false
+        }
+        self.pendingImageFileDrop = nil
+
+        focusHostViewIfNeeded()
+        return performImageFileDrop?(pendingImageFileDrop) ?? false
+    }
+
+    override func draggingExited(_ sender: NSDraggingInfo?) {
+        pendingImageFileDrop = nil
+        super.draggingExited(sender)
+    }
+
+    override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+        pendingImageFileDrop = nil
+        super.concludeDragOperation(sender)
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1474,6 +1689,16 @@ final class TerminalHostView: NSView {
             )
         }
         return handled
+    }
+
+    private static func imageFileURLs(from pasteboard: NSPasteboard) -> [URL] {
+        guard let objects = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: imageFileURLReadOptions
+        ) as? [URL] else {
+            return []
+        }
+        return objects.map(\.standardizedFileURL)
     }
 
     private static func hasStringContentInPasteboard() -> Bool {
