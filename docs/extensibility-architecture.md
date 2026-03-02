@@ -131,6 +131,26 @@ toastty feed list [--limit 20]
 toastty feed inject <content-id> "feedback text"    # simulate user comment
 ```
 
+**session telemetry (agent-emitted):**
+
+```bash
+toastty session start --agent claude|codex --panel <panel-id> [--session <id>] [--cwd <path>] [--repo-root <path>]
+toastty session update-files --session <id> --panel <panel-id> --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
+toastty session progress --session <id> --panel <panel-id> --message "..."
+toastty session needs-input --session <id> --panel <panel-id> --title "..." --body "..."
+toastty session error --session <id> --panel <panel-id> --message "..."
+toastty session stop --session <id> --panel <panel-id> [--reason "..."]
+```
+
+These commands are designed for agent-driven automation (for example, via globally installed Claude Code/Codex skills). They emit `session.*` socket events to keep Toastty session metadata in sync without requiring users to launch agents through a wrapper process.
+
+Canonical agent IDs for telemetry are:
+
+- `claude` = Claude Code
+- `codex` = Codex CLI
+
+`--session` on `session start` is optional. If omitted, the CLI generates a UUID session ID and returns it in command output (`--json` recommended for skill-driven flows). Follow-up `session` commands must use that returned ID.
+
 ### output format
 
 By default, commands print human-readable output. Pass `--json` for structured JSON (the raw socket response). Scripts and agents should use `--json`.
@@ -353,6 +373,16 @@ Extension panel state is persisted with the workspace layout. On restore, the ap
 
 An agent posts content (feed item, markdown annotation). The user reads it and wants to respond. The response needs to reach the agent. But agents like Claude Code and Codex are ephemeral — they run, do work, and exit. They don't hold open connections waiting for feedback.
 
+### session metadata ingestion (wrapper-optional)
+
+Toastty consumes session metadata from `session.*` events, but wrappers are optional:
+
+1. Primary path: globally installed Claude Code/Codex skills call `toastty session start/update-files/progress/needs-input/error/stop` while the agent runs.
+2. Optional path: wrapper/adapter processes can emit the same `session.*` events directly over the socket.
+3. Fallback path when no telemetry is emitted: feedback routing uses panel/workspace context and terminal injection, then spawns a new agent invocation when needed.
+
+This keeps the architecture usable for default agent CLIs while still allowing richer attribution when telemetry is available.
+
 ### two cases
 
 **Case 1: Agent is currently running in a terminal pane.**
@@ -524,6 +554,8 @@ The feed panel renders an inline comment input on each feedback-enabled item. Wh
 
 ## 5) phased implementation
 
+Section 6 below is the recommended near-term execution order (what to do now vs defer) for these phases.
+
 ### phase 1: always-on socket + CLI
 
 **Goal:** The full current automation surface area is available via CLI in normal (non-automation) operation.
@@ -532,8 +564,10 @@ The feed panel renders an inline comment input on each feedback-enabled item. Wh
 - Keep `automation.reset`, `automation.load_fixture`, `automation.capture_screenshot`, `automation.dump_state` gated behind `--automation`.
 - Automation commands remain socket/internal in this phase; they are not part of the standard end-user `toastty` CLI command surface.
 - Build `toastty` CLI binary (`Sources/CLI/`) that wraps socket communication.
-- Implement command groups: `workspace`, `split`, `focus`, `resize`, `equalize`, `panel`, `send`, `read`, `font`, `status`, `notify`.
+- Implement command groups: `workspace`, `split`, `focus`, `resize`, `equalize`, `panel`, `send`, `read`, `font`, `status`, `notify`, `session`.
 - Panel command surface includes `panel create`, `panel toggle builtin`, `panel focus`, `panel close`, and `panel reopen`.
+- Add `session` command surface that emits `session.*` events (`start`, `update-files`, `progress`, `needs-input`, `error`, `stop`).
+- Ship global skill snippets/templates for Claude Code and Codex that call `toastty session ...` during agent execution.
 - JSON output mode (`--json`) for programmatic use.
 - Socket discovery, error handling, timeout.
 
@@ -570,7 +604,23 @@ The feed panel renders an inline comment input on each feedback-enabled item. Wh
 - Extension listing: `toastty extension list`, `toastty extension info <id>`.
 - Documentation and examples for extension authors.
 
-## 6) open questions and future considerations
+## 6) recommended execution order
+
+### do now
+
+- Deliver phase 1 CLI/socket baseline including the `toastty session` command group.
+- Publish globally installable Claude Code/Codex skills that emit session telemetry via `toastty session ...`.
+- Keep feedback routing resilient when telemetry is missing (panel/workspace fallback + terminal injection).
+- Keep wrapper/adaptor integration optional and protocol-compatible.
+
+### defer
+
+- Mandatory wrapper-based launch flows for all users.
+- Push-subscription/broadcast feed protocol for external agents; polling is sufficient in v1.
+- Deep session-driven UI polish (rich progress/needs-input surfaces) beyond minimal routing/attribution needs.
+- Additional extension-platform surface area that lacks a concrete near-term use case.
+
+## 7) open questions and future considerations
 
 ### permissions model
 
