@@ -74,6 +74,7 @@ struct WorkspaceView: View {
             focusedPanelModeActive: workspace.focusedPanelModeActive,
             unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle
         )
+        .id(workspace.id)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -407,6 +408,7 @@ private struct PanelCardView: View {
                     globalFontPoints: globalFontPoints,
                     runtimeRegistry: terminalRuntimeRegistry
                 )
+                .id(panelID)
                 .overlay {
                     if focusedPanelID != nil, !isFocused, unfocusedSplitStyle.fillOverlayOpacity > 0 {
                         Rectangle()

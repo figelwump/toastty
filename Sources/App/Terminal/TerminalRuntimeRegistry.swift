@@ -339,6 +339,8 @@ final class TerminalSurfaceController {
     private var usesBackingPixelSurfaceSizing = false
     private var hasDeterminedSurfaceSizingMode = false
     private var lastRenderMetrics: GhosttyRenderMetrics?
+    private var lastDisplayID: UInt32?
+    private var hasLoggedTinyViewportSuppression = false
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -367,6 +369,18 @@ final class TerminalSurfaceController {
     }
 
     func attach(into container: NSView) {
+        let sourceContainerChanged = activeSourceContainer !== container
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if shouldIgnoreAttach(to: container) {
+            ToasttyLog.debug(
+                "Ignoring terminal attach from detached container callback",
+                category: .ghostty,
+                metadata: ["panel_id": panelID.uuidString]
+            )
+            return
+        }
+        #endif
+
         activeSourceContainer = container
         if hostedView.superview !== container {
             hostedView.removeFromSuperview()
@@ -379,6 +393,12 @@ final class TerminalSurfaceController {
                 hostedView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             ])
         }
+
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if sourceContainerChanged {
+            refreshSurfaceAfterContainerMove(sourceContainer: container)
+        }
+        #endif
     }
 
     func update(
@@ -390,15 +410,19 @@ final class TerminalSurfaceController {
         sourceContainer: NSView
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        guard activeSourceContainer === sourceContainer else {
-            ToasttyLog.debug(
-                "Skipping terminal update from stale container callback",
-                category: .ghostty,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                ]
-            )
-            return
+        if activeSourceContainer !== sourceContainer {
+            if shouldPromoteSourceContainer(to: sourceContainer) {
+                attach(into: sourceContainer)
+            } else {
+                ToasttyLog.debug(
+                    "Skipping terminal update from stale container callback",
+                    category: .ghostty,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                    ]
+                )
+                return
+            }
         }
 
         guard hostedView.superview === sourceContainer else {
@@ -433,10 +457,26 @@ final class TerminalSurfaceController {
 
         let xScale = max(Double(backingScaleFactor), 1)
         let yScale = max(Double(backingScaleFactor), 1)
-        ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
-
         let logicalWidth = max(Int(viewportSize.width.rounded(.down)), 1)
         let logicalHeight = max(Int(viewportSize.height.rounded(.down)), 1)
+        if logicalWidth <= tinyViewportSuppressionThreshold || logicalHeight <= tinyViewportSuppressionThreshold {
+            if !hasLoggedTinyViewportSuppression {
+                ToasttyLog.debug(
+                    "Skipping tiny transient terminal viewport update during hierarchy churn",
+                    category: .ghostty,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "viewport_width": String(logicalWidth),
+                        "viewport_height": String(logicalHeight),
+                    ]
+                )
+            }
+            hasLoggedTinyViewportSuppression = true
+            return
+        }
+        hasLoggedTinyViewportSuppression = false
+        updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
+        ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
         let pixelWidth = max(Int((viewportSize.width * backingScaleFactor).rounded()), 1)
         let pixelHeight = max(Int((viewportSize.height * backingScaleFactor).rounded()), 1)
         let hasUsableViewport = logicalWidth > 16 && logicalHeight > 16
@@ -509,6 +549,8 @@ final class TerminalSurfaceController {
         usesBackingPixelSurfaceSizing = false
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
+        lastDisplayID = nil
+        hasLoggedTinyViewportSuppression = false
         #endif
         activeSourceContainer = nil
         fallbackView.removeFromSuperview()
@@ -645,9 +687,77 @@ final class TerminalSurfaceController {
         usesBackingPixelSurfaceSizing = false
         hasDeterminedSurfaceSizingMode = false
         lastRenderMetrics = nil
+        lastDisplayID = nil
+        hasLoggedTinyViewportSuppression = false
         ghosttySurface = surface
         registry.register(surface: surface, for: panelID)
     }
+
+    private func shouldIgnoreAttach(to candidate: NSView) -> Bool {
+        guard let activeSourceContainer else { return false }
+        guard activeSourceContainer !== candidate else { return false }
+        guard hostedView.superview != nil else { return false }
+        let activeAttached = containerIsAttachedAndVisible(activeSourceContainer)
+        let candidateClearlyDetached = candidate.window == nil || candidate.superview == nil
+        return activeAttached && candidateClearlyDetached
+    }
+
+    private func shouldPromoteSourceContainer(to candidate: NSView) -> Bool {
+        guard containerIsAttachedAndVisible(candidate) else {
+            return false
+        }
+        if hostedView.superview === candidate {
+            return true
+        }
+        guard let activeSourceContainer else {
+            return true
+        }
+        if activeSourceContainer === candidate {
+            return true
+        }
+        return !containerIsAttachedAndVisible(activeSourceContainer)
+    }
+
+    private func containerIsAttachedAndVisible(_ container: NSView?) -> Bool {
+        guard let container else { return false }
+        guard container.window != nil else { return false }
+        guard container.superview != nil else { return false }
+        guard !container.isHidden else { return false }
+        guard container.bounds.width > 1, container.bounds.height > 1 else { return false }
+
+        var ancestor = container.superview
+        while let view = ancestor {
+            if view.isHidden {
+                return false
+            }
+            ancestor = view.superview
+        }
+        return true
+    }
+
+    private func refreshSurfaceAfterContainerMove(sourceContainer: NSView) {
+        guard let ghosttySurface else { return }
+        updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
+        ghosttyManager.requestImmediateTick()
+        ghostty_surface_refresh(ghosttySurface)
+    }
+
+    private func updateDisplayIDIfNeeded(surface: ghostty_surface_t, sourceContainer: NSView) {
+        guard let displayID = resolvedDisplayID(sourceContainer: sourceContainer) else {
+            return
+        }
+        guard lastDisplayID != displayID else {
+            return
+        }
+        ghostty_surface_set_display_id(surface, displayID)
+        lastDisplayID = displayID
+    }
+
+    private func resolvedDisplayID(sourceContainer: NSView) -> UInt32? {
+        sourceContainer.window?.screen?.ghosttyDisplayID
+    }
+
+    private let tinyViewportSuppressionThreshold = 1
 
     private func shouldUseBackingPixelSurfaceSizing(
         measuredSize: ghostty_surface_size_s,
@@ -907,6 +1017,15 @@ final class TerminalHostView: NSView {
             ?? NSScreen.main?.backingScaleFactor
             ?? 1
         layer?.contentsScale = max(scale, 1)
+    }
+}
+
+private extension NSScreen {
+    var ghosttyDisplayID: UInt32? {
+        guard let screenNumber = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
+            return nil
+        }
+        return screenNumber.uint32Value
     }
 }
 

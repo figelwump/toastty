@@ -9,15 +9,34 @@ struct TerminalPanelHostView: NSViewRepresentable {
     let globalFontPoints: Double
     let runtimeRegistry: TerminalRuntimeRegistry
 
+    final class Coordinator {
+        private(set) var bindingGeneration: UInt64 = 0
+
+        @discardableResult
+        func advanceBindingGeneration() -> UInt64 {
+            bindingGeneration &+= 1
+            return bindingGeneration
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeNSView(context: Context) -> TerminalPanelContainerView {
         TerminalPanelContainerView()
     }
 
     func updateNSView(_ containerView: TerminalPanelContainerView, context: Context) {
+        let coordinator = context.coordinator
+        let generation = coordinator.advanceBindingGeneration()
         let controller = runtimeRegistry.controller(for: panelID)
         controller.attach(into: containerView)
 
-        let update = { (view: NSView) in
+        let update = { [weak coordinator] (view: NSView) in
+            guard let coordinator else { return }
+            // Drop stale layout callbacks from previous bindings of this representable.
+            guard coordinator.bindingGeneration == generation else { return }
             let scale = effectiveBackingScaleFactor(for: view)
             controller.update(
                 terminalState: terminalState,
@@ -31,6 +50,11 @@ struct TerminalPanelHostView: NSViewRepresentable {
 
         containerView.onLayout = update
         update(containerView)
+    }
+
+    static func dismantleNSView(_ containerView: TerminalPanelContainerView, coordinator: Coordinator) {
+        _ = coordinator.advanceBindingGeneration()
+        containerView.onLayout = nil
     }
 
     private func effectiveBackingScaleFactor(for view: NSView) -> CGFloat {
