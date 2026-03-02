@@ -182,6 +182,7 @@ TOASTTY_LOG_LEVEL=debug \
 TOASTTY_LOG_FILE="$TRACE_LOG_PATH" \
 "$APP_BINARY" \
   --automation \
+  --skip-quit-confirmation \
   --run-id "$RUN_ID" \
   --fixture "$FIXTURE" \
   --artifacts-dir "$ARTIFACTS_DIR" \

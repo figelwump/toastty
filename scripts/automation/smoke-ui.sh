@@ -61,6 +61,7 @@ TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
 "$APP_BINARY" \
   --automation \
+  --skip-quit-confirmation \
   --run-id "$RUN_ID" \
   --fixture "$FIXTURE" \
   --artifacts-dir "$ARTIFACTS_DIR" \

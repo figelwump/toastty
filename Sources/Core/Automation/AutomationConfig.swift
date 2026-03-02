@@ -67,9 +67,9 @@ public struct AutomationConfig: Equatable, Sendable {
         arguments: [String],
         environment: [String: String]
     ) -> Bool {
-        let isExplicitlyDisabled = arguments.contains(skipQuitConfirmationArgument)
+        let isExplicitBypassRequested = arguments.contains(skipQuitConfirmationArgument)
             || isEnabledFlag(environment[skipQuitConfirmationEnvironmentFlag])
-        return isExplicitlyDisabled || isAutomationSession(arguments: arguments, environment: environment)
+        return isExplicitBypassRequested || isAutomationSession(arguments: arguments, environment: environment)
     }
 
     private static func argumentValue(after flag: String, in arguments: [String]) -> String? {
