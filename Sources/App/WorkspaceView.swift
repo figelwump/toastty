@@ -111,7 +111,7 @@ struct WorkspaceView: View {
         active: Bool,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        styledTopBarButton(active: active, action: action) {
             HStack(spacing: 4) {
                 if let systemImage {
                     Image(systemName: systemImage)
@@ -123,14 +123,6 @@ struct WorkspaceView: View {
                     .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
             }
         }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(active ? ToastyTheme.elevatedBackground : Color.clear)
-        .overlay(
-            Rectangle()
-                .stroke(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
-        )
     }
 
     /// Top bar button variant that accepts a custom icon view (e.g. Canvas-based icons).
@@ -140,13 +132,23 @@ struct WorkspaceView: View {
         active: Bool,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        styledTopBarButton(active: active, action: action) {
             HStack(spacing: 4) {
                 icon()
                 Text(title)
                     .font(ToastyTheme.fontSubtext)
                     .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
             }
+        }
+    }
+
+    private func styledTopBarButton<Label: View>(
+        active: Bool,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: action) {
+            label()
         }
         .buttonStyle(.plain)
         .padding(.horizontal, 8)
@@ -160,6 +162,7 @@ struct WorkspaceView: View {
 
     /// Top bar button for momentary actions (e.g. split). Briefly flashes the "active"
     /// styling (accent icon, light text, elevated background) while pressed, then fades back.
+    /// This intentionally bypasses `styledTopBarButton` and uses `TopBarFlashButtonStyle`.
     private func topBarFlashButton<Icon: View>(
         title: String,
         @ViewBuilder icon: @escaping (_ isHighlighted: Bool) -> Icon,
