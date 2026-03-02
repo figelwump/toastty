@@ -27,6 +27,61 @@ struct AppReducerTests {
     }
 
     @Test
+    func splitFocusedPaneInheritsFocusedTerminalCWD() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[focusedPanelID] else {
+            Issue.record("expected focused panel to be terminal before split")
+            return
+        }
+        terminalState.cwd = "/tmp/toastty/split-cwd"
+        workspace.panels[focusedPanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let newFocusedPanelID = try #require(workspaceAfter.focusedPanelID)
+
+        guard case .terminal(let splitTerminalState) = workspaceAfter.panels[newFocusedPanelID] else {
+            Issue.record("expected split-created panel to be terminal")
+            return
+        }
+        #expect(splitTerminalState.cwd == "/tmp/toastty/split-cwd")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func splitFocusedPaneFallsBackToHomeCWDWhenFocusedPanelIsNonTerminal() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
+
+        let workspaceWithDiff = try #require(state.workspacesByID[workspaceID])
+        let diffPanelID = try #require(workspaceWithDiff.panels.first(where: { $0.value.kind == .diff })?.key)
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: diffPanelID), state: &state))
+
+        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+
+        let workspaceAfterSplit = try #require(state.workspacesByID[workspaceID])
+        let newFocusedPanelID = try #require(workspaceAfterSplit.focusedPanelID)
+        guard case .terminal(let terminalState) = workspaceAfterSplit.panels[newFocusedPanelID] else {
+            Issue.record("expected split-created panel to be terminal")
+            return
+        }
+
+        #expect(terminalState.cwd == NSHomeDirectory())
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func splitFocusedPaneInDirectionSupportsLeadingPlacements() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

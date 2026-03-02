@@ -456,66 +456,72 @@ public struct AppReducer {
         direction: PaneSplitDirection,
         state: inout AppState
     ) -> Bool {
-            guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.focusedPanelModeActive == false else { return false }
-            guard let focusResolution = resolveFocusedPanel(in: workspace) else {
-                return false
-            }
-            workspace.focusedPanelID = focusResolution.panelID
+        guard var workspace = state.workspacesByID[workspaceID] else { return false }
+        guard workspace.focusedPanelModeActive == false else { return false }
+        guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+            return false
+        }
+        workspace.focusedPanelID = focusResolution.panelID
 
-            let sourceLeaf = focusResolution.leaf
+        let sourceLeaf = focusResolution.leaf
+        let inheritedCWD: String
+        if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
+            inheritedCWD = focusedTerminalState.cwd
+        } else {
+            inheritedCWD = NSHomeDirectory()
+        }
 
-            let newPanelID = UUID()
-            let newPaneID = UUID()
+        let newPanelID = UUID()
+        let newPaneID = UUID()
 
-            workspace.panels[newPanelID] = .terminal(
-                TerminalPanelState(
-                    title: nextTerminalTitle(in: workspace),
-                    shell: "zsh",
-                    cwd: NSHomeDirectory()
-                )
+        workspace.panels[newPanelID] = .terminal(
+            TerminalPanelState(
+                title: nextTerminalTitle(in: workspace),
+                shell: "zsh",
+                cwd: inheritedCWD
             )
+        )
 
-            let newLeaf = PaneNode.leaf(paneID: newPaneID, tabPanelIDs: [newPanelID], selectedIndex: 0)
-            let originalLeaf = PaneNode.leaf(
-                paneID: sourceLeaf.paneID,
-                tabPanelIDs: sourceLeaf.tabPanelIDs,
-                selectedIndex: sourceLeaf.selectedIndex
-            )
+        let newLeaf = PaneNode.leaf(paneID: newPaneID, tabPanelIDs: [newPanelID], selectedIndex: 0)
+        let originalLeaf = PaneNode.leaf(
+            paneID: sourceLeaf.paneID,
+            tabPanelIDs: sourceLeaf.tabPanelIDs,
+            selectedIndex: sourceLeaf.selectedIndex
+        )
 
-            let orientation: SplitOrientation = switch direction {
-            case .left, .right:
-                .horizontal
-            case .up, .down:
-                .vertical
-            }
+        let orientation: SplitOrientation = switch direction {
+        case .left, .right:
+            .horizontal
+        case .up, .down:
+            .vertical
+        }
 
-            let firstNode: PaneNode
-            let secondNode: PaneNode
-            switch direction {
-            case .right, .down:
-                firstNode = originalLeaf
-                secondNode = newLeaf
-            case .left, .up:
-                firstNode = newLeaf
-                secondNode = originalLeaf
-            }
+        let firstNode: PaneNode
+        let secondNode: PaneNode
+        switch direction {
+        case .right, .down:
+            firstNode = originalLeaf
+            secondNode = newLeaf
+        case .left, .up:
+            firstNode = newLeaf
+            secondNode = originalLeaf
+        }
 
-            let split = PaneNode.split(
-                nodeID: UUID(),
-                orientation: orientation,
-                ratio: 0.5,
-                first: firstNode,
-                second: secondNode
-            )
+        let split = PaneNode.split(
+            nodeID: UUID(),
+            orientation: orientation,
+            ratio: 0.5,
+            first: firstNode,
+            second: secondNode
+        )
 
-            guard workspace.paneTree.replaceLeaf(paneID: sourceLeaf.paneID, with: split) else {
-                return false
-            }
+        guard workspace.paneTree.replaceLeaf(paneID: sourceLeaf.paneID, with: split) else {
+            return false
+        }
 
-            workspace.focusedPanelID = newPanelID
-            state.workspacesByID[workspaceID] = workspace
-            return true
+        workspace.focusedPanelID = newPanelID
+        state.workspacesByID[workspaceID] = workspace
+        return true
 
     }
 
