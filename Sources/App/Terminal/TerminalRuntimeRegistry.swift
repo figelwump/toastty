@@ -1069,6 +1069,7 @@ extension TerminalSurfaceController {
 final class TerminalHostView: NSView {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var ghosttySurface: ghostty_surface_t?
+    private var rightMousePressWasForwarded = false
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -1100,6 +1101,7 @@ final class TerminalHostView: NSView {
     #if TOASTTY_HAS_GHOSTTY_KIT
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
         ghosttySurface = surface
+        rightMousePressWasForwarded = false
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -1130,18 +1132,42 @@ final class TerminalHostView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        guard let ghosttySurface else {
+            rightMousePressWasForwarded = false
+            super.rightMouseDown(with: event)
+            return
+        }
         focusHostViewIfNeeded()
-        guard forwardMouseButton(
+        guard shouldForwardRawRightMouseEvents(surface: ghosttySurface) else {
+            rightMousePressWasForwarded = false
+            super.rightMouseDown(with: event)
+            return
+        }
+        let handled = forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_PRESS,
             button: GHOSTTY_MOUSE_RIGHT
-        ) else {
+        )
+        rightMousePressWasForwarded = handled
+        guard handled else {
             super.rightMouseDown(with: event)
             return
         }
     }
 
     override func rightMouseUp(with event: NSEvent) {
+        guard let ghosttySurface else {
+            rightMousePressWasForwarded = false
+            super.rightMouseUp(with: event)
+            return
+        }
+        let shouldForward = rightMousePressWasForwarded
+            || shouldForwardRawRightMouseEvents(surface: ghosttySurface)
+        rightMousePressWasForwarded = false
+        guard shouldForward else {
+            super.rightMouseUp(with: event)
+            return
+        }
         guard forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_RELEASE,
@@ -1236,6 +1262,56 @@ final class TerminalHostView: NSView {
         )
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let ghosttySurface else {
+            return super.menu(for: event)
+        }
+        guard !shouldForwardRawRightMouseEvents(surface: ghosttySurface) else {
+            return nil
+        }
+
+        focusHostViewIfNeeded()
+
+        let menu = NSMenu(title: "Terminal")
+        menu.autoenablesItems = false
+
+        let copyItem = NSMenuItem(
+            title: "Copy",
+            action: #selector(copy(_:)),
+            keyEquivalent: ""
+        )
+        copyItem.target = self
+        copyItem.isEnabled = hasCopyableSelection(on: ghosttySurface)
+        menu.addItem(copyItem)
+
+        let pasteItem = NSMenuItem(
+            title: "Paste",
+            action: #selector(paste(_:)),
+            keyEquivalent: ""
+        )
+        pasteItem.target = self
+        pasteItem.isEnabled = Self.hasStringContentInPasteboard()
+        menu.addItem(pasteItem)
+
+        return menu
+    }
+
+    @objc func copy(_ sender: Any?) {
+        guard let ghosttySurface,
+              hasCopyableSelection(on: ghosttySurface) else {
+            return
+        }
+        if invokeGhosttyBindingAction("copy_to_clipboard", on: ghosttySurface) {
+            return
+        }
+        _ = copySelectionToPasteboard()
+    }
+
+    @objc func paste(_ sender: Any?) {
+        guard let ghosttySurface else { return }
+        _ = invokeGhosttyBindingAction("paste_from_clipboard", on: ghosttySurface)
+    }
+
     override func keyDown(with event: NSEvent) {
         guard handleKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS) else {
             super.keyDown(with: event)
@@ -1310,6 +1386,10 @@ final class TerminalHostView: NSView {
         window.makeFirstResponder(self)
     }
 
+    private func shouldForwardRawRightMouseEvents(surface: ghostty_surface_t) -> Bool {
+        ghostty_surface_mouse_captured(surface)
+    }
+
     @discardableResult
     private func forwardMouseButton(
         _ event: NSEvent,
@@ -1334,6 +1414,73 @@ final class TerminalHostView: NSView {
         let y = bounds.height - point.y
         let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
         ghostty_surface_mouse_pos(surface, point.x, y, mods)
+    }
+
+    @discardableResult
+    private func copySelectionToPasteboard() -> Bool {
+        guard let ghosttySurface,
+              hasCopyableSelection(on: ghosttySurface),
+              let selectedText = selectedText(from: ghosttySurface),
+              selectedText.isEmpty == false else {
+            return false
+        }
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(selectedText, forType: .string)
+        return true
+    }
+
+    private func selectedText(from surface: ghostty_surface_t) -> String? {
+        var textPayload = ghostty_text_s()
+        guard ghostty_surface_read_selection(surface, &textPayload) else {
+            return nil
+        }
+        defer {
+            ghostty_surface_free_text(surface, &textPayload)
+        }
+        guard let textPointer = textPayload.text else {
+            return nil
+        }
+
+        let bytePointer = UnsafeRawPointer(textPointer).assumingMemoryBound(to: UInt8.self)
+        let buffer = UnsafeBufferPointer(start: bytePointer, count: Int(textPayload.text_len))
+        return String(decoding: buffer, as: UTF8.self)
+    }
+
+    private func hasCopyableSelection(on surface: ghostty_surface_t) -> Bool {
+        guard ghostty_surface_has_selection(surface),
+              let selectedText = selectedText(from: surface),
+              selectedText.isEmpty == false else {
+            return false
+        }
+        return true
+    }
+
+    @discardableResult
+    private func invokeGhosttyBindingAction(_ action: String, on surface: ghostty_surface_t) -> Bool {
+        let cString = action.utf8CString
+        let handled = cString.withUnsafeBufferPointer { buffer -> Bool in
+            guard let baseAddress = buffer.baseAddress else { return false }
+            let byteCount = max(buffer.count - 1, 0) // drop C-string null terminator
+            guard byteCount > 0 else { return false }
+            return ghostty_surface_binding_action(surface, baseAddress, uintptr_t(byteCount))
+        }
+        if handled == false {
+            ToasttyLog.warning(
+                "Ghostty context-menu action not handled",
+                category: .ghostty,
+                metadata: ["action": action]
+            )
+        }
+        return handled
+    }
+
+    private static func hasStringContentInPasteboard() -> Bool {
+        guard let text = NSPasteboard.general.string(forType: .string) else {
+            return false
+        }
+        return text.isEmpty == false
     }
 
     private static func ghosttyModifierFlags(for flags: NSEvent.ModifierFlags) -> ghostty_input_mods_e {
