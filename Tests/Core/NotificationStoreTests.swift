@@ -4,7 +4,7 @@ import Testing
 
 struct NotificationStoreTests {
     @Test
-    func suppressesWhenAppFocusedAndSourceVisible() {
+    func suppressesWhenAppFocusedAndSourceFocused() {
         var store = NotificationStore()
         let decision = store.record(
             workspaceID: UUID(),
@@ -12,12 +12,29 @@ struct NotificationStoreTests {
             title: "Claude",
             body: "Waiting",
             appIsFocused: true,
-            sourcePanelIsVisible: true,
+            sourcePanelIsFocused: true,
             at: Date()
         )
 
         #expect(decision == NotificationDecision(stored: false, shouldSendSystemNotification: false))
         #expect(store.notifications.isEmpty)
+    }
+
+    @Test
+    func storesAndSendsWhenAppFocusedButSourceNotFocused() {
+        var store = NotificationStore()
+        let decision = store.record(
+            workspaceID: UUID(),
+            panelID: UUID(),
+            title: "Claude",
+            body: "Done",
+            appIsFocused: true,
+            sourcePanelIsFocused: false,
+            at: Date()
+        )
+
+        #expect(decision == NotificationDecision(stored: true, shouldSendSystemNotification: true))
+        #expect(store.notifications.count == 1)
     }
 
     @Test
@@ -32,7 +49,7 @@ struct NotificationStoreTests {
             title: "Claude",
             body: "First",
             appIsFocused: false,
-            sourcePanelIsVisible: false,
+            sourcePanelIsFocused: false,
             at: Date(timeIntervalSince1970: 10)
         )
 
@@ -42,7 +59,7 @@ struct NotificationStoreTests {
             title: "Claude",
             body: "Second",
             appIsFocused: false,
-            sourcePanelIsVisible: false,
+            sourcePanelIsFocused: false,
             at: Date(timeIntervalSince1970: 20)
         )
 
@@ -63,7 +80,7 @@ struct NotificationStoreTests {
             title: "Codex",
             body: "Needs input",
             appIsFocused: false,
-            sourcePanelIsVisible: false,
+            sourcePanelIsFocused: false,
             at: Date()
         )
 
@@ -73,7 +90,7 @@ struct NotificationStoreTests {
             title: "Claude",
             body: "Done",
             appIsFocused: false,
-            sourcePanelIsVisible: false,
+            sourcePanelIsFocused: false,
             at: Date()
         )
 
@@ -96,7 +113,7 @@ struct NotificationStoreTests {
             title: "A",
             body: "one",
             appIsFocused: false,
-            sourcePanelIsVisible: false,
+            sourcePanelIsFocused: false,
             at: Date(timeIntervalSince1970: 1)
         )
         _ = store.record(
@@ -105,7 +122,7 @@ struct NotificationStoreTests {
             title: "B",
             body: "two",
             appIsFocused: false,
-            sourcePanelIsVisible: false,
+            sourcePanelIsFocused: false,
             at: Date(timeIntervalSince1970: 2)
         )
 

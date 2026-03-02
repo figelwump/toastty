@@ -13,10 +13,10 @@ public struct NotificationStore: Codable, Equatable, Sendable {
         title: String,
         body: String,
         appIsFocused: Bool,
-        sourcePanelIsVisible: Bool,
+        sourcePanelIsFocused: Bool,
         at now: Date
     ) -> NotificationDecision {
-        if appIsFocused && sourcePanelIsVisible {
+        if appIsFocused && sourcePanelIsFocused {
             return NotificationDecision(stored: false, shouldSendSystemNotification: false)
         }
 
@@ -35,7 +35,7 @@ public struct NotificationStore: Codable, Equatable, Sendable {
             )
         )
 
-        let shouldSendSystem = appIsFocused == false || sourcePanelIsVisible == false
+        let shouldSendSystem = appIsFocused == false || sourcePanelIsFocused == false
         return NotificationDecision(stored: true, shouldSendSystemNotification: shouldSendSystem)
     }
 

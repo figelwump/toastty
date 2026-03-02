@@ -650,8 +650,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 title: title,
                 body: body,
                 appIsFocused: NSApplication.shared.isActive,
-                sourcePanelIsVisible: isPanelVisible(panelID),
+                sourcePanelIsFocused: isPanelFocused(panelID),
                 at: now
+            )
+            handleNotificationDelivery(
+                decision: decision,
+                title: title,
+                body: body,
+                workspaceID: location.workspaceID,
+                panelID: panelID
             )
             stateVersion += 1
             return [
@@ -740,8 +747,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 title: title,
                 body: body,
                 appIsFocused: NSApplication.shared.isActive,
-                sourcePanelIsVisible: payloadPanelID.map(isPanelVisible) ?? false,
+                sourcePanelIsFocused: payloadPanelID.map(isPanelFocused) ?? false,
                 at: now
+            )
+            handleNotificationDelivery(
+                decision: decision,
+                title: title,
+                body: body,
+                workspaceID: resolvedWorkspaceID,
+                panelID: payloadPanelID
             )
             stateVersion += 1
             return [
@@ -1061,12 +1075,43 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func isPanelVisible(_ panelID: UUID) -> Bool {
+    private func isPanelFocused(_ panelID: UUID) -> Bool {
         guard let selectedWorkspaceID = store.selectedWorkspace?.id,
               let selectedWorkspace = store.state.workspacesByID[selectedWorkspaceID] else {
             return false
         }
-        return selectedWorkspace.panels[panelID] != nil
+        guard selectedWorkspace.focusedPanelID == panelID else {
+            return false
+        }
+        return selectedWorkspace.paneTree.leafContaining(panelID: panelID) != nil
+    }
+
+    @MainActor
+    private func handleNotificationDelivery(
+        decision: NotificationDecision,
+        title: String,
+        body: String,
+        workspaceID: UUID,
+        panelID: UUID?
+    ) {
+        guard decision.stored else {
+            return
+        }
+
+        _ = store.send(.recordDesktopNotification(workspaceID: workspaceID))
+
+        guard decision.shouldSendSystemNotification else {
+            return
+        }
+
+        Task {
+            await SystemNotificationSender.send(
+                title: title,
+                body: body,
+                workspaceID: workspaceID,
+                panelID: panelID
+            )
+        }
     }
 
     private func normalizeFiles(_ files: [String], cwd: String?) throws -> [String] {
