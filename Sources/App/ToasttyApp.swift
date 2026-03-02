@@ -1,20 +1,20 @@
 import AppKit
+import CoreState
 import SwiftUI
 
 @MainActor
 private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicationDelegate {
     private static let menuItemTitle = "Reload Configuration"
     private static let symbolName = "arrow.clockwise"
-    private static let automationArgument = "--automation"
-    private static let automationEnvironmentFlag = "TOASTTY_AUTOMATION"
     private var iconWasApplied = false
     private let shouldConfirmQuit: Bool
 
     override init() {
         let processInfo = ProcessInfo.processInfo
-        let isAutomationSession = processInfo.arguments.contains(Self.automationArgument)
-            || processInfo.environment[Self.automationEnvironmentFlag] == "1"
-        shouldConfirmQuit = !isAutomationSession
+        shouldConfirmQuit = !AutomationConfig.shouldBypassQuitConfirmation(
+            arguments: processInfo.arguments,
+            environment: processInfo.environment
+        )
         super.init()
     }
 

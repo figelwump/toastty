@@ -2,6 +2,11 @@ import Foundation
 import Darwin
 
 public struct AutomationConfig: Equatable, Sendable {
+    private static let automationArgument = "--automation"
+    private static let automationEnvironmentFlag = "TOASTTY_AUTOMATION"
+    private static let skipQuitConfirmationArgument = "--skip-quit-confirmation"
+    private static let skipQuitConfirmationEnvironmentFlag = "TOASTTY_SKIP_QUIT_CONFIRMATION"
+
     public let runID: String
     public let fixtureName: String?
     public let artifactsDirectory: String?
@@ -29,9 +34,7 @@ public struct AutomationConfig: Equatable, Sendable {
     }
 
     public static func parse(arguments: [String], environment: [String: String]) -> AutomationConfig? {
-        let isArgAutomation = arguments.contains("--automation")
-        let isEnvAutomation = environment["TOASTTY_AUTOMATION"] == "1"
-        guard isArgAutomation || isEnvAutomation else { return nil }
+        guard isAutomationSession(arguments: arguments, environment: environment) else { return nil }
 
         let runID = argumentValue(after: "--run-id", in: arguments)
             ?? environment["TOASTTY_RUN_ID"]
@@ -54,10 +57,19 @@ public struct AutomationConfig: Equatable, Sendable {
             fixtureName: fixtureName,
             artifactsDirectory: artifactsDirectory,
             socketPath: socketPath,
-            disableAnimations: arguments.contains("--disable-animations") || environment["TOASTTY_DISABLE_ANIMATIONS"] == "1",
+            disableAnimations: arguments.contains("--disable-animations") || isEnabledFlag(environment["TOASTTY_DISABLE_ANIMATIONS"]),
             fixedLocaleIdentifier: environment["TOASTTY_FIXED_LOCALE"],
             fixedTimeZoneIdentifier: environment["TOASTTY_FIXED_TIMEZONE"]
         )
+    }
+
+    public static func shouldBypassQuitConfirmation(
+        arguments: [String],
+        environment: [String: String]
+    ) -> Bool {
+        let isExplicitlyDisabled = arguments.contains(skipQuitConfirmationArgument)
+            || isEnabledFlag(environment[skipQuitConfirmationEnvironmentFlag])
+        return isExplicitlyDisabled || isAutomationSession(arguments: arguments, environment: environment)
     }
 
     private static func argumentValue(after flag: String, in arguments: [String]) -> String? {
@@ -74,5 +86,21 @@ public struct AutomationConfig: Equatable, Sendable {
         let directoryURL = URL(fileURLWithPath: tempDirectory, isDirectory: true)
             .appendingPathComponent("toastty-\(getuid())", isDirectory: true)
         return directoryURL.appendingPathComponent("events-v1.sock", isDirectory: false).path
+    }
+
+    private static func isAutomationSession(arguments: [String], environment: [String: String]) -> Bool {
+        let isArgAutomation = arguments.contains(automationArgument)
+        let isEnvAutomation = isEnabledFlag(environment[automationEnvironmentFlag])
+        return isArgAutomation || isEnvAutomation
+    }
+
+    static func isEnabledFlag(_ value: String?) -> Bool {
+        guard let value else { return false }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
     }
 }

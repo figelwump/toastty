@@ -49,6 +49,7 @@ xcodebuild \
   build >/dev/null
 
 TOASTTY_AUTOMATION=1 \
+TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
 "$APP_BINARY" \
   --automation \

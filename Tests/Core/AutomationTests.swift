@@ -76,6 +76,59 @@ struct AutomationTests {
     }
 
     @Test
+    func parseAutomationConfigAcceptsTruthyEnvironmentFlags() throws {
+        let config = try #require(
+            AutomationConfig.parse(
+                arguments: ["toastty"],
+                environment: [
+                    "TOASTTY_AUTOMATION": "true",
+                    "TOASTTY_DISABLE_ANIMATIONS": "on",
+                ]
+            )
+        )
+
+        #expect(config.disableAnimations == true)
+    }
+
+    @Test
+    func shouldBypassQuitConfirmationForAutomationAndExplicitSkipFlag() {
+        #expect(
+            AutomationConfig.shouldBypassQuitConfirmation(
+                arguments: ["toastty", "--automation"],
+                environment: [:]
+            )
+        )
+        #expect(
+            AutomationConfig.shouldBypassQuitConfirmation(
+                arguments: ["toastty"],
+                environment: ["TOASTTY_AUTOMATION": "true"]
+            )
+        )
+        #expect(
+            AutomationConfig.shouldBypassQuitConfirmation(
+                arguments: ["toastty", "--skip-quit-confirmation"],
+                environment: [:]
+            )
+        )
+        #expect(
+            AutomationConfig.shouldBypassQuitConfirmation(
+                arguments: ["toastty"],
+                environment: ["TOASTTY_SKIP_QUIT_CONFIRMATION": "yes"]
+            )
+        )
+    }
+
+    @Test
+    func shouldBypassQuitConfirmationIsFalseByDefault() {
+        #expect(
+            AutomationConfig.shouldBypassQuitConfirmation(
+                arguments: ["toastty"],
+                environment: [:]
+            ) == false
+        )
+    }
+
+    @Test
     func twoWorkspaceFixtureLoadsExpectedShape() throws {
         let fixture = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
 
