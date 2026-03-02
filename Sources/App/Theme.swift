@@ -19,6 +19,16 @@ enum ToastyTheme {
     static let accentDark = Color(hex: 0x0D0D0D)
     static let badgeBlue = Color(hex: 0x3B82F6)
 
+    // Empty state
+    static let emptyStateToastCrust = Color(hex: 0x4A3425)
+    static let emptyStateToastBread = Color(hex: 0x6B4E38)
+    static let emptyStateToastHighlight = Color(hex: 0x7D5C42)
+    static let emptyStateToastFace = Color(hex: 0x2A1A10)
+    static let emptyStateMutedText = Color(hex: 0x6B5D52)
+    static let emptyStateShortcutBg = Color(hex: 0x2A2420)
+    static let emptyStateShortcutBorder = Color(hex: 0x3A3028)
+    static let emptyStateShortcutText = Color(hex: 0x8A7B6E)
+
     static let sidebarWidth: CGFloat = 180
     static let topBarHeight: CGFloat = 36
 

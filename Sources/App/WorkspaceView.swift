@@ -16,7 +16,7 @@ struct WorkspaceView: View {
             if let workspace = store.selectedWorkspace {
                 workspaceContent(for: workspace)
             } else {
-                ContentUnavailableView("No workspace selected", systemImage: "rectangle.slash")
+                EmptyStateView()
             }
         }
         .background(ToastyTheme.surfaceBackground)
