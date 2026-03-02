@@ -23,7 +23,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
-    private var pendingCWDByPanelID: [UUID: String] = [:]
+    private var pendingCWDByPanelID: [UUID: [String]] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     #endif
@@ -63,7 +63,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers.removeValue(forKey: panelID)
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        pendingCWDByPanelID = pendingCWDByPanelID.filter { livePanelIDs.contains($0.key) }
+        pendingCWDByPanelID = pendingCWDByPanelID.filter { livePanelIDs.contains($0.key) && !$0.value.isEmpty }
         #endif
 
         handleGhosttyWorkspaceSelectionPulseIfNeeded(state: state)
@@ -516,10 +516,17 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState,
         store: AppStore
     ) -> Bool {
-        guard let pendingCWD = pendingCWDByPanelID.removeValue(forKey: panelID) else {
+        guard var pendingQueue = pendingCWDByPanelID[panelID], pendingQueue.isEmpty == false else {
             return true
         }
-        guard exitCode == 0 else {
+        let pendingCWD = pendingQueue.removeFirst()
+        if pendingQueue.isEmpty {
+            pendingCWDByPanelID.removeValue(forKey: panelID)
+        } else {
+            pendingCWDByPanelID[panelID] = pendingQueue
+        }
+
+        guard exitCode == nil || exitCode == 0 else {
             ToasttyLog.debug(
                 "Skipping inferred cwd update because cd command did not exit cleanly",
                 category: .terminal,
@@ -554,7 +561,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
               let predictedCWD = Self.predictedCWD(fromCDCommandTitle: title, currentCWD: terminalState.cwd) else {
             return
         }
-        pendingCWDByPanelID[panelID] = predictedCWD
+        pendingCWDByPanelID[panelID, default: []].append(predictedCWD)
     }
 
     private func handleTerminalMetadataUpdate(
@@ -664,44 +671,44 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             command = String(command.dropFirst("builtin ".count)).trimmingCharacters(in: .whitespaces)
         }
 
-        guard command == "cd" || command.hasPrefix("cd ") else { return nil }
+        let commandComponents = command.split(
+            maxSplits: 1,
+            omittingEmptySubsequences: true,
+            whereSeparator: { $0.isWhitespace }
+        )
+        guard let executable = commandComponents.first, executable == "cd" else { return nil }
 
-        let rawArgument = command == "cd"
+        let rawArgument = commandComponents.count == 1
             ? "~"
-            : String(command.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            : String(commandComponents[1]).trimmingCharacters(in: .whitespaces)
         guard rawArgument.isEmpty == false else {
             return (NSHomeDirectory() as NSString).standardizingPath
         }
         guard rawArgument != "-" else { return nil }
 
-        let argument: String
-        if rawArgument.hasPrefix("\""), rawArgument.hasSuffix("\""), rawArgument.count >= 2 {
-            argument = String(rawArgument.dropFirst().dropLast())
-        } else if rawArgument.hasPrefix("'"), rawArgument.hasSuffix("'"), rawArgument.count >= 2 {
-            argument = String(rawArgument.dropFirst().dropLast())
-        } else {
-            let pieces = rawArgument.split(whereSeparator: \.isWhitespace)
-            guard pieces.count == 1, let first = pieces.first else { return nil }
-            argument = String(first)
-        }
-        guard argument.isEmpty == false else { return nil }
+        // Keep this heuristic intentionally narrow; shell quoting/expansion is
+        // too complex to infer safely from title strings alone.
+        let argumentComponents = rawArgument.split(whereSeparator: { $0.isWhitespace })
+        guard argumentComponents.count == 1, let argument = argumentComponents.first else { return nil }
+        let argumentPath = String(argument)
+        guard argumentPath.isEmpty == false else { return nil }
 
+        let expandedArgumentPath = (argumentPath as NSString).expandingTildeInPath
         let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
         let baseDirectory = (currentCWD as NSString).standardizingPath
         let resolvedPath: String
-        if argument == "~" {
-            resolvedPath = homeDirectory
-        } else if argument.hasPrefix("~/") {
-            resolvedPath = homeDirectory + "/" + String(argument.dropFirst(2))
-        } else if argument.hasPrefix("/") {
-            resolvedPath = argument
+        if expandedArgumentPath != argumentPath || argumentPath.hasPrefix("/") {
+            resolvedPath = URL(fileURLWithPath: expandedArgumentPath)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .path
         } else {
             let fallbackBase = baseDirectory.isEmpty ? homeDirectory : baseDirectory
-            let candidate = URL(
-                fileURLWithPath: argument,
-                relativeTo: URL(fileURLWithPath: fallbackBase, isDirectory: true)
-            )
-            resolvedPath = candidate.standardizedFileURL.path
+            let baseURL = URL(fileURLWithPath: fallbackBase, isDirectory: true).resolvingSymlinksInPath()
+            resolvedPath = URL(fileURLWithPath: argumentPath, relativeTo: baseURL)
+                .standardizedFileURL
+                .resolvingSymlinksInPath()
+                .path
         }
 
         let normalizedPath = (resolvedPath as NSString).standardizingPath
