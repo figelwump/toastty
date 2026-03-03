@@ -768,7 +768,8 @@ private extension TerminalRuntimeRegistry {
         }
 
         let currentTitle = terminalState.title
-        let titleIsAgentInferred = Self.isInferredAgentTitle(currentTitle)
+        let currentCanonicalInferredAgentTitle = Self.canonicalInferredAgentTitle(from: currentTitle)
+        let titleIsAgentInferred = currentCanonicalInferredAgentTitle != nil
         let titleEligibleForInference = Self.titleIsEligibleForAgentInference(
             terminalTitle: currentTitle,
             terminalCWD: terminalState.cwd
@@ -798,7 +799,7 @@ private extension TerminalRuntimeRegistry {
                 return
             }
 
-            if inferredAgentTitle == currentTitle {
+            if inferredAgentTitle == currentCanonicalInferredAgentTitle {
                 return
             }
 
@@ -2003,7 +2004,52 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     }
 
     private static func isInferredAgentTitle(_ title: String) -> Bool {
-        inferredAgentTitles.contains(title.trimmingCharacters(in: .whitespacesAndNewlines))
+        canonicalInferredAgentTitle(from: title) != nil
+    }
+
+    private static func canonicalInferredAgentTitle(from title: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+
+        let normalized = Self.normalizedAgentTitleCandidate(trimmed)
+        guard normalized.isEmpty == false else {
+            return nil
+        }
+        let normalizedLowercased = normalized.lowercased()
+
+        for candidate in inferredAgentTitleCandidates {
+            let candidateLowercased = candidate.lowercased()
+            guard normalizedLowercased.hasPrefix(candidateLowercased) else {
+                continue
+            }
+            let boundaryIndex = normalizedLowercased.index(
+                normalizedLowercased.startIndex,
+                offsetBy: candidateLowercased.count
+            )
+            if boundaryIndex == normalizedLowercased.endIndex {
+                return candidate
+            }
+
+            let boundaryCharacter = normalizedLowercased[boundaryIndex]
+            guard boundaryCharacter.isLetter == false,
+                  boundaryCharacter.isNumber == false else {
+                continue
+            }
+            return candidate
+        }
+        return nil
+    }
+
+    private static func normalizedAgentTitleCandidate(_ title: String) -> String {
+        var candidate = title
+        while let first = candidate.first,
+              first.isLetter == false,
+              first.isNumber == false {
+            candidate.removeFirst()
+        }
+        return candidate.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func titleLooksLikeDefaultTerminalTitle(_ title: String) -> Bool {
@@ -2025,11 +2071,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     }
 
     private static func inferredAgentKind(terminalTitle: String, visibleText: String) -> AgentKindInference? {
-        let normalizedTitle = terminalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if normalizedTitle == "Codex" {
+        let inferredTitleFromTerminalTitle = canonicalInferredAgentTitle(from: terminalTitle)
+        if inferredTitleFromTerminalTitle == "Codex" {
             return .codex
         }
-        if normalizedTitle == "Claude Code" {
+        if inferredTitleFromTerminalTitle == "Claude Code" {
             return .claudeCode
         }
 
@@ -2150,7 +2196,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return nil
     }
 
-    private static let inferredAgentTitles: Set<String> = ["Codex", "Claude Code"]
+    private static let inferredAgentTitleCandidates: [String] = ["Codex", "Claude Code"]
     private static let defaultTerminalTitleAfterAgentInferenceRestore = "Terminal"
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
