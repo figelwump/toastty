@@ -141,7 +141,8 @@ Next actions:
 ## Terminal font preference behavior
 
 - Baseline source: Ghostty `font-size` from loaded Ghostty config.
-- Toastty user override source: `~/.config/toastty/config` key `terminal-font-size`.
+- Toastty user override source: `~/.toastty/config` key `terminal-font-size`.
+- Legacy Toastty path `~/.config/toastty/config` is auto-migrated to `~/.toastty/config` on launch.
 - Runtime behavior:
   - `Increase/Decrease Terminal Font` adjusts current font size and persists `terminal-font-size`.
   - Toastty keeps the persisted override until `Reset Terminal Font` is used (it does not auto-clear when value matches baseline).

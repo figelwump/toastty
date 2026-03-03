@@ -7,13 +7,22 @@ struct ToasttyConfig: Equatable {
 
 enum ToasttyConfigStore {
     private static let terminalFontSizeKey = "terminal-font-size"
-    private static let configDirectoryName = ".config/toastty"
+    private static let configDirectoryName = ".toastty"
+    private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
 
     static func load() -> ToasttyConfig {
-        guard let contents = try? String(contentsOf: configFileURL(), encoding: .utf8) else {
+        let primaryURL = configFileURL()
+        if let contents = try? String(contentsOf: primaryURL, encoding: .utf8) {
+            return parse(contents: contents)
+        }
+
+        let legacyURL = legacyConfigFileURL()
+        guard let contents = try? String(contentsOf: legacyURL, encoding: .utf8) else {
             return ToasttyConfig(terminalFontSizePoints: nil)
         }
+
+        migrateLegacyConfigIfNeeded(legacyURL: legacyURL, destinationURL: primaryURL)
         return parse(contents: contents)
     }
 
@@ -30,6 +39,7 @@ enum ToasttyConfigStore {
             try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
             let rendered = render(config: ToasttyConfig(terminalFontSizePoints: clampedPoints))
             try rendered.write(to: configURL, atomically: true, encoding: .utf8)
+            removeConfigFileIfPresent(at: legacyConfigFileURL())
         } catch {
             ToasttyLog.warning(
                 "Failed to persist Toastty config",
@@ -81,7 +91,45 @@ enum ToasttyConfigStore {
     }
 
     private static func removeConfigFileIfPresent() {
-        let url = configFileURL()
+        removeConfigFileIfPresent(at: configFileURL())
+        removeConfigFileIfPresent(at: legacyConfigFileURL())
+    }
+
+    private static func migrateLegacyConfigIfNeeded(legacyURL: URL, destinationURL: URL) {
+        guard FileManager.default.fileExists(atPath: destinationURL.path) == false else { return }
+        do {
+            try FileManager.default.createDirectory(
+                at: destinationURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            do {
+                try FileManager.default.moveItem(at: legacyURL, to: destinationURL)
+            } catch {
+                try FileManager.default.copyItem(at: legacyURL, to: destinationURL)
+                removeConfigFileIfPresent(at: legacyURL)
+            }
+            ToasttyLog.info(
+                "Migrated Toastty config to ~/.toastty",
+                category: .bootstrap,
+                metadata: [
+                    "path": destinationURL.path,
+                    "legacy_path": legacyURL.path,
+                ]
+            )
+        } catch {
+            ToasttyLog.warning(
+                "Failed to migrate legacy Toastty config",
+                category: .bootstrap,
+                metadata: [
+                    "path": destinationURL.path,
+                    "legacy_path": legacyURL.path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+    }
+
+    private static func removeConfigFileIfPresent(at url: URL) {
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         do {
             try FileManager.default.removeItem(at: url)
@@ -100,6 +148,12 @@ enum ToasttyConfigStore {
     private static func configFileURL() -> URL {
         URL(filePath: NSHomeDirectory())
             .appending(path: configDirectoryName, directoryHint: .isDirectory)
+            .appending(path: configFileName, directoryHint: .notDirectory)
+    }
+
+    private static func legacyConfigFileURL() -> URL {
+        URL(filePath: NSHomeDirectory())
+            .appending(path: legacyConfigDirectoryName, directoryHint: .isDirectory)
             .appending(path: configFileName, directoryHint: .notDirectory)
     }
 }

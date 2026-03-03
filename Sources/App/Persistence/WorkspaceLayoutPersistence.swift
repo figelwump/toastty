@@ -14,6 +14,7 @@ struct WorkspaceLayoutPersistenceContext {
     }
 
     func loadState() -> (state: AppState, resolvedProfileID: String)? {
+        migrateLegacyStoreIfNeeded()
         let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
         guard let loadResult = store.loadLayout(
             for: profileID,
@@ -22,6 +23,38 @@ struct WorkspaceLayoutPersistenceContext {
             return nil
         }
         return (loadResult.layout.makeAppState(), loadResult.resolvedProfileID)
+    }
+
+    private func migrateLegacyStoreIfNeeded() {
+        let legacyURL = WorkspaceLayoutPersistenceLocation.legacyFileURL()
+        guard legacyURL.standardizedFileURL != fileURL.standardizedFileURL else { return }
+        guard FileManager.default.fileExists(atPath: fileURL.path) == false else { return }
+        guard FileManager.default.fileExists(atPath: legacyURL.path) else { return }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.moveItem(at: legacyURL, to: fileURL)
+            ToasttyLog.info(
+                "Migrated workspace layout store to ~/.toastty",
+                category: .state,
+                metadata: [
+                    "path": fileURL.path,
+                ]
+            )
+        } catch {
+            ToasttyLog.warning(
+                "Failed to migrate legacy workspace layout store",
+                category: .state,
+                metadata: [
+                    "path": fileURL.path,
+                    "legacy_path": legacyURL.path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
     }
 }
 
@@ -91,12 +124,19 @@ final class WorkspaceLayoutPersistenceCoordinator {
 }
 
 enum WorkspaceLayoutPersistenceLocation {
-    private static let configDirectoryName = ".config/toastty"
+    private static let configDirectoryName = ".toastty"
+    private static let legacyConfigDirectoryName = ".config/toastty"
     private static let fileName = "workspace-layout-profiles.json"
 
     static func fileURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {
         URL(filePath: homeDirectoryPath)
             .appending(path: configDirectoryName, directoryHint: .isDirectory)
+            .appending(path: fileName, directoryHint: .notDirectory)
+    }
+
+    static func legacyFileURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {
+        URL(filePath: homeDirectoryPath)
+            .appending(path: legacyConfigDirectoryName, directoryHint: .isDirectory)
             .appending(path: fileName, directoryHint: .notDirectory)
     }
 }

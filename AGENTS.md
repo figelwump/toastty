@@ -39,7 +39,8 @@
   - final fallback: Ghostty default search paths (`ghostty_config_load_default_files`).
 - Embedded runtime does not parse Ghostty CLI args by default (avoids Toastty launch flags being reported as Ghostty config diagnostics).
 - Opt-in Ghostty CLI arg parsing with `TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1`.
-- Toastty terminal font override is stored in `~/.config/toastty/config` as `terminal-font-size`.
+- Toastty terminal font override is stored in `~/.toastty/config` as `terminal-font-size`.
+  - legacy `~/.config/toastty/config` is auto-migrated on launch.
   - when unset, Toastty follows Ghostty `font-size`.
   - Toastty keeps this override until an explicit `Reset Terminal Font`.
   - `Reset Terminal Font` clears Toastty override and returns to Ghostty baseline.

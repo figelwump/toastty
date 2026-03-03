@@ -1044,7 +1044,7 @@ Pending:
     - startup/reload paths apply/reset global font explicitly when no Toastty override is present.
   - made persisted override behavior explicit:
     - `Increase/Decrease` and explicit `setGlobal` persist override even when value equals Ghostty baseline.
-    - only `Reset Terminal Font` clears `~/.config/toastty/config`.
+    - only `Reset Terminal Font` clears `~/.toastty/config`.
   - moved Ghostty config reads (`font-size`, host-style keys, diagnostics) before `ghostty_config_finalize` in init/reload flows.
   - added shared terminal-font epsilon constant in `AppState` to avoid duplicated magic thresholds.
   - added reducer tests for:
