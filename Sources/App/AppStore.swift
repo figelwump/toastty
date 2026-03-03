@@ -3,11 +3,13 @@ import Foundation
 
 @MainActor
 final class AppStore: ObservableObject {
+    typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
+
     @Published private(set) var state: AppState
 
     private let reducer = AppReducer()
     private let persistTerminalFontPreference: Bool
-    var onActionApplied: ((AppAction, AppState, AppState) -> Void)?
+    private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
 
     init(
         state: AppState = .bootstrap(),
@@ -37,7 +39,10 @@ final class AppStore: ObservableObject {
         }
         state = next
         persistTerminalFontPreferenceIfNeeded(action: action, previousState: previousState, nextState: next)
-        onActionApplied?(action, previousState, next)
+        let observers = Array(actionAppliedObservers.values)
+        for observer in observers {
+            observer(action, previousState, next)
+        }
         ToasttyLog.debug(
             "Applied app action",
             category: .store,
@@ -62,6 +67,17 @@ final class AppStore: ObservableObject {
         guard let window = selectedWindow,
               let workspaceID = window.selectedWorkspaceID else { return nil }
         return state.workspacesByID[workspaceID]
+    }
+
+    @discardableResult
+    func addActionAppliedObserver(_ observer: @escaping ActionAppliedObserver) -> UUID {
+        let token = UUID()
+        actionAppliedObservers[token] = observer
+        return token
+    }
+
+    func removeActionAppliedObserver(_ token: UUID) {
+        actionAppliedObservers.removeValue(forKey: token)
     }
 
     private func persistTerminalFontPreferenceIfNeeded(action: AppAction, previousState: AppState, nextState: AppState) {

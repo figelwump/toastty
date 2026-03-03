@@ -203,6 +203,31 @@ private final class FocusTerminalShortcutInterceptor {
     }
 }
 
+private final class AppTerminationObserver: NSObject {
+    private let onWillTerminate: () -> Void
+
+    init(onWillTerminate: @escaping () -> Void) {
+        self.onWillTerminate = onWillTerminate
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleWillTerminateNotification),
+            name: NSApplication.willTerminateNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc
+    private func handleWillTerminateNotification(_ notification: Notification) {
+        _ = notification
+        onWillTerminate()
+    }
+}
+
 @MainActor
 @main
 struct ToasttyApp: App {
@@ -216,6 +241,9 @@ struct ToasttyApp: App {
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
     private let disableAnimations: Bool
+    private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
+    private let workspaceLayoutPersistenceObserverToken: UUID?
+    private let appTerminationObserver: AppTerminationObserver?
     private let paneFocusRestoreCoordinator: PaneFocusRestoreCoordinator
     private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
@@ -244,6 +272,26 @@ struct ToasttyApp: App {
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
+
+        if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
+            let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
+            workspaceLayoutPersistenceObserverToken = store.addActionAppliedObserver { [weak coordinator] action, previousState, nextState in
+                coordinator?.handleAppliedAction(
+                    action,
+                    previousState: previousState,
+                    nextState: nextState
+                )
+            }
+            workspaceLayoutPersistenceCoordinator = coordinator
+            appTerminationObserver = AppTerminationObserver { [weak store, weak coordinator] in
+                guard let store, let coordinator else { return }
+                coordinator.flushCurrentState(store.state, reason: "application_will_terminate")
+            }
+        } else {
+            workspaceLayoutPersistenceCoordinator = nil
+            workspaceLayoutPersistenceObserverToken = nil
+            appTerminationObserver = nil
+        }
 
         if let automationConfig = bootstrap.automationConfig {
             do {

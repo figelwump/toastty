@@ -6,6 +6,7 @@ struct AppBootstrapResult {
     let automationConfig: AutomationConfig?
     let automationLifecycle: AutomationLifecycle?
     let disableAnimations: Bool
+    let layoutPersistenceContext: WorkspaceLayoutPersistenceContext?
 }
 
 enum AppBootstrap {
@@ -19,12 +20,36 @@ enum AppBootstrap {
             arguments: processInfo.arguments,
             environment: processInfo.environment
         ) else {
-            ToasttyLog.info("Launching without automation", category: .bootstrap)
+            let layoutPersistenceContext = WorkspaceLayoutPersistenceContext.resolve(processInfo: processInfo)
+            let state: AppState
+            if let restored = layoutPersistenceContext.loadState() {
+                state = restored.state
+                ToasttyLog.info(
+                    "Restored workspace layout state",
+                    category: .bootstrap,
+                    metadata: [
+                        "requested_profile_id": layoutPersistenceContext.profileID,
+                        "resolved_profile_id": restored.resolvedProfileID,
+                        "path": layoutPersistenceContext.fileURL.path,
+                    ]
+                )
+            } else {
+                state = .bootstrap()
+                ToasttyLog.info(
+                    "Launching without persisted layout state",
+                    category: .bootstrap,
+                    metadata: [
+                        "profile_id": layoutPersistenceContext.profileID,
+                        "path": layoutPersistenceContext.fileURL.path,
+                    ]
+                )
+            }
             return AppBootstrapResult(
-                state: .bootstrap(),
+                state: state,
                 automationConfig: nil,
                 automationLifecycle: nil,
-                disableAnimations: false
+                disableAnimations: false,
+                layoutPersistenceContext: layoutPersistenceContext
             )
         }
 
@@ -70,7 +95,10 @@ enum AppBootstrap {
             state: state,
             automationConfig: automationConfig,
             automationLifecycle: AutomationLifecycle(config: automationConfig, startupError: startupError),
-            disableAnimations: automationConfig.disableAnimations
+            disableAnimations: automationConfig.disableAnimations,
+            // Automation runs must be deterministic and fixture-driven, so we
+            // intentionally bypass user layout persistence in this mode.
+            layoutPersistenceContext: nil
         )
     }
 }

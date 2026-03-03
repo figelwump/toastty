@@ -21,6 +21,7 @@ enum AutomationImageFileDropResult {
 final class TerminalRuntimeRegistry: ObservableObject {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
     private weak var store: AppStore?
+    private var storeActionObserverToken: UUID?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
@@ -40,11 +41,16 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func bind(store: AppStore) {
-        if let existingStore = self.store {
+        let previousStore = self.store
+        if let existingStore = previousStore {
             precondition(existingStore === store, "TerminalRuntimeRegistry cannot be rebound to a different AppStore.")
         }
+        if let storeActionObserverToken,
+           let previousStore {
+            previousStore.removeActionAppliedObserver(storeActionObserverToken)
+        }
         self.store = store
-        store.onActionApplied = { [weak self] action, previousState, nextState in
+        storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
             self?.handleAppliedStoreAction(
                 action,
                 previousState: previousState,
