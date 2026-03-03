@@ -42,7 +42,7 @@ enum ToastyTheme {
     static let fontWorkspaceName = Font.system(size: 12, weight: .semibold, design: .default)
     static let fontWorkspaceNameInactive = Font.system(size: 12, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
-    static let fontShortcutBadge = Font.system(size: 9, weight: .regular, design: .monospaced)
+    static let fontShortcutBadge = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontNewWorkspace = Font.system(size: 11, weight: .regular, design: .default)
 }
 
