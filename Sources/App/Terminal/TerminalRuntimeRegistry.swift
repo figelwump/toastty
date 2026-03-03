@@ -923,10 +923,12 @@ private extension TerminalRuntimeRegistry {
         }
 
         let inferredPhase = Self.inferredAgentPhase(visibleText: visibleText, visibleLines: visibleLines)
+        let inferredRunningCommand = Self.inferredRunningCommand(visibleLines: visibleLines)
         panelActivityByPanelID[panelID] = PanelActivityState(
             workspaceID: workspaceID,
             agent: inferredAgentKind,
             phase: inferredPhase,
+            runningCommand: inferredRunningCommand,
             updatedAt: now
         )
     }
@@ -947,7 +949,7 @@ private extension TerminalRuntimeRegistry {
 
         var nextSubtextByWorkspaceID: [UUID: String] = [:]
         for (workspaceID, activities) in activitiesByWorkspaceID {
-            guard let subtext = Self.workspaceActivitySubtext(from: activities) else { continue }
+            guard let subtext = Self.workspaceActivitySubtext(from: activities, now: now) else { continue }
             nextSubtextByWorkspaceID[workspaceID] = subtext
         }
 
@@ -2128,7 +2130,45 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return false
     }
 
-    private static func workspaceActivitySubtext(from activities: [PanelActivityState]) -> String? {
+    private static func inferredRunningCommand(visibleLines: [String]) -> String? {
+        guard visibleLines.isEmpty == false else { return nil }
+        let candidateLines = Array(visibleLines.suffix(agentTitleDetectionLineWindow))
+
+        for (offset, line) in candidateLines.reversed().enumerated() {
+            guard offset <= recentPromptLineMaxDistanceFromBottom else {
+                break
+            }
+            guard let command = promptLineDetails(line)?.command else {
+                continue
+            }
+
+            let normalized = collapsedWhitespace(command)
+            guard normalized.isEmpty == false else {
+                continue
+            }
+            let commandToken = normalized
+                .split(whereSeparator: { $0.isWhitespace })
+                .first?
+                .lowercased() ?? ""
+            guard commandToken.isEmpty == false else {
+                continue
+            }
+            // Keep agent launch commands out of the activity command slot so
+            // long-running foreground shell jobs stay visible.
+            guard agentLaunchCommandTokens.contains(commandToken) == false else {
+                continue
+            }
+            return String(normalized.prefix(activityCommandCharacterLimit))
+        }
+
+        return nil
+    }
+
+    private static func collapsedWhitespace(_ line: String) -> String {
+        line.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    private static func workspaceActivitySubtext(from activities: [PanelActivityState], now: Date) -> String? {
         guard activities.isEmpty == false else { return nil }
 
         var codexCount = 0
@@ -2183,6 +2223,22 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             agentSegments.append("\(codexCount) Codex")
         }
 
+        if totalAgentCount == 1,
+           let mostRecentActivity = activities.max(by: { $0.updatedAt < $1.updatedAt }),
+           now.timeIntervalSince(mostRecentActivity.updatedAt) <= activityCommandFreshnessInterval,
+           let runningCommand = mostRecentActivity.runningCommand {
+            let singleAgent = agentActivityLabel(for: mostRecentActivity.agent)
+            switch mostRecentActivity.phase {
+            case .running:
+                return "\(runningCommand) · \(singleAgent) running"
+            case .waitingInput:
+                return "\(runningCommand) · \(singleAgent) waiting input"
+            case .idle:
+                // Idle state should fall back to aggregate status formatting.
+                break
+            }
+        }
+
         return "\(agentSegments.joined(separator: ", ")) · \(statusText)"
     }
 
@@ -2196,10 +2252,22 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return nil
     }
 
+    private static func agentActivityLabel(for agent: AgentKindInference) -> String {
+        switch agent {
+        case .codex:
+            return "1 Codex"
+        case .claudeCode:
+            return "1 \(claudeCodeActivityLabel)"
+        }
+    }
+
     private static let inferredAgentTitleCandidates: [String] = ["Codex", "Claude Code"]
     private static let defaultTerminalTitleAfterAgentInferenceRestore = "Terminal"
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
+    private static let activityCommandCharacterLimit = 96
+    // Keep command-first summaries short-lived so stale process labels clear quickly.
+    private static let activityCommandFreshnessInterval: TimeInterval = 60
     // Compact labels preserve room for status details in the sidebar.
     private static let claudeCodeActivityLabel = "CC"
     // Drop stale activity after a short window to avoid long-lived misleading subtext.
@@ -2212,6 +2280,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         var workspaceID: UUID
         var agent: AgentKindInference
         var phase: AgentActivityPhase
+        var runningCommand: String?
         var updatedAt: Date
     }
 
