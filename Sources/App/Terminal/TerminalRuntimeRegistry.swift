@@ -920,12 +920,10 @@ private extension TerminalRuntimeRegistry {
         }
 
         let inferredPhase = Self.inferredAgentPhase(visibleText: visibleText, visibleLines: visibleLines)
-        let inferredSummary = Self.inferredAgentSummary(visibleLines: visibleLines)
         panelActivityByPanelID[panelID] = PanelActivityState(
             workspaceID: workspaceID,
             agent: inferredAgentKind,
             phase: inferredPhase,
-            summary: inferredSummary,
             updatedAt: now
         )
     }
@@ -946,7 +944,7 @@ private extension TerminalRuntimeRegistry {
 
         var nextSubtextByWorkspaceID: [UUID: String] = [:]
         for (workspaceID, activities) in activitiesByWorkspaceID {
-            guard let subtext = Self.workspaceActivitySubtext(from: activities, now: now) else { continue }
+            guard let subtext = Self.workspaceActivitySubtext(from: activities) else { continue }
             nextSubtextByWorkspaceID[workspaceID] = subtext
         }
 
@@ -2022,124 +2020,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return .running
     }
 
-    private static func inferredAgentSummary(visibleLines: [String]) -> String? {
-        guard visibleLines.isEmpty == false else { return nil }
-        let candidateLines = Array(visibleLines.suffix(activitySummaryLineWindow))
-
-        for line in candidateLines.reversed() {
-            if promptLineDetails(line) != nil {
-                continue
-            }
-
-            let normalized = collapsedWhitespace(line)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard normalized.isEmpty == false else { continue }
-            guard normalized.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else {
-                continue
-            }
-            if looksLikeEphemeralAgentProgressLine(normalized) {
-                continue
-            }
-
-            let lowercased = normalized.lowercased()
-            let footerCandidate = normalizedAgentFooterCandidate(lowercased)
-            if lowercased.contains("openai codex (v") || lowercased.contains("claude code v") {
-                continue
-            }
-            if lowercased == "codex" || lowercased == "claude code" {
-                continue
-            }
-            if lowercased == "thinking..." || lowercased == "thinking" {
-                continue
-            }
-            if lowercased.hasPrefix("tokens:") {
-                continue
-            }
-            if footerCandidate.hasPrefix("model:")
-                || footerCandidate.hasPrefix("ctx(")
-                || footerCandidate.hasPrefix("ctx:")
-                || footerCandidate.hasPrefix("ctx (")
-                || footerCandidate.hasPrefix("(cwd):")
-                || footerCandidate.hasPrefix("cwd:")
-                || footerCandidate.hasPrefix("bypass permissions on")
-                || footerCandidate.contains("shift+tab to cycle") {
-                continue
-            }
-            if lowercased.contains("claude code •")
-                || lowercased.contains("claude code ·")
-                || lowercased.contains("codex •")
-                || lowercased.contains("codex ·") {
-                continue
-            }
-
-            let trimmed = normalized.prefix(activitySummaryCharacterLimit)
-            return String(trimmed)
-        }
-
-        return nil
-    }
-
-    private static func collapsedWhitespace(_ line: String) -> String {
-        line.split(whereSeparator: { $0.isWhitespace })
-            .map(String.init)
-            .joined(separator: " ")
-    }
-
-    private static func normalizedAgentFooterCandidate(_ line: String) -> String {
-        var candidate = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        while let firstScalar = candidate.unicodeScalars.first,
-              agentFooterLeadingMarkerCharacters.contains(firstScalar) {
-            candidate.removeFirst()
-            candidate = candidate.trimmingCharacters(in: .whitespaces)
-        }
-        return candidate
-    }
-
-    private static func looksLikeEphemeralAgentProgressLine(_ line: String) -> Bool {
-        var tokens = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        guard tokens.isEmpty == false else { return false }
-
-        var hadLeadingStatusMarker = false
-        if let firstToken = tokens.first,
-           tokenContainsAlphanumerics(firstToken) == false,
-           tokens.count > 1 {
-            hadLeadingStatusMarker = true
-            tokens.removeFirst()
-        }
-
-        guard tokens.isEmpty == false else { return false }
-        guard tokens.count <= ephemeralAgentProgressTokenLimit else { return false }
-
-        let joined = tokens.joined(separator: " ").lowercased()
-        guard joined.hasSuffix("...") || joined.hasSuffix("…") else { return false }
-
-        let normalizedTokens = tokens.compactMap { token -> String? in
-            let normalizedToken = token
-                .trimmingCharacters(in: ephemeralAgentProgressTokenTrimmingCharacters)
-                .lowercased()
-            guard normalizedToken.isEmpty == false else { return nil }
-            return normalizedToken
-        }
-        guard normalizedTokens.isEmpty == false else { return false }
-
-        guard hadLeadingStatusMarker
-                || ephemeralAgentProgressLeadWords.contains(normalizedTokens[0]) else {
-            return false
-        }
-
-        return normalizedTokens.allSatisfy { token in
-            token.unicodeScalars.allSatisfy { scalar in
-                CharacterSet.letters.contains(scalar)
-            }
-        }
-    }
-
-    private static func tokenContainsAlphanumerics(_ token: String) -> Bool {
-        token.unicodeScalars.contains { scalar in
-            CharacterSet.alphanumerics.contains(scalar)
-        }
-    }
-
     private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
         guard visibleLines.isEmpty == false else { return false }
         let candidateLines = Array(visibleLines.suffix(agentTitleDetectionLineWindow))
@@ -2166,7 +2046,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return false
     }
 
-    private static func workspaceActivitySubtext(from activities: [PanelActivityState], now: Date) -> String? {
+    private static func workspaceActivitySubtext(from activities: [PanelActivityState]) -> String? {
         guard activities.isEmpty == false else { return nil }
 
         var codexCount = 0
@@ -2221,21 +2101,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             agentSegments.append("\(codexCount) Codex")
         }
 
-        if totalAgentCount == 1,
-           let mostRecentActivity = activities.sorted(by: { $0.updatedAt > $1.updatedAt }).first,
-           now.timeIntervalSince(mostRecentActivity.updatedAt) <= activitySummaryFreshnessInterval,
-           let summary = mostRecentActivity.summary,
-           let singleAgent = agentSegments.first {
-            switch mostRecentActivity.phase {
-            case .running:
-                return "\(singleAgent) running · \(summary)"
-            case .waitingInput:
-                return "\(singleAgent) waiting input · \(summary)"
-            case .idle:
-                break
-            }
-        }
-
         return "\(agentSegments.joined(separator: ", ")) · \(statusText)"
     }
 
@@ -2252,32 +2117,8 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let inferredAgentTitles: Set<String> = ["Codex", "Claude Code"]
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
-    private static let agentFooterLeadingMarkerCharacters = CharacterSet(charactersIn: "›>•")
-    private static let activitySummaryLineWindow = 24
-    private static let activitySummaryCharacterLimit = 96
-    private static let ephemeralAgentProgressTokenLimit = 3
-    private static let ephemeralAgentProgressLeadWords: Set<String> = [
-        "analyzing",
-        "brainstorming",
-        "drafting",
-        "planning",
-        "pondering",
-        "processing",
-        "reading",
-        "reasoning",
-        "scanning",
-        "simmering",
-        "summarizing",
-        "thinking",
-        "working",
-    ]
-    private static let ephemeralAgentProgressTokenTrimmingCharacters = CharacterSet(
-        charactersIn: ".,…:;!?()[]{}<>\"'`-_"
-    )
-    // Compact labels preserve room for real-time summary text in the sidebar.
+    // Compact labels preserve room for status details in the sidebar.
     private static let claudeCodeActivityLabel = "CC"
-    // Include detailed single-agent summaries only when the signal is still fresh.
-    private static let activitySummaryFreshnessInterval: TimeInterval = 60
     // Drop stale activity after a short window to avoid long-lived misleading subtext.
     private static let activityRetentionInterval: TimeInterval = 240
     private struct PromptLineDetails {
@@ -2288,7 +2129,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         var workspaceID: UUID
         var agent: AgentKindInference
         var phase: AgentActivityPhase
-        var summary: String?
         var updatedAt: Date
     }
 
