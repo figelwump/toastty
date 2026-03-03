@@ -1,8 +1,26 @@
 #if TOASTTY_HAS_GHOSTTY_KIT
 import CoreState
-import Foundation
 import Darwin
+import Foundation
 
+/// Tracks terminal shell processes by PID-snapshot-diffing at surface creation time,
+/// then reads CWD via `proc_pidinfo(PROC_PIDVNODEPATHINFO)`.
+///
+/// Process hierarchy spawned by Ghostty:
+/// ```
+/// ToasttyApp (PID X)
+/// ├── login (PID A) → zsh (PID B)   ← panel 1
+/// └── login (PID C) → zsh (PID D)   ← panel 2
+/// ```
+///
+/// The previous env-var-injection approach failed because `/usr/bin/login` creates
+/// a clean environment, stripping any injected `TOASTTY_PANEL_ID`.
+///
+/// This implementation snapshots app child PIDs before surface creation, diffs after
+/// to find the new `login` child, walks to its shell grandchild, and caches that
+/// PID for fast CWD queries. If the shell hasn't spawned yet when registration
+/// runs, the login PID is cached and upgraded to the shell PID lazily during the
+/// next CWD poll.
 final class TerminalProcessWorkingDirectoryResolver {
     private struct ProcessStartSignature: Equatable {
         let seconds: UInt64
@@ -11,143 +29,214 @@ final class TerminalProcessWorkingDirectoryResolver {
 
     private struct CachedProcessEntry {
         let pid: pid_t
-        let commandName: String
         let startSignature: ProcessStartSignature
+        /// When true, `pid` is the intermediate `login` process and needs to be
+        /// upgraded to its shell child on the next resolution attempt.
+        let needsShellWalk: Bool
     }
 
-    private let currentProcessID: pid_t
-    private let currentUserID: uid_t
-    private let argmax: Int
-    private let panelIDEnvironmentKey = "TOASTTY_PANEL_ID"
-
+    private let appPID: pid_t
     private var cachedProcessByPanelID: [UUID: CachedProcessEntry] = [:]
-    private var resolutionMissCountByPanelID: [UUID: Int] = [:]
-
-    private let shellCommandNames: Set<String> = [
-        "bash",
-        "fish",
-        "ksh",
-        "nu",
-        "sh",
-        "tcsh",
-        "tmux",
-        "xonsh",
-        "zsh",
-    ]
+    /// Panels that failed initial PID snapshot diff (child not visible yet).
+    /// The poll loop will attempt deferred registration by scanning app children.
+    private var pendingDeferredRegistration: Set<UUID> = []
 
     init() {
-        currentProcessID = getpid()
-        currentUserID = getuid()
-        argmax = Self.systemArgmaxOrDefault()
+        appPID = getpid()
     }
 
-    func resolveWorkingDirectory(for panelID: UUID) -> String? {
-        if let cachedEntry = cachedProcessByPanelID[panelID] {
-            if let cwd = resolveWorkingDirectoryFromCache(panelID: panelID, entry: cachedEntry) {
-                clearMisses(for: panelID)
-                return cwd
-            }
+    // MARK: - PID Snapshot API
 
-            cachedProcessByPanelID.removeValue(forKey: panelID)
+    /// Snapshot direct child PIDs of this app process. Call immediately before surface creation.
+    func snapshotChildPIDs() -> Set<pid_t> {
+        Set(childPIDs(of: appPID))
+    }
+
+    /// After surface creation, diff current children against the pre-creation snapshot
+    /// to find the newly spawned login/shell process. Non-blocking — if the shell
+    /// hasn't spawned yet, caches the login PID and upgrades lazily during CWD polls.
+    func registerNewChild(panelID: UUID, previousChildren: Set<pid_t>) {
+        let currentChildren = Set(childPIDs(of: appPID))
+        let newChildren = currentChildren.subtracting(previousChildren)
+
+        guard let newLoginPID = newChildren.first else {
+            // Child not visible yet — mark for deferred registration during poll loop.
+            pendingDeferredRegistration.insert(panelID)
             ToasttyLog.debug(
-                "Invalidated cached process cwd mapping for terminal panel",
+                "No new child process detected after surface creation; deferring registration",
                 category: .terminal,
                 metadata: [
                     "panel_id": panelID.uuidString,
-                    "pid": String(cachedEntry.pid),
-                    "command": cachedEntry.commandName,
+                    "previous_child_count": String(previousChildren.count),
+                    "current_child_count": String(currentChildren.count),
                 ]
             )
+            return
         }
 
-        guard let discoveredEntry = discoverProcess(for: panelID) else {
-            recordMiss(for: panelID, reason: "no_matching_process")
+        cacheLoginOrShell(panelID: panelID, loginPID: newLoginPID, source: "snapshot_diff")
+    }
+
+    // MARK: - CWD Resolution
+
+    func resolveWorkingDirectory(for panelID: UUID) -> String? {
+        // Attempt deferred registration if this panel was never registered.
+        if pendingDeferredRegistration.contains(panelID) {
+            attemptDeferredRegistration(panelID: panelID)
+        }
+
+        guard var entry = cachedProcessByPanelID[panelID] else {
             return nil
         }
 
-        guard let cwd = processWorkingDirectory(pid: discoveredEntry.pid) else {
-            recordMiss(for: panelID, reason: "cwd_read_failed_after_discovery")
+        // If we cached the login PID, try to upgrade to the shell child now.
+        if entry.needsShellWalk {
+            let children = childPIDs(of: entry.pid)
+            if let shellPID = children.first,
+               let shellSignature = processStartSignature(pid: shellPID) {
+                let upgraded = CachedProcessEntry(
+                    pid: shellPID,
+                    startSignature: shellSignature,
+                    needsShellWalk: false
+                )
+                cachedProcessByPanelID[panelID] = upgraded
+                entry = upgraded
+                ToasttyLog.debug(
+                    "Upgraded cached login PID to shell PID",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "shell_pid": String(shellPID),
+                    ]
+                )
+            } else {
+                // Shell still not spawned — read CWD from login PID as fallback.
+                // The login process CWD is typically the user's home directory,
+                // which is better than nothing while the shell starts up.
+            }
+        }
+
+        // Validate the cached PID is still the same process (not recycled).
+        guard let currentSignature = processStartSignature(pid: entry.pid),
+              currentSignature == entry.startSignature else {
+            cachedProcessByPanelID.removeValue(forKey: panelID)
+            ToasttyLog.debug(
+                "Invalidated cached terminal process (PID recycled or exited)",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "pid": String(entry.pid),
+                ]
+            )
             return nil
         }
 
-        cachedProcessByPanelID[panelID] = discoveredEntry
-        ToasttyLog.debug(
-            "Resolved terminal cwd process for panel",
-            category: .terminal,
-            metadata: [
-                "panel_id": panelID.uuidString,
-                "pid": String(discoveredEntry.pid),
-                "command": discoveredEntry.commandName,
-                "cwd_sample": String(cwd.prefix(120)),
-            ]
-        )
-        clearMisses(for: panelID)
-        return cwd
+        return processWorkingDirectory(pid: entry.pid)
     }
 
     func invalidate(panelID: UUID) {
         cachedProcessByPanelID.removeValue(forKey: panelID)
-        resolutionMissCountByPanelID.removeValue(forKey: panelID)
+        pendingDeferredRegistration.remove(panelID)
     }
 
-    private func resolveWorkingDirectoryFromCache(panelID: UUID, entry: CachedProcessEntry) -> String? {
-        guard let currentSignature = processStartSignature(pid: entry.pid),
-              currentSignature == entry.startSignature else {
-            return nil
+    // MARK: - Registration Helpers
+
+    /// Caches a login PID, immediately walking to the shell child if available.
+    /// If the shell hasn't spawned yet, caches the login PID with `needsShellWalk=true`
+    /// so the next poll can upgrade it without blocking.
+    private func cacheLoginOrShell(panelID: UUID, loginPID: pid_t, source: String) {
+        pendingDeferredRegistration.remove(panelID)
+
+        let children = childPIDs(of: loginPID)
+        let resolvedPID: pid_t
+        let needsShellWalk: Bool
+
+        if let shellPID = children.first {
+            resolvedPID = shellPID
+            needsShellWalk = false
+        } else {
+            // Shell not spawned yet — cache login PID and upgrade lazily.
+            resolvedPID = loginPID
+            needsShellWalk = true
         }
 
-        guard let cwd = processWorkingDirectory(pid: entry.pid) else {
-            recordMiss(for: panelID, reason: "cached_pid_cwd_read_failed")
-            return nil
-        }
-
-        return cwd
-    }
-
-    private func discoverProcess(for panelID: UUID) -> CachedProcessEntry? {
-        let panelIDValue = panelID.uuidString
-        var bestShellEntry: CachedProcessEntry?
-        var bestFallbackEntry: CachedProcessEntry?
-
-        for pid in allProcessIDs() {
-            guard pid > 0, pid != currentProcessID else { continue }
-            guard let processInfo = processInfo(pid: pid) else { continue }
-            guard processInfo.uid == currentUserID else { continue }
-            guard processEnvironmentValue(pid: pid, key: panelIDEnvironmentKey) == panelIDValue else { continue }
-
-            let candidate = CachedProcessEntry(
-                pid: pid,
-                commandName: processInfo.commandName,
-                startSignature: processInfo.startSignature
+        guard let signature = processStartSignature(pid: resolvedPID) else {
+            ToasttyLog.warning(
+                "Could not read start signature for new terminal process",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "login_pid": String(loginPID),
+                    "resolved_pid": String(resolvedPID),
+                    "source": source,
+                ]
             )
-
-            if shellCommandNames.contains(processInfo.commandName.lowercased()) {
-                if let currentBestShellEntry = bestShellEntry {
-                    if candidate.pid < currentBestShellEntry.pid {
-                        bestShellEntry = candidate
-                    }
-                } else {
-                    bestShellEntry = candidate
-                }
-            } else if let currentBestFallbackEntry = bestFallbackEntry {
-                if candidate.pid < currentBestFallbackEntry.pid {
-                    bestFallbackEntry = candidate
-                }
-            } else {
-                bestFallbackEntry = candidate
-            }
+            return
         }
 
-        return bestShellEntry ?? bestFallbackEntry
+        cachedProcessByPanelID[panelID] = CachedProcessEntry(
+            pid: resolvedPID,
+            startSignature: signature,
+            needsShellWalk: needsShellWalk
+        )
+
+        ToasttyLog.debug(
+            "Registered terminal process for panel",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "login_pid": String(loginPID),
+                "resolved_pid": String(resolvedPID),
+                "needs_shell_walk": needsShellWalk ? "true" : "false",
+                "source": source,
+            ]
+        )
     }
 
-    private struct ProcessInfo {
-        let uid: uid_t
-        let commandName: String
-        let startSignature: ProcessStartSignature
+    /// For panels where the initial snapshot diff missed the child process,
+    /// scan current app children and try to find the untracked one.
+    private func attemptDeferredRegistration(panelID: UUID) {
+        let currentAppChildren = Set(childPIDs(of: appPID))
+        let knownPIDs = Set(cachedProcessByPanelID.values.map(\.pid))
+
+        // Find app children that aren't tracked by any panel yet.
+        // Also check their login children (shell PIDs) against known PIDs.
+        for candidatePID in currentAppChildren {
+            guard !knownPIDs.contains(candidatePID) else { continue }
+            let loginChildren = childPIDs(of: candidatePID)
+            let shellPID = loginChildren.first
+            if let shellPID, knownPIDs.contains(shellPID) { continue }
+
+            // Found an untracked child — assign it to this panel.
+            cacheLoginOrShell(panelID: panelID, loginPID: candidatePID, source: "deferred_scan")
+            return
+        }
     }
 
-    private func processInfo(pid: pid_t) -> ProcessInfo? {
+    // MARK: - Low-Level Process Helpers
+
+    /// Returns direct child PIDs of `parentPID` using `proc_listchildpids`.
+    private func childPIDs(of parentPID: pid_t) -> [pid_t] {
+        // First call with nil buffer to get the count of child PIDs.
+        let estimatedBytes = proc_listchildpids(parentPID, nil, 0)
+        guard estimatedBytes > 0 else { return [] }
+
+        let pidSize = MemoryLayout<pid_t>.stride
+        // Over-allocate slightly in case new children appear between calls.
+        let capacity = Int(estimatedBytes) / pidSize + 8
+        var pids = Array(repeating: pid_t(0), count: capacity)
+
+        let returnedBytes = pids.withUnsafeMutableBufferPointer { buffer -> Int32 in
+            guard let base = buffer.baseAddress else { return 0 }
+            return proc_listchildpids(parentPID, base, Int32(buffer.count * pidSize))
+        }
+
+        guard returnedBytes > 0 else { return [] }
+        let count = Int(returnedBytes) / pidSize
+        return Array(pids.prefix(count).filter { $0 > 0 })
+    }
+
+    private func processStartSignature(pid: pid_t) -> ProcessStartSignature? {
         var info = proc_bsdinfo()
         let result = withUnsafeMutablePointer(to: &info) { infoPointer in
             proc_pidinfo(
@@ -163,36 +252,10 @@ final class TerminalProcessWorkingDirectoryResolver {
             return nil
         }
 
-        let commandName = processCommandName(from: &info)
-        let startSignature = ProcessStartSignature(
+        return ProcessStartSignature(
             seconds: UInt64(info.pbi_start_tvsec),
             microseconds: UInt64(info.pbi_start_tvusec)
         )
-
-        return ProcessInfo(
-            uid: info.pbi_uid,
-            commandName: commandName,
-            startSignature: startSignature
-        )
-    }
-
-    private func processStartSignature(pid: pid_t) -> ProcessStartSignature? {
-        guard let info = processInfo(pid: pid) else { return nil }
-        return info.startSignature
-    }
-
-    private func processCommandName(from info: inout proc_bsdinfo) -> String {
-        let primaryName = Self.stringFromCCharTuple(&info.pbi_name)
-        if primaryName.isEmpty == false {
-            return primaryName
-        }
-
-        let command = Self.stringFromCCharTuple(&info.pbi_comm)
-        if command.isEmpty == false {
-            return command
-        }
-
-        return "unknown"
     }
 
     private func processWorkingDirectory(pid: pid_t) -> String? {
@@ -222,176 +285,6 @@ final class TerminalProcessWorkingDirectoryResolver {
         let normalized = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.isEmpty == false else { return nil }
         return normalized
-    }
-
-    private func processEnvironmentValue(pid: pid_t, key: String) -> String? {
-        guard argmax > 0 else { return nil }
-
-        var mib = [
-            Int32(CTL_KERN),
-            Int32(KERN_PROCARGS2),
-            pid,
-        ]
-        var byteCount = argmax
-        let buffer = UnsafeMutableRawPointer.allocate(
-            byteCount: argmax,
-            alignment: MemoryLayout<Int32>.alignment
-        )
-        defer {
-            buffer.deallocate()
-        }
-
-        let sysctlResult = sysctl(&mib, u_int(mib.count), buffer, &byteCount, nil, 0)
-        guard sysctlResult == 0, byteCount > MemoryLayout<Int32>.size else {
-            return nil
-        }
-
-        let argumentCount = Int(buffer.load(as: Int32.self))
-        guard argumentCount >= 0 else {
-            return nil
-        }
-
-        let bytes = buffer.assumingMemoryBound(to: UInt8.self)
-        var index = MemoryLayout<Int32>.size
-
-        func skipNullBytes() {
-            while index < byteCount, bytes[index] == 0 {
-                index += 1
-            }
-        }
-
-        func skipCString() {
-            while index < byteCount, bytes[index] != 0 {
-                index += 1
-            }
-        }
-
-        // argv layout: argc, executable path, args..., env...
-        skipCString()
-        skipNullBytes()
-
-        if argumentCount > 0 {
-            for _ in 0..<argumentCount {
-                skipCString()
-                skipNullBytes()
-                if index >= byteCount {
-                    return nil
-                }
-            }
-        }
-
-        while index < byteCount {
-            skipNullBytes()
-            guard index < byteCount else { break }
-
-            let start = index
-            skipCString()
-            guard index > start else { continue }
-
-            let length = index - start
-            let entry = UnsafeBufferPointer(start: bytes.advanced(by: start), count: length)
-            let value = String(decoding: entry, as: UTF8.self)
-
-            guard value.hasPrefix(key) else { continue }
-            guard value.count > key.count, value[value.index(value.startIndex, offsetBy: key.count)] == "=" else {
-                continue
-            }
-
-            let valueStart = value.index(value.startIndex, offsetBy: key.count + 1)
-            return String(value[valueStart...])
-        }
-
-        return nil
-    }
-
-    private func allProcessIDs() -> [pid_t] {
-        var capacity = 4096
-        let pidSize = MemoryLayout<pid_t>.stride
-
-        while capacity <= 131_072 {
-            var processIDs = Array(repeating: pid_t(0), count: capacity)
-            let returnedBytes = processIDs.withUnsafeMutableBufferPointer { buffer -> Int32 in
-                guard let baseAddress = buffer.baseAddress else { return 0 }
-                return proc_listpids(
-                    UInt32(PROC_ALL_PIDS),
-                    0,
-                    UnsafeMutableRawPointer(baseAddress),
-                    Int32(buffer.count * pidSize)
-                )
-            }
-
-            guard returnedBytes > 0 else {
-                return []
-            }
-
-            let processCount = Int(returnedBytes) / pidSize
-            if processCount < capacity {
-                return processIDs[0..<processCount].filter { $0 > 0 }
-            }
-
-            capacity *= 2
-        }
-
-        return []
-    }
-
-    private func recordMiss(for panelID: UUID, reason: String) {
-        let missCount = (resolutionMissCountByPanelID[panelID] ?? 0) + 1
-        resolutionMissCountByPanelID[panelID] = missCount
-
-        guard missCount <= 2 || missCount.isMultiple(of: 30) else {
-            return
-        }
-
-        ToasttyLog.debug(
-            "Terminal process cwd resolution miss",
-            category: .terminal,
-            metadata: [
-                "panel_id": panelID.uuidString,
-                "reason": reason,
-                "miss_count": String(missCount),
-            ]
-        )
-    }
-
-    private func clearMisses(for panelID: UUID) {
-        guard let previousMissCount = resolutionMissCountByPanelID.removeValue(forKey: panelID),
-              previousMissCount > 0 else {
-            return
-        }
-
-        ToasttyLog.debug(
-            "Terminal process cwd resolution recovered",
-            category: .terminal,
-            metadata: [
-                "panel_id": panelID.uuidString,
-                "previous_miss_count": String(previousMissCount),
-            ]
-        )
-    }
-
-    private static func systemArgmaxOrDefault() -> Int {
-        var mib = [Int32(CTL_KERN), Int32(KERN_ARGMAX)]
-        var argmaxValue: Int32 = 0
-        var valueSize = MemoryLayout<Int32>.size
-
-        let result = sysctl(&mib, u_int(mib.count), &argmaxValue, &valueSize, nil, 0)
-        if result == 0, argmaxValue > 0 {
-            return Int(argmaxValue)
-        }
-
-        return 262_144
-    }
-
-    private static func stringFromCCharTuple<T>(_ tuple: inout T) -> String {
-        withUnsafePointer(to: &tuple) { tuplePointer in
-            tuplePointer.withMemoryRebound(to: CChar.self, capacity: MemoryLayout<T>.size) { cStringPointer in
-                guard cStringPointer.pointee != 0 else {
-                    return ""
-                }
-                return String(cString: cStringPointer)
-            }
-        }
     }
 }
 #endif

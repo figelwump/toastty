@@ -191,8 +191,29 @@ private extension TerminalRuntimeRegistry {
     @discardableResult
     func sendSplitAction(_ action: AppAction) -> Bool {
         guard let store else { return false }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        refreshFocusedPanelCWDBeforeSplit(store: store)
+        #endif
         return store.send(action)
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    /// Refreshes the focused panel's CWD from its tracked process PID so the
+    /// reducer reads a fresh value when creating the new split panel.
+    func refreshFocusedPanelCWDBeforeSplit(store: AppStore) {
+        let state = store.state
+        guard let workspaceID = selectedWorkspaceID(state: state),
+              let workspace = state.workspacesByID[workspaceID],
+              let focusedPanelID = workspace.focusedPanelID else {
+            return
+        }
+
+        refreshWorkingDirectoryFromProcessIfNeeded(
+            panelID: focusedPanelID,
+            source: "pre_split_refresh"
+        )
+    }
+    #endif
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -401,6 +422,14 @@ private extension TerminalRuntimeRegistry {
             panelIDBySurfaceHandle.removeValue(forKey: key)
         }
         processWorkingDirectoryResolver.invalidate(panelID: panelID)
+    }
+
+    func snapshotChildPIDsForSurfaceCreation() -> Set<pid_t> {
+        processWorkingDirectoryResolver.snapshotChildPIDs()
+    }
+
+    func registerChildPIDAfterSurfaceCreation(panelID: UUID, previousChildren: Set<pid_t>) {
+        processWorkingDirectoryResolver.registerNewChild(panelID: panelID, previousChildren: previousChildren)
     }
 
     func panelID(for surface: ghostty_surface_t) -> UUID? {
@@ -1712,7 +1741,6 @@ final class TerminalSurfaceController {
         }
 
         let inheritedSourceSurface: ghostty_surface_t?
-        var splitSourcePanelID: UUID?
         switch registry.splitSourceSurfaceState(for: panelID) {
         case .none:
             inheritedSourceSurface = nil
@@ -1727,7 +1755,6 @@ final class TerminalSurfaceController {
             return
         case .ready(let sourcePanelID, let sourceSurface):
             inheritedSourceSurface = sourceSurface
-            splitSourcePanelID = sourcePanelID
             ToasttyLog.debug(
                 "Using source Ghostty surface for split inheritance",
                 category: .terminal,
@@ -1738,29 +1765,17 @@ final class TerminalSurfaceController {
             )
         }
 
-        let requestedWorkingDirectory: String
-        if let splitSourcePanelID,
-           let sourceWorkingDirectory = registry.resolvedWorkingDirectoryFromProcess(panelID: splitSourcePanelID) {
-            requestedWorkingDirectory = sourceWorkingDirectory
-            if sourceWorkingDirectory != terminalState.cwd {
-                ToasttyLog.debug(
-                    "Using process-resolved split source cwd for new terminal surface",
-                    category: .terminal,
-                    metadata: [
-                        "source_panel_id": splitSourcePanelID.uuidString,
-                        "new_panel_id": panelID.uuidString,
-                        "source_cwd_sample": String(sourceWorkingDirectory.prefix(120)),
-                    ]
-                )
-            }
-        } else {
-            requestedWorkingDirectory = terminalState.cwd
-        }
+        // CWD is already up-to-date in terminalState.cwd thanks to the
+        // pre-split refresh in sendSplitAction().
+        let requestedWorkingDirectory = terminalState.cwd
+
+        // Snapshot child PIDs before surface creation so we can diff after
+        // to find the newly spawned login/shell process for CWD tracking.
+        let previousChildPIDs = registry.snapshotChildPIDsForSurfaceCreation()
 
         diagnostics.surfaceAttemptCount += 1
         guard let createdSurface = ghosttyManager.makeSurface(
             hostView: hostView,
-            panelID: panelID,
             workingDirectory: requestedWorkingDirectory,
             fontPoints: fontPoints,
             inheritFrom: inheritedSourceSurface
@@ -1796,6 +1811,13 @@ final class TerminalSurfaceController {
         lastDisplayID = nil
         ghosttySurface = surface
         registry.register(surface: surface, for: panelID)
+
+        // Register the new child process (login → shell) for CWD tracking.
+        registry.registerChildPIDAfterSurfaceCreation(
+            panelID: panelID,
+            previousChildren: previousChildPIDs
+        )
+
         registry.reconcileSurfaceWorkingDirectory(
             panelID: panelID,
             workingDirectory: Self.currentWorkingDirectory(for: surface) ?? createdSurface.workingDirectory,
