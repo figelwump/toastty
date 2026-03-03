@@ -234,7 +234,7 @@ struct SidebarView: View {
             Text(subtitle)
                 .font(ToastyTheme.fontWorkspaceSubtitle)
                 .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
-                .lineLimit(2)
+                .lineLimit(3)
                 .truncationMode(.tail)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)

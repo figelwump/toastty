@@ -1995,6 +1995,9 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             guard normalized.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else {
                 continue
             }
+            if looksLikeEphemeralAgentProgressLine(normalized) {
+                continue
+            }
 
             let lowercased = normalized.lowercased()
             let footerCandidate = normalizedAgentFooterCandidate(lowercased)
@@ -2048,6 +2051,51 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             candidate = candidate.trimmingCharacters(in: .whitespaces)
         }
         return candidate
+    }
+
+    private static func looksLikeEphemeralAgentProgressLine(_ line: String) -> Bool {
+        var tokens = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard tokens.isEmpty == false else { return false }
+
+        var hadLeadingStatusMarker = false
+        if let firstToken = tokens.first,
+           tokenContainsAlphanumerics(firstToken) == false,
+           tokens.count > 1 {
+            hadLeadingStatusMarker = true
+            tokens.removeFirst()
+        }
+
+        guard tokens.isEmpty == false else { return false }
+        guard tokens.count <= ephemeralAgentProgressTokenLimit else { return false }
+
+        let joined = tokens.joined(separator: " ").lowercased()
+        guard joined.hasSuffix("...") || joined.hasSuffix("…") else { return false }
+
+        let normalizedTokens = tokens.compactMap { token -> String? in
+            let normalizedToken = token
+                .trimmingCharacters(in: ephemeralAgentProgressTokenTrimmingCharacters)
+                .lowercased()
+            guard normalizedToken.isEmpty == false else { return nil }
+            return normalizedToken
+        }
+        guard normalizedTokens.isEmpty == false else { return false }
+
+        guard hadLeadingStatusMarker
+                || ephemeralAgentProgressLeadWords.contains(normalizedTokens[0]) else {
+            return false
+        }
+
+        return normalizedTokens.allSatisfy { token in
+            token.unicodeScalars.allSatisfy { scalar in
+                CharacterSet.letters.contains(scalar)
+            }
+        }
+    }
+
+    private static func tokenContainsAlphanumerics(_ token: String) -> Bool {
+        token.unicodeScalars.contains { scalar in
+            CharacterSet.alphanumerics.contains(scalar)
+        }
     }
 
     private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
@@ -2125,7 +2173,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 
         var agentSegments: [String] = []
         if claudeCount > 0 {
-            agentSegments.append("\(claudeCount) Claude Code")
+            agentSegments.append("\(claudeCount) \(claudeCodeActivityLabel)")
         }
         if codexCount > 0 {
             agentSegments.append("\(codexCount) Codex")
@@ -2164,7 +2212,28 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let claudePromptTokens: Set<String> = ["claude"]
     private static let agentFooterLeadingMarkerCharacters = CharacterSet(charactersIn: "›>•")
     private static let activitySummaryLineWindow = 24
-    private static let activitySummaryCharacterLimit = 72
+    private static let activitySummaryCharacterLimit = 96
+    private static let ephemeralAgentProgressTokenLimit = 3
+    private static let ephemeralAgentProgressLeadWords: Set<String> = [
+        "analyzing",
+        "brainstorming",
+        "drafting",
+        "planning",
+        "pondering",
+        "processing",
+        "reading",
+        "reasoning",
+        "scanning",
+        "simmering",
+        "summarizing",
+        "thinking",
+        "working",
+    ]
+    private static let ephemeralAgentProgressTokenTrimmingCharacters = CharacterSet(
+        charactersIn: ".,…:;!?()[]{}<>\"'`-_"
+    )
+    // Compact labels preserve room for real-time summary text in the sidebar.
+    private static let claudeCodeActivityLabel = "CC"
     // Include detailed single-agent summaries only when the signal is still fresh.
     private static let activitySummaryFreshnessInterval: TimeInterval = 60
     // Drop stale activity after a short window to avoid long-lived misleading subtext.
