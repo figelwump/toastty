@@ -2663,14 +2663,16 @@ final class TerminalSurfaceController {
 
     func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
         guard let ghosttySurface else { return }
+        guard abs(nextPoints - previousPoints) >= AppState.terminalFontComparisonEpsilon else { return }
 
-        if nextPoints == AppState.defaultTerminalFontPoints {
+        let baselinePoints = resolvedGhosttyConfiguredFontBaselinePoints()
+
+        if abs(nextPoints - baselinePoints) < AppState.terminalFontComparisonEpsilon {
             _ = invokeGhosttyBindingAction("reset_font_size", on: ghosttySurface)
             return
         }
 
         let pointDelta = nextPoints - previousPoints
-        guard pointDelta != 0 else { return }
         let stepMagnitude = max(
             Int(round(abs(pointDelta) / AppState.terminalFontStepPoints)),
             1
@@ -2683,6 +2685,37 @@ final class TerminalSurfaceController {
 
     func currentGhosttySurface() -> ghostty_surface_t? {
         ghosttySurface
+    }
+
+    private func resolvedGhosttyConfiguredFontBaselinePoints() -> Double {
+        let configuredPoints = ghosttyManager.configuredTerminalFontPoints ?? AppState.defaultTerminalFontPoints
+        return AppState.clampedTerminalFontPoints(configuredPoints)
+    }
+
+    private func synchronizeGhosttySurfaceFont(to targetPoints: Double, on surface: ghostty_surface_t) {
+        let baselinePoints = resolvedGhosttyConfiguredFontBaselinePoints()
+        let clampedTargetPoints = AppState.clampedTerminalFontPoints(targetPoints)
+
+        if abs(clampedTargetPoints - baselinePoints) < AppState.terminalFontComparisonEpsilon {
+            _ = invokeGhosttyBindingAction("reset_font_size", on: surface)
+            return
+        }
+
+        // Normalize to Ghostty's configured baseline before applying a delta so
+        // newly created panes don't retain stale inherited zoom levels.
+        guard invokeGhosttyBindingAction("reset_font_size", on: surface) else {
+            return
+        }
+
+        let pointDelta = clampedTargetPoints - baselinePoints
+        let stepMagnitude = max(
+            Int(round(abs(pointDelta) / AppState.terminalFontStepPoints)),
+            1
+        )
+        let action = pointDelta > 0
+            ? "increase_font_size:\(stepMagnitude)"
+            : "decrease_font_size:\(stepMagnitude)"
+        _ = invokeGhosttyBindingAction(action, on: surface)
     }
 
     private static func currentWorkingDirectory(for surface: ghostty_surface_t) -> String? {
@@ -2819,6 +2852,7 @@ final class TerminalSurfaceController {
         lastDisplayID = nil
         ghosttySurface = surface
         registry.register(surface: surface, for: panelID)
+        synchronizeGhosttySurfaceFont(to: fontPoints, on: surface)
 
         // Register the new child process (login → shell) for CWD tracking.
         registry.registerChildPIDAfterSurfaceCreation(
