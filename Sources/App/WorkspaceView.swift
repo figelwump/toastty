@@ -217,21 +217,27 @@ private struct PaneNodeView: View {
             GeometryReader { geometry in
                 let baseRatio = min(max(ratio, 0.1), 0.9)
                 let effectiveRatio = effectiveSplitRatio(baseRatio: baseRatio, first: first, second: second)
-                let isCollapsed = effectiveRatio <= 0.0001 || effectiveRatio >= 0.9999
                 let focusBranchVisibility = focusModeBranchVisibility(first: first, second: second)
-                let bothBranchesVisible = focusBranchVisibility.showFirst && focusBranchVisibility.showSecond
-                let dividerThickness: CGFloat = (isCollapsed || !bothBranchesVisible) ? 0 : 1
 
                 Group {
                     if orientation == .horizontal {
-                        let availableWidth = max(geometry.size.width - dividerThickness, 0)
-                        let firstWidth = availableWidth * effectiveRatio
-                        let secondWidth = max(availableWidth - firstWidth, 0)
-                        let showFirst = focusBranchVisibility.showFirst && (isCollapsed ? effectiveRatio >= 0.5 : true)
-                        let showSecond = focusBranchVisibility.showSecond && (isCollapsed ? effectiveRatio < 0.5 : true)
+                        let availableWidth = max(geometry.size.width, 0)
+                        let collapseRatioThreshold = collapseRatioThreshold(
+                            availableDimension: availableWidth,
+                            minimumVisibleDimension: Self.minimumAnimatedBranchDimension
+                        )
+                        let isCollapsed = effectiveRatio <= collapseRatioThreshold
+                            || effectiveRatio >= (1 - collapseRatioThreshold)
+                        let showFirst = focusBranchVisibility.showFirst || !isCollapsed
+                        let showSecond = focusBranchVisibility.showSecond || !isCollapsed
+                        let bothBranchesVisible = showFirst && showSecond
+                        let dividerThickness: CGFloat = bothBranchesVisible ? 1 : 0
+                        let adjustedAvailableWidth = max(geometry.size.width - dividerThickness, 0)
+                        let firstWidth = adjustedAvailableWidth * effectiveRatio
+                        let secondWidth = max(adjustedAvailableWidth - firstWidth, 0)
                         let showDivider = dividerThickness > 0 && showFirst && showSecond
-                        let displayFirstWidth: CGFloat = showFirst ? (showSecond ? firstWidth : availableWidth) : 0
-                        let displaySecondWidth: CGFloat = showSecond ? (showFirst ? secondWidth : availableWidth) : 0
+                        let displayFirstWidth: CGFloat = showFirst ? (showSecond ? firstWidth : adjustedAvailableWidth) : 0
+                        let displaySecondWidth: CGFloat = showSecond ? (showFirst ? secondWidth : adjustedAvailableWidth) : 0
 
                         HStack(spacing: 0) {
                             if showFirst {
@@ -270,14 +276,23 @@ private struct PaneNodeView: View {
                         }
                         .clipped()
                     } else {
-                        let availableHeight = max(geometry.size.height - dividerThickness, 0)
-                        let firstHeight = availableHeight * effectiveRatio
-                        let secondHeight = max(availableHeight - firstHeight, 0)
-                        let showFirst = focusBranchVisibility.showFirst && (isCollapsed ? effectiveRatio >= 0.5 : true)
-                        let showSecond = focusBranchVisibility.showSecond && (isCollapsed ? effectiveRatio < 0.5 : true)
+                        let availableHeight = max(geometry.size.height, 0)
+                        let collapseRatioThreshold = collapseRatioThreshold(
+                            availableDimension: availableHeight,
+                            minimumVisibleDimension: Self.minimumAnimatedBranchDimension
+                        )
+                        let isCollapsed = effectiveRatio <= collapseRatioThreshold
+                            || effectiveRatio >= (1 - collapseRatioThreshold)
+                        let showFirst = focusBranchVisibility.showFirst || !isCollapsed
+                        let showSecond = focusBranchVisibility.showSecond || !isCollapsed
+                        let bothBranchesVisible = showFirst && showSecond
+                        let dividerThickness: CGFloat = bothBranchesVisible ? 1 : 0
+                        let adjustedAvailableHeight = max(geometry.size.height - dividerThickness, 0)
+                        let firstHeight = adjustedAvailableHeight * effectiveRatio
+                        let secondHeight = max(adjustedAvailableHeight - firstHeight, 0)
                         let showDivider = dividerThickness > 0 && showFirst && showSecond
-                        let displayFirstHeight: CGFloat = showFirst ? (showSecond ? firstHeight : availableHeight) : 0
-                        let displaySecondHeight: CGFloat = showSecond ? (showFirst ? secondHeight : availableHeight) : 0
+                        let displayFirstHeight: CGFloat = showFirst ? (showSecond ? firstHeight : adjustedAvailableHeight) : 0
+                        let displaySecondHeight: CGFloat = showSecond ? (showFirst ? secondHeight : adjustedAvailableHeight) : 0
 
                         VStack(spacing: 0) {
                             if showFirst {
@@ -318,9 +333,22 @@ private struct PaneNodeView: View {
                     }
                 }
                 .animation(.easeInOut(duration: 0.2), value: baseRatio)
+                .animation(.easeInOut(duration: 0.2), value: focusedPanelModeActive)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    private static let minimumAnimatedBranchDimension: CGFloat = 64
+
+    private func collapseRatioThreshold(
+        availableDimension: CGFloat,
+        minimumVisibleDimension: CGFloat
+    ) -> Double {
+        guard availableDimension > 0 else {
+            return 0.0001
+        }
+        return min(max(Double(minimumVisibleDimension / availableDimension), 0.0001), 0.5)
     }
 
     private func effectiveSplitRatio(baseRatio: Double, first: PaneNode, second: PaneNode) -> Double {
