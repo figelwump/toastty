@@ -646,6 +646,16 @@ private extension TerminalRuntimeRegistry {
         let now = Date()
         refreshSelectedWorkspaceTerminalMetadataFromProcess(state: state)
 
+        let selectedPanelWorkspaceIDs = trackedSelectedWorkspaceVisibleTerminalPanelIDs(state: state)
+        for (panelID, workspaceID) in selectedPanelWorkspaceIDs {
+            refreshPanelActivityFromVisibleTextIfNeeded(
+                panelID: panelID,
+                workspaceID: workspaceID,
+                state: state,
+                now: now
+            )
+        }
+
         let backgroundPanelWorkspaceIDs = trackedBackgroundTerminalPanelIDs(state: state)
         for (panelID, workspaceID) in backgroundPanelWorkspaceIDs {
             refreshPanelActivityFromVisibleTextIfNeeded(
@@ -675,6 +685,20 @@ private extension TerminalRuntimeRegistry {
             )
             refreshAgentTitleFromVisibleTextIfNeeded(panelID: panelID, state: state)
         }
+    }
+
+    func trackedSelectedWorkspaceVisibleTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
+        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
+              let workspace = state.workspacesByID[selectedWorkspaceID] else {
+            return [:]
+        }
+
+        var workspaceByPanelID: [UUID: UUID] = [:]
+        for panelID in visibleTerminalPanelIDs(in: workspace) {
+            guard controllers[panelID] != nil else { continue }
+            workspaceByPanelID[panelID] = selectedWorkspaceID
+        }
+        return workspaceByPanelID
     }
 
     func trackedBackgroundTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
@@ -871,11 +895,9 @@ private extension TerminalRuntimeRegistry {
     }
 
     func updateWorkspaceActivitySubtext(state: AppState, now: Date) {
-        let selectedWorkspaceID = selectedWorkspaceID(state: state)
         var activitiesByWorkspaceID: [UUID: [PanelActivityState]] = [:]
         for activity in panelActivityByPanelID.values {
             guard state.workspacesByID[activity.workspaceID] != nil else { continue }
-            guard activity.workspaceID != selectedWorkspaceID else { continue }
             guard now.timeIntervalSince(activity.updatedAt) <= Self.activityRetentionInterval else { continue }
             activitiesByWorkspaceID[activity.workspaceID, default: []].append(activity)
         }
@@ -1893,7 +1915,10 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return true
         }
 
-        guard let normalizedTitlePath = normalizedCWDValue(terminalTitle),
+        // Preserve compact directory titles like "clawdbot", but still allow
+        // inference for raw CWD path titles ("/Users/..." or "~/...").
+        guard titleLooksLikePathTitle(terminalTitle),
+              let normalizedTitlePath = normalizedCWDValue(terminalTitle),
               let normalizedCurrentCWD = normalizedCWDValue(terminalCWD) else {
             return false
         }
@@ -1916,6 +1941,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return false
         }
         return Int(components[1]) != nil
+    }
+
+    private static func titleLooksLikePathTitle(_ title: String) -> Bool {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.hasPrefix("file://")
     }
 
     private static func inferredAgentKind(terminalTitle: String, visibleText: String) -> AgentKindInference? {
@@ -1974,6 +2004,12 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                 continue
             }
             if lowercased.hasPrefix("tokens:") {
+                continue
+            }
+            if lowercased.contains("claude code •")
+                || lowercased.contains("claude code ·")
+                || lowercased.contains("codex •")
+                || lowercased.contains("codex ·") {
                 continue
             }
 
@@ -2072,16 +2108,18 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         if totalAgentCount == 1,
-           waitingInputCount == 0,
-           runningCount == 1,
-           let mostRecentRunningActivity = activities
-           .filter({ $0.phase == .running })
-           .sorted(by: { $0.updatedAt > $1.updatedAt })
-           .first,
-           now.timeIntervalSince(mostRecentRunningActivity.updatedAt) <= activitySummaryFreshnessInterval,
-           let summary = mostRecentRunningActivity.summary,
+           let mostRecentActivity = activities.sorted(by: { $0.updatedAt > $1.updatedAt }).first,
+           now.timeIntervalSince(mostRecentActivity.updatedAt) <= activitySummaryFreshnessInterval,
+           let summary = mostRecentActivity.summary,
            let singleAgent = agentSegments.first {
-            return "\(singleAgent) running · \(summary)"
+            switch mostRecentActivity.phase {
+            case .running:
+                return "\(singleAgent) running · \(summary)"
+            case .waitingInput:
+                return "\(singleAgent) waiting input · \(summary)"
+            case .idle:
+                break
+            }
         }
 
         return "\(agentSegments.joined(separator: ", ")) · \(statusText)"
