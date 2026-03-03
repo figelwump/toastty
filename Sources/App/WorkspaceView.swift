@@ -230,6 +230,8 @@ private struct PaneNodeView: View {
                         let showFirst = focusBranchVisibility.showFirst && (isCollapsed ? effectiveRatio >= 0.5 : true)
                         let showSecond = focusBranchVisibility.showSecond && (isCollapsed ? effectiveRatio < 0.5 : true)
                         let showDivider = dividerThickness > 0 && showFirst && showSecond
+                        let displayFirstWidth: CGFloat = showFirst ? (showSecond ? firstWidth : availableWidth) : 0
+                        let displaySecondWidth: CGFloat = showSecond ? (showFirst ? secondWidth : availableWidth) : 0
 
                         HStack(spacing: 0) {
                             PaneNodeView(
@@ -242,7 +244,7 @@ private struct PaneNodeView: View {
                                 focusedPanelModeActive: focusedPanelModeActive,
                                 unfocusedSplitStyle: unfocusedSplitStyle
                             )
-                            .frame(width: firstWidth, height: geometry.size.height)
+                            .frame(width: displayFirstWidth, height: geometry.size.height)
                             .opacity(showFirst ? 1 : 0)
                             .animation(nil, value: showFirst)
                             .allowsHitTesting(showFirst)
@@ -263,7 +265,7 @@ private struct PaneNodeView: View {
                                 focusedPanelModeActive: focusedPanelModeActive,
                                 unfocusedSplitStyle: unfocusedSplitStyle
                             )
-                            .frame(width: secondWidth, height: geometry.size.height)
+                            .frame(width: displaySecondWidth, height: geometry.size.height)
                             .opacity(showSecond ? 1 : 0)
                             .animation(nil, value: showSecond)
                             .allowsHitTesting(showSecond)
@@ -276,6 +278,8 @@ private struct PaneNodeView: View {
                         let showFirst = focusBranchVisibility.showFirst && (isCollapsed ? effectiveRatio >= 0.5 : true)
                         let showSecond = focusBranchVisibility.showSecond && (isCollapsed ? effectiveRatio < 0.5 : true)
                         let showDivider = dividerThickness > 0 && showFirst && showSecond
+                        let displayFirstHeight: CGFloat = showFirst ? (showSecond ? firstHeight : availableHeight) : 0
+                        let displaySecondHeight: CGFloat = showSecond ? (showFirst ? secondHeight : availableHeight) : 0
 
                         VStack(spacing: 0) {
                             PaneNodeView(
@@ -288,7 +292,7 @@ private struct PaneNodeView: View {
                                 focusedPanelModeActive: focusedPanelModeActive,
                                 unfocusedSplitStyle: unfocusedSplitStyle
                             )
-                            .frame(width: geometry.size.width, height: firstHeight)
+                            .frame(width: geometry.size.width, height: displayFirstHeight)
                             .opacity(showFirst ? 1 : 0)
                             .animation(nil, value: showFirst)
                             .allowsHitTesting(showFirst)
@@ -309,7 +313,7 @@ private struct PaneNodeView: View {
                                 focusedPanelModeActive: focusedPanelModeActive,
                                 unfocusedSplitStyle: unfocusedSplitStyle
                             )
-                            .frame(width: geometry.size.width, height: secondHeight)
+                            .frame(width: geometry.size.width, height: displaySecondHeight)
                             .opacity(showSecond ? 1 : 0)
                             .animation(nil, value: showSecond)
                             .allowsHitTesting(showSecond)
