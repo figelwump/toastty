@@ -114,6 +114,44 @@ private final class ClosePanelShortcutInterceptor {
 }
 
 @MainActor
+private final class FocusTerminalShortcutInterceptor {
+    private weak var store: AppStore?
+    nonisolated(unsafe) private var eventMonitor: Any?
+
+    init(store: AppStore) {
+        self.store = store
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            guard let shortcutNumber = Self.shortcutNumber(for: event) else { return event }
+            let didFocusPanel = self.focusTerminalPanel(shortcutNumber: shortcutNumber)
+            // If no panel is mapped to this shortcut, keep default key behavior.
+            return didFocusPanel ? nil : event
+        }
+    }
+
+    deinit {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+        }
+    }
+
+    private static func shortcutNumber(for event: NSEvent) -> Int? {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags == [.option] else { return nil }
+        return TerminalShortcutConfig.shortcutNumber(from: event.charactersIgnoringModifiers)
+    }
+
+    private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
+        guard let store else { return false }
+        guard let workspace = store.selectedWorkspace else { return false }
+        guard let panelID = workspace.terminalPanelID(forDisplayShortcutNumber: shortcutNumber) else {
+            return false
+        }
+        return store.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
+    }
+}
+
+@MainActor
 @main
 struct ToasttyApp: App {
     private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
@@ -127,6 +165,7 @@ struct ToasttyApp: App {
     private let automationStartupError: String?
     private let disableAnimations: Bool
     private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
+    private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
     init() {
         let bootstrap = AppBootstrap.make()
@@ -141,6 +180,7 @@ struct ToasttyApp: App {
             Self.applyInitialTerminalFontState(to: store)
         }
         closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(store: store)
+        focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle

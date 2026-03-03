@@ -86,6 +86,9 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState) -> some View {
+        let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
+            limit: TerminalShortcutConfig.maxShortcutCount
+        )
         PaneNodeView(
             node: workspace.paneTree,
             workspace: workspace,
@@ -94,7 +97,8 @@ struct WorkspaceView: View {
             globalFontPoints: store.state.globalTerminalFontPoints,
             focusedPanelID: workspace.focusedPanelID,
             focusedPanelModeActive: workspace.focusedPanelModeActive,
-            unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle
+            unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
+            terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
         )
         .id(workspace.id)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -207,6 +211,7 @@ private struct PaneNodeView: View {
     let focusedPanelID: UUID?
     let focusedPanelModeActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
+    let terminalShortcutNumbersByPanelID: [UUID: Int]
 
     var body: some View {
         switch node {
@@ -224,6 +229,7 @@ private struct PaneNodeView: View {
                         panelID: panelID,
                         panelState: panelState,
                         focusedPanelID: workspace.focusedPanelID,
+                        shortcutNumber: terminalShortcutNumbersByPanelID[panelID],
                         globalFontPoints: globalFontPoints,
                         unfocusedSplitStyle: unfocusedSplitStyle,
                         store: store,
@@ -271,7 +277,8 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                    unfocusedSplitStyle: unfocusedSplitStyle,
+                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
                                 .frame(width: displayFirstWidth, height: geometry.size.height)
                             }
@@ -291,7 +298,8 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                    unfocusedSplitStyle: unfocusedSplitStyle,
+                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
                                 .frame(width: displaySecondWidth, height: geometry.size.height)
                             }
@@ -326,7 +334,8 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                    unfocusedSplitStyle: unfocusedSplitStyle,
+                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
                                 .frame(width: geometry.size.width, height: displayFirstHeight)
                             }
@@ -346,7 +355,8 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                    unfocusedSplitStyle: unfocusedSplitStyle,
+                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
                                 .frame(width: geometry.size.width, height: displaySecondHeight)
                             }
@@ -428,6 +438,7 @@ private struct PanelCardView: View {
     let panelID: UUID
     let panelState: PanelState
     let focusedPanelID: UUID?
+    let shortcutNumber: Int?
     let globalFontPoints: Double
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
@@ -439,18 +450,28 @@ private struct PanelCardView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(panelLabel)
-                .font(ToastyTheme.fontMonoHeader)
-                .foregroundStyle(ToastyTheme.primaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 5)
-                .background(ToastyTheme.elevatedBackground)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(isFocused ? ToastyTheme.accent : ToastyTheme.hairline)
-                        .frame(height: 1)
+            HStack(spacing: 8) {
+                Text(panelLabel)
+                    .font(ToastyTheme.fontMonoHeader)
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Spacer(minLength: 0)
+
+                if let shortcutLabel {
+                    shortcutBadge(shortcutLabel)
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(ToastyTheme.elevatedBackground)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(isFocused ? ToastyTheme.accent : ToastyTheme.hairline)
+                    .frame(height: 1)
+            }
 
             switch panelState {
             case .terminal(let terminalState):
@@ -509,6 +530,12 @@ private struct PanelCardView: View {
         }
     }
 
+    private var shortcutLabel: String? {
+        guard case .terminal = panelState else { return nil }
+        guard let shortcutNumber else { return nil }
+        return TerminalShortcutConfig.shortcutLabel(for: shortcutNumber)
+    }
+
     @ViewBuilder
     private func auxPanelPlaceholder(title: String) -> some View {
         Text(title)
@@ -519,6 +546,15 @@ private struct PanelCardView: View {
                 maxHeight: .infinity,
                 alignment: .leading
             )
+    }
+
+    private func shortcutBadge(_ label: String) -> some View {
+        Text(label)
+            .font(ToastyTheme.fontShortcutBadge)
+            .foregroundStyle(ToastyTheme.shortcutBadgeText)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
     }
 }
 
