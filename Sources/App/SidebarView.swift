@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
@@ -269,6 +270,7 @@ struct SidebarView: View {
     private func commitWorkspaceRename(workspaceID: UUID) {
         guard let workspace = store.state.workspacesByID[workspaceID] else {
             cancelWorkspaceRename()
+            scheduleWorkspacePaneFocusRestore()
             return
         }
 
@@ -276,17 +278,31 @@ struct SidebarView: View {
         guard trimmedTitle.isEmpty == false else {
             renameDraftTitle = workspace.title
             cancelWorkspaceRename()
+            scheduleWorkspacePaneFocusRestore()
             return
         }
 
         _ = store.send(.renameWorkspace(workspaceID: workspaceID, title: trimmedTitle))
         cancelWorkspaceRename()
+        scheduleWorkspacePaneFocusRestore()
     }
 
     private func cancelWorkspaceRename() {
         renamingWorkspaceID = nil
         focusedRenameWorkspaceID = nil
         renameDraftTitle = ""
+    }
+
+    private func scheduleWorkspacePaneFocusRestore(attempt: Int = 0) {
+        let delay = attempt == 0 ? 0 : 16
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
+            if terminalRuntimeRegistry.focusSelectedWorkspacePaneIfPossible() {
+                return
+            }
+
+            guard attempt < 12 else { return }
+            scheduleWorkspacePaneFocusRestore(attempt: attempt + 1)
+        }
     }
 
     private func scheduleRenameSelection(workspaceID: UUID, attempt: Int = 0) {

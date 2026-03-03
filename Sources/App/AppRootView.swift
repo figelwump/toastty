@@ -11,7 +11,7 @@ struct AppRootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SidebarView(store: store)
+            SidebarView(store: store, terminalRuntimeRegistry: terminalRuntimeRegistry)
                 .frame(width: ToastyTheme.sidebarWidth)
 
             Rectangle()

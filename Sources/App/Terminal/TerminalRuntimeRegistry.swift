@@ -140,6 +140,21 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return .unavailableSurface
     }
 
+    /// Attempts to return keyboard focus to the currently selected workspace's
+    /// focused terminal pane host view. Returns `false` when there is no active
+    /// focused terminal pane or no attached host view.
+    @discardableResult
+    func focusSelectedWorkspacePaneIfPossible() -> Bool {
+        guard let workspace = store?.selectedWorkspace,
+              let panelID = workspace.focusedPanelID else {
+            return false
+        }
+        guard let controller = controllers[panelID] else {
+            return false
+        }
+        return controller.focusHostViewIfNeeded()
+    }
+
     func prepareImageFileDrop(from urls: [URL]) -> PreparedImageFileDrop? {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard let store else { return nil }
@@ -2046,6 +2061,15 @@ final class TerminalSurfaceController {
         activeSourceContainer = nil
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
+    }
+
+    @discardableResult
+    func focusHostViewIfNeeded() -> Bool {
+        guard let window = hostedView.window else { return false }
+        if window.firstResponder === hostedView {
+            return true
+        }
+        return window.makeFirstResponder(hostedView)
     }
 
     func automationSendText(_ text: String, submit: Bool) -> Bool {
