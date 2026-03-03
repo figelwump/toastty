@@ -1802,7 +1802,6 @@ final class TerminalSurfaceController {
             return
         }
 
-        hostedView.isHidden = false
         terminalHostView.setGhosttySurface(ghosttySurface)
         if fallbackView.superview != nil {
             fallbackView.removeFromSuperview()
@@ -1818,6 +1817,9 @@ final class TerminalSurfaceController {
             width: logicalWidth,
             height: logicalHeight
         ) {
+            // Keep the hosted terminal hidden until layout is stable enough for
+            // a valid viewport update; otherwise stale tiny geometry can flash.
+            hostedView.isHidden = true
             diagnostics.viewportDeferredCount += 1
             let reasonChanged = lastViewportDeferralReason != viewportDeferralReason
             lastViewportDeferralReason = viewportDeferralReason
@@ -1834,6 +1836,7 @@ final class TerminalSurfaceController {
             return
         }
         lastViewportDeferralReason = nil
+        hostedView.isHidden = false
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
         ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
         let pixelWidth = max(Int((viewportSize.width * backingScaleFactor).rounded()), 1)
