@@ -24,6 +24,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
+    private var titleBeforeAgentInferenceByPanelID: [UUID: String] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
@@ -90,6 +91,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers.removeValue(forKey: panelID)
             #if TOASTTY_HAS_GHOSTTY_KIT
             processWorkingDirectoryResolver.invalidate(panelID: panelID)
+            titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
             #endif
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
@@ -549,6 +551,163 @@ private extension TerminalRuntimeRegistry {
             _ = refreshWorkingDirectoryFromProcessIfNeeded(
                 panelID: panelID,
                 source: "process_poll"
+            )
+            refreshAgentTitleFromVisibleTextIfNeeded(panelID: panelID, state: state)
+        }
+    }
+
+    func refreshAgentTitleFromVisibleTextIfNeeded(panelID: UUID, state: AppState) {
+        guard let store,
+              let workspaceID = workspaceID(containing: panelID, state: state),
+              let workspace = state.workspacesByID[workspaceID],
+              let panelState = workspace.panels[panelID],
+              case .terminal(let terminalState) = panelState else {
+            titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+            return
+        }
+
+        let currentTitle = terminalState.title
+        let titleIsAgentInferred = Self.isInferredAgentTitle(currentTitle)
+        let titleEligibleForInference = Self.titleIsEligibleForAgentInference(
+            terminalTitle: currentTitle,
+            terminalCWD: terminalState.cwd
+        )
+        guard titleIsAgentInferred || titleEligibleForInference else {
+            titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+            return
+        }
+
+        guard let visibleText = automationReadVisibleText(panelID: panelID) else {
+            return
+        }
+        let inferredAgentTitle = Self.inferredAgentTitleFromVisibleTerminalText(visibleText)
+        let shellPromptIsActive = Self.visibleTextShowsInteractiveShellPrompt(visibleText)
+
+        if titleIsAgentInferred {
+            if shellPromptIsActive {
+                restoreTitleBeforeAgentInferenceIfNeeded(
+                    panelID: panelID,
+                    workspaceID: workspaceID,
+                    store: store
+                )
+                return
+            }
+
+            if inferredAgentTitle == currentTitle {
+                return
+            }
+
+            if let inferredAgentTitle {
+                let handled = store.send(
+                    .updateTerminalPanelMetadata(
+                        panelID: panelID,
+                        title: inferredAgentTitle,
+                        cwd: nil
+                    )
+                )
+                if handled {
+                    ToasttyLog.debug(
+                        "Updated inferred agent title from visible terminal text",
+                        category: .terminal,
+                        metadata: [
+                            "workspace_id": workspaceID.uuidString,
+                            "panel_id": panelID.uuidString,
+                            "inferred_title": inferredAgentTitle,
+                        ]
+                    )
+                } else {
+                    ToasttyLog.warning(
+                        "Reducer rejected inferred agent title update",
+                        category: .terminal,
+                        metadata: [
+                            "workspace_id": workspaceID.uuidString,
+                            "panel_id": panelID.uuidString,
+                            "inferred_title": inferredAgentTitle,
+                        ]
+                    )
+                }
+                return
+            }
+
+            restoreTitleBeforeAgentInferenceIfNeeded(
+                panelID: panelID,
+                workspaceID: workspaceID,
+                store: store
+            )
+            return
+        }
+
+        guard let inferredAgentTitle else {
+            return
+        }
+
+        let handled = store.send(
+            .updateTerminalPanelMetadata(
+                panelID: panelID,
+                title: inferredAgentTitle,
+                cwd: nil
+            )
+        )
+        if handled {
+            titleBeforeAgentInferenceByPanelID[panelID] = currentTitle
+            ToasttyLog.debug(
+                "Inferred agent title from visible terminal text",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "inferred_title": inferredAgentTitle,
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Reducer rejected inferred agent title update",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "inferred_title": inferredAgentTitle,
+                ]
+            )
+        }
+    }
+
+    func restoreTitleBeforeAgentInferenceIfNeeded(
+        panelID: UUID,
+        workspaceID: UUID,
+        store: AppStore
+    ) {
+        guard let previousTitle = titleBeforeAgentInferenceByPanelID[panelID] else {
+            return
+        }
+
+        let handled = store.send(
+            .updateTerminalPanelMetadata(
+                panelID: panelID,
+                title: previousTitle,
+                cwd: nil
+            )
+        )
+        if handled {
+            titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+            ToasttyLog.debug(
+                "Restored terminal title after inferred agent title became stale",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "restored_title": previousTitle,
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Reducer rejected restoring stale inferred terminal title",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "restored_title": previousTitle,
+                ]
             )
         }
     }
@@ -1255,6 +1414,81 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return normalizedPath
     }
 
+    private static func inferredAgentTitleFromVisibleTerminalText(_ visibleText: String) -> String? {
+        let lines = sanitizedVisibleTerminalLines(visibleText)
+        guard lines.isEmpty == false else { return nil }
+        let candidateLines = Array(lines.suffix(agentTitleDetectionLineWindow))
+
+        for line in candidateLines.reversed() {
+            let lowercasedLine = line.lowercased()
+            if lowercasedLine.contains("openai codex (v") {
+                return "Codex"
+            }
+            if lowercasedLine.contains("claude code v") {
+                return "Claude Code"
+            }
+        }
+        return nil
+    }
+
+    private static func visibleTextShowsInteractiveShellPrompt(_ visibleText: String) -> Bool {
+        let lines = sanitizedVisibleTerminalLines(visibleText)
+        guard lines.isEmpty == false else { return false }
+        let candidateLines = Array(lines.suffix(agentTitleDetectionLineWindow))
+
+        for line in candidateLines.reversed() {
+            guard let promptLine = parsedPromptLine(line) else {
+                continue
+            }
+
+            guard let command = promptLine.command?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  command.isEmpty == false else {
+                return true
+            }
+
+            let commandToken = command
+                .split(whereSeparator: { $0.isWhitespace })
+                .first?
+                .lowercased() ?? ""
+            return agentLaunchCommandTokens.contains(commandToken) == false
+        }
+
+        return false
+    }
+
+    private static func titleIsEligibleForAgentInference(terminalTitle: String, terminalCWD: String) -> Bool {
+        if titleLooksLikeDefaultTerminalTitle(terminalTitle) {
+            return true
+        }
+
+        guard let normalizedTitlePath = normalizedCWDValue(terminalTitle),
+              let normalizedCurrentCWD = normalizedCWDValue(terminalCWD) else {
+            return false
+        }
+
+        return canonicalCWDForComparison(normalizedTitlePath) == canonicalCWDForComparison(normalizedCurrentCWD)
+    }
+
+    private static func isInferredAgentTitle(_ title: String) -> Bool {
+        inferredAgentTitles.contains(title.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private static func titleLooksLikeDefaultTerminalTitle(_ title: String) -> Bool {
+        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if normalized == "terminal" {
+            return true
+        }
+
+        let components = normalized.split(separator: " ", omittingEmptySubsequences: true)
+        guard components.count == 2, components[0] == "terminal" else {
+            return false
+        }
+        return Int(components[1]) != nil
+    }
+
+    private static let inferredAgentTitles: Set<String> = ["Codex", "Claude Code"]
+    private static let agentTitleDetectionLineWindow = 16
+    private static let agentLaunchCommandTokens: Set<String> = ["cdx", "codex", "cc", "claude"]
     private static let promptMarkerTokens: Set<String> = ["%", "#", "$", ">"]
     private static let promptPathWrapperCharacters = CharacterSet(charactersIn: "\"'`()[]{}<>")
     private static let promptPathTrailingPunctuationCharacters = CharacterSet(charactersIn: ",;")
