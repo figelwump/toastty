@@ -161,15 +161,18 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return controller.focusHostViewIfNeeded()
     }
 
-    func prepareImageFileDrop(from urls: [URL]) -> PreparedImageFileDrop? {
+    func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard let store else { return nil }
         let imageFileURLs = Self.normalizedImageFileURLs(from: urls)
         guard imageFileURLs.isEmpty == false else { return nil }
-        guard let targetPanelID = focusedTerminalPanelIDForDrop(state: store.state) else {
+        let state = store.state
+        guard isValidDropTargetPanel(targetPanelID, state: state) else {
             return nil
         }
-        let targetController = controller(for: targetPanelID)
+        guard let targetController = controllers[targetPanelID] else {
+            return nil
+        }
         guard targetController.canAcceptImageFileDrop() else {
             return nil
         }
@@ -183,24 +186,74 @@ final class TerminalRuntimeRegistry: ObservableObject {
     @discardableResult
     func handlePreparedImageFileDrop(_ drop: PreparedImageFileDrop) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        let targetController = controller(for: drop.targetPanelID)
-        let handled = targetController.handleImageFileDrop(drop.imageFileURLs)
-        if handled {
-            ToasttyLog.debug(
-                "Forwarded image file drop to focused terminal",
+        guard let store else { return false }
+        let state = store.state
+        guard isValidDropTargetPanel(drop.targetPanelID, state: state) else {
+            ToasttyLog.warning(
+                "Rejected image file drop because drop-target panel is invalid",
                 category: .input,
                 metadata: [
                     "panel_id": drop.targetPanelID.uuidString,
                     "image_count": String(drop.imageFileURLs.count),
                 ]
             )
-        } else {
+            return false
+        }
+        guard let targetController = controllers[drop.targetPanelID] else {
             ToasttyLog.warning(
-                "Failed to forward image file drop to focused terminal",
+                "Rejected image file drop because drop-target controller is unavailable",
                 category: .input,
                 metadata: [
                     "panel_id": drop.targetPanelID.uuidString,
                     "image_count": String(drop.imageFileURLs.count),
+                ]
+            )
+            return false
+        }
+        guard targetController.canAcceptImageFileDrop() else {
+            ToasttyLog.warning(
+                "Rejected image file drop because drop-target surface is unavailable",
+                category: .input,
+                metadata: [
+                    "panel_id": drop.targetPanelID.uuidString,
+                    "image_count": String(drop.imageFileURLs.count),
+                ]
+            )
+            return false
+        }
+
+        let handled = targetController.handleImageFileDrop(drop.imageFileURLs)
+        let focusActionApplied = handled
+            ? focusPanelForImageDropIfPossible(drop.targetPanelID)
+            : false
+        if handled {
+            if !focusActionApplied {
+                ToasttyLog.warning(
+                    "Image file drop succeeded but drop-target panel focus action was rejected",
+                    category: .input,
+                    metadata: [
+                        "panel_id": drop.targetPanelID.uuidString,
+                        "image_count": String(drop.imageFileURLs.count),
+                    ]
+                )
+            }
+            ToasttyLog.debug(
+                "Forwarded image file drop to drop-target terminal",
+                category: .input,
+                metadata: [
+                    "panel_id": drop.targetPanelID.uuidString,
+                    "image_count": String(drop.imageFileURLs.count),
+                    "focus_action_applied": focusActionApplied ? "true" : "false",
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Failed to forward image file drop to drop-target terminal",
+                category: .input,
+                metadata: [
+                    "panel_id": drop.targetPanelID.uuidString,
+                    "image_count": String(drop.imageFileURLs.count),
+                    "focus_action_applied": focusActionApplied ? "true" : "false",
                 ]
             )
         }
@@ -425,16 +478,25 @@ private extension TerminalRuntimeRegistry {
         return nil
     }
 
-    func focusedTerminalPanelIDForDrop(state: AppState) -> UUID? {
-        guard let workspaceID = selectedWorkspaceID(state: state),
+    func isValidDropTargetPanel(_ panelID: UUID, state: AppState) -> Bool {
+        guard let workspaceID = workspaceID(containing: panelID, state: state),
               let workspace = state.workspacesByID[workspaceID],
-              let focusedPanelID = workspace.focusedPanelID,
-              let panelState = workspace.panels[focusedPanelID],
+              let panelState = workspace.panels[panelID],
               case .terminal = panelState,
-              workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil else {
-            return nil
+              workspace.paneTree.leafContaining(panelID: panelID) != nil else {
+            return false
         }
-        return focusedPanelID
+        return true
+    }
+
+    @discardableResult
+    func focusPanelForImageDropIfPossible(_ panelID: UUID) -> Bool {
+        guard let store else { return false }
+        let state = store.state
+        guard let workspaceID = workspaceID(containing: panelID, state: state) else {
+            return false
+        }
+        return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
     }
 
     func register(surface: ghostty_surface_t, for panelID: UUID) {
@@ -1841,7 +1903,7 @@ final class TerminalSurfaceController {
         hostedView = hostView
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
-            return self.registry.prepareImageFileDrop(from: urls)
+            return self.registry.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
         }
         terminalHostView.performImageFileDrop = { [weak self] drop in
             guard let self else { return false }
