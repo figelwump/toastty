@@ -1835,8 +1835,8 @@ final class TerminalSurfaceController {
             }
             return
         }
+        let resumedFromViewportDeferral = lastViewportDeferralReason != nil
         lastViewportDeferralReason = nil
-        hostedView.isHidden = false
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
         ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
         let pixelWidth = max(Int((viewportSize.width * backingScaleFactor).rounded()), 1)
@@ -1891,8 +1891,13 @@ final class TerminalSurfaceController {
             scale: xScale,
             measuredSize: measuredSizeForLogging
         )
+        hostedView.isHidden = false
         ghostty_surface_set_focus(ghosttySurface, focused)
         ensureFirstResponderIfNeeded(focused: focused)
+        if resumedFromViewportDeferral {
+            ghosttyManager.requestImmediateTick()
+            ghostty_surface_refresh(ghosttySurface)
+        }
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
         #endif
