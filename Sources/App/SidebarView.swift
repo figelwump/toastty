@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -186,6 +187,7 @@ struct SidebarView: View {
                 .font(ToastyTheme.fontWorkspaceName)
                 .foregroundStyle(ToastyTheme.primaryText)
                 .focused($focusedRenameWorkspaceID, equals: workspaceID)
+                .accessibilityIdentifier(renameTextFieldAccessibilityID(for: workspaceID))
                 .onSubmit {
                     commitWorkspaceRename(workspaceID: workspaceID)
                 }
@@ -194,6 +196,7 @@ struct SidebarView: View {
                 }
                 .onAppear {
                     focusedRenameWorkspaceID = workspaceID
+                    scheduleRenameSelection(workspaceID: workspaceID)
                 }
         }
     }
@@ -284,6 +287,37 @@ struct SidebarView: View {
         renamingWorkspaceID = nil
         focusedRenameWorkspaceID = nil
         renameDraftTitle = ""
+    }
+
+    private func scheduleRenameSelection(workspaceID: UUID, attempt: Int = 0) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) {
+            guard renamingWorkspaceID == workspaceID,
+                  focusedRenameWorkspaceID == workspaceID else { return }
+
+            if let editor = currentRenameEditor(workspaceID: workspaceID) {
+                editor.selectAll(nil)
+                return
+            }
+
+            guard attempt < 12 else { return }
+            scheduleRenameSelection(workspaceID: workspaceID, attempt: attempt + 1)
+        }
+    }
+
+    private func currentRenameEditor(workspaceID: UUID) -> NSTextView? {
+        guard let keyWindow = NSApp.keyWindow,
+              let editor = keyWindow.firstResponder as? NSTextView,
+              let textField = editor.delegate as? NSTextField else {
+            return nil
+        }
+
+        let expectedIdentifier = renameTextFieldAccessibilityID(for: workspaceID)
+        guard textField.accessibilityIdentifier() == expectedIdentifier else { return nil }
+        return editor
+    }
+
+    private func renameTextFieldAccessibilityID(for workspaceID: UUID) -> String {
+        "sidebar.workspace.rename.\(workspaceID.uuidString)"
     }
 
     private func requestWorkspaceClose(workspaceID: UUID) {
