@@ -31,12 +31,10 @@ struct WorkspaceView: View {
 
             Spacer()
 
-            auxToggle(title: "Diff", systemImage: "text.alignleft", kind: .diff, identifier: "topbar.toggle.diff")
-            auxToggle(title: "Markdown", systemImage: "doc.text", kind: .markdown, identifier: "topbar.toggle.markdown")
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
             topBarFlashButton(title: "Split H", icon: { highlighted in
-                SplitHorizontalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+                SplitHorizontalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
                 split(orientation: .horizontal)
             }
@@ -44,7 +42,7 @@ struct WorkspaceView: View {
             .accessibilityIdentifier("workspace.split.horizontal")
 
             topBarFlashButton(title: "Split V", icon: { highlighted in
-                SplitVerticalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+                SplitVerticalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
                 split(orientation: .vertical)
             }
@@ -93,7 +91,7 @@ struct WorkspaceView: View {
     private func focusedPanelToggle(identifier: String) -> some View {
         let isOn = isFocusedPanelModeActive
         topBarButton(title: isOn ? "Restore Layout" : "Focus Panel", icon: {
-            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.inactiveText)
         }, active: isOn) {
             guard let workspaceID = store.selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
@@ -116,11 +114,11 @@ struct WorkspaceView: View {
                 if let systemImage {
                     Image(systemName: systemImage)
                         .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(active ? ToastyTheme.accent : ToastyTheme.mutedTextStrong)
+                        .foregroundStyle(active ? ToastyTheme.accent : ToastyTheme.inactiveText)
                 }
                 Text(title)
                     .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
+                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
             }
         }
     }
@@ -137,7 +135,7 @@ struct WorkspaceView: View {
                 icon()
                 Text(title)
                     .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
+                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
             }
         }
     }
@@ -589,7 +587,7 @@ private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
             icon(highlighted)
             Text(title)
                 .font(ToastyTheme.fontSubtext)
-                .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.mutedTextStrong)
+                .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)

@@ -66,7 +66,7 @@ struct SidebarView: View {
                         plus.addLine(to: CGPoint(x: 9, y: 5.5))
                         context.stroke(
                             plus,
-                            with: .color(ToastyTheme.mutedTextStrong),
+                            with: .color(ToastyTheme.inactiveText),
                             style: StrokeStyle(lineWidth: 1.1, lineCap: .round)
                         )
                     }
@@ -74,7 +74,7 @@ struct SidebarView: View {
 
                     Text("New workspace")
                         .font(ToastyTheme.fontWorkspaceNameInactive)
-                        .foregroundStyle(ToastyTheme.mutedTextStrong)
+                        .foregroundStyle(ToastyTheme.inactiveText)
                         .lineLimit(1)
                 }
                 .padding(.vertical, 7)
@@ -233,7 +233,7 @@ struct SidebarView: View {
             // Subtitle: pane count + context info
             Text(subtitle)
                 .font(ToastyTheme.fontWorkspaceSubtitle)
-                .foregroundStyle(isSelected ? ToastyTheme.mutedText : Color(hex: 0x4A4A4A))
+                .foregroundStyle(isSelected ? ToastyTheme.mutedText : ToastyTheme.inactiveWorkspaceSubtitleText)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }

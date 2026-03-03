@@ -10,8 +10,8 @@ enum ToastyTheme {
 
     static let primaryText = Color(hex: 0xE8E4DF)
     static let mutedText = Color(hex: 0x666666)
-    static let mutedTextStrong = Color(hex: 0x808080)
-    static let inactiveText = Color(hex: 0x888888)
+    static let inactiveText = Color(hex: 0xB8B8B8)
+    static let inactiveWorkspaceSubtitleText = Color(hex: 0xA0A0A0)
     static let subtleText = Color(hex: 0x5A5A5A)
     static let shortcutBadgeText = Color(hex: 0x666666)
 
