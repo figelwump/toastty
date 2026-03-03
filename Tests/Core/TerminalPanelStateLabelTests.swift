@@ -4,14 +4,14 @@ import Testing
 
 struct TerminalPanelStateLabelTests {
     @Test
-    func defaultTitleUsesDirectoryAndShell() {
+    func defaultTitleUsesDirectoryOnly() {
         let state = TerminalPanelState(
             title: "Terminal 1",
             shell: "/bin/zsh",
             cwd: "/tmp/toastty"
         )
 
-        #expect(state.displayPanelLabel == "tmp/toastty · zsh")
+        #expect(state.displayPanelLabel == "tmp/toastty")
     }
 
     @Test
@@ -22,7 +22,7 @@ struct TerminalPanelStateLabelTests {
             cwd: NSHomeDirectory()
         )
 
-        #expect(state.displayPanelLabel == "~ · zsh")
+        #expect(state.displayPanelLabel == "~")
     }
 
     @Test
@@ -33,7 +33,7 @@ struct TerminalPanelStateLabelTests {
             cwd: NSHomeDirectory() + "/projects/toastty"
         )
 
-        #expect(state.displayPanelLabel == "~/projects/toastty · zsh")
+        #expect(state.displayPanelLabel == "~/projects/toastty")
     }
 
     @Test
@@ -44,7 +44,18 @@ struct TerminalPanelStateLabelTests {
             cwd: NSHomeDirectory() + "/projects/toastty/backend/api"
         )
 
-        #expect(state.displayPanelLabel == "~/.../backend/api · zsh")
+        #expect(state.displayPanelLabel == ".../toastty/backend/api")
+    }
+
+    @Test
+    func defaultTitleMatchesGhosttyStyleForHomeDescendantPath() {
+        let state = TerminalPanelState(
+            title: "Terminal 6",
+            shell: "zsh",
+            cwd: NSHomeDirectory() + "/GiantThings/repos/toastty"
+        )
+
+        #expect(state.displayPanelLabel == ".../GiantThings/repos/toastty")
     }
 
     @Test
@@ -77,7 +88,7 @@ struct TerminalPanelStateLabelTests {
             cwd: "/tmp/repo"
         )
 
-        #expect(state.displayPanelLabel == "tmp/repo · zsh")
+        #expect(state.displayPanelLabel == "tmp/repo")
     }
 
     @Test

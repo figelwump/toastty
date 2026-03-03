@@ -70,9 +70,6 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         }
 
         if let directory = directoryLabel {
-            if let shell = shellName {
-                return "\(directory) · \(shell)"
-            }
             return directory
         }
 
@@ -143,7 +140,9 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         if components.count <= 2 {
             return "~/" + components.joined(separator: "/")
         }
-        return "~/.../" + components.suffix(2).joined(separator: "/")
+        // Match Ghostty-style path labels by eliding the home root prefix for
+        // deeper home-descendant paths (for example: ".../GiantThings/repos/toastty").
+        return ".../" + components.suffix(3).joined(separator: "/")
     }
 
     private static func compactPathLabel(from components: [String]) -> String {
