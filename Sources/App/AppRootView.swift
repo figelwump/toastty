@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct AppRootView: View {
@@ -33,9 +34,16 @@ struct AppRootView: View {
         .task {
             terminalRuntimeRegistry.synchronize(with: store.state)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
+            terminalRuntimeRegistry.scheduleSelectedWorkspacePaneFocusRestore()
         }
         .onChange(of: store.state) { _, nextState in
             terminalRuntimeRegistry.synchronize(with: nextState)
+        }
+        .onChange(of: selectedPaneFocusSignature) { _, _ in
+            terminalRuntimeRegistry.scheduleSelectedWorkspacePaneFocusRestore()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            terminalRuntimeRegistry.scheduleSelectedWorkspacePaneFocusRestore()
         }
         .onChange(of: store.state.globalTerminalFontPoints) { previousPoints, nextPoints in
             terminalRuntimeRegistry.applyGlobalFontChange(from: previousPoints, to: nextPoints)
@@ -62,6 +70,21 @@ struct AppRootView: View {
             }
         }
     }
+
+    private var selectedPaneFocusSignature: SelectedPaneFocusSignature? {
+        guard let selectedWindow = store.selectedWindow else { return nil }
+        return SelectedPaneFocusSignature(
+            windowID: selectedWindow.id,
+            workspaceID: selectedWindow.selectedWorkspaceID,
+            focusedPanelID: store.selectedWorkspace?.focusedPanelID
+        )
+    }
+}
+
+private struct SelectedPaneFocusSignature: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID?
+    let focusedPanelID: UUID?
 }
 
 private struct FontHUD: View {

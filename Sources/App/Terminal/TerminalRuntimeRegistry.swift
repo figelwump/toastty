@@ -23,6 +23,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
+    private var selectedPaneFocusRestoreTask: Task<Void, Never>?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
@@ -36,6 +37,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     #endif
 
     deinit {
+        selectedPaneFocusRestoreTask?.cancel()
         #if TOASTTY_HAS_GHOSTTY_KIT
         visibilityPulseTask?.cancel()
         processWorkingDirectoryRefreshTask?.cancel()
@@ -172,6 +174,38 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return false
         }
         return controller.focusHostViewIfNeeded()
+    }
+
+    /// Retries first-responder restoration for the selected workspace's focused
+    /// pane. This covers launch/layout races where the host view exists in state
+    /// but is not yet attached when focus should be applied.
+    func scheduleSelectedWorkspacePaneFocusRestore() {
+        selectedPaneFocusRestoreTask?.cancel()
+        selectedPaneFocusRestoreTask = Task { @MainActor [weak self] in
+            let maxAttempts = 12
+            let retryDelayNanoseconds: UInt64 = 16_000_000
+            for attempt in 0..<maxAttempts {
+                guard Task.isCancelled == false else { return }
+                guard let self else { return }
+                if NSApp.isActive, self.shouldAvoidStealingKeyboardFocus() {
+                    return
+                }
+                if NSApp.isActive, self.focusSelectedWorkspacePaneIfPossible() {
+                    return
+                }
+                guard attempt < maxAttempts - 1 else { return }
+                try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
+                guard Task.isCancelled == false else { return }
+            }
+        }
+    }
+
+    private func shouldAvoidStealingKeyboardFocus() -> Bool {
+        guard let keyWindow = NSApp.keyWindow,
+              let textView = keyWindow.firstResponder as? NSTextView else {
+            return false
+        }
+        return textView.isFieldEditor
     }
 
     func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
@@ -534,8 +568,16 @@ private extension TerminalRuntimeRegistry {
         processWorkingDirectoryResolver.snapshotChildPIDs()
     }
 
-    func registerChildPIDAfterSurfaceCreation(panelID: UUID, previousChildren: Set<pid_t>) {
-        processWorkingDirectoryResolver.registerNewChild(panelID: panelID, previousChildren: previousChildren)
+    func registerChildPIDAfterSurfaceCreation(
+        panelID: UUID,
+        previousChildren: Set<pid_t>,
+        expectedWorkingDirectory: String
+    ) {
+        processWorkingDirectoryResolver.registerNewChild(
+            panelID: panelID,
+            previousChildren: previousChildren,
+            expectedWorkingDirectory: expectedWorkingDirectory
+        )
     }
 
     func panelID(for surface: ghostty_surface_t) -> UUID? {
@@ -2858,7 +2900,8 @@ final class TerminalSurfaceController {
         // Register the new child process (login → shell) for CWD tracking.
         registry.registerChildPIDAfterSurfaceCreation(
             panelID: panelID,
-            previousChildren: previousChildPIDs
+            previousChildren: previousChildPIDs,
+            expectedWorkingDirectory: requestedWorkingDirectory
         )
 
         registry.reconcileSurfaceWorkingDirectory(

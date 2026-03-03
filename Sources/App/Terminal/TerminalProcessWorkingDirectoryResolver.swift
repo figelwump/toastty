@@ -32,6 +32,12 @@ final class TerminalProcessWorkingDirectoryResolver {
         let startSignature: ProcessStartSignature
     }
 
+    private struct RegistrationCandidate {
+        let loginPID: pid_t
+        let shellPID: pid_t?
+        let shellWorkingDirectory: String?
+    }
+
     private let appPID: pid_t
     private var cachedProcessByPanelID: [UUID: CachedProcessEntry] = [:]
     /// Panels that failed initial PID snapshot diff (child not visible yet).
@@ -40,6 +46,10 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// Login PIDs whose shell children haven't spawned yet. Keyed by panel ID.
     /// Resolved during the next CWD poll cycle.
     private var pendingLoginPIDByPanelID: [UUID: pid_t] = [:]
+    /// Canonical CWD requested at panel surface creation time. Used to avoid
+    /// assigning a login/shell process to the wrong panel when multiple terminals
+    /// spawn concurrently during app launch/restore.
+    private var expectedWorkingDirectoryByPanelID: [UUID: String] = [:]
 
     init() {
         appPID = getpid()
@@ -55,11 +65,17 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// After surface creation, diff current children against the pre-creation snapshot
     /// to find the newly spawned login/shell process. Non-blocking — if the shell
     /// hasn't spawned yet, caches the login PID and upgrades lazily during CWD polls.
-    func registerNewChild(panelID: UUID, previousChildren: Set<pid_t>) {
+    func registerNewChild(panelID: UUID, previousChildren: Set<pid_t>, expectedWorkingDirectory: String?) {
+        if let canonicalExpectedWorkingDirectory = Self.canonicalWorkingDirectory(expectedWorkingDirectory) {
+            expectedWorkingDirectoryByPanelID[panelID] = canonicalExpectedWorkingDirectory
+        } else {
+            expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
+        }
+
         let currentChildren = Set(childPIDs(of: appPID))
         let newChildren = currentChildren.subtracting(previousChildren)
 
-        guard let newLoginPID = newChildren.first else {
+        guard newChildren.isEmpty == false else {
             // Child not visible yet — mark for deferred registration during poll loop.
             pendingDeferredRegistration.insert(panelID)
             ToasttyLog.debug(
@@ -74,7 +90,29 @@ final class TerminalProcessWorkingDirectoryResolver {
             return
         }
 
-        cacheLoginOrShell(panelID: panelID, loginPID: newLoginPID, source: "snapshot_diff")
+        let candidates = registrationCandidates(
+            from: Array(newChildren),
+            reservedLoginPIDs: reservedLoginPIDs(excluding: panelID),
+            knownShellPIDs: knownShellPIDs()
+        )
+        guard let selectedCandidate = selectRegistrationCandidate(
+            panelID: panelID,
+            candidates: candidates,
+            preferNewestWhenAmbiguous: true
+        ) else {
+            pendingDeferredRegistration.insert(panelID)
+            ToasttyLog.debug(
+                "Ambiguous new child process candidates after surface creation; deferring registration",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "candidate_count": String(candidates.count),
+                ]
+            )
+            return
+        }
+
+        cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "snapshot_diff")
     }
 
     // MARK: - CWD Resolution
@@ -87,14 +125,14 @@ final class TerminalProcessWorkingDirectoryResolver {
 
         // Try to resolve pending login → shell walk.
         if let loginPID = pendingLoginPIDByPanelID[panelID] {
-            let children = childPIDs(of: loginPID)
-            if let shellPID = children.first,
+            if let shellPID = resolvedShellPID(forLoginPID: loginPID),
                let signature = processStartSignature(pid: shellPID) {
                 pendingLoginPIDByPanelID.removeValue(forKey: panelID)
                 cachedProcessByPanelID[panelID] = CachedProcessEntry(
                     pid: shellPID,
                     startSignature: signature
                 )
+                expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
                 ToasttyLog.debug(
                     "Resolved deferred login→shell for panel",
                     category: .terminal,
@@ -133,6 +171,7 @@ final class TerminalProcessWorkingDirectoryResolver {
         cachedProcessByPanelID.removeValue(forKey: panelID)
         pendingDeferredRegistration.remove(panelID)
         pendingLoginPIDByPanelID.removeValue(forKey: panelID)
+        expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
     }
 
     // MARK: - Registration Helpers
@@ -146,13 +185,13 @@ final class TerminalProcessWorkingDirectoryResolver {
     private func cacheLoginOrShell(panelID: UUID, loginPID: pid_t, source: String) {
         pendingDeferredRegistration.remove(panelID)
 
-        let children = childPIDs(of: loginPID)
-        if let shellPID = children.first,
+        if let shellPID = resolvedShellPID(forLoginPID: loginPID),
            let signature = processStartSignature(pid: shellPID) {
             cachedProcessByPanelID[panelID] = CachedProcessEntry(
                 pid: shellPID,
                 startSignature: signature
             )
+            expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
             ToasttyLog.debug(
                 "Registered terminal process for panel",
                 category: .terminal,
@@ -184,21 +223,124 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// For panels where the initial snapshot diff missed the child process,
     /// scan current app children and try to find the untracked one.
     private func attemptDeferredRegistration(panelID: UUID) {
-        let currentAppChildren = Set(childPIDs(of: appPID))
-        let knownPIDs = Set(cachedProcessByPanelID.values.map(\.pid))
-
-        // Find app children that aren't tracked by any panel yet.
-        // Also check their login children (shell PIDs) against known PIDs.
-        for candidatePID in currentAppChildren {
-            guard !knownPIDs.contains(candidatePID) else { continue }
-            let loginChildren = childPIDs(of: candidatePID)
-            let shellPID = loginChildren.first
-            if let shellPID, knownPIDs.contains(shellPID) { continue }
-
-            // Found an untracked child — assign it to this panel.
-            cacheLoginOrShell(panelID: panelID, loginPID: candidatePID, source: "deferred_scan")
+        let candidates = registrationCandidates(
+            from: childPIDs(of: appPID),
+            reservedLoginPIDs: reservedLoginPIDs(excluding: panelID),
+            knownShellPIDs: knownShellPIDs()
+        )
+        guard let selectedCandidate = selectRegistrationCandidate(
+            panelID: panelID,
+            candidates: candidates,
+            preferNewestWhenAmbiguous: false
+        ) else {
             return
         }
+
+        // Found an untracked child — assign it to this panel.
+        cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "deferred_scan")
+    }
+
+    private func knownShellPIDs() -> Set<pid_t> {
+        Set(cachedProcessByPanelID.values.map(\.pid))
+    }
+
+    private func reservedLoginPIDs(excluding panelID: UUID) -> Set<pid_t> {
+        Set(
+            pendingLoginPIDByPanelID.compactMap { candidatePanelID, loginPID in
+                candidatePanelID == panelID ? nil : loginPID
+            }
+        )
+    }
+
+    private func registrationCandidates(
+        from loginPIDs: [pid_t],
+        reservedLoginPIDs: Set<pid_t>,
+        knownShellPIDs: Set<pid_t>
+    ) -> [RegistrationCandidate] {
+        var seenLoginPIDs: Set<pid_t> = []
+        var candidates: [RegistrationCandidate] = []
+        for loginPID in loginPIDs.sorted() {
+            guard seenLoginPIDs.insert(loginPID).inserted else { continue }
+            guard !reservedLoginPIDs.contains(loginPID) else { continue }
+
+            let loginChildren = childPIDs(of: loginPID).sorted()
+            if loginChildren.contains(where: { knownShellPIDs.contains($0) }) {
+                continue
+            }
+            let shellPID = resolvedShellPID(fromLoginChildren: loginChildren)
+            let shellWorkingDirectory = shellPID
+                .flatMap(processWorkingDirectory)
+                .flatMap(Self.canonicalWorkingDirectory)
+            candidates.append(
+                RegistrationCandidate(
+                    loginPID: loginPID,
+                    shellPID: shellPID,
+                    shellWorkingDirectory: shellWorkingDirectory
+                )
+            )
+        }
+        return candidates
+    }
+
+    private func selectRegistrationCandidate(
+        panelID: UUID,
+        candidates: [RegistrationCandidate],
+        preferNewestWhenAmbiguous: Bool
+    ) -> RegistrationCandidate? {
+        guard !candidates.isEmpty else { return nil }
+
+        if let expectedWorkingDirectory = expectedWorkingDirectoryByPanelID[panelID] {
+            let cwdMatches = candidates.filter { $0.shellWorkingDirectory == expectedWorkingDirectory }
+            if cwdMatches.count == 1 {
+                return cwdMatches[0]
+            }
+            if !cwdMatches.isEmpty {
+                if cwdMatches.count > 1 {
+                    ToasttyLog.debug(
+                        "Multiple login candidates matched expected cwd; applying deterministic tiebreak",
+                        category: .terminal,
+                        metadata: [
+                            "panel_id": panelID.uuidString,
+                            "match_count": String(cwdMatches.count),
+                            "expected_cwd": expectedWorkingDirectory,
+                        ]
+                    )
+                }
+                return preferNewestWhenAmbiguous ? cwdMatches.max(by: { $0.loginPID < $1.loginPID }) : cwdMatches[0]
+            }
+        }
+
+        if candidates.count == 1 {
+            return candidates[0]
+        }
+        if preferNewestWhenAmbiguous {
+            return candidates.max(by: { $0.loginPID < $1.loginPID })
+        }
+        return nil
+    }
+
+    private static func canonicalWorkingDirectory(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let standardizedPath = (trimmed as NSString).standardizingPath
+        guard standardizedPath.isEmpty == false else { return nil }
+        guard standardizedPath.count > 1 else { return standardizedPath }
+        if standardizedPath.hasSuffix("/") {
+            return String(standardizedPath.dropLast())
+        }
+        return standardizedPath
+    }
+
+    private func resolvedShellPID(forLoginPID loginPID: pid_t) -> pid_t? {
+        resolvedShellPID(fromLoginChildren: childPIDs(of: loginPID).sorted())
+    }
+
+    private func resolvedShellPID(fromLoginChildren loginChildren: [pid_t]) -> pid_t? {
+        if let readableProcessPID = loginChildren.first(where: { processStartSignature(pid: $0) != nil }) {
+            return readableProcessPID
+        }
+        return loginChildren.first
     }
 
     // MARK: - Low-Level Process Helpers
