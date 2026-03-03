@@ -791,6 +791,7 @@ private extension TerminalRuntimeRegistry {
                 restoreTitleBeforeAgentInferenceIfNeeded(
                     panelID: panelID,
                     workspaceID: workspaceID,
+                    currentTitle: currentTitle,
                     store: store
                 )
                 suppressedAgentTitleInferencePanelIDs.insert(panelID)
@@ -836,6 +837,7 @@ private extension TerminalRuntimeRegistry {
             restoreTitleBeforeAgentInferenceIfNeeded(
                 panelID: panelID,
                 workspaceID: workspaceID,
+                currentTitle: currentTitle,
                 store: store
             )
             suppressedAgentTitleInferencePanelIDs.insert(panelID)
@@ -956,38 +958,72 @@ private extension TerminalRuntimeRegistry {
     func restoreTitleBeforeAgentInferenceIfNeeded(
         panelID: UUID,
         workspaceID: UUID,
+        currentTitle: String,
         store: AppStore
     ) {
-        guard let previousTitle = titleBeforeAgentInferenceByPanelID[panelID] else {
+        if let previousTitle = titleBeforeAgentInferenceByPanelID[panelID] {
+            let handled = store.send(
+                .updateTerminalPanelMetadata(
+                    panelID: panelID,
+                    title: previousTitle,
+                    cwd: nil
+                )
+            )
+            if handled {
+                titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+                ToasttyLog.debug(
+                    "Restored terminal title after inferred agent title became stale",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "restored_title": previousTitle,
+                    ]
+                )
+            } else {
+                ToasttyLog.warning(
+                    "Reducer rejected restoring stale inferred terminal title",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "restored_title": previousTitle,
+                    ]
+                )
+            }
+            // Fall through to stale-title fallback when restore is rejected.
+        }
+
+        guard Self.isInferredAgentTitle(currentTitle) else {
+            return
+        }
+
+        let resetTitle = Self.defaultTerminalTitleAfterAgentInferenceRestore
+        guard currentTitle != resetTitle else {
             return
         }
 
         let handled = store.send(
-            .updateTerminalPanelMetadata(
-                panelID: panelID,
-                title: previousTitle,
-                cwd: nil
-            )
+            .updateTerminalPanelMetadata(panelID: panelID, title: resetTitle, cwd: nil)
         )
         if handled {
-            titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
             ToasttyLog.debug(
-                "Restored terminal title after inferred agent title became stale",
+                "Reset stale inferred terminal title after restart",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
-                    "restored_title": previousTitle,
+                    "restored_title": resetTitle,
                 ]
             )
         } else {
             ToasttyLog.warning(
-                "Reducer rejected restoring stale inferred terminal title",
+                "Reducer rejected resetting stale inferred terminal title",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
-                    "restored_title": previousTitle,
+                    "restored_title": resetTitle,
                 ]
             )
         }
@@ -2115,6 +2151,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     }
 
     private static let inferredAgentTitles: Set<String> = ["Codex", "Claude Code"]
+    private static let defaultTerminalTitleAfterAgentInferenceRestore = "Terminal"
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
     // Compact labels preserve room for status details in the sidebar.
