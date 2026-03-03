@@ -1653,10 +1653,14 @@ final class TerminalSurfaceController {
     private var lastSurfaceCreationSignature: SurfaceCreationSignature?
     private var lastSurfaceDeferralReason: SurfaceCreationDeferralReason?
     private var lastViewportDeferralReason: SurfaceCreationDeferralReason?
+    private var temporarilyHiddenForViewportDeferral = false
+    private var viewportResumeStabilityPasses = 0
+    private var lastViewportResumeSignature: SurfaceCreationSignature?
     private var diagnostics = SurfaceDiagnostics()
 
-    private let minimumSurfaceHostDimension = 16
+    private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
+    private let requiredStableViewportResumePasses = 2
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -1796,6 +1800,8 @@ final class TerminalSurfaceController {
         guard let ghosttySurface else {
             // Keep the host visible while retrying Ghostty surface creation.
             hostedView.isHidden = false
+            temporarilyHiddenForViewportDeferral = false
+            resetViewportResumeStability()
             terminalHostView.setGhosttySurface(nil)
             fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty surface unavailable")
             swapToFallbackIfNeeded()
@@ -1820,6 +1826,7 @@ final class TerminalSurfaceController {
             // Keep the hosted terminal hidden until layout is stable enough for
             // a valid viewport update; otherwise stale tiny geometry can flash.
             hostedView.isHidden = true
+            temporarilyHiddenForViewportDeferral = true
             diagnostics.viewportDeferredCount += 1
             let reasonChanged = lastViewportDeferralReason != viewportDeferralReason
             lastViewportDeferralReason = viewportDeferralReason
@@ -1892,6 +1899,8 @@ final class TerminalSurfaceController {
             measuredSize: measuredSizeForLogging
         )
         hostedView.isHidden = false
+        temporarilyHiddenForViewportDeferral = false
+        resetViewportResumeStability()
         ghostty_surface_set_focus(ghosttySurface, focused)
         ensureFirstResponderIfNeeded(focused: focused)
         if resumedFromViewportDeferral {
@@ -1920,6 +1929,8 @@ final class TerminalSurfaceController {
         lastSurfaceCreationSignature = nil
         lastSurfaceDeferralReason = nil
         lastViewportDeferralReason = nil
+        temporarilyHiddenForViewportDeferral = false
+        resetViewportResumeStability()
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -2258,20 +2269,53 @@ final class TerminalSurfaceController {
         width: Int,
         height: Int
     ) -> SurfaceCreationDeferralReason? {
-        guard hostView.window != nil else {
+        guard let window = hostView.window else {
+            resetViewportResumeStability()
             return .noWindow
         }
 
-        guard hostView.isHidden == false, hostView.hasHiddenAncestor == false else {
+        guard hostView.hasHiddenAncestor == false else {
+            resetViewportResumeStability()
+            return .hiddenHost
+        }
+
+        if hostView.isHidden, temporarilyHiddenForViewportDeferral == false {
+            resetViewportResumeStability()
             return .hiddenHost
         }
 
         guard width >= minimumSurfaceHostDimension,
               height >= minimumSurfaceHostDimension else {
+            resetViewportResumeStability()
             return .tinyBounds
         }
 
+        if temporarilyHiddenForViewportDeferral {
+            let signature = SurfaceCreationSignature(
+                windowID: ObjectIdentifier(window),
+                width: width,
+                height: height
+            )
+            if lastViewportResumeSignature == signature {
+                viewportResumeStabilityPasses += 1
+            } else {
+                lastViewportResumeSignature = signature
+                viewportResumeStabilityPasses = 1
+            }
+
+            guard viewportResumeStabilityPasses >= requiredStableViewportResumePasses else {
+                return .unstableBounds
+            }
+        } else {
+            resetViewportResumeStability()
+        }
+
         return nil
+    }
+
+    private func resetViewportResumeStability() {
+        viewportResumeStabilityPasses = 0
+        lastViewportResumeSignature = nil
     }
 
     private func logSurfaceDiagnostics(message: String, extra: [String: String] = [:]) {

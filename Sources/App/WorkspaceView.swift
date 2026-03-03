@@ -234,20 +234,19 @@ private struct PaneNodeView: View {
                         let displaySecondWidth: CGFloat = showSecond ? (showFirst ? secondWidth : availableWidth) : 0
 
                         HStack(spacing: 0) {
-                            PaneNodeView(
-                                node: first,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle
-                            )
-                            .frame(width: displayFirstWidth, height: geometry.size.height)
-                            .opacity(showFirst ? 1 : 0)
-                            .animation(nil, value: showFirst)
-                            .allowsHitTesting(showFirst)
+                            if showFirst {
+                                PaneNodeView(
+                                    node: first,
+                                    workspace: workspace,
+                                    store: store,
+                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    globalFontPoints: globalFontPoints,
+                                    focusedPanelID: focusedPanelID,
+                                    focusedPanelModeActive: focusedPanelModeActive,
+                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                )
+                                .frame(width: displayFirstWidth, height: geometry.size.height)
+                            }
 
                             if showDivider {
                                 Rectangle()
@@ -255,20 +254,19 @@ private struct PaneNodeView: View {
                                     .frame(width: dividerThickness, height: geometry.size.height)
                             }
 
-                            PaneNodeView(
-                                node: second,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle
-                            )
-                            .frame(width: displaySecondWidth, height: geometry.size.height)
-                            .opacity(showSecond ? 1 : 0)
-                            .animation(nil, value: showSecond)
-                            .allowsHitTesting(showSecond)
+                            if showSecond {
+                                PaneNodeView(
+                                    node: second,
+                                    workspace: workspace,
+                                    store: store,
+                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    globalFontPoints: globalFontPoints,
+                                    focusedPanelID: focusedPanelID,
+                                    focusedPanelModeActive: focusedPanelModeActive,
+                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                )
+                                .frame(width: displaySecondWidth, height: geometry.size.height)
+                            }
                         }
                         .clipped()
                     } else {
@@ -282,20 +280,19 @@ private struct PaneNodeView: View {
                         let displaySecondHeight: CGFloat = showSecond ? (showFirst ? secondHeight : availableHeight) : 0
 
                         VStack(spacing: 0) {
-                            PaneNodeView(
-                                node: first,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle
-                            )
-                            .frame(width: geometry.size.width, height: displayFirstHeight)
-                            .opacity(showFirst ? 1 : 0)
-                            .animation(nil, value: showFirst)
-                            .allowsHitTesting(showFirst)
+                            if showFirst {
+                                PaneNodeView(
+                                    node: first,
+                                    workspace: workspace,
+                                    store: store,
+                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    globalFontPoints: globalFontPoints,
+                                    focusedPanelID: focusedPanelID,
+                                    focusedPanelModeActive: focusedPanelModeActive,
+                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                )
+                                .frame(width: geometry.size.width, height: displayFirstHeight)
+                            }
 
                             if showDivider {
                                 Rectangle()
@@ -303,20 +300,19 @@ private struct PaneNodeView: View {
                                     .frame(width: geometry.size.width, height: dividerThickness)
                             }
 
-                            PaneNodeView(
-                                node: second,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                focusedPanelModeActive: focusedPanelModeActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle
-                            )
-                            .frame(width: geometry.size.width, height: displaySecondHeight)
-                            .opacity(showSecond ? 1 : 0)
-                            .animation(nil, value: showSecond)
-                            .allowsHitTesting(showSecond)
+                            if showSecond {
+                                PaneNodeView(
+                                    node: second,
+                                    workspace: workspace,
+                                    store: store,
+                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    globalFontPoints: globalFontPoints,
+                                    focusedPanelID: focusedPanelID,
+                                    focusedPanelModeActive: focusedPanelModeActive,
+                                    unfocusedSplitStyle: unfocusedSplitStyle
+                                )
+                                .frame(width: geometry.size.width, height: displaySecondHeight)
+                            }
                         }
                         .clipped()
                     }
