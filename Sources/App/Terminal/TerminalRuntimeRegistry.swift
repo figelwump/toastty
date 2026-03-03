@@ -26,7 +26,16 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
+    private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
+    private let processWorkingDirectoryResolver = TerminalProcessWorkingDirectoryResolver()
     #endif
+
+    deinit {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        visibilityPulseTask?.cancel()
+        processWorkingDirectoryRefreshTask?.cancel()
+        #endif
+    }
 
     func bind(store: AppStore) {
         if let existingStore = self.store {
@@ -41,6 +50,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             )
         }
         configureGhosttyActionHandler()
+        startProcessWorkingDirectoryRefreshLoopIfNeeded()
     }
 
     @discardableResult
@@ -78,6 +88,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
         for panelID in controllers.keys where !livePanelIDs.contains(panelID) {
             controllers[panelID]?.invalidate()
             controllers.removeValue(forKey: panelID)
+            #if TOASTTY_HAS_GHOSTTY_KIT
+            processWorkingDirectoryResolver.invalidate(panelID: panelID)
+            #endif
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
         pendingSplitSourcePanelByNewPanelID = pendingSplitSourcePanelByNewPanelID.filter {
@@ -300,6 +313,8 @@ private extension TerminalRuntimeRegistry {
     func handleGhosttyWorkspaceSelectionPulseIfNeeded(state _: AppState) {}
 
     func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
+
+    func startProcessWorkingDirectoryRefreshLoopIfNeeded() {}
 }
 #endif
 
@@ -385,6 +400,7 @@ private extension TerminalRuntimeRegistry {
         if panelIDBySurfaceHandle[key] == panelID {
             panelIDBySurfaceHandle.removeValue(forKey: key)
         }
+        processWorkingDirectoryResolver.invalidate(panelID: panelID)
     }
 
     func panelID(for surface: ghostty_surface_t) -> UUID? {
@@ -450,6 +466,60 @@ private extension TerminalRuntimeRegistry {
                     "panel_id": panelID.uuidString,
                     "source": source,
                 ]
+            )
+        }
+    }
+
+    func resolvedWorkingDirectoryFromProcess(panelID: UUID) -> String? {
+        guard let processWorkingDirectory = processWorkingDirectoryResolver.resolveWorkingDirectory(for: panelID) else {
+            return nil
+        }
+        return Self.normalizedCWDValue(processWorkingDirectory)
+    }
+
+    @discardableResult
+    func refreshWorkingDirectoryFromProcessIfNeeded(panelID: UUID, source: String) -> String? {
+        guard let normalizedWorkingDirectory = resolvedWorkingDirectoryFromProcess(panelID: panelID) else {
+            return nil
+        }
+
+        reconcileSurfaceWorkingDirectory(
+            panelID: panelID,
+            workingDirectory: normalizedWorkingDirectory,
+            source: source
+        )
+        return normalizedWorkingDirectory
+    }
+
+    func startProcessWorkingDirectoryRefreshLoopIfNeeded() {
+        guard processWorkingDirectoryRefreshTask == nil else { return }
+        processWorkingDirectoryRefreshTask = Task { @MainActor [weak self] in
+            while Task.isCancelled == false {
+                guard let self else { return }
+                guard let store else {
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    continue
+                }
+
+                self.refreshVisibleTerminalWorkingDirectoriesFromProcess(state: store.state)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    func refreshVisibleTerminalWorkingDirectoriesFromProcess(state: AppState) {
+        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
+              let workspace = state.workspacesByID[selectedWorkspaceID] else {
+            return
+        }
+
+        let panelIDs = visibleTerminalPanelIDs(in: workspace)
+        guard panelIDs.isEmpty == false else { return }
+
+        for panelID in panelIDs {
+            _ = refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: panelID,
+                source: "process_poll"
             )
         }
     }
@@ -1642,6 +1712,7 @@ final class TerminalSurfaceController {
         }
 
         let inheritedSourceSurface: ghostty_surface_t?
+        var splitSourcePanelID: UUID?
         switch registry.splitSourceSurfaceState(for: panelID) {
         case .none:
             inheritedSourceSurface = nil
@@ -1656,6 +1727,7 @@ final class TerminalSurfaceController {
             return
         case .ready(let sourcePanelID, let sourceSurface):
             inheritedSourceSurface = sourceSurface
+            splitSourcePanelID = sourcePanelID
             ToasttyLog.debug(
                 "Using source Ghostty surface for split inheritance",
                 category: .terminal,
@@ -1666,10 +1738,30 @@ final class TerminalSurfaceController {
             )
         }
 
+        let requestedWorkingDirectory: String
+        if let splitSourcePanelID,
+           let sourceWorkingDirectory = registry.resolvedWorkingDirectoryFromProcess(panelID: splitSourcePanelID) {
+            requestedWorkingDirectory = sourceWorkingDirectory
+            if sourceWorkingDirectory != terminalState.cwd {
+                ToasttyLog.debug(
+                    "Using process-resolved split source cwd for new terminal surface",
+                    category: .terminal,
+                    metadata: [
+                        "source_panel_id": splitSourcePanelID.uuidString,
+                        "new_panel_id": panelID.uuidString,
+                        "source_cwd_sample": String(sourceWorkingDirectory.prefix(120)),
+                    ]
+                )
+            }
+        } else {
+            requestedWorkingDirectory = terminalState.cwd
+        }
+
         diagnostics.surfaceAttemptCount += 1
         guard let createdSurface = ghosttyManager.makeSurface(
             hostView: hostView,
-            workingDirectory: terminalState.cwd,
+            panelID: panelID,
+            workingDirectory: requestedWorkingDirectory,
             fontPoints: fontPoints,
             inheritFrom: inheritedSourceSurface
         ) else {

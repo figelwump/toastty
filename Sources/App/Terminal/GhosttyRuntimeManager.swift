@@ -569,6 +569,7 @@ final class GhosttyRuntimeManager {
 
     private static let ghosttyConfigPathEnvironmentKey = "TOASTTY_GHOSTTY_CONFIG_PATH"
     private static let ghosttyParseCLIArgsEnvironmentKey = "TOASTTY_GHOSTTY_PARSE_CLI_ARGS"
+    private static let panelIDEnvironmentKey = "TOASTTY_PANEL_ID"
 
     weak var actionHandler: (any GhosttyRuntimeActionHandling)?
 
@@ -577,6 +578,7 @@ final class GhosttyRuntimeManager {
     private(set) var configuredTerminalFontPoints: Double?
     private var isTickScheduled = false
     private var clipboardSurfaceHandleByHostViewHandle: [UInt: UInt] = [:]
+    private var retainedEnvironmentPointersBySurfaceHandle: [UInt: [UnsafeMutablePointer<CChar>]] = [:]
 
     private init() {
         guard Self.initializeGhosttyRuntime() else {
@@ -609,6 +611,7 @@ final class GhosttyRuntimeManager {
 
     func makeSurface(
         hostView: NSView,
+        panelID: UUID,
         workingDirectory: String,
         fontPoints: Double,
         inheritFrom sourceSurface: ghostty_surface_t? = nil
@@ -641,29 +644,77 @@ final class GhosttyRuntimeManager {
 
         let requestedWorkingDirectory = Self.normalizedWorkingDirectoryValue(workingDirectory)
         let resolvedWorkingDirectory: String
-        if let inheritedWorkingDirectory {
-            if let requestedWorkingDirectory,
+        if let requestedWorkingDirectory {
+            if let inheritedWorkingDirectory,
                requestedWorkingDirectory != inheritedWorkingDirectory {
                 ToasttyLog.info(
-                    "Split surface inherited cwd differed from app state; using inherited cwd",
+                    "Split surface inherited cwd differed from requested cwd; using requested cwd",
                     category: .terminal,
                     metadata: [
+                        "panel_id": panelID.uuidString,
                         "requested_cwd": requestedWorkingDirectory,
                         "inherited_cwd": inheritedWorkingDirectory,
                     ]
                 )
             }
-            resolvedWorkingDirectory = inheritedWorkingDirectory
-        } else if let requestedWorkingDirectory {
             resolvedWorkingDirectory = requestedWorkingDirectory
+        } else if let inheritedWorkingDirectory {
+            resolvedWorkingDirectory = inheritedWorkingDirectory
         } else {
             resolvedWorkingDirectory = NSHomeDirectory()
         }
-        let surface = resolvedWorkingDirectory.withCString { cwdPointer in
-            surfaceConfig.working_directory = cwdPointer
-            return ghostty_surface_new(app, &surfaceConfig)
+        var envVars: [ghostty_env_var_s] = []
+        var retainedEnvironmentPointers: [UnsafeMutablePointer<CChar>] = []
+        envVars.reserveCapacity(Int(surfaceConfig.env_var_count) + 1)
+        retainedEnvironmentPointers.reserveCapacity(max(Int(surfaceConfig.env_var_count) * 2 + 2, 2))
+
+        if let inheritedEnvVars = surfaceConfig.env_vars,
+           surfaceConfig.env_var_count > 0 {
+            for index in 0..<Int(surfaceConfig.env_var_count) {
+                let inheritedEnvVar = inheritedEnvVars[index]
+                guard let keyPointer = inheritedEnvVar.key,
+                      let valuePointer = inheritedEnvVar.value,
+                      let keyCopy = strdup(keyPointer),
+                      let valueCopy = strdup(valuePointer) else {
+                    continue
+                }
+                retainedEnvironmentPointers.append(keyCopy)
+                retainedEnvironmentPointers.append(valueCopy)
+                envVars.append(
+                    ghostty_env_var_s(
+                        key: UnsafePointer(keyCopy),
+                        value: UnsafePointer(valueCopy)
+                    )
+                )
+            }
+        }
+
+        let panelIDValue = panelID.uuidString
+        guard let panelKeyCopy = Self.panelIDEnvironmentKey.withCString({ strdup($0) }),
+              let panelIDValueCopy = panelIDValue.withCString({ strdup($0) }) else {
+            Self.freeEnvironmentPointers(retainedEnvironmentPointers)
+            return nil
+        }
+        retainedEnvironmentPointers.append(panelKeyCopy)
+        retainedEnvironmentPointers.append(panelIDValueCopy)
+        envVars.append(
+            ghostty_env_var_s(
+                key: UnsafePointer(panelKeyCopy),
+                value: UnsafePointer(panelIDValueCopy)
+            )
+        )
+
+        let envVarCount = envVars.count
+        let surface = envVars.withUnsafeMutableBufferPointer { envBuffer in
+            surfaceConfig.env_vars = envBuffer.baseAddress
+            surfaceConfig.env_var_count = envVarCount
+            return resolvedWorkingDirectory.withCString { cwdPointer in
+                surfaceConfig.working_directory = cwdPointer
+                return ghostty_surface_new(app, &surfaceConfig)
+            }
         }
         if let surface {
+            retainedEnvironmentPointersBySurfaceHandle[UInt(bitPattern: surface)] = retainedEnvironmentPointers
             registerClipboardSurface(surface, forHostView: hostView)
             scheduleImmediateTick()
             return SurfaceCreationResult(
@@ -671,6 +722,7 @@ final class GhosttyRuntimeManager {
                 workingDirectory: resolvedWorkingDirectory
             )
         }
+        Self.freeEnvironmentPointers(retainedEnvironmentPointers)
         scheduleImmediateTick()
         return nil
     }
@@ -684,6 +736,7 @@ final class GhosttyRuntimeManager {
             return
         }
         clipboardSurfaceHandleByHostViewHandle.removeValue(forKey: hostViewHandle)
+        releaseRetainedEnvironmentPointers(forSurfaceHandle: currentSurfaceHandle)
     }
 
     fileprivate func clipboardSurfaceHandle(forHostViewHandle hostViewHandle: UInt) -> UInt? {
@@ -692,7 +745,25 @@ final class GhosttyRuntimeManager {
 
     private func registerClipboardSurface(_ surface: ghostty_surface_t, forHostView hostView: NSView) {
         let hostViewHandle = UInt(bitPattern: Unmanaged.passUnretained(hostView).toOpaque())
-        clipboardSurfaceHandleByHostViewHandle[hostViewHandle] = UInt(bitPattern: surface)
+        let newSurfaceHandle = UInt(bitPattern: surface)
+        if let previousSurfaceHandle = clipboardSurfaceHandleByHostViewHandle[hostViewHandle],
+           previousSurfaceHandle != newSurfaceHandle {
+            releaseRetainedEnvironmentPointers(forSurfaceHandle: previousSurfaceHandle)
+        }
+        clipboardSurfaceHandleByHostViewHandle[hostViewHandle] = newSurfaceHandle
+    }
+
+    private func releaseRetainedEnvironmentPointers(forSurfaceHandle surfaceHandle: UInt) {
+        guard let retainedPointers = retainedEnvironmentPointersBySurfaceHandle.removeValue(forKey: surfaceHandle) else {
+            return
+        }
+        Self.freeEnvironmentPointers(retainedPointers)
+    }
+
+    private static func freeEnvironmentPointers(_ pointers: [UnsafeMutablePointer<CChar>]) {
+        for pointer in pointers {
+            free(pointer)
+        }
     }
 
     @discardableResult
