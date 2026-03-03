@@ -19,7 +19,7 @@ enum SystemNotificationSender {
     static func send(
         title: String,
         body: String,
-        workspaceID: UUID,
+        workspaceID: UUID?,
         panelID: UUID?,
         context: DesktopNotificationContext = DesktopNotificationContext()
     ) async {
@@ -50,11 +50,16 @@ enum SystemNotificationSender {
 
         // Attach workspace/panel identifiers so a future delegate can route
         // click-to-focus actions (not yet implemented).
-        var userInfo: [String: String] = ["workspaceID": workspaceID.uuidString]
+        var userInfo: [String: String] = [:]
+        if let workspaceID {
+            userInfo["workspaceID"] = workspaceID.uuidString
+        }
         if let panelID {
             userInfo["panelID"] = panelID.uuidString
         }
-        content.userInfo = userInfo
+        if userInfo.isEmpty == false {
+            content.userInfo = userInfo
+        }
 
         let request = UNNotificationRequest(
             identifier: UUID().uuidString,
@@ -64,13 +69,14 @@ enum SystemNotificationSender {
 
         do {
             try await UNUserNotificationCenter.current().add(request)
+            var metadata: [String: String] = ["title": finalTitle]
+            if let workspaceID {
+                metadata["workspace_id"] = workspaceID.uuidString
+            }
             ToasttyLog.debug(
                 "Delivered system notification",
                 category: .notifications,
-                metadata: [
-                    "title": finalTitle,
-                    "workspace_id": workspaceID.uuidString,
-                ]
+                metadata: metadata
             )
         } catch {
             if shouldUseAppleScriptFallback(for: error) {
@@ -128,15 +134,15 @@ enum SystemNotificationSender {
     private static func sendViaAppleScript(
         title: String,
         body: String,
-        workspaceID: UUID,
+        workspaceID: UUID?,
         panelID: UUID?
     ) async {
         do {
             try await runAppleScriptNotification(title: title, body: body)
-            var metadata: [String: String] = [
-                "title": title,
-                "workspace_id": workspaceID.uuidString,
-            ]
+            var metadata: [String: String] = ["title": title]
+            if let workspaceID {
+                metadata["workspace_id"] = workspaceID.uuidString
+            }
             if let panelID {
                 metadata["panel_id"] = panelID.uuidString
             }

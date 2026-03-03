@@ -828,6 +828,22 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
         let state = store.state
 
+        // Desktop notifications are handled separately — they should not steal focus.
+        if case .desktopNotification(let title, let body) = action.intent {
+            let route = resolveDesktopNotificationRoute(
+                action: action,
+                title: title,
+                state: state
+            )
+            return handleDesktopNotification(
+                title: title,
+                body: body,
+                route: route,
+                state: state,
+                store: store
+            )
+        }
+
         let panelID: UUID
         let workspaceIDForAction: UUID
         if let surfaceHandle = action.surfaceHandle {
@@ -858,18 +874,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             }
             panelID = resolvedPanelID
             workspaceIDForAction = selectedWorkspaceID
-        }
-
-        // Desktop notifications are handled separately — they should not steal focus.
-        if case .desktopNotification(let title, let body) = action.intent {
-            return handleDesktopNotification(
-                title: title,
-                body: body,
-                workspaceID: workspaceIDForAction,
-                panelID: panelID,
-                state: state,
-                store: store
-            )
         }
 
         // Metadata updates should not steal focus.
@@ -973,24 +977,91 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return handled
     }
 
+    private struct DesktopNotificationRoute {
+        let workspaceID: UUID?
+        let panelID: UUID?
+        let source: String
+    }
+
+    private func resolveDesktopNotificationRoute(
+        action: GhosttyRuntimeAction,
+        title: String,
+        state: AppState
+    ) -> DesktopNotificationRoute {
+        if let surfaceHandle = action.surfaceHandle {
+            if let panelID = panelIDBySurfaceHandle[surfaceHandle],
+               let workspaceID = workspaceID(containing: panelID, state: state) {
+                return DesktopNotificationRoute(
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    source: "surface_handle"
+                )
+            }
+
+            ToasttyLog.warning(
+                "Desktop notification missing panel mapping for Ghostty surface handle",
+                category: .notifications,
+                metadata: ["surface_handle": String(surfaceHandle)]
+            )
+        }
+
+        if let selectedWindowID = state.selectedWindowID,
+           let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) {
+            let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
+            let nonSelectedWorkspaceIDs = selectedWindow.workspaceIDs.filter { $0 != currentSelectedWorkspaceID }
+            if nonSelectedWorkspaceIDs.count == 1,
+               let workspaceID = nonSelectedWorkspaceIDs.first,
+               let workspace = state.workspacesByID[workspaceID],
+               let panelID = resolvedActionPanelID(in: workspace) {
+                return DesktopNotificationRoute(
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    source: "single_non_selected_workspace"
+                )
+            }
+        }
+
+        ToasttyLog.warning(
+            "Desktop notification route unresolved",
+            category: .notifications,
+            metadata: [
+                "title": title,
+                "has_surface_handle": action.surfaceHandle == nil ? "false" : "true",
+            ]
+        )
+        return DesktopNotificationRoute(
+            workspaceID: nil,
+            panelID: nil,
+            source: "unresolved"
+        )
+    }
+
     private func handleDesktopNotification(
         title: String,
         body: String,
-        workspaceID: UUID,
-        panelID: UUID,
+        route: DesktopNotificationRoute,
         state: AppState,
         store: AppStore
     ) -> Bool {
-        let notificationContext = desktopNotificationContext(
-            workspaceID: workspaceID,
-            panelID: panelID,
-            state: state
-        )
+        let workspaceID = route.workspaceID
+        let panelID = route.panelID
+        let notificationContext: DesktopNotificationContext
+        if let workspaceID {
+            notificationContext = desktopNotificationContext(
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: state
+            )
+        } else {
+            notificationContext = DesktopNotificationContext()
+        }
 
         let appIsActive = NSApplication.shared.isActive
         let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
         let panelIsFocused: Bool
-        if currentSelectedWorkspaceID == workspaceID,
+        if let workspaceID,
+           let panelID,
+           currentSelectedWorkspaceID == workspaceID,
            let workspace = state.workspacesByID[workspaceID] {
             panelIsFocused = workspace.focusedPanelID == panelID
                 && workspace.paneTree.leafContaining(panelID: panelID) != nil
@@ -999,19 +1070,52 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         if appIsActive && panelIsFocused {
+            var metadata: [String: String] = [
+                "title": title,
+                "route_source": route.source,
+            ]
+            if let workspaceID {
+                metadata["workspace_id"] = workspaceID.uuidString
+            }
+            if let panelID {
+                metadata["panel_id"] = panelID.uuidString
+            }
             ToasttyLog.debug(
                 "Suppressed desktop notification for focused panel",
                 category: .notifications,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "title": title,
-                ]
+                metadata: metadata
             )
             return true
         }
 
-        store.send(.recordDesktopNotification(workspaceID: workspaceID))
+        if appIsActive,
+           workspaceID == nil,
+           panelID == nil,
+           let selectedWorkspaceID = currentSelectedWorkspaceID,
+           let selectedWindowID = state.selectedWindowID,
+           let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }),
+           selectedWindow.workspaceIDs.count == 1,
+           let workspace = state.workspacesByID[selectedWorkspaceID],
+           let resolvedPanelID = resolvedActionPanelID(in: workspace),
+           workspace.focusedPanelID == resolvedPanelID,
+           workspace.paneTree.leafContaining(panelID: resolvedPanelID) != nil {
+            ToasttyLog.debug(
+                "Suppressed unresolved desktop notification for focused panel in single-workspace window",
+                category: .notifications,
+                metadata: ["title": title]
+            )
+            return true
+        }
+
+        if let workspaceID {
+            _ = store.send(.recordDesktopNotification(workspaceID: workspaceID))
+        } else {
+            ToasttyLog.warning(
+                "Skipped unread badge update because desktop notification route is unresolved",
+                category: .notifications,
+                metadata: ["title": title]
+            )
+        }
 
         Task {
             await SystemNotificationSender.send(
@@ -1023,22 +1127,28 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             )
         }
 
+        var metadata: [String: String] = [
+            "title": title,
+            "app_active": appIsActive ? "true" : "false",
+            "route_source": route.source,
+        ]
+        if let workspaceID {
+            metadata["workspace_id"] = workspaceID.uuidString
+        }
+        if let panelID {
+            metadata["panel_id"] = panelID.uuidString
+        }
         ToasttyLog.info(
             "Delivered desktop notification from Ghostty",
             category: .notifications,
-            metadata: [
-                "workspace_id": workspaceID.uuidString,
-                "panel_id": panelID.uuidString,
-                "title": title,
-                "app_active": appIsActive ? "true" : "false",
-            ]
+            metadata: metadata
         )
         return true
     }
 
     private func desktopNotificationContext(
         workspaceID: UUID,
-        panelID: UUID,
+        panelID: UUID?,
         state: AppState
     ) -> DesktopNotificationContext {
         guard let workspace = state.workspacesByID[workspaceID] else {
@@ -1046,7 +1156,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
         return DesktopNotificationContext(
             workspaceTitle: workspace.title,
-            panelLabel: workspace.panels[panelID]?.notificationLabel
+            panelLabel: panelID.flatMap { workspace.panels[$0]?.notificationLabel }
         )
     }
 
