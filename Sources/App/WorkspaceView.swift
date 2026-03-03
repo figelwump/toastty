@@ -317,7 +317,7 @@ private struct PaneNodeView: View {
                         .clipped()
                     }
                 }
-                .animation(.easeInOut(duration: 0.2), value: effectiveRatio)
+                .animation(.easeInOut(duration: 0.2), value: baseRatio)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
