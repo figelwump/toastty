@@ -211,22 +211,60 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// regardless of UID.
     private func childPIDs(of parentPID: pid_t) -> [pid_t] {
         let pidSize = MemoryLayout<pid_t>.stride
-        var capacity = 64
-        var pids = Array(repeating: pid_t(0), count: capacity)
+        let minimumCapacity = 64
+        let maximumCapacity = Int(Int32.max) / pidSize
 
-        let returnedBytes = pids.withUnsafeMutableBufferPointer { buffer -> Int32 in
-            guard let base = buffer.baseAddress else { return 0 }
-            return proc_listpids(
+        // Probe for the current child list size, then over-allocate slightly.
+        // Children can still spawn between calls, so we may need to retry.
+        let probedBytes = Int(
+            proc_listpids(
                 UInt32(PROC_PPID_ONLY),
                 UInt32(parentPID),
-                UnsafeMutableRawPointer(base),
-                Int32(buffer.count * pidSize)
+                nil,
+                0
             )
+        )
+        var capacity = minimumCapacity
+        if probedBytes > 0 {
+            let probedCount = probedBytes / pidSize
+            let adjustedProbeCount = probedCount + (probedBytes % pidSize == 0 ? 0 : 1)
+            capacity = max(minimumCapacity, adjustedProbeCount + 8)
         }
 
-        guard returnedBytes > 0 else { return [] }
-        let count = Int(returnedBytes) / pidSize
-        return Array(pids.prefix(count).filter { $0 > 0 })
+        while true {
+            var pids = Array(repeating: pid_t(0), count: capacity)
+            let returnedBytes = pids.withUnsafeMutableBufferPointer { buffer -> Int32 in
+                guard let base = buffer.baseAddress else { return 0 }
+                return proc_listpids(
+                    UInt32(PROC_PPID_ONLY),
+                    UInt32(parentPID),
+                    UnsafeMutableRawPointer(base),
+                    Int32(buffer.count * pidSize)
+                )
+            }
+
+            guard returnedBytes > 0 else { return [] }
+            let count = Int(returnedBytes) / pidSize
+            let filledBuffer = count >= capacity
+
+            if filledBuffer == false {
+                return Array(pids.prefix(count).filter { $0 > 0 })
+            }
+
+            if capacity >= maximumCapacity {
+                ToasttyLog.warning(
+                    "Reached maximum child PID buffer capacity; child PID list may be truncated",
+                    category: .terminal,
+                    metadata: [
+                        "parent_pid": String(parentPID),
+                        "capacity": String(capacity),
+                    ]
+                )
+                return Array(pids.prefix(count).filter { $0 > 0 })
+            }
+
+            capacity = min(capacity * 2, maximumCapacity)
+        }
     }
 
     private func processStartSignature(pid: pid_t) -> ProcessStartSignature? {
