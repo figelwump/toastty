@@ -1123,7 +1123,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         if let workspaceID {
-            _ = store.send(.recordDesktopNotification(workspaceID: workspaceID))
+            _ = store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
         } else {
             ToasttyLog.warning(
                 "Skipped unread badge update because desktop notification route is unresolved",

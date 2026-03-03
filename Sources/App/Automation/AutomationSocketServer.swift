@@ -1132,7 +1132,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return
         }
 
-        _ = store.send(.recordDesktopNotification(workspaceID: workspaceID))
+        _ = store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
 
         guard decision.shouldSendSystemNotification else {
             return

@@ -50,7 +50,8 @@ public enum AppAction: Equatable, Sendable {
     case equalizePaneSplits(workspaceID: UUID)
     case createTerminalPanel(workspaceID: UUID, paneID: UUID)
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
-    case recordDesktopNotification(workspaceID: UUID)
+    case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
+    case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
 }
 
 public extension AppAction {
@@ -110,6 +111,8 @@ public extension AppAction {
             return "updateTerminalPanelMetadata"
         case .recordDesktopNotification:
             return "recordDesktopNotification"
+        case .markPanelNotificationsRead:
+            return "markPanelNotificationsRead"
         }
     }
 }

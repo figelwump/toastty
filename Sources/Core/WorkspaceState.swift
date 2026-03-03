@@ -20,7 +20,11 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var focusedPanelID: UUID?
     public var auxPanelVisibility: Set<PanelKind>
     public var focusedPanelModeActive: Bool
-    public var unreadNotificationCount: Int
+    public var unreadPanelIDs: Set<UUID>
+    public var unreadWorkspaceNotificationCount: Int
+    public var unreadNotificationCount: Int {
+        unreadPanelIDs.count + unreadWorkspaceNotificationCount
+    }
     public var recentlyClosedPanels: [ClosedPanelRecord]
 
     public init(
@@ -31,7 +35,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind> = [],
         focusedPanelModeActive: Bool = false,
-        unreadNotificationCount: Int = 0,
+        unreadPanelIDs: Set<UUID> = [],
+        unreadWorkspaceNotificationCount: Int = 0,
         recentlyClosedPanels: [ClosedPanelRecord] = []
     ) {
         self.id = id
@@ -41,7 +46,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.focusedPanelID = focusedPanelID
         self.auxPanelVisibility = auxPanelVisibility
         self.focusedPanelModeActive = focusedPanelModeActive
-        self.unreadNotificationCount = unreadNotificationCount
+        self.unreadPanelIDs = unreadPanelIDs.intersection(Set(panels.keys))
+        self.unreadWorkspaceNotificationCount = max(0, unreadWorkspaceNotificationCount)
         self.recentlyClosedPanels = recentlyClosedPanels
     }
 
@@ -66,6 +72,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         case panels
         case focusedPanelID
         case auxPanelVisibility
+        case unreadPanelIDs
+        case unreadWorkspaceNotificationCount
         case unreadNotificationCount
         case recentlyClosedPanels
     }
@@ -78,7 +86,11 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         panels = try container.decode([UUID: PanelState].self, forKey: .panels)
         focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
         auxPanelVisibility = try container.decodeIfPresent(Set<PanelKind>.self, forKey: .auxPanelVisibility) ?? []
-        unreadNotificationCount = try container.decodeIfPresent(Int.self, forKey: .unreadNotificationCount) ?? 0
+        unreadPanelIDs = (try container.decodeIfPresent(Set<UUID>.self, forKey: .unreadPanelIDs) ?? [])
+            .intersection(Set(panels.keys))
+        let decodedWorkspaceUnread = try container.decodeIfPresent(Int.self, forKey: .unreadWorkspaceNotificationCount)
+        let legacyUnreadCount = try container.decodeIfPresent(Int.self, forKey: .unreadNotificationCount)
+        unreadWorkspaceNotificationCount = max(0, decodedWorkspaceUnread ?? legacyUnreadCount ?? 0)
         recentlyClosedPanels = try container.decodeIfPresent([ClosedPanelRecord].self, forKey: .recentlyClosedPanels) ?? []
         // Focus mode is a transient UI/runtime flag and should never persist across decode boundaries.
         focusedPanelModeActive = false
@@ -92,6 +104,9 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(panels, forKey: .panels)
         try container.encodeIfPresent(focusedPanelID, forKey: .focusedPanelID)
         try container.encode(auxPanelVisibility, forKey: .auxPanelVisibility)
+        try container.encode(unreadPanelIDs, forKey: .unreadPanelIDs)
+        try container.encode(unreadWorkspaceNotificationCount, forKey: .unreadWorkspaceNotificationCount)
+        // Backwards compatibility with older persisted state shape.
         try container.encode(unreadNotificationCount, forKey: .unreadNotificationCount)
         try container.encode(recentlyClosedPanels, forKey: .recentlyClosedPanels)
     }

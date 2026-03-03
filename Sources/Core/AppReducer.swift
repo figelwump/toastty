@@ -21,7 +21,7 @@ public struct AppReducer {
             guard state.windows[index].workspaceIDs.contains(workspaceID) else { return false }
             state.selectedWindowID = windowID
             state.windows[index].selectedWorkspaceID = workspaceID
-            markWorkspaceNotificationsRead(workspaceID: workspaceID, state: &state)
+            markWorkspaceScopedNotificationsRead(workspaceID: workspaceID, state: &state)
             return true
 
         case .createWorkspace(let windowID, let title):
@@ -52,8 +52,9 @@ public struct AppReducer {
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.panels[panelID] != nil else { return false }
             workspace.focusedPanelID = panelID
+            _ = workspace.unreadPanelIDs.remove(panelID)
+            workspace.unreadWorkspaceNotificationCount = 0
             state.workspacesByID[workspaceID] = workspace
-            markWorkspaceNotificationsRead(workspaceID: workspaceID, state: &state)
             return true
 
         case .reorderPanel(let panelID, let toIndex, let paneID):
@@ -114,6 +115,7 @@ public struct AppReducer {
             guard sourceRemoval.removed else { return false }
 
             var updatedSourceWorkspace: WorkspaceState?
+            let didTransferUnreadBadge = sourceWorkspace.unreadPanelIDs.remove(panelID) != nil
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.paneTree = updatedSourceTree
@@ -130,6 +132,9 @@ public struct AppReducer {
             }
             targetWorkspace.paneTree = targetTree
             targetWorkspace.focusedPanelID = panelID
+            if didTransferUnreadBadge {
+                targetWorkspace.unreadPanelIDs.insert(panelID)
+            }
 
             if let updatedSourceWorkspace {
                 state.workspacesByID[sourceLocation.workspaceID] = updatedSourceWorkspace
@@ -147,6 +152,7 @@ public struct AppReducer {
             let sourceRemoval = sourceWorkspace.paneTree.removingPanel(panelID)
             guard sourceRemoval.removed else { return false }
 
+            let didTransferUnreadBadge = sourceWorkspace.unreadPanelIDs.remove(panelID) != nil
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.paneTree = updatedSourceTree
@@ -163,7 +169,8 @@ public struct AppReducer {
                 title: "Workspace 1",
                 paneTree: .leaf(paneID: detachedPaneID, tabPanelIDs: [panelID], selectedIndex: 0),
                 panels: [panelID: panelState],
-                focusedPanelID: panelID
+                focusedPanelID: panelID,
+                unreadPanelIDs: didTransferUnreadBadge ? [panelID] : []
             )
 
             let detachedWindowID = UUID()
@@ -199,6 +206,7 @@ public struct AppReducer {
             guard removal.removed else { return false }
 
             workspace.panels.removeValue(forKey: panelID)
+            workspace.unreadPanelIDs.remove(panelID)
             workspace.auxPanelVisibility.remove(panelState.kind)
 
             if let updatedTree = removal.node {
@@ -257,6 +265,7 @@ public struct AppReducer {
                 guard removal.removed else { return false }
 
                 workspace.panels.removeValue(forKey: existingPanelID)
+                workspace.unreadPanelIDs.remove(existingPanelID)
                 workspace.auxPanelVisibility.remove(kind)
 
                 if let updatedTree = removal.node {
@@ -443,9 +452,23 @@ public struct AppReducer {
             state.workspacesByID[location.workspaceID] = workspace
             return true
 
-        case .recordDesktopNotification(let workspaceID):
-            guard state.workspacesByID[workspaceID] != nil else { return false }
-            state.workspacesByID[workspaceID]!.unreadNotificationCount += 1
+        case .recordDesktopNotification(let workspaceID, let panelID):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            if let panelID {
+                guard workspace.panels[panelID] != nil else { return false }
+                workspace.unreadPanelIDs.insert(panelID)
+            } else {
+                workspace.unreadWorkspaceNotificationCount += 1
+            }
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
+        case .markPanelNotificationsRead(let workspaceID, let panelID):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard workspace.panels[panelID] != nil else { return false }
+            if workspace.unreadPanelIDs.remove(panelID) != nil {
+                state.workspacesByID[workspaceID] = workspace
+            }
             return true
         }
     }
@@ -559,15 +582,16 @@ public struct AppReducer {
         }
 
         workspace.focusedPanelID = targetPanelID
+        _ = workspace.unreadPanelIDs.remove(targetPanelID)
+        workspace.unreadWorkspaceNotificationCount = 0
         state.workspacesByID[workspaceID] = workspace
-        markWorkspaceNotificationsRead(workspaceID: workspaceID, state: &state)
         return true
     }
 
-    private static func markWorkspaceNotificationsRead(workspaceID: UUID, state: inout AppState) {
+    private static func markWorkspaceScopedNotificationsRead(workspaceID: UUID, state: inout AppState) {
         guard var workspace = state.workspacesByID[workspaceID] else { return }
-        guard workspace.unreadNotificationCount > 0 else { return }
-        workspace.unreadNotificationCount = 0
+        guard workspace.unreadWorkspaceNotificationCount > 0 else { return }
+        workspace.unreadWorkspaceNotificationCount = 0
         state.workspacesByID[workspaceID] = workspace
     }
 

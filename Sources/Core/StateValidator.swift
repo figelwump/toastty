@@ -13,6 +13,7 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case panelReferencedMultipleTimes(workspaceID: UUID, panelID: UUID)
     case focusedPanelMissing(workspaceID: UUID, panelID: UUID)
     case focusedPanelNotInPaneTree(workspaceID: UUID, panelID: UUID)
+    case unreadPanelMissing(workspaceID: UUID, panelID: UUID)
     case duplicateNodeID(workspaceID: UUID, nodeID: UUID)
 }
 
@@ -90,6 +91,10 @@ public enum StateValidator {
                 if count > 1 {
                     throw StateInvariantViolation.panelReferencedMultipleTimes(workspaceID: workspace.id, panelID: panelID)
                 }
+            }
+
+            for unreadPanelID in workspace.unreadPanelIDs where workspace.panels[unreadPanelID] == nil {
+                throw StateInvariantViolation.unreadPanelMissing(workspaceID: workspace.id, panelID: unreadPanelID)
             }
 
             if let focusedPanelID = workspace.focusedPanelID {

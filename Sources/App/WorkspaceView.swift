@@ -5,6 +5,9 @@ struct WorkspaceView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
+    @State private var focusedUnreadClearTask: Task<Void, Never>?
+
+    private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -20,6 +23,16 @@ struct WorkspaceView: View {
             }
         }
         .background(ToastyTheme.surfaceBackground)
+        .onAppear {
+            scheduleFocusedUnreadPanelClearIfNeeded()
+        }
+        .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
+            scheduleFocusedUnreadPanelClearIfNeeded()
+        }
+        .onDisappear {
+            focusedUnreadClearTask?.cancel()
+            focusedUnreadClearTask = nil
+        }
     }
 
     private var topBar: some View {
@@ -131,6 +144,39 @@ struct WorkspaceView: View {
         store.selectedWorkspace?.focusedPanelModeActive ?? false
     }
 
+    private var selectedWorkspaceUnreadSignature: SelectedWorkspaceUnreadSignature? {
+        guard let workspace = store.selectedWorkspace else { return nil }
+        return SelectedWorkspaceUnreadSignature(
+            workspaceID: workspace.id,
+            focusedPanelID: workspace.focusedPanelID,
+            unreadPanelIDs: workspace.unreadPanelIDs
+        )
+    }
+
+    private func scheduleFocusedUnreadPanelClearIfNeeded() {
+        focusedUnreadClearTask?.cancel()
+        focusedUnreadClearTask = nil
+
+        guard let workspace = store.selectedWorkspace,
+              let focusedPanelID = workspace.focusedPanelID,
+              workspace.unreadPanelIDs.contains(focusedPanelID) else {
+            return
+        }
+
+        let workspaceID = workspace.id
+        focusedUnreadClearTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.focusedUnreadClearDelayNanoseconds)
+            guard Task.isCancelled == false else { return }
+            guard let currentWorkspace = store.selectedWorkspace,
+                  currentWorkspace.id == workspaceID,
+                  currentWorkspace.focusedPanelID == focusedPanelID,
+                  currentWorkspace.unreadPanelIDs.contains(focusedPanelID) else {
+                return
+            }
+            _ = store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: focusedPanelID))
+        }
+    }
+
     private func topBarButton(
         title: String,
         systemImage: String? = nil,
@@ -202,6 +248,12 @@ struct WorkspaceView: View {
     }
 }
 
+private struct SelectedWorkspaceUnreadSignature: Equatable {
+    let workspaceID: UUID
+    let focusedPanelID: UUID?
+    let unreadPanelIDs: Set<UUID>
+}
+
 private struct PaneNodeView: View {
     let node: PaneNode
     let workspace: WorkspaceState
@@ -229,6 +281,7 @@ private struct PaneNodeView: View {
                         panelID: panelID,
                         panelState: panelState,
                         focusedPanelID: workspace.focusedPanelID,
+                        hasUnreadNotification: workspace.unreadPanelIDs.contains(panelID),
                         shortcutNumber: terminalShortcutNumbersByPanelID[panelID],
                         globalFontPoints: globalFontPoints,
                         unfocusedSplitStyle: unfocusedSplitStyle,
@@ -438,6 +491,7 @@ private struct PanelCardView: View {
     let panelID: UUID
     let panelState: PanelState
     let focusedPanelID: UUID?
+    let hasUnreadNotification: Bool
     let shortcutNumber: Int?
     let globalFontPoints: Double
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
@@ -451,6 +505,13 @@ private struct PanelCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
+                if hasUnreadNotification {
+                    Circle()
+                        .fill(ToastyTheme.badgeBlue)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
+                }
+
                 Text(panelLabel)
                     .font(ToastyTheme.fontMonoHeader)
                     .foregroundStyle(ToastyTheme.primaryText)
