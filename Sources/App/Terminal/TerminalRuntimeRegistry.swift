@@ -25,6 +25,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var titleBeforeAgentInferenceByPanelID: [UUID: String] = [:]
+    private var suppressedAgentTitleInferencePanelIDs: Set<UUID> = []
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
@@ -92,6 +93,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             #if TOASTTY_HAS_GHOSTTY_KIT
             processWorkingDirectoryResolver.invalidate(panelID: panelID)
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+            suppressedAgentTitleInferencePanelIDs.remove(panelID)
             #endif
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
@@ -424,6 +426,8 @@ private extension TerminalRuntimeRegistry {
             panelIDBySurfaceHandle.removeValue(forKey: key)
         }
         processWorkingDirectoryResolver.invalidate(panelID: panelID)
+        titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+        suppressedAgentTitleInferencePanelIDs.remove(panelID)
     }
 
     func snapshotChildPIDsForSurfaceCreation() -> Set<pid_t> {
@@ -563,6 +567,7 @@ private extension TerminalRuntimeRegistry {
               let panelState = workspace.panels[panelID],
               case .terminal(let terminalState) = panelState else {
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+            suppressedAgentTitleInferencePanelIDs.remove(panelID)
             return
         }
 
@@ -574,6 +579,7 @@ private extension TerminalRuntimeRegistry {
         )
         guard titleIsAgentInferred || titleEligibleForInference else {
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
+            suppressedAgentTitleInferencePanelIDs.remove(panelID)
             return
         }
 
@@ -582,6 +588,7 @@ private extension TerminalRuntimeRegistry {
         }
         let inferredAgentTitle = Self.inferredAgentTitleFromVisibleTerminalText(visibleText)
         let shellPromptIsActive = Self.visibleTextShowsInteractiveShellPrompt(visibleText)
+        let recentAgentLaunchCommandIsVisible = Self.visibleTextShowsRecentAgentLaunchCommand(visibleText)
 
         if titleIsAgentInferred {
             if shellPromptIsActive {
@@ -590,6 +597,7 @@ private extension TerminalRuntimeRegistry {
                     workspaceID: workspaceID,
                     store: store
                 )
+                suppressedAgentTitleInferencePanelIDs.insert(panelID)
                 return
             }
 
@@ -634,6 +642,7 @@ private extension TerminalRuntimeRegistry {
                 workspaceID: workspaceID,
                 store: store
             )
+            suppressedAgentTitleInferencePanelIDs.insert(panelID)
             return
         }
 
@@ -641,6 +650,15 @@ private extension TerminalRuntimeRegistry {
             // Avoid re-inference loops from stale banner text once control has
             // returned to an interactive shell prompt.
             return
+        }
+
+        if suppressedAgentTitleInferencePanelIDs.contains(panelID) {
+            // Do not re-infer from stale banner text after prompt restore unless
+            // a fresh launch command is visible near the current prompt.
+            guard recentAgentLaunchCommandIsVisible else {
+                return
+            }
+            suppressedAgentTitleInferencePanelIDs.remove(panelID)
         }
 
         guard let inferredAgentTitle else {
@@ -656,6 +674,7 @@ private extension TerminalRuntimeRegistry {
         )
         if handled {
             titleBeforeAgentInferenceByPanelID[panelID] = currentTitle
+            suppressedAgentTitleInferencePanelIDs.remove(panelID)
             ToasttyLog.debug(
                 "Inferred agent title from visible terminal text",
                 category: .terminal,
@@ -1438,28 +1457,131 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     }
 
     private static func visibleTextShowsInteractiveShellPrompt(_ visibleText: String) -> Bool {
+        guard let promptContext = recentPromptContext(visibleText) else {
+            return false
+        }
+
+        switch promptContext {
+        case .interactive:
+            return true
+        case .command(let token):
+            return agentLaunchCommandTokens.contains(token) == false
+        }
+    }
+
+    private static func visibleTextShowsRecentAgentLaunchCommand(_ visibleText: String) -> Bool {
+        guard let promptContext = recentPromptContext(visibleText) else {
+            return false
+        }
+
+        switch promptContext {
+        case .interactive:
+            return false
+        case .command(let token):
+            return agentLaunchCommandTokens.contains(token)
+        }
+    }
+
+    private static func recentPromptContext(_ visibleText: String) -> PromptContext? {
         let lines = sanitizedVisibleTerminalLines(visibleText)
-        guard lines.isEmpty == false else { return false }
+        guard lines.isEmpty == false else { return nil }
         let candidateLines = Array(lines.suffix(agentTitleDetectionLineWindow))
 
-        for line in candidateLines.reversed() {
-            guard let promptLine = parsedPromptLine(line) else {
+        for (offset, line) in candidateLines.reversed().enumerated() {
+            guard offset <= recentPromptLineMaxDistanceFromBottom else {
+                break
+            }
+            guard let promptLine = promptLineDetails(line) else {
                 continue
             }
 
-            guard let command = promptLine.command?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  command.isEmpty == false else {
-                return true
+            guard let command = promptLine.command else {
+                return .interactive
             }
 
             let commandToken = command
                 .split(whereSeparator: { $0.isWhitespace })
                 .first?
                 .lowercased() ?? ""
-            return agentLaunchCommandTokens.contains(commandToken) == false
+            if commandToken.isEmpty {
+                return .interactive
+            }
+            return .command(token: commandToken)
         }
 
-        return false
+        return nil
+    }
+
+    private static func promptLineDetails(_ line: String) -> PromptLineDetails? {
+        if let strictPromptLine = parsedPromptLine(line) {
+            let command = normalizedPromptCommand(strictPromptLine.command)
+            return PromptLineDetails(command: command)
+        }
+
+        if let loosePromptLine = parsedLoosePromptLine(line) {
+            return loosePromptLine
+        }
+
+        return nil
+    }
+
+    private static func parsedLoosePromptLine(_ line: String) -> PromptLineDetails? {
+        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.isEmpty == false else { return nil }
+        let lastIndex = min(parts.count - 1, loosePromptMarkerScanTokenLimit)
+        guard lastIndex >= 0 else { return nil }
+
+        // Prompts appear at the start of a line; constraining scan depth avoids
+        // matching arbitrary markers in agent output text.
+        for index in 0...lastIndex {
+            let token = parts[index]
+
+            if promptMarkerTokens.contains(token) {
+                guard index > 0,
+                      normalizedPromptPathCandidate(parts[index - 1]) != nil else {
+                    continue
+                }
+                let command: String?
+                if index + 1 < parts.count {
+                    command = parts[(index + 1)...].joined(separator: " ")
+                } else {
+                    command = nil
+                }
+                return PromptLineDetails(command: normalizedPromptCommand(command))
+            }
+
+            guard token.count > 1,
+                  let trailingCharacter = token.last else {
+                continue
+            }
+            let markerToken = String(trailingCharacter)
+            guard promptMarkerTokens.contains(markerToken) else {
+                continue
+            }
+
+            let pathToken = String(token.dropLast())
+            guard normalizedPromptPathCandidate(pathToken) != nil else {
+                continue
+            }
+            let command: String?
+            if index + 1 < parts.count {
+                command = parts[(index + 1)...].joined(separator: " ")
+            } else {
+                command = nil
+            }
+            return PromptLineDetails(command: normalizedPromptCommand(command))
+        }
+
+        return nil
+    }
+
+    private static func normalizedPromptCommand(_ command: String?) -> String? {
+        guard let command else { return nil }
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
     }
 
     private static func titleIsEligibleForAgentInference(terminalTitle: String, terminalCWD: String) -> Bool {
@@ -1493,7 +1615,18 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     }
 
     private static let inferredAgentTitles: Set<String> = ["Codex", "Claude Code"]
+    private struct PromptLineDetails {
+        let command: String?
+    }
+
+    private enum PromptContext {
+        case interactive
+        case command(token: String)
+    }
+
     private static let agentTitleDetectionLineWindow = 16
+    private static let recentPromptLineMaxDistanceFromBottom = 5
+    private static let loosePromptMarkerScanTokenLimit = 5
     private static let agentLaunchCommandTokens: Set<String> = ["cdx", "codex", "cc", "claude"]
     private static let promptMarkerTokens: Set<String> = ["%", "#", "$", ">"]
     private static let promptPathWrapperCharacters = CharacterSet(charactersIn: "\"'`()[]{}<>")
