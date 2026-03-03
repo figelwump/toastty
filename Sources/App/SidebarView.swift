@@ -233,7 +233,7 @@ struct SidebarView: View {
             // Subtitle: pane count + context info
             Text(subtitle)
                 .font(ToastyTheme.fontWorkspaceSubtitle)
-                .foregroundStyle(isSelected ? ToastyTheme.mutedText : ToastyTheme.inactiveWorkspaceSubtitleText)
+                .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
