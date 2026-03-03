@@ -637,6 +637,12 @@ private extension TerminalRuntimeRegistry {
             return
         }
 
+        if shellPromptIsActive {
+            // Avoid re-inference loops from stale banner text once control has
+            // returned to an interactive shell prompt.
+            return
+        }
+
         guard let inferredAgentTitle else {
             return
         }
