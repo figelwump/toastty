@@ -1992,8 +1992,12 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             let normalized = collapsedWhitespace(line)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard normalized.isEmpty == false else { continue }
+            guard normalized.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else {
+                continue
+            }
 
             let lowercased = normalized.lowercased()
+            let footerCandidate = normalizedAgentFooterCandidate(lowercased)
             if lowercased.contains("openai codex (v") || lowercased.contains("claude code v") {
                 continue
             }
@@ -2004,6 +2008,16 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                 continue
             }
             if lowercased.hasPrefix("tokens:") {
+                continue
+            }
+            if footerCandidate.hasPrefix("model:")
+                || footerCandidate.hasPrefix("ctx(")
+                || footerCandidate.hasPrefix("ctx:")
+                || footerCandidate.hasPrefix("ctx (")
+                || footerCandidate.hasPrefix("(cwd):")
+                || footerCandidate.hasPrefix("cwd:")
+                || footerCandidate.hasPrefix("bypass permissions on")
+                || footerCandidate.contains("shift+tab to cycle") {
                 continue
             }
             if lowercased.contains("claude code •")
@@ -2024,6 +2038,16 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         line.split(whereSeparator: { $0.isWhitespace })
             .map(String.init)
             .joined(separator: " ")
+    }
+
+    private static func normalizedAgentFooterCandidate(_ line: String) -> String {
+        var candidate = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let firstScalar = candidate.unicodeScalars.first,
+              agentFooterLeadingMarkerCharacters.contains(firstScalar) {
+            candidate.removeFirst()
+            candidate = candidate.trimmingCharacters(in: .whitespaces)
+        }
+        return candidate
     }
 
     private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
@@ -2138,6 +2162,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let inferredAgentTitles: Set<String> = ["Codex", "Claude Code"]
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
+    private static let agentFooterLeadingMarkerCharacters = CharacterSet(charactersIn: "›>•")
     private static let activitySummaryLineWindow = 24
     private static let activitySummaryCharacterLimit = 72
     // Include detailed single-agent summaries only when the signal is still fresh.
