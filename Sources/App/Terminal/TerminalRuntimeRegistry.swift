@@ -22,11 +22,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
+    @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var titleBeforeAgentInferenceByPanelID: [UUID: String] = [:]
     private var suppressedAgentTitleInferencePanelIDs: Set<UUID> = []
+    private var panelActivityByPanelID: [UUID: PanelActivityState] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
@@ -100,13 +102,24 @@ final class TerminalRuntimeRegistry: ObservableObject {
             processWorkingDirectoryResolver.invalidate(panelID: panelID)
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
             suppressedAgentTitleInferencePanelIDs.remove(panelID)
+            panelActivityByPanelID.removeValue(forKey: panelID)
             #endif
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
         pendingSplitSourcePanelByNewPanelID = pendingSplitSourcePanelByNewPanelID.filter {
             livePanelIDs.contains($0.key) && livePanelIDs.contains($0.value)
         }
+        panelActivityByPanelID = panelActivityByPanelID.filter { panelID, _ in
+            livePanelIDs.contains(panelID)
+        }
         #endif
+
+        if workspaceActivitySubtextByID.isEmpty == false {
+            let liveWorkspaceIDs = Set(state.workspacesByID.keys)
+            workspaceActivitySubtextByID = workspaceActivitySubtextByID.filter { workspaceID, _ in
+                liveWorkspaceIDs.contains(workspaceID)
+            }
+        }
 
         handleGhosttyWorkspaceSelectionPulseIfNeeded(state: state)
     }
@@ -159,6 +172,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return false
         }
         return controller.focusHostViewIfNeeded()
+    }
+
+    func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
+        workspaceActivitySubtextByID[workspaceID]
     }
 
     func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
@@ -626,6 +643,24 @@ private extension TerminalRuntimeRegistry {
     }
 
     func refreshVisibleTerminalWorkingDirectoriesFromProcess(state: AppState) {
+        let now = Date()
+        refreshSelectedWorkspaceTerminalMetadataFromProcess(state: state)
+
+        let backgroundPanelWorkspaceIDs = trackedBackgroundTerminalPanelIDs(state: state)
+        for (panelID, workspaceID) in backgroundPanelWorkspaceIDs {
+            refreshPanelActivityFromVisibleTextIfNeeded(
+                panelID: panelID,
+                workspaceID: workspaceID,
+                state: state,
+                now: now
+            )
+        }
+
+        pruneStalePanelActivity(now: now)
+        updateWorkspaceActivitySubtext(state: state, now: now)
+    }
+
+    func refreshSelectedWorkspaceTerminalMetadataFromProcess(state: AppState) {
         guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
               let workspace = state.workspacesByID[selectedWorkspaceID] else {
             return
@@ -633,7 +668,6 @@ private extension TerminalRuntimeRegistry {
 
         let panelIDs = visibleTerminalPanelIDs(in: workspace)
         guard panelIDs.isEmpty == false else { return }
-
         for panelID in panelIDs {
             _ = refreshWorkingDirectoryFromProcessIfNeeded(
                 panelID: panelID,
@@ -641,6 +675,19 @@ private extension TerminalRuntimeRegistry {
             )
             refreshAgentTitleFromVisibleTextIfNeeded(panelID: panelID, state: state)
         }
+    }
+
+    func trackedBackgroundTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
+        let selectedWorkspaceID = selectedWorkspaceID(state: state)
+        var workspaceByPanelID: [UUID: UUID] = [:]
+        for workspace in state.workspacesByID.values where workspace.id != selectedWorkspaceID {
+            for (panelID, panelState) in workspace.panels {
+                guard case .terminal = panelState else { continue }
+                guard controllers[panelID] != nil else { continue }
+                workspaceByPanelID[panelID] = workspace.id
+            }
+        }
+        return workspaceByPanelID
     }
 
     func refreshAgentTitleFromVisibleTextIfNeeded(panelID: UUID, state: AppState) {
@@ -777,6 +824,70 @@ private extension TerminalRuntimeRegistry {
                     "inferred_title": inferredAgentTitle,
                 ]
             )
+        }
+    }
+
+    func refreshPanelActivityFromVisibleTextIfNeeded(
+        panelID: UUID,
+        workspaceID: UUID,
+        state: AppState,
+        now: Date
+    ) {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let panelState = workspace.panels[panelID],
+              case .terminal(let terminalState) = panelState else {
+            panelActivityByPanelID.removeValue(forKey: panelID)
+            return
+        }
+
+        guard let visibleText = automationReadVisibleText(panelID: panelID) else {
+            return
+        }
+        let visibleLines = Self.sanitizedVisibleTerminalLines(visibleText)
+
+        let inferredAgentKind = Self.inferredAgentKind(
+            terminalTitle: terminalState.title,
+            visibleText: visibleText
+        )
+        guard let inferredAgentKind else {
+            return
+        }
+
+        let inferredPhase = Self.inferredAgentPhase(visibleText: visibleText, visibleLines: visibleLines)
+        let inferredSummary = Self.inferredAgentSummary(visibleLines: visibleLines)
+        panelActivityByPanelID[panelID] = PanelActivityState(
+            workspaceID: workspaceID,
+            agent: inferredAgentKind,
+            phase: inferredPhase,
+            summary: inferredSummary,
+            updatedAt: now
+        )
+    }
+
+    func pruneStalePanelActivity(now: Date) {
+        panelActivityByPanelID = panelActivityByPanelID.filter { _, activity in
+            now.timeIntervalSince(activity.updatedAt) <= Self.activityRetentionInterval
+        }
+    }
+
+    func updateWorkspaceActivitySubtext(state: AppState, now: Date) {
+        let selectedWorkspaceID = selectedWorkspaceID(state: state)
+        var activitiesByWorkspaceID: [UUID: [PanelActivityState]] = [:]
+        for activity in panelActivityByPanelID.values {
+            guard state.workspacesByID[activity.workspaceID] != nil else { continue }
+            guard activity.workspaceID != selectedWorkspaceID else { continue }
+            guard now.timeIntervalSince(activity.updatedAt) <= Self.activityRetentionInterval else { continue }
+            activitiesByWorkspaceID[activity.workspaceID, default: []].append(activity)
+        }
+
+        var nextSubtextByWorkspaceID: [UUID: String] = [:]
+        for (workspaceID, activities) in activitiesByWorkspaceID {
+            guard let subtext = Self.workspaceActivitySubtext(from: activities, now: now) else { continue }
+            nextSubtextByWorkspaceID[workspaceID] = subtext
+        }
+
+        if workspaceActivitySubtextByID != nextSubtextByWorkspaceID {
+            workspaceActivitySubtextByID = nextSubtextByWorkspaceID
         }
     }
 
@@ -1807,9 +1918,215 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return Int(components[1]) != nil
     }
 
+    private static func inferredAgentKind(terminalTitle: String, visibleText: String) -> AgentKindInference? {
+        let normalizedTitle = terminalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if normalizedTitle == "Codex" {
+            return .codex
+        }
+        if normalizedTitle == "Claude Code" {
+            return .claudeCode
+        }
+
+        if let inferredTitle = inferredAgentTitleFromVisibleTerminalText(visibleText) {
+            return inferredTitle == "Codex" ? .codex : .claudeCode
+        }
+
+        guard let promptContext = recentPromptContext(visibleText) else {
+            return nil
+        }
+        guard case .command(let token) = promptContext else {
+            return nil
+        }
+        return agentKind(forPromptToken: token)
+    }
+
+    private static func inferredAgentPhase(visibleText: String, visibleLines: [String]) -> AgentActivityPhase {
+        if visibleTextShowsWaitingForInput(visibleLines) {
+            return .waitingInput
+        }
+        if visibleTextShowsInteractiveShellPrompt(visibleText) {
+            return .idle
+        }
+        return .running
+    }
+
+    private static func inferredAgentSummary(visibleLines: [String]) -> String? {
+        guard visibleLines.isEmpty == false else { return nil }
+        let candidateLines = Array(visibleLines.suffix(activitySummaryLineWindow))
+
+        for line in candidateLines.reversed() {
+            if promptLineDetails(line) != nil {
+                continue
+            }
+
+            let normalized = collapsedWhitespace(line)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard normalized.isEmpty == false else { continue }
+
+            let lowercased = normalized.lowercased()
+            if lowercased.contains("openai codex (v") || lowercased.contains("claude code v") {
+                continue
+            }
+            if lowercased == "codex" || lowercased == "claude code" {
+                continue
+            }
+            if lowercased == "thinking..." || lowercased == "thinking" {
+                continue
+            }
+            if lowercased.hasPrefix("tokens:") {
+                continue
+            }
+
+            let trimmed = normalized.prefix(activitySummaryCharacterLimit)
+            return String(trimmed)
+        }
+
+        return nil
+    }
+
+    private static func collapsedWhitespace(_ line: String) -> String {
+        line.split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .joined(separator: " ")
+    }
+
+    private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
+        guard visibleLines.isEmpty == false else { return false }
+        let candidateLines = Array(visibleLines.suffix(agentTitleDetectionLineWindow))
+
+        for line in candidateLines.reversed() {
+            let lowercased = line.lowercased()
+            if lowercased.contains("waiting for input")
+                || lowercased.contains("waiting on user input")
+                || lowercased.contains("needs your input")
+                || lowercased.contains("select an option")
+                || lowercased.contains("enter your choice")
+                || lowercased.contains("press enter to continue")
+                || lowercased.contains("press return to continue")
+                || lowercased.contains("approve command")
+                || lowercased.contains("approval required") {
+                return true
+            }
+
+            if lowercased.contains("y/n") || lowercased.contains("[y]") || lowercased.contains("[n]") {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private static func workspaceActivitySubtext(from activities: [PanelActivityState], now: Date) -> String? {
+        guard activities.isEmpty == false else { return nil }
+
+        var codexCount = 0
+        var claudeCount = 0
+        var runningCount = 0
+        var waitingInputCount = 0
+        var idleCount = 0
+
+        for activity in activities {
+            switch activity.agent {
+            case .codex:
+                codexCount += 1
+            case .claudeCode:
+                claudeCount += 1
+            }
+
+            switch activity.phase {
+            case .running:
+                runningCount += 1
+            case .waitingInput:
+                waitingInputCount += 1
+            case .idle:
+                idleCount += 1
+            }
+        }
+
+        let totalAgentCount = codexCount + claudeCount
+        guard totalAgentCount > 0 else { return nil }
+
+        let statusSegments: [String] = {
+            if waitingInputCount > 0 && runningCount > 0 {
+                return [
+                    "\(waitingInputCount) waiting input",
+                    "\(runningCount) running",
+                ]
+            }
+            if waitingInputCount > 0 {
+                return ["\(waitingInputCount) waiting input"]
+            }
+            if runningCount > 0 {
+                return ["\(runningCount) running"]
+            }
+            return ["\(idleCount) idle"]
+        }()
+        let statusText = statusSegments.joined(separator: ", ")
+
+        var agentSegments: [String] = []
+        if claudeCount > 0 {
+            agentSegments.append("\(claudeCount) Claude Code")
+        }
+        if codexCount > 0 {
+            agentSegments.append("\(codexCount) Codex")
+        }
+
+        if totalAgentCount == 1,
+           waitingInputCount == 0,
+           runningCount == 1,
+           let mostRecentRunningActivity = activities
+           .filter({ $0.phase == .running })
+           .sorted(by: { $0.updatedAt > $1.updatedAt })
+           .first,
+           now.timeIntervalSince(mostRecentRunningActivity.updatedAt) <= activitySummaryFreshnessInterval,
+           let summary = mostRecentRunningActivity.summary,
+           let singleAgent = agentSegments.first {
+            return "\(singleAgent) running · \(summary)"
+        }
+
+        return "\(agentSegments.joined(separator: ", ")) · \(statusText)"
+    }
+
+    private static func agentKind(forPromptToken token: String) -> AgentKindInference? {
+        if codexPromptTokens.contains(token) {
+            return .codex
+        }
+        if claudePromptTokens.contains(token) {
+            return .claudeCode
+        }
+        return nil
+    }
+
     private static let inferredAgentTitles: Set<String> = ["Codex", "Claude Code"]
+    private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
+    private static let claudePromptTokens: Set<String> = ["claude"]
+    private static let activitySummaryLineWindow = 24
+    private static let activitySummaryCharacterLimit = 72
+    // Include detailed single-agent summaries only when the signal is still fresh.
+    private static let activitySummaryFreshnessInterval: TimeInterval = 60
+    // Drop stale activity after a short window to avoid long-lived misleading subtext.
+    private static let activityRetentionInterval: TimeInterval = 240
     private struct PromptLineDetails {
         let command: String?
+    }
+
+    private struct PanelActivityState {
+        var workspaceID: UUID
+        var agent: AgentKindInference
+        var phase: AgentActivityPhase
+        var summary: String?
+        var updatedAt: Date
+    }
+
+    private enum AgentKindInference {
+        case codex
+        case claudeCode
+    }
+
+    private enum AgentActivityPhase {
+        case running
+        case waitingInput
+        case idle
     }
 
     private enum PromptContext {
