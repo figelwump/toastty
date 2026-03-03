@@ -36,6 +36,7 @@ enum ToastyTheme {
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)
     static let fontSubtext = Font.system(size: 11, weight: .medium)
     static let fontMonoHeader = Font.system(size: 12, weight: .semibold, design: .monospaced)
+    static let fontMonoTerminalPaneTitle = Font.system(size: 12, weight: .regular, design: .monospaced)
 
     // Sidebar-specific fonts matching design spec
     static let fontLogoTitle = Font.system(size: 13, weight: .bold, design: .default)

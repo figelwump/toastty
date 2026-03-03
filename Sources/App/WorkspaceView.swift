@@ -513,7 +513,7 @@ private struct PanelCardView: View {
                 }
 
                 Text(panelLabel)
-                    .font(ToastyTheme.fontMonoHeader)
+                    .font(panelTitleFont)
                     .foregroundStyle(ToastyTheme.primaryText)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -595,6 +595,13 @@ private struct PanelCardView: View {
         guard case .terminal = panelState else { return nil }
         guard let shortcutNumber else { return nil }
         return TerminalShortcutConfig.shortcutLabel(for: shortcutNumber)
+    }
+
+    private var panelTitleFont: Font {
+        guard case .terminal = panelState else {
+            return ToastyTheme.fontMonoHeader
+        }
+        return ToastyTheme.fontMonoTerminalPaneTitle
     }
 
     @ViewBuilder
