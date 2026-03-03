@@ -79,12 +79,53 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
 }
 
 @MainActor
+private final class PaneFocusRestoreCoordinator {
+    // Keep retries short and bounded to cover SwiftUI/AppKit layout handoff after pane close.
+    private static let maxAttempts = 12
+    private static let retryDelayNanoseconds: UInt64 = 16_000_000
+    private var restoreTask: Task<Void, Never>?
+
+    deinit {
+        restoreTask?.cancel()
+    }
+
+    func schedule(
+        store: AppStore,
+        runtimeRegistry: TerminalRuntimeRegistry,
+        expectedFocusedPanelID: UUID
+    ) {
+        restoreTask?.cancel()
+        restoreTask = Task { @MainActor [weak store, weak runtimeRegistry] in
+            for attempt in 0..<Self.maxAttempts {
+                guard Task.isCancelled == false else { return }
+                guard let store, let runtimeRegistry else { return }
+                // Stop retrying if focus moved elsewhere after close.
+                guard store.selectedWorkspace?.focusedPanelID == expectedFocusedPanelID else { return }
+                if runtimeRegistry.focusSelectedWorkspacePaneIfPossible() {
+                    return
+                }
+                guard attempt < Self.maxAttempts - 1 else { return }
+                try? await Task.sleep(nanoseconds: Self.retryDelayNanoseconds)
+            }
+        }
+    }
+}
+
+@MainActor
 private final class ClosePanelShortcutInterceptor {
     private weak var store: AppStore?
+    private weak var runtimeRegistry: TerminalRuntimeRegistry?
+    private let paneFocusRestoreCoordinator: PaneFocusRestoreCoordinator
     nonisolated(unsafe) private var eventMonitor: Any?
 
-    init(store: AppStore) {
+    init(
+        store: AppStore,
+        runtimeRegistry: TerminalRuntimeRegistry,
+        paneFocusRestoreCoordinator: PaneFocusRestoreCoordinator
+    ) {
         self.store = store
+        self.runtimeRegistry = runtimeRegistry
+        self.paneFocusRestoreCoordinator = paneFocusRestoreCoordinator
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             guard Self.isClosePanelShortcut(event) else { return event }
@@ -109,7 +150,18 @@ private final class ClosePanelShortcutInterceptor {
     private func closeFocusedPanelIfPossible() -> Bool {
         guard let store else { return false }
         guard let focusedPanelID = store.selectedWorkspace?.focusedPanelID else { return false }
-        return store.send(.closePanel(panelID: focusedPanelID))
+        let didClosePanel = store.send(.closePanel(panelID: focusedPanelID))
+        guard didClosePanel else { return false }
+        guard let runtimeRegistry,
+              let nextFocusedPanelID = store.selectedWorkspace?.focusedPanelID else {
+            return true
+        }
+        paneFocusRestoreCoordinator.schedule(
+            store: store,
+            runtimeRegistry: runtimeRegistry,
+            expectedFocusedPanelID: nextFocusedPanelID
+        )
+        return didClosePanel
     }
 }
 
@@ -164,6 +216,7 @@ struct ToasttyApp: App {
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
     private let disableAnimations: Bool
+    private let paneFocusRestoreCoordinator: PaneFocusRestoreCoordinator
     private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
@@ -176,10 +229,16 @@ struct ToasttyApp: App {
         )
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         terminalRuntimeRegistry.bind(store: store)
+        let paneFocusRestoreCoordinator = PaneFocusRestoreCoordinator()
         if persistTerminalFontPreference {
             Self.applyInitialTerminalFontState(to: store)
         }
-        closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(store: store)
+        self.paneFocusRestoreCoordinator = paneFocusRestoreCoordinator
+        closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(
+            store: store,
+            runtimeRegistry: terminalRuntimeRegistry,
+            paneFocusRestoreCoordinator: paneFocusRestoreCoordinator
+        )
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
@@ -328,7 +387,13 @@ struct ToasttyApp: App {
 
     private func closeFocusedPanelFromSelection() {
         guard let focusedPanelID = store.selectedWorkspace?.focusedPanelID else { return }
-        store.send(.closePanel(panelID: focusedPanelID))
+        guard store.send(.closePanel(panelID: focusedPanelID)) else { return }
+        guard let nextFocusedPanelID = store.selectedWorkspace?.focusedPanelID else { return }
+        paneFocusRestoreCoordinator.schedule(
+            store: store,
+            runtimeRegistry: terminalRuntimeRegistry,
+            expectedFocusedPanelID: nextFocusedPanelID
+        )
     }
 
     private var supportsConfigurationReload: Bool {
