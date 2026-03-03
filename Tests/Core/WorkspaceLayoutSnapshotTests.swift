@@ -73,6 +73,8 @@ struct WorkspaceLayoutSnapshotTests {
             return
         }
 
+        #expect(leftTerminalState.title == "Terminal 1")
+        #expect(rightTerminalState.title == "Terminal 2")
         #expect(leftTerminalState.cwd == "/tmp/infra")
         #expect(rightTerminalState.cwd == "/tmp/ui")
 
@@ -85,5 +87,76 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(restoredState.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
 
         try StateValidator.validate(restoredState)
+    }
+
+    @Test
+    func makeAppStateRegeneratesTerminalTitlesPerWorkspace() throws {
+        let windowID = UUID()
+        let workspaceOneID = UUID()
+        let workspaceTwoID = UUID()
+        let workspaceOnePaneID = UUID()
+        let workspaceTwoPaneID = UUID()
+        let workspaceOnePanelID = UUID()
+        let workspaceTwoPanelID = UUID()
+
+        let workspaceOne = WorkspaceState(
+            id: workspaceOneID,
+            title: "One",
+            paneTree: .leaf(paneID: workspaceOnePaneID, tabPanelIDs: [workspaceOnePanelID], selectedIndex: 0),
+            panels: [
+                workspaceOnePanelID: .terminal(
+                    TerminalPanelState(title: "Agent A", shell: "zsh", cwd: "/tmp/one")
+                ),
+            ],
+            focusedPanelID: workspaceOnePanelID,
+            auxPanelVisibility: []
+        )
+
+        let workspaceTwo = WorkspaceState(
+            id: workspaceTwoID,
+            title: "Two",
+            paneTree: .leaf(paneID: workspaceTwoPaneID, tabPanelIDs: [workspaceTwoPanelID], selectedIndex: 0),
+            panels: [
+                workspaceTwoPanelID: .terminal(
+                    TerminalPanelState(title: "Agent B", shell: "zsh", cwd: "/tmp/two")
+                ),
+            ],
+            focusedPanelID: workspaceTwoPanelID,
+            auxPanelVisibility: []
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceOneID, workspaceTwoID],
+                    selectedWorkspaceID: workspaceOneID
+                ),
+            ],
+            workspacesByID: [
+                workspaceOneID: workspaceOne,
+                workspaceTwoID: workspaceTwo,
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspaceOne = try #require(restoredState.workspacesByID[workspaceOneID])
+        let restoredWorkspaceTwo = try #require(restoredState.workspacesByID[workspaceTwoID])
+
+        guard case .terminal(let workspaceOneTerminal) = restoredWorkspaceOne.panels[workspaceOnePanelID] else {
+            Issue.record("Expected workspace one panel to be terminal")
+            return
+        }
+        guard case .terminal(let workspaceTwoTerminal) = restoredWorkspaceTwo.panels[workspaceTwoPanelID] else {
+            Issue.record("Expected workspace two panel to be terminal")
+            return
+        }
+
+        #expect(workspaceOneTerminal.title == "Terminal 1")
+        #expect(workspaceTwoTerminal.title == "Terminal 1")
     }
 }

@@ -69,6 +69,44 @@ struct WorkspaceLayoutPersistenceStoreTests {
         #expect(store.loadLayout(for: "desktop") == nil)
     }
 
+    @Test
+    func persistsTerminalPanelsWithoutTitleMetadata() throws {
+        let fileURL = try makeTempStoreURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+
+        let store = WorkspaceLayoutPersistenceStore(fileURL: fileURL)
+        var state = AppState.bootstrap()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+        guard case .terminal(var terminalState) = workspace.panels[panelID] else {
+            Issue.record("Expected focused panel to be terminal")
+            return
+        }
+
+        terminalState.title = "Ephemeral Agent Title"
+        terminalState.cwd = "/tmp/ephemeral"
+        workspace.panels[panelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let layout = WorkspaceLayoutSnapshot(state: state)
+        #expect(store.persistLayout(layout, for: "desktop"))
+
+        let persistedData = try Data(contentsOf: fileURL)
+        let persistedJSON = String(decoding: persistedData, as: UTF8.self)
+        #expect(persistedJSON.contains("Ephemeral Agent Title") == false)
+
+        let loaded = try #require(store.loadLayout(for: "desktop"))
+        let restoredState = loaded.layout.makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        guard case .terminal(let restoredTerminalState) = restoredWorkspace.panels[panelID] else {
+            Issue.record("Expected restored panel to be terminal")
+            return
+        }
+        #expect(restoredTerminalState.title == "Terminal 1")
+        #expect(restoredTerminalState.cwd == "/tmp/ephemeral")
+    }
+
     private func makeTempStoreURL() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-layout-store-tests-\(UUID().uuidString)", isDirectory: true)

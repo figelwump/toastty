@@ -11,7 +11,7 @@ public struct WorkspaceLayoutPersistenceLoadResult: Equatable, Sendable {
 }
 
 public struct WorkspaceLayoutPersistenceStore: Sendable {
-    public static let currentFormatVersion = 1
+    public static let currentFormatVersion = 2
 
     public let fileURL: URL
 

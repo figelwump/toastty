@@ -38,11 +38,89 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable {
+    public var shell: String
+    public var cwd: String
+
+    public init(shell: String, cwd: String) {
+        self.shell = shell
+        self.cwd = cwd
+    }
+
+    init(terminalState: TerminalPanelState) {
+        shell = terminalState.shell
+        cwd = terminalState.cwd
+    }
+}
+
+public enum WorkspaceLayoutPanelSnapshot: Equatable, Sendable {
+    case terminal(WorkspaceLayoutTerminalPanelSnapshot)
+    case diff(DiffPanelState)
+    case markdown(MarkdownPanelState)
+    case scratchpad(ScratchpadPanelState)
+
+    init(panelState: PanelState) {
+        switch panelState {
+        case .terminal(let terminalState):
+            self = .terminal(WorkspaceLayoutTerminalPanelSnapshot(terminalState: terminalState))
+        case .diff(let diffState):
+            self = .diff(diffState)
+        case .markdown(let markdownState):
+            self = .markdown(markdownState)
+        case .scratchpad(let scratchpadState):
+            self = .scratchpad(scratchpadState)
+        }
+    }
+}
+
+extension WorkspaceLayoutPanelSnapshot: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case terminal
+        case diff
+        case markdown
+        case scratchpad
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try container.decode(PanelKind.self, forKey: .kind)
+        switch kind {
+        case .terminal:
+            self = .terminal(try container.decode(WorkspaceLayoutTerminalPanelSnapshot.self, forKey: .terminal))
+        case .diff:
+            self = .diff(try container.decode(DiffPanelState.self, forKey: .diff))
+        case .markdown:
+            self = .markdown(try container.decode(MarkdownPanelState.self, forKey: .markdown))
+        case .scratchpad:
+            self = .scratchpad(try container.decode(ScratchpadPanelState.self, forKey: .scratchpad))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .terminal(let value):
+            try container.encode(PanelKind.terminal, forKey: .kind)
+            try container.encode(value, forKey: .terminal)
+        case .diff(let value):
+            try container.encode(PanelKind.diff, forKey: .kind)
+            try container.encode(value, forKey: .diff)
+        case .markdown(let value):
+            try container.encode(PanelKind.markdown, forKey: .kind)
+            try container.encode(value, forKey: .markdown)
+        case .scratchpad(let value):
+            try container.encode(PanelKind.scratchpad, forKey: .kind)
+            try container.encode(value, forKey: .scratchpad)
+        }
+    }
+}
+
 public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var title: String
     public var paneTree: PaneNode
-    public var panels: [UUID: PanelState]
+    public var panels: [UUID: WorkspaceLayoutPanelSnapshot]
     public var focusedPanelID: UUID?
     public var auxPanelVisibility: Set<PanelKind>
 
@@ -50,7 +128,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         id: UUID,
         title: String,
         paneTree: PaneNode,
-        panels: [UUID: PanelState],
+        panels: [UUID: WorkspaceLayoutPanelSnapshot],
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind>
     ) {
@@ -66,17 +144,20 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         id = workspace.id
         title = workspace.title
         paneTree = workspace.paneTree
-        panels = workspace.panels
+        panels = workspace.panels.reduce(into: [:]) { partialResult, entry in
+            partialResult[entry.key] = WorkspaceLayoutPanelSnapshot(panelState: entry.value)
+        }
         focusedPanelID = workspace.focusedPanelID
         auxPanelVisibility = workspace.auxPanelVisibility
     }
 
     func makeWorkspaceState() -> WorkspaceState {
-        WorkspaceState(
+        let restoredPanels = makePanelsWithRestoredTerminalTitles()
+        return WorkspaceState(
             id: id,
             title: title,
             paneTree: paneTree,
-            panels: panels,
+            panels: restoredPanels,
             focusedPanelID: focusedPanelID,
             auxPanelVisibility: auxPanelVisibility,
             focusedPanelModeActive: false,
@@ -85,4 +166,61 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             recentlyClosedPanels: []
         )
     }
+
+    private func makePanelsWithRestoredTerminalTitles() -> [UUID: PanelState] {
+        let terminalTitleByPanelID = makeRestoredTerminalTitlesByPanelID()
+
+        return panels.reduce(into: [UUID: PanelState]()) { partialResult, entry in
+            let panelID = entry.key
+            switch entry.value {
+            case .terminal(let terminalSnapshot):
+                guard let title = terminalTitleByPanelID[panelID] else {
+                    preconditionFailure("Missing restored terminal title for panel \(panelID)")
+                }
+                partialResult[panelID] = .terminal(
+                    TerminalPanelState(title: title, shell: terminalSnapshot.shell, cwd: terminalSnapshot.cwd)
+                )
+            case .diff(let diffState):
+                partialResult[panelID] = .diff(diffState)
+            case .markdown(let markdownState):
+                partialResult[panelID] = .markdown(markdownState)
+            case .scratchpad(let scratchpadState):
+                partialResult[panelID] = .scratchpad(scratchpadState)
+            }
+        }
+    }
+
+    private func makeRestoredTerminalTitlesByPanelID() -> [UUID: String] {
+        var titleByPanelID: [UUID: String] = [:]
+        var nextTerminalNumber = 1
+
+        func assignTitleIfNeeded(_ panelID: UUID) {
+            guard titleByPanelID[panelID] == nil else { return }
+            titleByPanelID[panelID] = "\(Self.restoredTerminalTitlePrefix)\(nextTerminalNumber)"
+            nextTerminalNumber += 1
+        }
+
+        for leaf in paneTree.allLeafInfos {
+            for panelID in leaf.tabPanelIDs {
+                guard let panelSnapshot = panels[panelID],
+                      case .terminal = panelSnapshot else {
+                    continue
+                }
+                assignTitleIfNeeded(panelID)
+            }
+        }
+
+        let sortedPanelIDs = panels.keys.sorted { $0.uuidString < $1.uuidString }
+        for panelID in sortedPanelIDs {
+            guard let panelSnapshot = panels[panelID],
+                  case .terminal = panelSnapshot else {
+                continue
+            }
+            assignTitleIfNeeded(panelID)
+        }
+
+        return titleByPanelID
+    }
+
+    private static let restoredTerminalTitlePrefix = "Terminal "
 }
