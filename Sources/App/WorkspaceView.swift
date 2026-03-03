@@ -13,8 +13,8 @@ struct WorkspaceView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
 
-            if let workspace = store.selectedWorkspace {
-                workspaceContent(for: workspace)
+            if let window = store.selectedWindow {
+                workspaceStack(for: window)
             } else {
                 EmptyStateView()
             }
@@ -58,6 +58,30 @@ struct WorkspaceView: View {
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
         terminalRuntimeRegistry.splitFocusedPane(workspaceID: workspaceID, orientation: orientation)
+    }
+
+    private func workspaceStack(for window: WindowState) -> some View {
+        let missingWorkspaceIDs = window.workspaceIDs.filter { store.state.workspacesByID[$0] == nil }
+        assert(
+            missingWorkspaceIDs.isEmpty,
+            "Selected window references workspace(s) missing from state map: \(missingWorkspaceIDs)"
+        )
+
+        return ZStack {
+            ForEach(window.workspaceIDs, id: \.self) { workspaceID in
+                if let workspace = store.state.workspacesByID[workspaceID] {
+                    let isSelected = window.selectedWorkspaceID == workspaceID
+                    workspaceContent(for: workspace)
+                        // Keep non-selected workspaces mounted so background terminal
+                        // surfaces can continue emitting runtime actions (for example
+                        // desktop notifications and command-finished updates).
+                        .opacity(isSelected ? 1 : 0)
+                        .allowsHitTesting(isSelected)
+                        .accessibilityHidden(!isSelected)
+                        .zIndex(isSelected ? 1 : 0)
+                }
+            }
+        }
     }
 
     @ViewBuilder
