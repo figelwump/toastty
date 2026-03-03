@@ -30,9 +30,6 @@ final class TerminalProcessWorkingDirectoryResolver {
     private struct CachedProcessEntry {
         let pid: pid_t
         let startSignature: ProcessStartSignature
-        /// When true, `pid` is the intermediate `login` process and needs to be
-        /// upgraded to its shell child on the next resolution attempt.
-        let needsShellWalk: Bool
     }
 
     private let appPID: pid_t
@@ -40,6 +37,9 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// Panels that failed initial PID snapshot diff (child not visible yet).
     /// The poll loop will attempt deferred registration by scanning app children.
     private var pendingDeferredRegistration: Set<UUID> = []
+    /// Login PIDs whose shell children haven't spawned yet. Keyed by panel ID.
+    /// Resolved during the next CWD poll cycle.
+    private var pendingLoginPIDByPanelID: [UUID: pid_t] = [:]
 
     init() {
         appPID = getpid()
@@ -85,35 +85,30 @@ final class TerminalProcessWorkingDirectoryResolver {
             attemptDeferredRegistration(panelID: panelID)
         }
 
-        guard var entry = cachedProcessByPanelID[panelID] else {
-            return nil
-        }
-
-        // If we cached the login PID, try to upgrade to the shell child now.
-        if entry.needsShellWalk {
-            let children = childPIDs(of: entry.pid)
+        // Try to resolve pending login → shell walk.
+        if let loginPID = pendingLoginPIDByPanelID[panelID] {
+            let children = childPIDs(of: loginPID)
             if let shellPID = children.first,
-               let shellSignature = processStartSignature(pid: shellPID) {
-                let upgraded = CachedProcessEntry(
+               let signature = processStartSignature(pid: shellPID) {
+                pendingLoginPIDByPanelID.removeValue(forKey: panelID)
+                cachedProcessByPanelID[panelID] = CachedProcessEntry(
                     pid: shellPID,
-                    startSignature: shellSignature,
-                    needsShellWalk: false
+                    startSignature: signature
                 )
-                cachedProcessByPanelID[panelID] = upgraded
-                entry = upgraded
                 ToasttyLog.debug(
-                    "Upgraded cached login PID to shell PID",
+                    "Resolved deferred login→shell for panel",
                     category: .terminal,
                     metadata: [
                         "panel_id": panelID.uuidString,
+                        "login_pid": String(loginPID),
                         "shell_pid": String(shellPID),
                     ]
                 )
-            } else {
-                // Shell still not spawned — read CWD from login PID as fallback.
-                // The login process CWD is typically the user's home directory,
-                // which is better than nothing while the shell starts up.
             }
+        }
+
+        guard let entry = cachedProcessByPanelID[panelID] else {
+            return nil
         }
 
         // Validate the cached PID is still the same process (not recycled).
@@ -137,57 +132,50 @@ final class TerminalProcessWorkingDirectoryResolver {
     func invalidate(panelID: UUID) {
         cachedProcessByPanelID.removeValue(forKey: panelID)
         pendingDeferredRegistration.remove(panelID)
+        pendingLoginPIDByPanelID.removeValue(forKey: panelID)
     }
 
     // MARK: - Registration Helpers
 
-    /// Caches a login PID, immediately walking to the shell child if available.
-    /// If the shell hasn't spawned yet, caches the login PID with `needsShellWalk=true`
-    /// so the next poll can upgrade it without blocking.
+    /// Caches the shell child of a login PID for CWD tracking.
+    ///
+    /// The `login` process is root-owned and its info is unreadable via
+    /// `proc_pidinfo`, so we must resolve the user-owned shell child.
+    /// If the shell hasn't spawned yet, records the login PID for deferred
+    /// resolution during the next poll cycle.
     private func cacheLoginOrShell(panelID: UUID, loginPID: pid_t, source: String) {
         pendingDeferredRegistration.remove(panelID)
 
         let children = childPIDs(of: loginPID)
-        let resolvedPID: pid_t
-        let needsShellWalk: Bool
-
-        if let shellPID = children.first {
-            resolvedPID = shellPID
-            needsShellWalk = false
-        } else {
-            // Shell not spawned yet — cache login PID and upgrade lazily.
-            resolvedPID = loginPID
-            needsShellWalk = true
-        }
-
-        guard let signature = processStartSignature(pid: resolvedPID) else {
-            ToasttyLog.warning(
-                "Could not read start signature for new terminal process",
+        if let shellPID = children.first,
+           let signature = processStartSignature(pid: shellPID) {
+            cachedProcessByPanelID[panelID] = CachedProcessEntry(
+                pid: shellPID,
+                startSignature: signature
+            )
+            ToasttyLog.debug(
+                "Registered terminal process for panel",
                 category: .terminal,
                 metadata: [
                     "panel_id": panelID.uuidString,
                     "login_pid": String(loginPID),
-                    "resolved_pid": String(resolvedPID),
+                    "shell_pid": String(shellPID),
                     "source": source,
                 ]
             )
             return
         }
 
-        cachedProcessByPanelID[panelID] = CachedProcessEntry(
-            pid: resolvedPID,
-            startSignature: signature,
-            needsShellWalk: needsShellWalk
-        )
-
+        // Shell not spawned yet — record login PID for deferred resolution.
+        // We can't cache the login PID directly because it's root-owned and
+        // proc_pidinfo can't read its info or CWD.
+        pendingLoginPIDByPanelID[panelID] = loginPID
         ToasttyLog.debug(
-            "Registered terminal process for panel",
+            "Shell not spawned yet for login process; deferring shell resolution",
             category: .terminal,
             metadata: [
                 "panel_id": panelID.uuidString,
                 "login_pid": String(loginPID),
-                "resolved_pid": String(resolvedPID),
-                "needs_shell_walk": needsShellWalk ? "true" : "false",
                 "source": source,
             ]
         )
@@ -215,20 +203,25 @@ final class TerminalProcessWorkingDirectoryResolver {
 
     // MARK: - Low-Level Process Helpers
 
-    /// Returns direct child PIDs of `parentPID` using `proc_listchildpids`.
+    /// Returns child PIDs of `parentPID` using `proc_listpids(PROC_PPID_ONLY)`.
+    ///
+    /// We use `PROC_PPID_ONLY` instead of `proc_listchildpids` because the latter
+    /// silently skips children owned by a different UID (e.g. root-owned `login`
+    /// processes spawned by Ghostty). `PROC_PPID_ONLY` returns all children
+    /// regardless of UID.
     private func childPIDs(of parentPID: pid_t) -> [pid_t] {
-        // First call with nil buffer to get the count of child PIDs.
-        let estimatedBytes = proc_listchildpids(parentPID, nil, 0)
-        guard estimatedBytes > 0 else { return [] }
-
         let pidSize = MemoryLayout<pid_t>.stride
-        // Over-allocate slightly in case new children appear between calls.
-        let capacity = Int(estimatedBytes) / pidSize + 8
+        var capacity = 64
         var pids = Array(repeating: pid_t(0), count: capacity)
 
         let returnedBytes = pids.withUnsafeMutableBufferPointer { buffer -> Int32 in
             guard let base = buffer.baseAddress else { return 0 }
-            return proc_listchildpids(parentPID, base, Int32(buffer.count * pidSize))
+            return proc_listpids(
+                UInt32(PROC_PPID_ONLY),
+                UInt32(parentPID),
+                UnsafeMutableRawPointer(base),
+                Int32(buffer.count * pidSize)
+            )
         }
 
         guard returnedBytes > 0 else { return [] }
