@@ -37,7 +37,7 @@ struct RecentScreenshotsPanelView: View {
 
     private var screenshotList: some View {
         ScrollView {
-            VStack(spacing: 8) {
+            LazyVStack(spacing: 10) {
                 ForEach(Array(store.items.enumerated()), id: \.element.id) { index, item in
                     RecentScreenshotRow(
                         item: item,
@@ -68,26 +68,26 @@ private struct RecentScreenshotRow: View {
     let item: RecentScreenshotItem
     let index: Int
 
+    private static let previewHeight: CGFloat = 220
+
+    @State private var previewImage: NSImage?
+
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             thumbnail
 
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.displayName)
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(ToastyTheme.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            Text(item.capturedAt, format: .dateTime.month(.abbreviated).day().hour().minute())
+                .font(ToastyTheme.fontBody)
+                .foregroundStyle(ToastyTheme.primaryText)
 
-                Text(item.capturedAt, format: .dateTime.month().day().hour().minute().second())
-                    .font(ToastyTheme.fontWorkspaceSubtitle)
-                    .foregroundStyle(ToastyTheme.inactiveText)
-            }
-
-            Spacer(minLength: 0)
+            Text(item.displayName)
+                .font(ToastyTheme.fontWorkspaceSubtitle)
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .lineLimit(1)
+                .truncationMode(.middle)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
         .background(ToastyTheme.elevatedBackground)
         .overlay(
             Rectangle()
@@ -98,33 +98,47 @@ private struct RecentScreenshotRow: View {
             NSItemProvider(object: item.fileURL as NSURL)
         }
         .accessibilityIdentifier("screenshots.row.\(index)")
+        .task(id: item.id) {
+            await loadPreviewImageIfNeeded()
+        }
     }
 
-    @ViewBuilder
     private var thumbnail: some View {
-        if let image = NSImage(contentsOf: item.fileURL) {
-            Image(nsImage: image)
-                .resizable()
-                .scaledToFill()
-                .frame(width: 76, height: 46)
-                .clipped()
-                .overlay(
-                    Rectangle()
-                        .stroke(ToastyTheme.hairline, lineWidth: 1)
-                )
-        } else {
+        ZStack {
             Rectangle()
                 .fill(ToastyTheme.chromeBackground)
-                .frame(width: 76, height: 46)
-                .overlay(
-                    Image(systemName: "photo")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(ToastyTheme.inactiveText)
-                )
-                .overlay(
-                    Rectangle()
-                        .stroke(ToastyTheme.hairline, lineWidth: 1)
-                )
+
+            if let previewImage {
+                Image(nsImage: previewImage)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            } else {
+                Image(systemName: "photo")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+            }
         }
+        .frame(
+            maxWidth: .infinity,
+            minHeight: Self.previewHeight,
+            maxHeight: Self.previewHeight,
+            alignment: .center
+        )
+        .overlay(
+            Rectangle()
+                .stroke(ToastyTheme.hairline, lineWidth: 1)
+        )
+    }
+
+    @MainActor
+    private func loadPreviewImageIfNeeded() async {
+        guard previewImage == nil else { return }
+        let fileURL = item.fileURL
+        let imageData = await Task.detached(priority: .utility) {
+            try? Data(contentsOf: fileURL)
+        }.value
+        guard Task.isCancelled == false else { return }
+        previewImage = imageData.flatMap(NSImage.init(data:))
     }
 }

@@ -41,7 +41,11 @@ struct WorkspaceView: View {
             Text(store.selectedWorkspace?.title ?? "")
                 .font(ToastyTheme.fontTitle)
                 .foregroundStyle(ToastyTheme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .accessibilityIdentifier("topbar.workspace.title")
+
+            Spacer()
 
             auxToggle(
                 title: "Shots",
@@ -49,8 +53,6 @@ struct WorkspaceView: View {
                 kind: .screenshots,
                 identifier: "topbar.toggle.screenshots"
             )
-
-            Spacer()
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
