@@ -20,6 +20,7 @@ enum AutomationImageFileDropResult {
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
+    private var bindingEpochByPanelID: [UUID: UInt64] = [:]
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
@@ -93,6 +94,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return created
     }
 
+    func nextBindingEpoch(for panelID: UUID) -> UInt64 {
+        let nextEpoch = (bindingEpochByPanelID[panelID] ?? 0) &+ 1
+        bindingEpochByPanelID[panelID] = nextEpoch
+        return nextEpoch
+    }
+
     func synchronize(with state: AppState) {
         let livePanelIDs = Set(
             state.workspacesByID.values.flatMap { workspace in
@@ -108,6 +115,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         for panelID in controllers.keys where !livePanelIDs.contains(panelID) {
             controllers[panelID]?.invalidate()
             controllers.removeValue(forKey: panelID)
+            bindingEpochByPanelID.removeValue(forKey: panelID)
             #if TOASTTY_HAS_GHOSTTY_KIT
             processWorkingDirectoryResolver.invalidate(panelID: panelID)
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
@@ -2404,6 +2412,7 @@ final class TerminalSurfaceController {
     private unowned let registry: TerminalRuntimeRegistry
     private let hostedView: NSView
     private weak var activeSourceContainer: NSView?
+    private var activeBindingEpoch: UInt64 = 0
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private let terminalHostView: TerminalHostView
@@ -2485,12 +2494,14 @@ final class TerminalSurfaceController {
         #endif
     }
 
-    func attach(into container: NSView) {
+    func attach(into container: NSView, bindingEpoch: UInt64) {
+        guard bindingEpoch >= activeBindingEpoch else { return }
+        let sourceContainerChanged = activeSourceContainer !== container
+        let bindingEpochChanged = bindingEpoch > activeBindingEpoch
+        let hostedViewWillReattach = hostedView.superview !== container
+        activeBindingEpoch = bindingEpoch
         #if TOASTTY_HAS_GHOSTTY_KIT
         diagnostics.attachCount += 1
-        #endif
-        let sourceContainerChanged = activeSourceContainer !== container
-        #if TOASTTY_HAS_GHOSTTY_KIT
         if shouldIgnoreAttach(to: container) {
             ToasttyLog.debug(
                 "Ignoring terminal attach from detached container callback",
@@ -2502,7 +2513,7 @@ final class TerminalSurfaceController {
         #endif
 
         activeSourceContainer = container
-        if hostedView.superview !== container {
+        if hostedViewWillReattach {
             hostedView.removeFromSuperview()
             container.addSubview(hostedView)
             hostedView.translatesAutoresizingMaskIntoConstraints = false
@@ -2515,7 +2526,7 @@ final class TerminalSurfaceController {
         }
 
         #if TOASTTY_HAS_GHOSTTY_KIT
-        if sourceContainerChanged {
+        if sourceContainerChanged || bindingEpochChanged || hostedViewWillReattach {
             surfaceCreationStabilityPasses = 0
             lastSurfaceCreationSignature = nil
             lastSurfaceDeferralReason = nil
@@ -2530,23 +2541,21 @@ final class TerminalSurfaceController {
         fontPoints: Double,
         viewportSize: CGSize,
         backingScaleFactor: CGFloat,
-        sourceContainer: NSView
+        sourceContainer: NSView,
+        bindingEpoch: UInt64
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        guard bindingEpoch >= activeBindingEpoch else {
+            ToasttyLog.debug(
+                "Skipping terminal update from stale binding epoch",
+                category: .ghostty,
+                metadata: ["panel_id": panelID.uuidString]
+            )
+            return
+        }
         diagnostics.updateCount += 1
-        if activeSourceContainer !== sourceContainer {
-            if shouldPromoteSourceContainer(to: sourceContainer) {
-                attach(into: sourceContainer)
-            } else {
-                ToasttyLog.debug(
-                    "Skipping terminal update from stale container callback",
-                    category: .ghostty,
-                    metadata: [
-                        "panel_id": panelID.uuidString,
-                    ]
-                )
-                return
-            }
+        if activeSourceContainer !== sourceContainer || hostedView.superview !== sourceContainer {
+            attach(into: sourceContainer, bindingEpoch: bindingEpoch)
         }
 
         guard hostedView.superview === sourceContainer else {
@@ -2698,6 +2707,7 @@ final class TerminalSurfaceController {
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
+        activeBindingEpoch = 0
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }
@@ -3167,42 +3177,9 @@ extension TerminalSurfaceController {
         guard let activeSourceContainer else { return false }
         guard activeSourceContainer !== candidate else { return false }
         guard hostedView.superview != nil else { return false }
-        let activeAttached = containerIsAttachedAndVisible(activeSourceContainer)
+        let activeAttached = activeSourceContainer.window != nil && activeSourceContainer.superview != nil
         let candidateClearlyDetached = candidate.window == nil || candidate.superview == nil
         return activeAttached && candidateClearlyDetached
-    }
-
-    private func shouldPromoteSourceContainer(to candidate: NSView) -> Bool {
-        guard containerIsAttachedAndVisible(candidate) else {
-            return false
-        }
-        if hostedView.superview === candidate {
-            return true
-        }
-        guard let activeSourceContainer else {
-            return true
-        }
-        if activeSourceContainer === candidate {
-            return true
-        }
-        return !containerIsAttachedAndVisible(activeSourceContainer)
-    }
-
-    private func containerIsAttachedAndVisible(_ container: NSView?) -> Bool {
-        guard let container else { return false }
-        guard container.window != nil else { return false }
-        guard container.superview != nil else { return false }
-        guard !container.isHidden else { return false }
-        guard container.bounds.width > 1, container.bounds.height > 1 else { return false }
-
-        var ancestor = container.superview
-        while let view = ancestor {
-            if view.isHidden {
-                return false
-            }
-            ancestor = view.superview
-        }
-        return true
     }
 
     private func refreshSurfaceAfterContainerMove(sourceContainer: NSView) {
