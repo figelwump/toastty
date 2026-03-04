@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -6,6 +7,7 @@ struct WorkspaceView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
+    @State private var appIsActive = NSApplication.shared.isActive
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
 
@@ -24,6 +26,7 @@ struct WorkspaceView: View {
         }
         .background(ToastyTheme.surfaceBackground)
         .onAppear {
+            appIsActive = NSApplication.shared.isActive
             scheduleFocusedUnreadPanelClearIfNeeded()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
@@ -32,6 +35,12 @@ struct WorkspaceView: View {
         .onDisappear {
             focusedUnreadClearTask?.cancel()
             focusedUnreadClearTask = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            appIsActive = true
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            appIsActive = false
         }
     }
 
@@ -110,6 +119,7 @@ struct WorkspaceView: View {
             globalFontPoints: store.state.globalTerminalFontPoints,
             focusedPanelID: workspace.focusedPanelID,
             focusedPanelModeActive: workspace.focusedPanelModeActive,
+            appIsActive: appIsActive,
             unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
             terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
         )
@@ -262,6 +272,7 @@ private struct PaneNodeView: View {
     let globalFontPoints: Double
     let focusedPanelID: UUID?
     let focusedPanelModeActive: Bool
+    let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
 
@@ -284,6 +295,7 @@ private struct PaneNodeView: View {
                         hasUnreadNotification: workspace.unreadPanelIDs.contains(panelID),
                         shortcutNumber: terminalShortcutNumbersByPanelID[panelID],
                         globalFontPoints: globalFontPoints,
+                        appIsActive: appIsActive,
                         unfocusedSplitStyle: unfocusedSplitStyle,
                         store: store,
                         terminalRuntimeRegistry: terminalRuntimeRegistry
@@ -330,6 +342,7 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
+                                    appIsActive: appIsActive,
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
@@ -351,6 +364,7 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
+                                    appIsActive: appIsActive,
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
@@ -387,6 +401,7 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
+                                    appIsActive: appIsActive,
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
@@ -408,6 +423,7 @@ private struct PaneNodeView: View {
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
+                                    appIsActive: appIsActive,
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
@@ -494,6 +510,7 @@ private struct PanelCardView: View {
     let hasUnreadNotification: Bool
     let shortcutNumber: Int?
     let globalFontPoints: Double
+    let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -514,7 +531,7 @@ private struct PanelCardView: View {
 
                 Text(panelLabel)
                     .font(panelTitleFont)
-                    .foregroundStyle(ToastyTheme.primaryText)
+                    .foregroundStyle(panelTitleTextColor)
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -530,7 +547,7 @@ private struct PanelCardView: View {
             .background(ToastyTheme.elevatedBackground)
             .overlay(alignment: .bottom) {
                 Rectangle()
-                    .fill(isFocused ? ToastyTheme.accent : ToastyTheme.hairline)
+                    .fill(panelHeaderDividerColor)
                     .frame(height: 1)
             }
 
@@ -602,6 +619,23 @@ private struct PanelCardView: View {
             return ToastyTheme.fontMonoHeader
         }
         return ToastyTheme.fontMonoTerminalPaneTitle
+    }
+
+    private var panelTitleTextColor: Color {
+        guard case .terminal = panelState else {
+            return ToastyTheme.primaryText
+        }
+        return appIsActive ? ToastyTheme.primaryText : ToastyTheme.primaryText.opacity(0.68)
+    }
+
+    private var panelHeaderDividerColor: Color {
+        guard isFocused else {
+            return ToastyTheme.hairline
+        }
+        guard case .terminal = panelState else {
+            return ToastyTheme.accent
+        }
+        return appIsActive ? ToastyTheme.accent : ToastyTheme.accent.opacity(0.5)
     }
 
     @ViewBuilder
