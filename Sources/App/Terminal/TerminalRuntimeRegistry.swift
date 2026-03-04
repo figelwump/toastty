@@ -69,12 +69,18 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     @discardableResult
     func splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation) -> Bool {
-        sendSplitAction(.splitFocusedPane(workspaceID: workspaceID, orientation: orientation))
+        sendSplitAction(
+            workspaceID: workspaceID,
+            action: .splitFocusedPane(workspaceID: workspaceID, orientation: orientation)
+        )
     }
 
     @discardableResult
     func splitFocusedPaneInDirection(workspaceID: UUID, direction: PaneSplitDirection) -> Bool {
-        sendSplitAction(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: direction))
+        sendSplitAction(
+            workspaceID: workspaceID,
+            action: .splitFocusedPaneInDirection(workspaceID: workspaceID, direction: direction)
+        )
     }
 
     func controller(for panelID: UUID) -> TerminalSurfaceController {
@@ -322,32 +328,36 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
 private extension TerminalRuntimeRegistry {
     @discardableResult
-    func sendSplitAction(_ action: AppAction) -> Bool {
+    func sendSplitAction(workspaceID: UUID, action: AppAction) -> Bool {
         guard let store else { return false }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        refreshFocusedPanelCWDBeforeSplit(store: store)
+        refreshSplitSourcePanelCWDBeforeSplit(
+            workspaceID: workspaceID,
+            store: store
+        )
         #endif
         return store.send(action)
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
-    /// Refreshes the focused panel's CWD from its tracked process PID so the
+    /// Refreshes the split source panel CWD from its tracked process PID so the
     /// reducer reads a fresh value when creating the new split panel.
-    func refreshFocusedPanelCWDBeforeSplit(store: AppStore) {
+    func refreshSplitSourcePanelCWDBeforeSplit(workspaceID: UUID, store: AppStore) {
         let state = store.state
-        guard let workspaceID = selectedWorkspaceID(state: state),
-              let workspace = state.workspacesByID[workspaceID],
-              let focusedPanelID = workspace.focusedPanelID else {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let sourcePanelID = resolvedActionPanelID(in: workspace),
+              let panelState = workspace.panels[sourcePanelID],
+              case .terminal = panelState else {
             return
         }
         let now = Date()
-        guard shouldRunProcessCWDFallbackPoll(panelID: focusedPanelID, now: now) else {
+        guard shouldRunProcessCWDFallbackPoll(panelID: sourcePanelID, now: now) else {
             return
         }
-        recordProcessCWDFallbackPoll(panelID: focusedPanelID, now: now)
+        recordProcessCWDFallbackPoll(panelID: sourcePanelID, now: now)
 
         refreshWorkingDirectoryFromProcessIfNeeded(
-            panelID: focusedPanelID,
+            panelID: sourcePanelID,
             source: "pre_split_refresh"
         )
     }
