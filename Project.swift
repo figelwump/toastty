@@ -218,5 +218,20 @@ let project = Project(
                 )
             )
         ),
+        .scheme(
+            name: "ToasttyApp-Release",
+            buildAction: .buildAction(
+                targets: [
+                    .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                ]
+            ),
+            runAction: .runAction(
+                configuration: .release,
+                executable: .project(path: .relativeToRoot("."), target: "ToasttyApp")
+            ),
+            archiveAction: .archiveAction(
+                configuration: .release
+            )
+        ),
     ],
 )
