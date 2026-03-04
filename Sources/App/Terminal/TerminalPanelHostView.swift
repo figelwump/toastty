@@ -31,8 +31,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
         let coordinator = context.coordinator
         let generation = coordinator.advanceBindingGeneration()
         let controller = runtimeRegistry.controller(for: panelID)
-        let bindingEpoch = runtimeRegistry.nextBindingEpoch(for: panelID)
-        controller.attach(into: containerView, bindingEpoch: bindingEpoch)
+        controller.attach(into: containerView)
 
         let update = { [weak coordinator] (view: NSView) in
             guard let coordinator else { return }
@@ -45,8 +44,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
                 fontPoints: globalFontPoints,
                 viewportSize: view.bounds.size,
                 backingScaleFactor: scale,
-                sourceContainer: view,
-                bindingEpoch: bindingEpoch
+                sourceContainer: view
             )
         }
 
