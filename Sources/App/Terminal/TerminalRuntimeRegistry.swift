@@ -2413,7 +2413,6 @@ final class TerminalSurfaceController {
     private let hostedView: NSView
     private weak var activeSourceContainer: NSView?
     private var activeBindingEpoch: UInt64 = 0
-    private var hasCommittedViewportForCurrentBindingEpoch = false
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private let terminalHostView: TerminalHostView
@@ -2503,7 +2502,7 @@ final class TerminalSurfaceController {
         activeBindingEpoch = bindingEpoch
         #if TOASTTY_HAS_GHOSTTY_KIT
         diagnostics.attachCount += 1
-        if !bindingEpochChanged && shouldIgnoreAttach(to: container) {
+        if shouldIgnoreAttach(to: container) {
             ToasttyLog.debug(
                 "Ignoring terminal attach from detached container callback",
                 category: .ghostty,
@@ -2531,11 +2530,6 @@ final class TerminalSurfaceController {
             surfaceCreationStabilityPasses = 0
             lastSurfaceCreationSignature = nil
             lastSurfaceDeferralReason = nil
-            // Binding epoch can advance on normal SwiftUI updates; only clear
-            // viewport-commit state when the host attachment actually changes.
-            if sourceContainerChanged || hostedViewWillReattach {
-                hasCommittedViewportForCurrentBindingEpoch = false
-            }
             refreshSurfaceAfterContainerMove(sourceContainer: container)
         }
         #endif
@@ -2602,12 +2596,10 @@ final class TerminalSurfaceController {
             width: logicalWidth,
             height: logicalHeight
         ) {
-            // Keep an existing terminal surface visible while waiting for a
-            // stable viewport update so pane-close reparent races do not leave
-            // the promoted pane looking blank. New surfaces still stay hidden
-            // until they receive a valid first viewport.
-            hostedView.isHidden = !hasCommittedViewportForCurrentBindingEpoch
-            temporarilyHiddenForViewportDeferral = !hasCommittedViewportForCurrentBindingEpoch
+            // Keep the hosted terminal hidden until layout is stable enough for
+            // a valid viewport update; otherwise stale tiny geometry can flash.
+            hostedView.isHidden = true
+            temporarilyHiddenForViewportDeferral = true
             diagnostics.viewportDeferredCount += 1
             let reasonChanged = lastViewportDeferralReason != viewportDeferralReason
             lastViewportDeferralReason = viewportDeferralReason
@@ -2681,7 +2673,6 @@ final class TerminalSurfaceController {
         )
         hostedView.isHidden = false
         temporarilyHiddenForViewportDeferral = false
-        hasCommittedViewportForCurrentBindingEpoch = true
         resetViewportResumeStability()
         ghostty_surface_set_focus(ghosttySurface, focused)
         ensureFirstResponderIfNeeded(focused: focused)
@@ -2717,7 +2708,6 @@ final class TerminalSurfaceController {
         #endif
         activeSourceContainer = nil
         activeBindingEpoch = 0
-        hasCommittedViewportForCurrentBindingEpoch = false
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }
