@@ -1135,8 +1135,54 @@ struct AppReducerTests {
             return
         }
 
-        #expect(rootRatio == 0.5)
+        #expect(abs(rootRatio - (1.0 / 3.0)) < 0.0001)
         #expect(nestedRatio == 0.5)
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func equalizePaneSplitsBalancesRightSplitChainIntoThirds() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, .horizontal, let rootRatio, _, let second) = workspace.paneTree,
+              case .split(_, .horizontal, let nestedRatio, _, _) = second else {
+            Issue.record("expected right-leaning horizontal split chain")
+            return
+        }
+
+        #expect(abs(rootRatio - (1.0 / 3.0)) < 0.0001)
+        #expect(abs(nestedRatio - 0.5) < 0.0001)
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func equalizePaneSplitsBalancesLeftSplitChainIntoThirds() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left), state: &state))
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left), state: &state))
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, .horizontal, let rootRatio, let first, _) = workspace.paneTree,
+              case .split(_, .horizontal, let nestedRatio, _, _) = first else {
+            Issue.record("expected left-leaning horizontal split chain")
+            return
+        }
+
+        #expect(abs(rootRatio - (2.0 / 3.0)) < 0.0001)
+        #expect(abs(nestedRatio - 0.5) < 0.0001)
         #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }

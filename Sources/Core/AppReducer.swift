@@ -718,6 +718,7 @@ public struct AppReducer {
     private struct SplitEqualizeResult {
         let node: PaneNode
         let didMutate: Bool
+        let leafCount: Int
     }
 
     // Suppresses floating-point noise near clamp bounds; this must stay well below the
@@ -856,15 +857,18 @@ public struct AppReducer {
     private static func equalizeSplitRatios(in node: PaneNode) -> SplitEqualizeResult {
         switch node {
         case .leaf:
-            return SplitEqualizeResult(node: node, didMutate: false)
+            return SplitEqualizeResult(node: node, didMutate: false, leafCount: 1)
 
         case .split(let nodeID, let orientation, let ratio, let first, let second):
             let firstResult = equalizeSplitRatios(in: first)
             let secondResult = equalizeSplitRatios(in: second)
-            let targetRatio = 0.5
-            let didMutate = firstResult.didMutate || secondResult.didMutate || ratio != targetRatio
+            let totalLeafCount = firstResult.leafCount + secondResult.leafCount
+            let targetRatio = Double(firstResult.leafCount) / Double(totalLeafCount)
+            let didMutate = firstResult.didMutate
+                || secondResult.didMutate
+                || ratio != targetRatio
             guard didMutate else {
-                return SplitEqualizeResult(node: node, didMutate: false)
+                return SplitEqualizeResult(node: node, didMutate: false, leafCount: totalLeafCount)
             }
 
             return SplitEqualizeResult(
@@ -875,7 +879,8 @@ public struct AppReducer {
                     first: firstResult.node,
                     second: secondResult.node
                 ),
-                didMutate: didMutate
+                didMutate: didMutate,
+                leafCount: totalLeafCount
             )
         }
     }
