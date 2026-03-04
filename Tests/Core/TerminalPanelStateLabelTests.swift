@@ -59,14 +59,14 @@ struct TerminalPanelStateLabelTests {
     }
 
     @Test
-    func customTitleIsPreferredAndIncludesDirectoryContext() {
+    func customTitleIsPreferredWithoutDirectoryContext() {
         let state = TerminalPanelState(
             title: "Dev Server",
             shell: "zsh",
             cwd: "/tmp/api"
         )
 
-        #expect(state.displayPanelLabel == "Dev Server · tmp/api")
+        #expect(state.displayPanelLabel == "Dev Server")
     }
 
     @Test
@@ -93,7 +93,62 @@ struct TerminalPanelStateLabelTests {
     }
 
     @Test
-    func decoratedCustomTitleIncludingDirectoryIsNotDuplicated() {
+    func compactPathTitleIsTreatedAsDirectoryContext() {
+        let state = TerminalPanelState(
+            title: ".../GiantThings/repos/toastty",
+            shell: "zsh",
+            cwd: NSHomeDirectory() + "/GiantThings/repos/toastty"
+        )
+
+        #expect(state.displayPanelLabel == ".../GiantThings/repos/toastty")
+    }
+
+    @Test
+    func unicodeEllipsisPathTitleIsTreatedAsDirectoryContext() {
+        let state = TerminalPanelState(
+            title: "…/GiantThings/repos/toastty",
+            shell: "zsh",
+            cwd: NSHomeDirectory() + "/GiantThings/repos/toastty"
+        )
+
+        #expect(state.displayPanelLabel == ".../GiantThings/repos/toastty")
+    }
+
+    @Test
+    func pathLikeCustomTitleUsesDirectoryLabelWhenCWDPresent() {
+        let state = TerminalPanelState(
+            title: "/tmp/other",
+            shell: "zsh",
+            cwd: "/tmp/current"
+        )
+
+        #expect(state.displayPanelLabel == "tmp/current")
+    }
+
+    @Test
+    func fileURLCustomTitleUsesDirectoryLabelWhenCWDPresent() {
+        let state = TerminalPanelState(
+            title: "file:///tmp/other",
+            shell: "zsh",
+            cwd: "/tmp/current"
+        )
+
+        #expect(state.displayPanelLabel == "tmp/current")
+    }
+
+    @Test
+    func pathLikeCustomTitleWithoutDirectoryContextFallsBackToCustomTitle() {
+        let state = TerminalPanelState(
+            title: "/tmp/other",
+            shell: "zsh",
+            cwd: "   "
+        )
+
+        #expect(state.displayPanelLabel == "/tmp/other")
+    }
+
+    @Test
+    func decoratedCustomTitleIncludingDirectoryIsPreserved() {
         let state = TerminalPanelState(
             title: "Codex · .../GiantThings/repos/toastty",
             shell: "zsh",
