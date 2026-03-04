@@ -1135,7 +1135,9 @@ struct AppReducerTests {
             return
         }
 
-        #expect(abs(rootRatio - (1.0 / 3.0)) < 0.0001)
+        // Horizontal root with a vertical child subtree uses Ghostty semantics:
+        // opposite-orientation subtrees count as a single weight unit.
+        #expect(abs(rootRatio - 0.5) < 0.0001)
         #expect(nestedRatio == 0.5)
         #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
@@ -1183,6 +1185,169 @@ struct AppReducerTests {
 
         #expect(abs(rootRatio - (2.0 / 3.0)) < 0.0001)
         #expect(abs(nestedRatio - 0.5) < 0.0001)
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func equalizePaneSplitsBalancesDeepRightSplitChain() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, .horizontal, let rootRatio, _, let secondNode) = workspace.paneTree,
+              case .split(_, .horizontal, let secondRatio, _, let thirdNode) = secondNode,
+              case .split(_, .horizontal, let thirdRatio, _, _) = thirdNode else {
+            Issue.record("expected deep right-leaning horizontal split chain")
+            return
+        }
+
+        #expect(abs(rootRatio - 0.25) < 0.0001)
+        #expect(abs(secondRatio - (1.0 / 3.0)) < 0.0001)
+        #expect(abs(thirdRatio - 0.5) < 0.0001)
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func equalizePaneSplitsUsesOrientationAwareWeightsForMixedTree() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+
+        guard case .split(_, _, _, let first, let second) = workspace.paneTree,
+              case .leaf(let leftPaneID, let leftTabs, let leftSelectedIndex) = first,
+              case .leaf(let rightPaneID, let rightTabs, let rightSelectedIndex) = second,
+              let leftPanelID = leftTabs.first,
+              let rightPanelID = rightTabs.first else {
+            Issue.record("expected split-workspace fixture to expose two terminal leaves")
+            return
+        }
+
+        let leftSecondPanelID = UUID()
+        let rightThirdPanelID = UUID()
+        let rightFourthPanelID = UUID()
+        workspace.panels[leftSecondPanelID] = .terminal(
+            TerminalPanelState(title: "Terminal L2", shell: "zsh", cwd: "/tmp")
+        )
+        workspace.panels[rightThirdPanelID] = .terminal(
+            TerminalPanelState(title: "Terminal R3", shell: "zsh", cwd: "/tmp")
+        )
+        workspace.panels[rightFourthPanelID] = .terminal(
+            TerminalPanelState(title: "Terminal R4", shell: "zsh", cwd: "/tmp")
+        )
+
+        let leftSecondPaneID = UUID()
+        let rightThirdPaneID = UUID()
+        let rightFourthPaneID = UUID()
+
+        let leftSubtree = PaneNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.9,
+            first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: leftSelectedIndex),
+            second: .leaf(paneID: leftSecondPaneID, tabPanelIDs: [leftSecondPanelID], selectedIndex: 0)
+        )
+        let rightNestedSubtree = PaneNode.split(
+            nodeID: UUID(),
+            orientation: .vertical,
+            ratio: 0.9,
+            first: .leaf(paneID: rightThirdPaneID, tabPanelIDs: [rightThirdPanelID], selectedIndex: 0),
+            second: .leaf(paneID: rightFourthPaneID, tabPanelIDs: [rightFourthPanelID], selectedIndex: 0)
+        )
+        let rightSubtree = PaneNode.split(
+            nodeID: UUID(),
+            orientation: .vertical,
+            ratio: 0.9,
+            first: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: rightSelectedIndex),
+            second: rightNestedSubtree
+        )
+        workspace.paneTree = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.9,
+            first: leftSubtree,
+            second: rightSubtree
+        )
+        workspace.focusedPanelID = leftPanelID
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, .horizontal, let rootRatio, let updatedLeft, let updatedRight) = updatedWorkspace.paneTree,
+              case .split(_, .horizontal, let leftRatio, _, _) = updatedLeft,
+              case .split(_, .vertical, let rightRatio, _, let updatedRightNested) = updatedRight,
+              case .split(_, .vertical, let rightNestedRatio, _, _) = updatedRightNested else {
+            Issue.record("expected mixed-orientation split tree after equalize")
+            return
+        }
+
+        #expect(abs(rootRatio - (2.0 / 3.0)) < 0.0001)
+        #expect(abs(leftRatio - 0.5) < 0.0001)
+        #expect(abs(rightRatio - (1.0 / 3.0)) < 0.0001)
+        #expect(abs(rightNestedRatio - 0.5) < 0.0001)
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func equalizePaneSplitsTreatsOppositeOrientationSubtreeAsSingleWeight() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+
+        guard case .split(_, _, _, let first, let second) = workspace.paneTree,
+              case .leaf(let leftPaneID, let leftTabs, let leftSelectedIndex) = first,
+              case .leaf(let rightPaneID, let rightTabs, let rightSelectedIndex) = second,
+              let leftPanelID = leftTabs.first,
+              let rightPanelID = rightTabs.first else {
+            Issue.record("expected split-workspace fixture to expose two terminal leaves")
+            return
+        }
+
+        let topRightPanelID = UUID()
+        workspace.panels[topRightPanelID] = .terminal(
+            TerminalPanelState(title: "Terminal Top Right", shell: "zsh", cwd: "/tmp")
+        )
+        let topRightPaneID = UUID()
+
+        let topSubtree = PaneNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.8,
+            first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: leftSelectedIndex),
+            second: .leaf(paneID: topRightPaneID, tabPanelIDs: [topRightPanelID], selectedIndex: 0)
+        )
+        workspace.paneTree = .split(
+            nodeID: UUID(),
+            orientation: .vertical,
+            ratio: 0.8,
+            first: topSubtree,
+            second: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: rightSelectedIndex)
+        )
+        workspace.focusedPanelID = leftPanelID
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, .vertical, let rootRatio, let updatedFirst, _) = updatedWorkspace.paneTree,
+              case .split(_, .horizontal, let topRatio, _, _) = updatedFirst else {
+            Issue.record("expected vertical root with horizontal top subtree after equalize")
+            return
+        }
+
+        #expect(abs(rootRatio - 0.5) < 0.0001)
+        #expect(abs(topRatio - 0.5) < 0.0001)
         #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }

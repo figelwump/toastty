@@ -718,7 +718,6 @@ public struct AppReducer {
     private struct SplitEqualizeResult {
         let node: PaneNode
         let didMutate: Bool
-        let leafCount: Int
     }
 
     // Suppresses floating-point noise near clamp bounds; this must stay well below the
@@ -857,18 +856,20 @@ public struct AppReducer {
     private static func equalizeSplitRatios(in node: PaneNode) -> SplitEqualizeResult {
         switch node {
         case .leaf:
-            return SplitEqualizeResult(node: node, didMutate: false, leafCount: 1)
+            return SplitEqualizeResult(node: node, didMutate: false)
 
         case .split(let nodeID, let orientation, let ratio, let first, let second):
             let firstResult = equalizeSplitRatios(in: first)
             let secondResult = equalizeSplitRatios(in: second)
-            let totalLeafCount = firstResult.leafCount + secondResult.leafCount
-            let targetRatio = Double(firstResult.leafCount) / Double(totalLeafCount)
+            let firstWeight = equalizeWeight(in: firstResult.node, orientation: orientation)
+            let secondWeight = equalizeWeight(in: secondResult.node, orientation: orientation)
+            let totalWeight = firstWeight + secondWeight
+            let targetRatio = Double(firstWeight) / Double(totalWeight)
             let didMutate = firstResult.didMutate
                 || secondResult.didMutate
                 || ratio != targetRatio
             guard didMutate else {
-                return SplitEqualizeResult(node: node, didMutate: false, leafCount: totalLeafCount)
+                return SplitEqualizeResult(node: node, didMutate: false)
             }
 
             return SplitEqualizeResult(
@@ -879,9 +880,22 @@ public struct AppReducer {
                     first: firstResult.node,
                     second: secondResult.node
                 ),
-                didMutate: didMutate,
-                leafCount: totalLeafCount
+                didMutate: didMutate
             )
+        }
+    }
+
+    /// Match Ghostty equalization semantics:
+    /// only descendants with the same split orientation contribute recursive weight.
+    /// Opposite-orientation subtrees count as a single unit.
+    private static func equalizeWeight(in node: PaneNode, orientation: SplitOrientation) -> Int {
+        switch node {
+        case .leaf:
+            return 1
+        case .split(_, let nodeOrientation, _, let first, let second):
+            guard nodeOrientation == orientation else { return 1 }
+            return equalizeWeight(in: first, orientation: orientation)
+                + equalizeWeight(in: second, orientation: orientation)
         }
     }
 
