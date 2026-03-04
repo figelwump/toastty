@@ -62,8 +62,16 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
 
     public var displayPanelLabel: String {
         if let customTitle = normalizedCustomTitle {
-            if let directory = directoryLabel,
-               directory.caseInsensitiveCompare(customTitle) != .orderedSame {
+            if let directory = directoryLabel {
+                if customTitleMatchesCurrentDirectory(customTitle) {
+                    return directory
+                }
+                if customTitle.caseInsensitiveCompare(directory) == .orderedSame {
+                    return customTitle
+                }
+                if customTitleContainsDirectorySegment(customTitle, directoryLabel: directory) {
+                    return customTitle
+                }
                 return "\(customTitle) · \(directory)"
             }
             return customTitle
@@ -121,6 +129,69 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
             return lastComponent
         }
         return trimmed
+    }
+
+    private func customTitleMatchesCurrentDirectory(_ customTitle: String) -> Bool {
+        guard let titlePath = Self.canonicalPath(from: customTitle),
+              let cwdPath = Self.canonicalPath(from: cwd) else {
+            return false
+        }
+        return titlePath == cwdPath
+    }
+
+    private func customTitleContainsDirectorySegment(_ customTitle: String, directoryLabel: String) -> Bool {
+        let normalizedTitle = customTitle.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedDirectory = directoryLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedTitle.isEmpty == false,
+              normalizedDirectory.isEmpty == false else {
+            return false
+        }
+
+        let separators = ["·", "|", "—", "–"]
+        for separator in separators {
+            let prefixedPatterns = [
+                "\(separator)\(normalizedDirectory)",
+                "\(separator) \(normalizedDirectory)",
+            ]
+            for pattern in prefixedPatterns where normalizedTitle.contains(pattern) {
+                return true
+            }
+
+            let suffixedPatterns = [
+                "\(normalizedDirectory)\(separator)",
+                "\(normalizedDirectory) \(separator)",
+            ]
+            for pattern in suffixedPatterns where normalizedTitle.contains(pattern) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func canonicalPath(from candidate: String) -> String? {
+        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+
+        var path: String
+        if trimmed.hasPrefix("file://"),
+           let url = URL(string: trimmed),
+           url.isFileURL {
+            path = url.path
+        } else if trimmed.hasPrefix("~") || trimmed.hasPrefix("/") {
+            path = trimmed
+        } else {
+            return nil
+        }
+
+        let expanded = (path as NSString).expandingTildeInPath
+        guard expanded.isEmpty == false else {
+            return nil
+        }
+        let standardized = (expanded as NSString).standardizingPath
+        guard standardized.isEmpty == false else {
+            return nil
+        }
+        return (standardized as NSString).resolvingSymlinksInPath
     }
 
     private static func isDefaultTerminalTitle(_ title: String) -> Bool {

@@ -81,6 +81,40 @@ struct TerminalPanelStateLabelTests {
     }
 
     @Test
+    func pathCustomTitleMatchingCWDCompactsToDirectoryLabel() {
+        let cwd = NSHomeDirectory() + "/GiantThings/repos/toastty"
+        let state = TerminalPanelState(
+            title: cwd,
+            shell: "zsh",
+            cwd: cwd
+        )
+
+        #expect(state.displayPanelLabel == ".../GiantThings/repos/toastty")
+    }
+
+    @Test
+    func decoratedCustomTitleIncludingDirectoryIsNotDuplicated() {
+        let state = TerminalPanelState(
+            title: "Codex · .../GiantThings/repos/toastty",
+            shell: "zsh",
+            cwd: NSHomeDirectory() + "/GiantThings/repos/toastty"
+        )
+
+        #expect(state.displayPanelLabel == "Codex · .../GiantThings/repos/toastty")
+    }
+
+    @Test
+    func relativeCWDExactTitleMatchDoesNotDuplicate() {
+        let state = TerminalPanelState(
+            title: "repo",
+            shell: "zsh",
+            cwd: "repo"
+        )
+
+        #expect(state.displayPanelLabel == "repo")
+    }
+
+    @Test
     func bareTerminalTitleIsTreatedAsDefault() {
         let state = TerminalPanelState(
             title: "Terminal",
