@@ -153,9 +153,7 @@ struct SidebarView: View {
         isSelected: Bool
     ) -> some View {
         Button {
-            guard let windowID = store.selectedWindow?.id else { return }
-            cancelWorkspaceRename()
-            store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
+            handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
         } label: {
             workspaceRowContent(
                 workspace: workspace,
@@ -261,6 +259,19 @@ struct SidebarView: View {
                 }
             }
         )
+    }
+
+    private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
+        if let currentEvent = NSApp.currentEvent,
+           currentEvent.type == .leftMouseUp,
+           currentEvent.clickCount == 2 {
+            beginWorkspaceRename(workspace)
+            return
+        }
+
+        guard let windowID = store.selectedWindow?.id else { return }
+        cancelWorkspaceRename()
+        store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }
 
     private func beginWorkspaceRename(_ workspace: WorkspaceState) {
