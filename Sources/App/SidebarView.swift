@@ -85,7 +85,7 @@ struct SidebarView: View {
                         .frame(width: 2)
                 }
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SidebarRowButtonStyle())
             .accessibilityIdentifier("sidebar.workspaces.new")
         }
         .padding(.vertical, 10)
@@ -167,7 +167,7 @@ struct SidebarView: View {
                     .truncationMode(.tail)
             }
         }
-        .buttonStyle(.plain)
+        .buttonStyle(SidebarRowButtonStyle())
     }
 
     private func workspaceRenameRow(
@@ -398,5 +398,12 @@ struct SidebarView: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+/// Keeps sidebar rows visually stable while pressed (no default plain-style press highlight flash).
+private struct SidebarRowButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
     }
 }
