@@ -5,4 +5,5 @@ public enum PanelKind: String, Codable, CaseIterable, Hashable, Sendable {
     case diff
     case markdown
     case scratchpad
+    case screenshots
 }

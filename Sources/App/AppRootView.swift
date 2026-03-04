@@ -4,6 +4,7 @@ import SwiftUI
 struct AppRootView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var recentScreenshotsStore: RecentScreenshotsStore
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
     let disableAnimations: Bool
@@ -19,7 +20,11 @@ struct AppRootView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(width: 1)
 
-            WorkspaceView(store: store, terminalRuntimeRegistry: terminalRuntimeRegistry)
+            WorkspaceView(
+                store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                recentScreenshotsStore: recentScreenshotsStore
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ToastyTheme.chromeBackground)
@@ -32,6 +37,7 @@ struct AppRootView: View {
             }
         }
         .task {
+            recentScreenshotsStore.start()
             terminalRuntimeRegistry.synchronize(with: store.state)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
             terminalRuntimeRegistry.scheduleSelectedWorkspacePaneFocusRestore()
@@ -60,6 +66,7 @@ struct AppRootView: View {
             }
         }
         .onDisappear {
+            recentScreenshotsStore.stop()
             hideFontHUDTask?.cancel()
             hideFontHUDTask = nil
         }

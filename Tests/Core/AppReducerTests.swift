@@ -588,6 +588,25 @@ struct AppReducerTests {
     }
 
     @Test
+    func toggleScreenshotsPanelOnOffRoundTrip() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .screenshots), state: &state))
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.auxPanelVisibility.contains(.screenshots))
+        #expect(workspace.panels.values.contains(where: { $0.kind == .screenshots }))
+
+        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .screenshots), state: &state))
+        workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.auxPanelVisibility.contains(.screenshots) == false)
+        #expect(workspace.panels.values.contains(where: { $0.kind == .screenshots }) == false)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func toggleAuxPanelAddsSeparatePaneInRightColumn() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()

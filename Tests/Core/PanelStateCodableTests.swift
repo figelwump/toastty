@@ -10,6 +10,7 @@ struct PanelStateCodableTests {
             .diff(DiffPanelState(showStaged: true, mode: .followFocusedTerminal, loadingState: .computing)),
             .markdown(MarkdownPanelState(sourcePanelID: UUID(), filePath: "/tmp/README.md", rawMarkdown: "# title")),
             .scratchpad(ScratchpadPanelState(documentID: UUID())),
+            .screenshots(ScreenshotsPanelState()),
         ]
 
         let encoder = JSONEncoder()
@@ -19,6 +20,14 @@ struct PanelStateCodableTests {
             let encoded = try encoder.encode(panel)
             let decoded = try decoder.decode(PanelState.self, from: encoded)
             #expect(decoded == panel)
+        }
+    }
+
+    @Test
+    func decodingScreenshotsPanelWithoutPayloadFails() throws {
+        let invalidJSON = #"{"kind":"screenshots"}"#.data(using: .utf8) ?? Data()
+        #expect(throws: DecodingError.self) {
+            _ = try JSONDecoder().decode(PanelState.self, from: invalidJSON)
         }
     }
 }
