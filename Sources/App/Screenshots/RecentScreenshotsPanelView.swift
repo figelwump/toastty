@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import SwiftUI
 
 struct RecentScreenshotsPanelView: View {
@@ -69,6 +70,8 @@ private struct RecentScreenshotRow: View {
     let index: Int
 
     private static let previewHeight: CGFloat = 220
+    private static let thumbnailCache = NSCache<NSString, NSImage>()
+    private static let thumbnailScaleFactor: CGFloat = 2
 
     @State private var previewImage: NSImage?
 
@@ -134,11 +137,66 @@ private struct RecentScreenshotRow: View {
     @MainActor
     private func loadPreviewImageIfNeeded() async {
         guard previewImage == nil else { return }
+        let cacheKey = thumbnailCacheKey
+        if let cachedThumbnail = Self.thumbnailCache.object(forKey: cacheKey) {
+            previewImage = cachedThumbnail
+            return
+        }
+
         let fileURL = item.fileURL
-        let imageData = await Task.detached(priority: .utility) {
-            try? Data(contentsOf: fileURL)
+        let thumbnailScaleFactor = Self.thumbnailScaleFactor
+        let thumbnailMaxPixelSize = Int(Self.previewHeight * thumbnailScaleFactor)
+        let thumbnailImage = await Task.detached(priority: .utility) {
+            Self.loadThumbnailImage(
+                fileURL: fileURL,
+                maxPixelSize: thumbnailMaxPixelSize,
+                scaleFactor: thumbnailScaleFactor
+            )
         }.value
         guard Task.isCancelled == false else { return }
-        previewImage = imageData.flatMap(NSImage.init(data:))
+        if let thumbnailImage {
+            Self.thumbnailCache.setObject(thumbnailImage, forKey: cacheKey)
+        }
+        previewImage = thumbnailImage
+    }
+
+    private var thumbnailCacheKey: NSString {
+        NSString(string: "\(item.id)#\(item.contentModifiedAt.timeIntervalSinceReferenceDate)")
+    }
+
+    nonisolated private static func loadThumbnailImage(
+        fileURL: URL,
+        maxPixelSize: Int,
+        scaleFactor: CGFloat
+    ) -> NSImage? {
+        let sourceOptions: [CFString: Any] = [
+            kCGImageSourceShouldCache: false,
+        ]
+        guard let source = CGImageSourceCreateWithURL(fileURL as CFURL, sourceOptions as CFDictionary) else {
+            return NSImage(contentsOf: fileURL)
+        }
+
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(1, maxPixelSize),
+        ]
+        guard let cgThumbnail = CGImageSourceCreateThumbnailAtIndex(
+            source,
+            0,
+            thumbnailOptions as CFDictionary
+        ) else {
+            return NSImage(contentsOf: fileURL)
+        }
+
+        let normalizedScaleFactor = max(1, scaleFactor)
+        let pointSize = NSSize(
+            width: CGFloat(cgThumbnail.width) / normalizedScaleFactor,
+            height: CGFloat(cgThumbnail.height) / normalizedScaleFactor
+        )
+        return NSImage(
+            cgImage: cgThumbnail,
+            size: pointSize
+        )
     }
 }

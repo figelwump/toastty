@@ -2,9 +2,23 @@ import Foundation
 import CoreState
 import UniformTypeIdentifiers
 
+private let commonImageFileExtensions: Set<String> = [
+    "png",
+    "jpg",
+    "jpeg",
+    "heic",
+    "heif",
+    "gif",
+    "tif",
+    "tiff",
+    "bmp",
+    "webp",
+]
+
 struct RecentScreenshotItem: Identifiable, Equatable, Sendable {
     let fileURL: URL
     let capturedAt: Date
+    let contentModifiedAt: Date
 
     var id: String {
         fileURL.standardizedFileURL.path(percentEncoded: false)
@@ -183,7 +197,6 @@ final class RecentScreenshotsStore: ObservableObject {
 
         let resourceKeys: Set<URLResourceKey> = [
             .isRegularFileKey,
-            .contentTypeKey,
             .creationDateKey,
             .contentModificationDateKey,
         ]
@@ -207,18 +220,20 @@ final class RecentScreenshotsStore: ObservableObject {
                   resourceValues.isRegularFile == true else {
                 continue
             }
-            guard Self.isImageFile(entry, resourceValues: resourceValues) else {
+            guard Self.isImageFile(entry) else {
                 continue
             }
 
             let capturedAt = resourceValues.creationDate
                 ?? resourceValues.contentModificationDate
                 ?? Date.distantPast
+            let contentModifiedAt = resourceValues.contentModificationDate ?? capturedAt
 
             collectedItems.append(
                 RecentScreenshotItem(
                     fileURL: entry.standardizedFileURL,
-                    capturedAt: capturedAt
+                    capturedAt: capturedAt,
+                    contentModifiedAt: contentModifiedAt
                 )
             )
         }
@@ -237,8 +252,19 @@ final class RecentScreenshotsStore: ObservableObject {
         return .success(collectedItems)
     }
 
-    nonisolated private static func isImageFile(_ fileURL: URL, resourceValues: URLResourceValues) -> Bool {
-        if let contentType = resourceValues.contentType {
+    nonisolated private static func isImageFile(_ fileURL: URL) -> Bool {
+        let normalizedExtension = fileURL.pathExtension.lowercased()
+        if normalizedExtension.isEmpty == false {
+            if commonImageFileExtensions.contains(normalizedExtension) {
+                return true
+            }
+            if let inferredType = UTType(filenameExtension: normalizedExtension) {
+                return inferredType.conforms(to: .image)
+            }
+            return false
+        }
+
+        if let contentType = try? fileURL.resourceValues(forKeys: [.contentTypeKey]).contentType {
             return contentType.conforms(to: .image)
         }
 
