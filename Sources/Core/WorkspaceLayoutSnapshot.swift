@@ -58,6 +58,7 @@ public enum WorkspaceLayoutPanelSnapshot: Equatable, Sendable {
     case diff(DiffPanelState)
     case markdown(MarkdownPanelState)
     case scratchpad(ScratchpadPanelState)
+    case screenshots(ScreenshotsPanelState)
 
     init(panelState: PanelState) {
         switch panelState {
@@ -69,6 +70,8 @@ public enum WorkspaceLayoutPanelSnapshot: Equatable, Sendable {
             self = .markdown(markdownState)
         case .scratchpad(let scratchpadState):
             self = .scratchpad(scratchpadState)
+        case .screenshots(let screenshotsState):
+            self = .screenshots(screenshotsState)
         }
     }
 }
@@ -80,6 +83,7 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
         case diff
         case markdown
         case scratchpad
+        case screenshots
     }
 
     public init(from decoder: Decoder) throws {
@@ -94,6 +98,8 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
             self = .markdown(try container.decode(MarkdownPanelState.self, forKey: .markdown))
         case .scratchpad:
             self = .scratchpad(try container.decode(ScratchpadPanelState.self, forKey: .scratchpad))
+        case .screenshots:
+            self = .screenshots(try container.decode(ScreenshotsPanelState.self, forKey: .screenshots))
         }
     }
 
@@ -112,6 +118,9 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
         case .scratchpad(let value):
             try container.encode(PanelKind.scratchpad, forKey: .kind)
             try container.encode(value, forKey: .scratchpad)
+        case .screenshots(let value):
+            try container.encode(PanelKind.screenshots, forKey: .kind)
+            try container.encode(value, forKey: .screenshots)
         }
     }
 }
@@ -186,6 +195,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
                 partialResult[panelID] = .markdown(markdownState)
             case .scratchpad(let scratchpadState):
                 partialResult[panelID] = .scratchpad(scratchpadState)
+            case .screenshots(let screenshotsState):
+                partialResult[panelID] = .screenshots(screenshotsState)
             }
         }
     }

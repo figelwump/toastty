@@ -237,6 +237,7 @@ struct ToasttyApp: App {
     private var reloadConfigurationMenuIconInstaller
     @StateObject private var store: AppStore
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @StateObject private var recentScreenshotsStore: RecentScreenshotsStore
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -257,6 +258,7 @@ struct ToasttyApp: App {
             persistTerminalFontPreference: persistTerminalFontPreference
         )
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let recentScreenshotsStore = RecentScreenshotsStore()
         terminalRuntimeRegistry.bind(store: store)
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
@@ -277,6 +279,7 @@ struct ToasttyApp: App {
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
+        _recentScreenshotsStore = StateObject(wrappedValue: recentScreenshotsStore)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
 
@@ -326,6 +329,7 @@ struct ToasttyApp: App {
             AppRootView(
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                recentScreenshotsStore: recentScreenshotsStore,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 disableAnimations: disableAnimations
@@ -373,6 +377,11 @@ struct ToasttyApp: App {
                     toggleFocusedPanelFromSelection()
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(store.selectedWorkspace == nil)
+
+                Button("Toggle Screenshots Panel") {
+                    toggleScreenshotsPanelFromSelection()
+                }
                 .disabled(store.selectedWorkspace == nil)
 
                 if let window = store.selectedWindow {
@@ -438,6 +447,11 @@ struct ToasttyApp: App {
     private func toggleFocusedPanelFromSelection() {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
         store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+    }
+
+    private func toggleScreenshotsPanelFromSelection() {
+        guard let workspaceID = store.selectedWorkspace?.id else { return }
+        store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .screenshots))
     }
 
     private func closeFocusedPanelFromSelection() {

@@ -5,6 +5,7 @@ import SwiftUI
 struct WorkspaceView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let recentScreenshotsStore: RecentScreenshotsStore
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -49,9 +50,18 @@ struct WorkspaceView: View {
             Text(store.selectedWorkspace?.title ?? "")
                 .font(ToastyTheme.fontTitle)
                 .foregroundStyle(ToastyTheme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .accessibilityIdentifier("topbar.workspace.title")
 
             Spacer()
+
+            auxToggle(
+                title: "Shots",
+                systemImage: "photo.on.rectangle.angled",
+                kind: .screenshots,
+                identifier: "topbar.toggle.screenshots"
+            )
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
@@ -116,6 +126,7 @@ struct WorkspaceView: View {
             workspace: workspace,
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            recentScreenshotsStore: recentScreenshotsStore,
             globalFontPoints: store.state.globalTerminalFontPoints,
             focusedPanelID: workspace.focusedPanelID,
             focusedPanelModeActive: workspace.focusedPanelModeActive,
@@ -269,6 +280,7 @@ private struct PaneNodeView: View {
     let workspace: WorkspaceState
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let recentScreenshotsStore: RecentScreenshotsStore
     let globalFontPoints: Double
     let focusedPanelID: UUID?
     let focusedPanelModeActive: Bool
@@ -297,6 +309,7 @@ private struct PaneNodeView: View {
                         globalFontPoints: globalFontPoints,
                         appIsActive: appIsActive,
                         unfocusedSplitStyle: unfocusedSplitStyle,
+                        recentScreenshotsStore: recentScreenshotsStore,
                         store: store,
                         terminalRuntimeRegistry: terminalRuntimeRegistry
                     )
@@ -339,6 +352,7 @@ private struct PaneNodeView: View {
                                     workspace: workspace,
                                     store: store,
                                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    recentScreenshotsStore: recentScreenshotsStore,
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
@@ -361,6 +375,7 @@ private struct PaneNodeView: View {
                                     workspace: workspace,
                                     store: store,
                                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    recentScreenshotsStore: recentScreenshotsStore,
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
@@ -398,6 +413,7 @@ private struct PaneNodeView: View {
                                     workspace: workspace,
                                     store: store,
                                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    recentScreenshotsStore: recentScreenshotsStore,
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
@@ -420,6 +436,7 @@ private struct PaneNodeView: View {
                                     workspace: workspace,
                                     store: store,
                                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                    recentScreenshotsStore: recentScreenshotsStore,
                                     globalFontPoints: globalFontPoints,
                                     focusedPanelID: focusedPanelID,
                                     focusedPanelModeActive: focusedPanelModeActive,
@@ -512,6 +529,7 @@ private struct PanelCardView: View {
     let globalFontPoints: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
+    let recentScreenshotsStore: RecentScreenshotsStore
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
 
@@ -581,6 +599,8 @@ private struct PanelCardView: View {
                 auxPanelPlaceholder(title: "Markdown Panel")
             case .scratchpad:
                 auxPanelPlaceholder(title: "Scratchpad Panel")
+            case .screenshots:
+                RecentScreenshotsPanelView(store: recentScreenshotsStore)
             }
         }
         .background(ToastyTheme.surfaceBackground)
@@ -605,6 +625,8 @@ private struct PanelCardView: View {
             return "Markdown Panel"
         case .scratchpad:
             return "Scratchpad Panel"
+        case .screenshots:
+            return "Screenshots"
         }
     }
 

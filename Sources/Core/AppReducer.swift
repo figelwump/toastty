@@ -1234,10 +1234,12 @@ public struct AppReducer {
             return .markdown(MarkdownPanelState())
         case .scratchpad:
             return .scratchpad(ScratchpadPanelState())
+        case .screenshots:
+            return .screenshots(ScreenshotsPanelState())
         }
     }
 
-    private static let auxiliaryPanelKinds: Set<PanelKind> = [.diff, .markdown, .scratchpad]
+    private static let auxiliaryPanelKinds: Set<PanelKind> = [.diff, .markdown, .scratchpad, .screenshots]
 }
 
 private struct PanelLocation {

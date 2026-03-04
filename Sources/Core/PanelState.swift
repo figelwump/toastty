@@ -197,11 +197,16 @@ public struct ScratchpadPanelState: Codable, Equatable, Sendable {
     }
 }
 
+public struct ScreenshotsPanelState: Codable, Equatable, Sendable {
+    public init() {}
+}
+
 public enum PanelState: Equatable, Sendable {
     case terminal(TerminalPanelState)
     case diff(DiffPanelState)
     case markdown(MarkdownPanelState)
     case scratchpad(ScratchpadPanelState)
+    case screenshots(ScreenshotsPanelState)
 
     public var kind: PanelKind {
         switch self {
@@ -213,6 +218,8 @@ public enum PanelState: Equatable, Sendable {
             return .markdown
         case .scratchpad:
             return .scratchpad
+        case .screenshots:
+            return .screenshots
         }
     }
 
@@ -226,6 +233,8 @@ public enum PanelState: Equatable, Sendable {
             return "Markdown"
         case .scratchpad:
             return "Scratchpad"
+        case .screenshots:
+            return "Screenshots"
         }
     }
 }
@@ -237,6 +246,7 @@ extension PanelState: Codable {
         case diff
         case markdown
         case scratchpad
+        case screenshots
     }
 
     public init(from decoder: Decoder) throws {
@@ -251,6 +261,8 @@ extension PanelState: Codable {
             self = .markdown(try container.decode(MarkdownPanelState.self, forKey: .markdown))
         case .scratchpad:
             self = .scratchpad(try container.decode(ScratchpadPanelState.self, forKey: .scratchpad))
+        case .screenshots:
+            self = .screenshots(try container.decode(ScreenshotsPanelState.self, forKey: .screenshots))
         }
     }
 
@@ -266,6 +278,8 @@ extension PanelState: Codable {
             try container.encode(value, forKey: .markdown)
         case .scratchpad(let value):
             try container.encode(value, forKey: .scratchpad)
+        case .screenshots(let value):
+            try container.encode(value, forKey: .screenshots)
         }
     }
 }
