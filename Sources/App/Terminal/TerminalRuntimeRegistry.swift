@@ -974,6 +974,12 @@ private extension TerminalRuntimeRegistry {
             visibleText: visibleText
         )
         guard let inferredAgentKind else {
+            // Clear stale agent activity after the pane returns to an
+            // interactive shell prompt. This avoids lingering sidebar status
+            // while also tolerating transient inference misses mid-run.
+            if Self.visibleTextShowsInteractiveShellPrompt(visibleText) {
+                panelActivityByPanelID.removeValue(forKey: panelID)
+            }
             return
         }
 
