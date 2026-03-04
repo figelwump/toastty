@@ -29,6 +29,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var titleBeforeAgentInferenceByPanelID: [UUID: String] = [:]
     private var suppressedAgentTitleInferencePanelIDs: Set<UUID> = []
+    private var nativeCWDLastSignalAtByPanelID: [UUID: Date] = [:]
+    private var nativeCWDLastProcessFallbackPollAtByPanelID: [UUID: Date] = [:]
     private var panelActivityByPanelID: [UUID: PanelActivityState] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
@@ -104,6 +106,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
             processWorkingDirectoryResolver.invalidate(panelID: panelID)
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
             suppressedAgentTitleInferencePanelIDs.remove(panelID)
+            nativeCWDLastSignalAtByPanelID.removeValue(forKey: panelID)
+            nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
             panelActivityByPanelID.removeValue(forKey: panelID)
             #endif
         }
@@ -336,6 +340,11 @@ private extension TerminalRuntimeRegistry {
               let focusedPanelID = workspace.focusedPanelID else {
             return
         }
+        let now = Date()
+        guard shouldRunProcessCWDFallbackPoll(panelID: focusedPanelID, now: now) else {
+            return
+        }
+        recordProcessCWDFallbackPoll(panelID: focusedPanelID, now: now)
 
         refreshWorkingDirectoryFromProcessIfNeeded(
             panelID: focusedPanelID,
@@ -562,6 +571,48 @@ private extension TerminalRuntimeRegistry {
         processWorkingDirectoryResolver.invalidate(panelID: panelID)
         titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
         suppressedAgentTitleInferencePanelIDs.remove(panelID)
+        nativeCWDLastSignalAtByPanelID.removeValue(forKey: panelID)
+        nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
+    }
+
+    func panelHasNativeCWDSignal(panelID: UUID) -> Bool {
+        nativeCWDLastSignalAtByPanelID[panelID] != nil
+    }
+
+    func prefersNativeCWDSignal(panelID: UUID, now: Date = Date()) -> Bool {
+        guard let lastSignalAt = nativeCWDLastSignalAtByPanelID[panelID] else {
+            return false
+        }
+        return now.timeIntervalSince(lastSignalAt) <= Self.nativeCWDSignalFreshnessInterval
+    }
+
+    func shouldRunProcessCWDFallbackPoll(panelID: UUID, now: Date = Date()) -> Bool {
+        guard panelHasNativeCWDSignal(panelID: panelID) else {
+            return true
+        }
+        guard let lastPollAt = nativeCWDLastProcessFallbackPollAtByPanelID[panelID] else {
+            return true
+        }
+        return now.timeIntervalSince(lastPollAt) >= Self.nativeCWDProcessFallbackPollInterval
+    }
+
+    func recordProcessCWDFallbackPoll(panelID: UUID, now: Date = Date()) {
+        nativeCWDLastProcessFallbackPollAtByPanelID[panelID] = now
+    }
+
+    func recordNativeCWDSignal(panelID: UUID, now: Date = Date()) {
+        let isFirstSignal = nativeCWDLastSignalAtByPanelID[panelID] == nil
+        nativeCWDLastSignalAtByPanelID[panelID] = now
+        // Seed fallback polling from the native signal timestamp so we do not
+        // immediately overwrite a fresh callback with a process poll.
+        nativeCWDLastProcessFallbackPollAtByPanelID[panelID] = now
+        if isFirstSignal {
+            ToasttyLog.info(
+                "Detected native Ghostty cwd callback for terminal panel; process cwd polling will be treated as fallback",
+                category: .terminal,
+                metadata: ["panel_id": panelID.uuidString]
+            )
+        }
     }
 
     func snapshotChildPIDsForSurfaceCreation() -> Set<pid_t> {
@@ -720,11 +771,15 @@ private extension TerminalRuntimeRegistry {
 
         let panelIDs = visibleTerminalPanelIDs(in: workspace)
         guard panelIDs.isEmpty == false else { return }
+        let now = Date()
         for panelID in panelIDs {
-            _ = refreshWorkingDirectoryFromProcessIfNeeded(
-                panelID: panelID,
-                source: "process_poll"
-            )
+            if shouldRunProcessCWDFallbackPoll(panelID: panelID, now: now) {
+                recordProcessCWDFallbackPoll(panelID: panelID, now: now)
+                _ = refreshWorkingDirectoryFromProcessIfNeeded(
+                    panelID: panelID,
+                    source: "process_poll"
+                )
+            }
             refreshAgentTitleFromVisibleTextIfNeeded(panelID: panelID, state: state)
         }
     }
@@ -1174,18 +1229,24 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         // Metadata updates should not steal focus.
         switch action.intent {
         case .setTerminalTitle(let title):
+            let now = Date()
             return handleTerminalMetadataUpdate(
                 title: title,
                 cwd: nil,
+                allowLegacyCWDInference: prefersNativeCWDSignal(panelID: panelID, now: now) == false,
                 workspaceID: workspaceIDForAction,
                 panelID: panelID,
                 state: state,
                 store: store
             )
         case .setTerminalCWD(let cwd):
+            if Self.normalizedCWDValue(cwd) != nil {
+                recordNativeCWDSignal(panelID: panelID)
+            }
             return handleTerminalMetadataUpdate(
                 title: nil,
                 cwd: cwd,
+                allowLegacyCWDInference: false,
                 workspaceID: workspaceIDForAction,
                 panelID: panelID,
                 state: state,
@@ -1458,6 +1519,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private func handleTerminalMetadataUpdate(
         title: String?,
         cwd: String?,
+        allowLegacyCWDInference: Bool,
         workspaceID: UUID,
         panelID: UUID,
         state: AppState,
@@ -1480,14 +1542,16 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         let normalizedTitle = Self.normalizedMetadataValue(title)
         var normalizedCWD = Self.normalizedCWDValue(cwd)
         var cwdSource = "explicit"
-        if normalizedCWD == nil,
+        if allowLegacyCWDInference,
+           normalizedCWD == nil,
            let normalizedTitle {
             normalizedCWD = Self.inferredCWDFromTitle(normalizedTitle, currentCWD: terminalState.cwd)
             if normalizedCWD != nil {
                 cwdSource = "title_inference"
             }
         }
-        if normalizedCWD == nil,
+        if allowLegacyCWDInference,
+           normalizedCWD == nil,
            cwd == nil,
            let normalizedTitle,
            normalizedTitle != terminalState.title,
@@ -1574,6 +1638,9 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState,
         store: AppStore
     ) -> Bool {
+        guard prefersNativeCWDSignal(panelID: panelID) == false else {
+            return true
+        }
         guard let workspace = state.workspacesByID[workspaceID],
               let panelState = workspace.panels[panelID],
               case .terminal(let terminalState) = panelState else {
@@ -1599,6 +1666,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return handleTerminalMetadataUpdate(
             title: nil,
             cwd: inferredCWD,
+            allowLegacyCWDInference: true,
             workspaceID: workspaceID,
             panelID: panelID,
             state: state,
@@ -2265,6 +2333,10 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let defaultTerminalTitleAfterAgentInferenceRestore = "Terminal"
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
+    // Consider native cwd callbacks authoritative for a short grace period.
+    private static let nativeCWDSignalFreshnessInterval: TimeInterval = 120
+    // Keep process-based cwd sync as a low-frequency fallback once native callbacks are observed.
+    private static let nativeCWDProcessFallbackPollInterval: TimeInterval = 30
     private static let activityCommandCharacterLimit = 96
     // Keep command-first summaries short-lived so stale process labels clear quickly.
     private static let activityCommandFreshnessInterval: TimeInterval = 60

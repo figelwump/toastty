@@ -1,6 +1,7 @@
 #if TOASTTY_HAS_GHOSTTY_KIT
 import AppKit
 import CoreState
+import Darwin
 import Foundation
 import GhosttyKit
 import UniformTypeIdentifiers
@@ -569,6 +570,7 @@ final class GhosttyRuntimeManager {
 
     private static let ghosttyConfigPathEnvironmentKey = "TOASTTY_GHOSTTY_CONFIG_PATH"
     private static let ghosttyParseCLIArgsEnvironmentKey = "TOASTTY_GHOSTTY_PARSE_CLI_ARGS"
+    private static let ghosttyResourcesDirectoryEnvironmentKey = "GHOSTTY_RESOURCES_DIR"
 
     weak var actionHandler: (any GhosttyRuntimeActionHandling)?
 
@@ -735,7 +737,8 @@ final class GhosttyRuntimeManager {
     }
 
     private static func initializeGhosttyRuntime() -> Bool {
-        ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
+        configureGhosttyResourcesDirectoryEnvironmentIfNeeded()
+        return ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
     }
 
     private static func loadGhosttyConfig(_ config: ghostty_config_t) -> GhosttyConfigSource {
@@ -843,6 +846,137 @@ final class GhosttyRuntimeManager {
             }
         }
         return nil
+    }
+
+    private static func configureGhosttyResourcesDirectoryEnvironmentIfNeeded() {
+        let environment = ProcessInfo.processInfo.environment
+        let key = ghosttyResourcesDirectoryEnvironmentKey
+        let existingRawValue = environment[key]
+        let existingPath = normalizedConfigPath(from: existingRawValue)
+
+        if let existingPath {
+            if hasGhosttyShellIntegrationResources(at: existingPath) {
+                ToasttyLog.debug(
+                    "Using configured Ghostty resources directory",
+                    category: .ghostty,
+                    metadata: ["path": existingPath]
+                )
+                return
+            }
+            ToasttyLog.warning(
+                "Configured Ghostty resources directory is missing shell integration assets; attempting auto-detection",
+                category: .ghostty,
+                metadata: [
+                    "path": existingPath,
+                    "env_key": key,
+                ]
+            )
+        }
+        if existingRawValue != nil, existingPath == nil {
+            ToasttyLog.warning(
+                "Configured Ghostty resources directory is invalid; attempting auto-detection",
+                category: .ghostty,
+                metadata: [
+                    "env_key": key,
+                    "reason": "must be absolute or use ~/ prefix",
+                ]
+            )
+        }
+
+        guard let detectedResourcesDirectory = detectGhosttyResourcesDirectory() else {
+            ToasttyLog.warning(
+                "Unable to find Ghostty resources directory; cwd/title shell integration callbacks may be unavailable",
+                category: .ghostty,
+                metadata: ["env_key": key]
+            )
+            return
+        }
+
+        let overwrite = existingRawValue == nil ? 0 : 1
+        let didSet = detectedResourcesDirectory.withCString { pathPointer in
+            setenv(key, pathPointer, Int32(overwrite)) == 0
+        }
+        guard didSet else {
+            ToasttyLog.warning(
+                "Failed to configure Ghostty resources directory environment variable",
+                category: .ghostty,
+                metadata: [
+                    "env_key": key,
+                    "path": detectedResourcesDirectory,
+                ]
+            )
+            return
+        }
+
+        ToasttyLog.info(
+            "Configured Ghostty resources directory for embedded runtime",
+            category: .ghostty,
+            metadata: [
+                "path": detectedResourcesDirectory,
+                "source": "auto_detect",
+            ]
+        )
+    }
+
+    private static func detectGhosttyResourcesDirectory() -> String? {
+        var candidates: [String] = []
+
+        if let bundledResourcesPath = Bundle.main.resourceURL?
+            .appendingPathComponent("ghostty", isDirectory: true)
+            .standardizedFileURL.path {
+            candidates.append(bundledResourcesPath)
+        }
+
+        candidates.append("/Applications/Ghostty.app/Contents/Resources/ghostty")
+        candidates.append(
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications/Ghostty.app/Contents/Resources/ghostty")
+                .standardizedFileURL.path
+        )
+        candidates.append("/opt/homebrew/share/ghostty")
+        candidates.append("/usr/local/share/ghostty")
+        candidates.append("/usr/share/ghostty")
+
+        var visited = Set<String>()
+        for candidate in candidates where visited.insert(candidate).inserted {
+            if hasGhosttyShellIntegrationResources(at: candidate) {
+                return candidate
+            }
+        }
+
+        return nil
+    }
+
+    private static func hasGhosttyShellIntegrationResources(at resourcesDirectory: String) -> Bool {
+        let integrationRoot = URL(fileURLWithPath: resourcesDirectory, isDirectory: true)
+            .appendingPathComponent("shell-integration", isDirectory: true)
+            .standardizedFileURL.path
+        guard isDirectory(at: integrationRoot) else {
+            return false
+        }
+
+        let requiredFiles = [
+            "zsh/ghostty-integration",
+            "bash/ghostty.bash",
+            "fish/vendor_conf.d/ghostty-shell-integration.fish",
+        ]
+        for requiredFile in requiredFiles {
+            let candidate = URL(fileURLWithPath: integrationRoot, isDirectory: true)
+                .appendingPathComponent(requiredFile, isDirectory: false)
+                .standardizedFileURL.path
+            if isRegularFile(at: candidate) == false {
+                return false
+            }
+        }
+        return true
+    }
+
+    private static func isDirectory(at path: String) -> Bool {
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+            return false
+        }
+        return isDirectory.boolValue
     }
 
     private static func isRegularFile(at path: String) -> Bool {
