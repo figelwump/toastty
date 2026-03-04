@@ -190,6 +190,10 @@ public struct AppReducer {
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard var workspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
             guard let panelState = workspace.panels[panelID] else { return false }
+            let wasFocusedPanel = workspace.focusedPanelID == panelID
+            let previousPaneIDBeforeRemoval = wasFocusedPanel
+                ? targetPaneID(from: sourceLocation.paneID, direction: .previous, paneTree: workspace.paneTree)
+                : nil
 
             workspace.recentlyClosedPanels.append(
                 ClosedPanelRecord(
@@ -211,7 +215,13 @@ public struct AppReducer {
 
             if let updatedTree = removal.node {
                 workspace.paneTree = updatedTree
-                workspace.focusedPanelID = resolveFocusedPanel(in: workspace)?.panelID
+                workspace.focusedPanelID = resolveFocusedPanelAfterClose(
+                    in: workspace,
+                    closedPanelID: panelID,
+                    closedPanelWasFocused: wasFocusedPanel,
+                    sourcePaneID: sourceLocation.paneID,
+                    previousPaneIDBeforeRemoval: previousPaneIDBeforeRemoval
+                )
                 state.workspacesByID[sourceLocation.workspaceID] = workspace
             } else {
                 state.workspacesByID[sourceLocation.workspaceID] = workspace
@@ -1044,6 +1054,38 @@ public struct AppReducer {
         }
 
         return nil
+    }
+
+    private static func resolveFocusedPanelAfterClose(
+        in workspace: WorkspaceState,
+        closedPanelID: UUID,
+        closedPanelWasFocused: Bool,
+        sourcePaneID: UUID,
+        previousPaneIDBeforeRemoval: UUID?
+    ) -> UUID? {
+        guard closedPanelWasFocused else {
+            return resolveFocusedPanel(in: workspace)?.panelID
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           focusedPanelID != closedPanelID,
+           workspace.panels[focusedPanelID] != nil,
+           workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil {
+            return focusedPanelID
+        }
+
+        if let sourceLeaf = workspace.paneTree.leafNode(paneID: sourcePaneID),
+           let selectedSourcePanelID = selectedPanelID(in: sourceLeaf, workspace: workspace) {
+            return selectedSourcePanelID
+        }
+
+        if let previousPaneIDBeforeRemoval,
+           let previousLeaf = workspace.paneTree.leafNode(paneID: previousPaneIDBeforeRemoval),
+           let selectedPreviousPanelID = selectedPanelID(in: previousLeaf, workspace: workspace) {
+            return selectedPreviousPanelID
+        }
+
+        return resolveFocusedPanel(in: workspace)?.panelID
     }
 
     private static func locatePanel(_ panelID: UUID, in state: AppState) -> PanelLocation? {
