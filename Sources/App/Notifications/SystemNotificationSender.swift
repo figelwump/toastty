@@ -48,14 +48,14 @@ enum SystemNotificationSender {
         content.body = finalBody
         content.sound = .default
 
-        // Attach workspace/panel identifiers so a future delegate can route
-        // click-to-focus actions (not yet implemented).
+        // Attach workspace/panel identifiers so the notification response
+        // delegate can route click-to-focus actions.
         var userInfo: [String: String] = [:]
         if let workspaceID {
-            userInfo["workspaceID"] = workspaceID.uuidString
+            userInfo[DesktopNotificationUserInfoKey.workspaceID] = workspaceID.uuidString
         }
         if let panelID {
-            userInfo["panelID"] = panelID.uuidString
+            userInfo[DesktopNotificationUserInfoKey.panelID] = panelID.uuidString
         }
         if userInfo.isEmpty == false {
             content.userInfo = userInfo

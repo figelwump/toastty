@@ -244,6 +244,7 @@ struct ToasttyApp: App {
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
+    private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let paneFocusRestoreCoordinator: PaneFocusRestoreCoordinator
     private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
@@ -257,10 +258,16 @@ struct ToasttyApp: App {
         )
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         terminalRuntimeRegistry.bind(store: store)
+        let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry
+        )
+        systemNotificationResponseCoordinator.installDelegate()
         let paneFocusRestoreCoordinator = PaneFocusRestoreCoordinator()
         if persistTerminalFontPreference {
             Self.applyInitialTerminalFontState(to: store)
         }
+        self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
         self.paneFocusRestoreCoordinator = paneFocusRestoreCoordinator
         closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(
             store: store,
