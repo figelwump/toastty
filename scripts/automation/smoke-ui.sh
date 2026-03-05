@@ -94,7 +94,7 @@ send_request() {
   request="{\"protocolVersion\":\"1.0\",\"kind\":\"request\",\"requestID\":\"${request_id}\",\"command\":\"${command}\",\"payload\":${payload}}"
 
   local response
-  response="$(printf '%s\n' "$request" | nc -U "$SOCKET_PATH")"
+  response="$(printf '%s\n' "$request" | nc -U -w 2 "$SOCKET_PATH")"
   if [[ -z "$response" ]]; then
     echo "error: no response for command ${command}" >&2
     exit 1
@@ -247,6 +247,65 @@ if (( SPLIT_RIGHT_PANE_COUNT <= BASELINE_PANE_COUNT )); then
   echo "baseline pane count: ${BASELINE_PANE_COUNT}" >&2
   echo "post-split pane count: ${SPLIT_RIGHT_PANE_COUNT}" >&2
   echo "snapshot response: ${SPLIT_RIGHT_RESPONSE}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.split.down"}'
+SPLIT_DOWN_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+SPLIT_DOWN_PANE_COUNT="$(extract_int_field "$SPLIT_DOWN_RESPONSE" "paneCount")"
+SPLIT_DOWN_FOCUSED_PANEL_ID="$(extract_string_field "$SPLIT_DOWN_RESPONSE" "focusedPanelID")"
+if [[ -z "$SPLIT_DOWN_PANE_COUNT" || -z "$SPLIT_DOWN_FOCUSED_PANEL_ID" ]]; then
+  echo "error: pane count or focused panel missing after workspace.split.down" >&2
+  echo "snapshot response: ${SPLIT_DOWN_RESPONSE}" >&2
+  exit 1
+fi
+if (( SPLIT_DOWN_PANE_COUNT <= SPLIT_RIGHT_PANE_COUNT )); then
+  echo "error: workspace.split.down did not increase pane count" >&2
+  echo "post-split-right pane count: ${SPLIT_RIGHT_PANE_COUNT}" >&2
+  echo "post-split-down pane count: ${SPLIT_DOWN_PANE_COUNT}" >&2
+  echo "snapshot response: ${SPLIT_DOWN_RESPONSE}" >&2
+  exit 1
+fi
+if [[ "$SPLIT_DOWN_FOCUSED_PANEL_ID" == "$SPLIT_RIGHT_FOCUSED_PANEL_ID" ]]; then
+  echo "error: workspace.split.down did not move focus to a new panel" >&2
+  echo "split-right focused panel: ${SPLIT_RIGHT_FOCUSED_PANEL_ID}" >&2
+  echo "split-down focused panel: ${SPLIT_DOWN_FOCUSED_PANEL_ID}" >&2
+  echo "snapshot response: ${SPLIT_DOWN_RESPONSE}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}'
+EXPECTED_CLOSE_PANE_COUNT=$((SPLIT_DOWN_PANE_COUNT - 1))
+CLOSE_SNAPSHOT_RESPONSE=""
+RENDER_SNAPSHOT_RESPONSE=""
+CLOSE_PANE_COUNT=""
+ALL_RENDERABLE=""
+for _ in $(seq 1 40); do
+  CLOSE_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+  CLOSE_PANE_COUNT="$(extract_int_field "$CLOSE_SNAPSHOT_RESPONSE" "paneCount")"
+  RENDER_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
+  ALL_RENDERABLE="$(extract_bool_field "$RENDER_SNAPSHOT_RESPONSE" "allRenderable")"
+  if [[ "$CLOSE_PANE_COUNT" == "$EXPECTED_CLOSE_PANE_COUNT" && "$ALL_RENDERABLE" == "true" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ "$CLOSE_PANE_COUNT" != "$EXPECTED_CLOSE_PANE_COUNT" ]]; then
+  echo "error: workspace.close-focused-panel did not reduce pane count as expected" >&2
+  echo "expected pane count: ${EXPECTED_CLOSE_PANE_COUNT}" >&2
+  echo "actual pane count: ${CLOSE_PANE_COUNT:-missing}" >&2
+  echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
+  exit 1
+fi
+if [[ -z "$ALL_RENDERABLE" ]]; then
+  echo "error: render snapshot missing allRenderable field after close-focused-panel" >&2
+  echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
+  exit 1
+fi
+if [[ "$ALL_RENDERABLE" != "true" ]]; then
+  echo "error: one or more terminal panes are not render-attached after close-focused-panel" >&2
+  echo "workspace snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
+  echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
   exit 1
 fi
 

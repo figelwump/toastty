@@ -17,6 +17,41 @@ enum AutomationImageFileDropResult {
     case unavailableSurface
 }
 
+struct TerminalPanelRenderAttachmentSnapshot {
+    let panelID: UUID
+    let controllerExists: Bool
+    let hostHasSuperview: Bool
+    let hostAttachedToWindow: Bool
+    let sourceContainerExists: Bool
+    let sourceContainerAttachedToWindow: Bool
+    let hostSuperviewMatchesSourceContainer: Bool
+    let bindingEpoch: UInt64
+    let ghosttySurfaceAvailable: Bool
+
+    var isRenderable: Bool {
+        controllerExists &&
+        hostHasSuperview &&
+        hostAttachedToWindow &&
+        sourceContainerExists &&
+        sourceContainerAttachedToWindow &&
+        hostSuperviewMatchesSourceContainer
+    }
+
+    static func missingController(panelID: UUID) -> Self {
+        Self(
+            panelID: panelID,
+            controllerExists: false,
+            hostHasSuperview: false,
+            hostAttachedToWindow: false,
+            sourceContainerExists: false,
+            sourceContainerAttachedToWindow: false,
+            hostSuperviewMatchesSourceContainer: false,
+            bindingEpoch: 0,
+            ghosttySurfaceAvailable: false
+        )
+    }
+}
+
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
@@ -160,6 +195,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return nil
         }
         return controller.automationReadVisibleText()
+    }
+
+    func automationRenderSnapshot(panelID: UUID) -> TerminalPanelRenderAttachmentSnapshot {
+        guard let controller = controllers[panelID] else {
+            return .missingController(panelID: panelID)
+        }
+        return controller.renderAttachmentSnapshot()
     }
 
     func automationDropImageFiles(_ filePaths: [String], panelID: UUID) -> AutomationImageFileDropResult {
@@ -2502,7 +2544,7 @@ final class TerminalSurfaceController {
         activeBindingEpoch = bindingEpoch
         #if TOASTTY_HAS_GHOSTTY_KIT
         diagnostics.attachCount += 1
-        if shouldIgnoreAttach(to: container) {
+        if shouldIgnoreAttach(to: container, bindingEpochChanged: bindingEpochChanged) {
             ToasttyLog.debug(
                 "Ignoring terminal attach from detached container callback",
                 category: .ghostty,
@@ -2788,6 +2830,26 @@ final class TerminalSurfaceController {
         #else
         return false
         #endif
+    }
+
+    func renderAttachmentSnapshot() -> TerminalPanelRenderAttachmentSnapshot {
+        let sourceContainer = activeSourceContainer
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let ghosttySurfaceAvailable = ghosttySurface != nil
+        #else
+        let ghosttySurfaceAvailable = false
+        #endif
+        return TerminalPanelRenderAttachmentSnapshot(
+            panelID: panelID,
+            controllerExists: true,
+            hostHasSuperview: hostedView.superview != nil,
+            hostAttachedToWindow: hostedView.window != nil,
+            sourceContainerExists: sourceContainer != nil,
+            sourceContainerAttachedToWindow: sourceContainer?.window != nil,
+            hostSuperviewMatchesSourceContainer: hostedView.superview === sourceContainer,
+            bindingEpoch: activeBindingEpoch,
+            ghosttySurfaceAvailable: ghosttySurfaceAvailable
+        )
     }
 
     func handleImageFileDrop(_ imageFileURLs: [URL]) -> Bool {
@@ -3173,7 +3235,10 @@ private extension NSView {
 @MainActor
 extension TerminalSurfaceController {
     #if TOASTTY_HAS_GHOSTTY_KIT
-    private func shouldIgnoreAttach(to candidate: NSView) -> Bool {
+    private func shouldIgnoreAttach(to candidate: NSView, bindingEpochChanged: Bool) -> Bool {
+        // A newer binding epoch should always win, even if the candidate view
+        // is momentarily detached during split/close reparenting.
+        guard bindingEpochChanged == false else { return false }
         guard let activeSourceContainer else { return false }
         guard activeSourceContainer !== candidate else { return false }
         guard hostedView.superview != nil else { return false }

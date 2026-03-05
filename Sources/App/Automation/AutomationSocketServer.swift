@@ -549,6 +549,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             let workspaceID = try resolveWorkspaceID(args: payload)
             return try workspaceSnapshot(workspaceID: workspaceID)
 
+        case "automation.workspace_render_snapshot":
+            let workspaceID = try resolveWorkspaceID(args: payload)
+            return try workspaceRenderSnapshot(workspaceID: workspaceID)
+
         case "automation.capture_screenshot":
             guard let step = payload.string("step"), step.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("step is required")
@@ -1037,6 +1041,50 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             "rootSplitRatio": rootSplitRatio,
             "leafPaneIDs": .array(leafPaneIDs),
             "leafPanelIDs": .array(leafPanelIDs),
+        ]
+    }
+
+    @MainActor
+    private func workspaceRenderSnapshot(workspaceID: UUID) throws -> [String: AutomationJSONValue] {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        let terminalPanelIDs: [UUID] = workspace.paneTree.allLeafInfos.flatMap { paneInfo in
+            paneInfo.tabPanelIDs.filter { panelID in
+                guard let panelState = workspace.panels[panelID] else {
+                    return false
+                }
+                if case .terminal = panelState {
+                    return true
+                }
+                return false
+            }
+        }
+
+        var allRenderable = true
+        let panelRenderStates: [AutomationJSONValue] = terminalPanelIDs.map { panelID in
+            let snapshot = terminalRuntimeRegistry.automationRenderSnapshot(panelID: panelID)
+            allRenderable = allRenderable && snapshot.isRenderable
+            return .object([
+                "panelID": .string(snapshot.panelID.uuidString),
+                "controllerExists": .bool(snapshot.controllerExists),
+                "hostHasSuperview": .bool(snapshot.hostHasSuperview),
+                "hostAttachedToWindow": .bool(snapshot.hostAttachedToWindow),
+                "sourceContainerExists": .bool(snapshot.sourceContainerExists),
+                "sourceContainerAttachedToWindow": .bool(snapshot.sourceContainerAttachedToWindow),
+                "hostSuperviewMatchesSourceContainer": .bool(snapshot.hostSuperviewMatchesSourceContainer),
+                "bindingEpoch": .string(String(snapshot.bindingEpoch)),
+                "ghosttySurfaceAvailable": .bool(snapshot.ghosttySurfaceAvailable),
+                "isRenderable": .bool(snapshot.isRenderable),
+            ])
+        }
+
+        return [
+            "workspaceID": .string(workspaceID.uuidString),
+            "terminalPanelCount": .int(terminalPanelIDs.count),
+            "allRenderable": .bool(allRenderable),
+            "panels": .array(panelRenderStates),
         ]
     }
 
