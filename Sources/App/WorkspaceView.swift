@@ -93,7 +93,7 @@ struct WorkspaceView: View {
             ForEach(window.workspaceIDs, id: \.self) { workspaceID in
                 if let workspace = store.state.workspacesByID[workspaceID] {
                     let isSelected = window.selectedWorkspaceID == workspaceID
-                    workspaceContent(for: workspace)
+                    workspaceContent(for: workspace, isSelected: isSelected)
                         // Keep non-selected workspaces mounted so background terminal
                         // surfaces can continue emitting runtime actions (for example
                         // desktop notifications and command-finished updates).
@@ -107,7 +107,7 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
-    private func workspaceContent(for workspace: WorkspaceState) -> some View {
+    private func workspaceContent(for workspace: WorkspaceState, isSelected: Bool) -> some View {
         let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
             limit: TerminalShortcutConfig.maxShortcutCount
         )
@@ -128,6 +128,7 @@ struct WorkspaceView: View {
                     SlotPlacementView(
                         placement: placement,
                         workspace: workspace,
+                        isWorkspaceSelected: isSelected,
                         store: store,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         globalFontPoints: store.state.globalTerminalFontPoints,
@@ -327,6 +328,7 @@ private struct SelectedWorkspaceUnreadSignature: Equatable {
 private struct SlotPlacementView: View {
     let placement: LayoutSlotPlacement
     let workspace: WorkspaceState
+    let isWorkspaceSelected: Bool
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let globalFontPoints: Double
@@ -341,6 +343,7 @@ private struct SlotPlacementView: View {
                     workspaceID: workspace.id,
                     panelID: placement.panelID,
                     panelState: panelState,
+                    isWorkspaceSelected: isWorkspaceSelected,
                     focusedPanelID: workspace.focusedPanelID,
                     hasUnreadNotification: workspace.unreadPanelIDs.contains(placement.panelID),
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
@@ -373,6 +376,7 @@ private struct PanelCardView: View {
     let workspaceID: UUID
     let panelID: UUID
     let panelState: PanelState
+    let isWorkspaceSelected: Bool
     let focusedPanelID: UUID?
     let hasUnreadNotification: Bool
     let shortcutNumber: Int?
@@ -383,7 +387,10 @@ private struct PanelCardView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
 
     private var isFocused: Bool {
-        focusedPanelID == panelID
+        // Only the selected workspace may present a focused terminal host.
+        // Hidden-but-mounted workspaces still render for background runtime
+        // updates, but they must not retain keyboard focus or route shortcuts.
+        isWorkspaceSelected && focusedPanelID == panelID
     }
 
     var body: some View {
@@ -428,7 +435,10 @@ private struct PanelCardView: View {
                     runtimeRegistry: terminalRuntimeRegistry
                 )
                 .overlay {
-                    if focusedPanelID != nil, !isFocused, unfocusedSplitStyle.fillOverlayOpacity > 0 {
+                    if isWorkspaceSelected,
+                       focusedPanelID != nil,
+                       !isFocused,
+                       unfocusedSplitStyle.fillOverlayOpacity > 0 {
                         Rectangle()
                             .fill(unfocusedSplitStyle.fillColor.color)
                             .opacity(unfocusedSplitStyle.fillOverlayOpacity)

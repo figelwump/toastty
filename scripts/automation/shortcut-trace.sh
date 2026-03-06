@@ -177,6 +177,11 @@ send_equalize_shortcut() {
   osascript -e "tell application \"System Events\" to key code ${EQUALIZE_KEY_CODE} using {command down, control down}"
 }
 
+send_workspace_shortcut() {
+  local index="$1"
+  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {command down}"
+}
+
 send_close_shortcut() {
   osascript -e 'tell application "System Events" to keystroke "w" using {command down}'
 }
@@ -534,6 +539,139 @@ if [[ -z "$SPLIT_DOWN_SLOT_COUNT" || "$SPLIT_DOWN_SLOT_COUNT" -lt "$EXPECTED_SPL
   exit 1
 fi
 
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+WORKSPACE_SWITCH_FIRST_SNAPSHOT=""
+WORKSPACE_SWITCH_FIRST_WORKSPACE_ID=""
+WORKSPACE_SWITCH_FIRST_SLOT_COUNT_RAW=""
+for _ in $(seq 1 20); do
+  WORKSPACE_SWITCH_FIRST_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  WORKSPACE_SWITCH_FIRST_WORKSPACE_ID="$(extract_string_field "$WORKSPACE_SWITCH_FIRST_SNAPSHOT" "workspaceID")"
+  WORKSPACE_SWITCH_FIRST_SLOT_COUNT_RAW="$(extract_double_field "$WORKSPACE_SWITCH_FIRST_SNAPSHOT" "slotCount")"
+  if [[ -n "$WORKSPACE_SWITCH_FIRST_WORKSPACE_ID" && -n "$WORKSPACE_SWITCH_FIRST_SLOT_COUNT_RAW" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$WORKSPACE_SWITCH_FIRST_WORKSPACE_ID" || -z "$WORKSPACE_SWITCH_FIRST_SLOT_COUNT_RAW" ]]; then
+  echo "error: missing baseline workspace snapshot fields for workspace-switch regression" >&2
+  echo "snapshot response: ${WORKSPACE_SWITCH_FIRST_SNAPSHOT}" >&2
+  exit 1
+fi
+WORKSPACE_SWITCH_FIRST_SLOT_COUNT="${WORKSPACE_SWITCH_FIRST_SLOT_COUNT_RAW%.*}"
+
+send_request "automation.perform_action" '{"action":"sidebar.workspaces.new"}' >/dev/null
+WORKSPACE_SWITCH_SECOND_SNAPSHOT=""
+WORKSPACE_SWITCH_SECOND_WORKSPACE_ID=""
+WORKSPACE_SWITCH_SECOND_SLOT_COUNT_RAW=""
+for _ in $(seq 1 20); do
+  WORKSPACE_SWITCH_SECOND_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  WORKSPACE_SWITCH_SECOND_WORKSPACE_ID="$(extract_string_field "$WORKSPACE_SWITCH_SECOND_SNAPSHOT" "workspaceID")"
+  WORKSPACE_SWITCH_SECOND_SLOT_COUNT_RAW="$(extract_double_field "$WORKSPACE_SWITCH_SECOND_SNAPSHOT" "slotCount")"
+  if [[ -n "$WORKSPACE_SWITCH_SECOND_WORKSPACE_ID" && -n "$WORKSPACE_SWITCH_SECOND_SLOT_COUNT_RAW" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$WORKSPACE_SWITCH_SECOND_WORKSPACE_ID" || -z "$WORKSPACE_SWITCH_SECOND_SLOT_COUNT_RAW" ]]; then
+  echo "error: missing second-workspace snapshot fields for workspace-switch regression" >&2
+  echo "snapshot response: ${WORKSPACE_SWITCH_SECOND_SNAPSHOT}" >&2
+  exit 1
+fi
+if [[ "$WORKSPACE_SWITCH_SECOND_WORKSPACE_ID" == "$WORKSPACE_SWITCH_FIRST_WORKSPACE_ID" ]]; then
+  echo "error: sidebar.workspaces.new did not select a distinct workspace" >&2
+  echo "first workspace ID: ${WORKSPACE_SWITCH_FIRST_WORKSPACE_ID}" >&2
+  echo "second workspace snapshot response: ${WORKSPACE_SWITCH_SECOND_SNAPSHOT}" >&2
+  exit 1
+fi
+WORKSPACE_SWITCH_SECOND_SLOT_COUNT="${WORKSPACE_SWITCH_SECOND_SLOT_COUNT_RAW%.*}"
+
+focus_app_terminal
+send_workspace_shortcut 1
+
+WORKSPACE_SWITCH_SELECTED_FIRST_SNAPSHOT=""
+WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID=""
+for _ in $(seq 1 20); do
+  WORKSPACE_SWITCH_SELECTED_FIRST_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID="$(extract_string_field "$WORKSPACE_SWITCH_SELECTED_FIRST_SNAPSHOT" "workspaceID")"
+  if [[ -n "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" && "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" == "$WORKSPACE_SWITCH_FIRST_WORKSPACE_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" || "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" != "$WORKSPACE_SWITCH_FIRST_WORKSPACE_ID" ]]; then
+  echo "error: workspace-switch regression did not select workspace 1 via Cmd+1" >&2
+  echo "expected workspace ID: ${WORKSPACE_SWITCH_FIRST_WORKSPACE_ID}" >&2
+  echo "observed workspace ID: ${WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID:-<missing>}" >&2
+  echo "snapshot response: ${WORKSPACE_SWITCH_SELECTED_FIRST_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_split_right_shortcut
+WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SNAPSHOT=""
+WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT=""
+EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT=$((WORKSPACE_SWITCH_FIRST_SLOT_COUNT + 1))
+for _ in $(seq 1 20); do
+  WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SNAPSHOT="$(send_request "automation.workspace_snapshot" "{\"workspaceID\":\"${WORKSPACE_SWITCH_FIRST_WORKSPACE_ID}\"}")"
+  WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT_RAW="$(extract_double_field "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SNAPSHOT" "slotCount")"
+  if [[ -n "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT_RAW" ]]; then
+    WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT="${WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT_RAW%.*}"
+  fi
+  if [[ -n "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" && "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" -ge "$EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" || "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" -lt "$EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT" ]]; then
+  echo "error: Cmd+D after workspace switch did not split the visible workspace" >&2
+  echo "workspace 1 baseline slot count: ${WORKSPACE_SWITCH_FIRST_SLOT_COUNT}" >&2
+  echo "expected workspace 1 slot count after split: ${EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT}" >&2
+  echo "observed workspace 1 slot count: ${WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT:-<missing>}" >&2
+  echo "snapshot response: ${WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_workspace_shortcut 2
+WORKSPACE_SWITCH_SELECTED_SECOND_SNAPSHOT=""
+WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID=""
+for _ in $(seq 1 20); do
+  WORKSPACE_SWITCH_SELECTED_SECOND_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID="$(extract_string_field "$WORKSPACE_SWITCH_SELECTED_SECOND_SNAPSHOT" "workspaceID")"
+  if [[ -n "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" && "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" == "$WORKSPACE_SWITCH_SECOND_WORKSPACE_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" || "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" != "$WORKSPACE_SWITCH_SECOND_WORKSPACE_ID" ]]; then
+  echo "error: workspace-switch regression did not return to workspace 2 via Cmd+2" >&2
+  echo "expected workspace ID: ${WORKSPACE_SWITCH_SECOND_WORKSPACE_ID}" >&2
+  echo "observed workspace ID: ${WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID:-<missing>}" >&2
+  echo "snapshot response: ${WORKSPACE_SWITCH_SELECTED_SECOND_SNAPSHOT}" >&2
+  exit 1
+fi
+
+WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SNAPSHOT=""
+WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT=""
+for _ in $(seq 1 20); do
+  WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SNAPSHOT="$(send_request "automation.workspace_snapshot" "{\"workspaceID\":\"${WORKSPACE_SWITCH_SECOND_WORKSPACE_ID}\"}")"
+  WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT_RAW="$(extract_double_field "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SNAPSHOT" "slotCount")"
+  if [[ -n "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT_RAW" ]]; then
+    WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT="${WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT_RAW%.*}"
+  fi
+  if [[ -n "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" && "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" == "$WORKSPACE_SWITCH_SECOND_SLOT_COUNT" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" || "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" != "$WORKSPACE_SWITCH_SECOND_SLOT_COUNT" ]]; then
+  echo "error: Cmd+D after workspace switch mutated the hidden workspace instead of the visible one" >&2
+  echo "workspace 2 baseline slot count: ${WORKSPACE_SWITCH_SECOND_SLOT_COUNT}" >&2
+  echo "observed workspace 2 slot count after returning: ${WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT:-<missing>}" >&2
+  echo "snapshot response: ${WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+
 ACTION_CLOSE_SIGNATURE="$(capture_close_outcome action)"
 MENU_CLOSE_SIGNATURE="$(capture_close_outcome menu)"
 SHORTCUT_CLOSE_SIGNATURE="$(capture_close_outcome shortcut)"
@@ -609,6 +747,12 @@ echo "focus baseline panel: $SPLIT_BASELINE_FOCUS_ID"
 echo "focus after split-right: $SPLIT_RIGHT_FOCUS_ID"
 echo "focus after focus-next: $FOCUS_NEXT_PANEL_ID"
 echo "focus after focus-previous: $FOCUS_PREVIOUS_PANEL_ID"
+echo "workspace 1 ID: $WORKSPACE_SWITCH_FIRST_WORKSPACE_ID"
+echo "workspace 2 ID: $WORKSPACE_SWITCH_SECOND_WORKSPACE_ID"
+echo "workspace 1 baseline slot count: $WORKSPACE_SWITCH_FIRST_SLOT_COUNT"
+echo "workspace 2 baseline slot count: $WORKSPACE_SWITCH_SECOND_SLOT_COUNT"
+echo "workspace 1 slot count after Cmd+1 then Cmd+D: $WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT"
+echo "workspace 2 slot count after returning with Cmd+2: $WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT"
 echo "action close structure: $ACTION_CLOSE_STRUCTURE"
 echo "menu close structure: $MENU_CLOSE_STRUCTURE"
 echo "shortcut close structure: $SHORTCUT_CLOSE_STRUCTURE"
