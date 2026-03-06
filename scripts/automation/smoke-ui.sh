@@ -352,6 +352,7 @@ fi
 
 TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
 FOCUSED_TERMINAL_SCREENSHOT_PATH=""
+FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH=""
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
 if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
   if [[ ! -f "$GHOSTTY_XCFRAMEWORK_PATH/Info.plist" ]]; then
@@ -622,14 +623,15 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
   fi
 
   FOCUSED_TERMINAL_MARKER="TOASTTY_FOCUSED_RENDER_${RUN_ID//[^A-Za-z0-9_]/_}"
-  FOCUSED_TERMINAL_COMMAND="printf '%s\\n' '${FOCUSED_TERMINAL_MARKER}'"
+  FOCUSED_TERMINAL_EXPECTED_OUTPUT="$(printf '%s' "$FOCUSED_TERMINAL_MARKER" | LC_ALL=C tr 'A-Z' 'a-z')"
+  FOCUSED_TERMINAL_COMMAND="printf '%s\\n' \"\$(printf '%s' '${FOCUSED_TERMINAL_MARKER}' | LC_ALL=C tr 'A-Z' 'a-z')\""
   FOCUSED_TERMINAL_COMMAND_JSON="$(json_escape_string "$FOCUSED_TERMINAL_COMMAND")"
   send_request "automation.terminal_send_text" "{\"text\":\"${FOCUSED_TERMINAL_COMMAND_JSON}\",\"submit\":true,\"allowUnavailable\":false,\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}" >/dev/null
 
   FOCUSED_TERMINAL_VISIBLE_RESPONSE=""
   FOCUSED_TERMINAL_MARKER_FOUND=0
   for _ in $(seq 1 40); do
-    FOCUSED_TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${FOCUSED_TERMINAL_MARKER}\",\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}")"
+    FOCUSED_TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${FOCUSED_TERMINAL_EXPECTED_OUTPUT}\",\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}")"
     if echo "$FOCUSED_TERMINAL_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
       FOCUSED_TERMINAL_MARKER_FOUND=1
       break
@@ -637,18 +639,61 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
     sleep 0.1
   done
   if [[ "$FOCUSED_TERMINAL_MARKER_FOUND" -ne 1 ]]; then
-    echo "error: focused-mode terminal marker not observed before screenshot capture" >&2
+    echo "error: focused-mode terminal command output not observed before screenshot capture" >&2
     echo "target panel id: ${FOCUSED_TERMINAL_PANEL_ID}" >&2
     echo "last terminal response: ${FOCUSED_TERMINAL_VISIBLE_RESPONSE}" >&2
     exit 1
   fi
 
   send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}' >/dev/null
+  FOCUSED_TERMINAL_VISIBLE_RESPONSE=""
+  FOCUSED_TERMINAL_MARKER_FOUND=0
+  for _ in $(seq 1 40); do
+    FOCUSED_TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${FOCUSED_TERMINAL_EXPECTED_OUTPUT}\",\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}")"
+    if echo "$FOCUSED_TERMINAL_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
+      FOCUSED_TERMINAL_MARKER_FOUND=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$FOCUSED_TERMINAL_MARKER_FOUND" -ne 1 ]]; then
+    echo "error: focused terminal output not visible after first focus-mode toggle" >&2
+    echo "target panel id: ${FOCUSED_TERMINAL_PANEL_ID}" >&2
+    echo "last terminal response: ${FOCUSED_TERMINAL_VISIBLE_RESPONSE}" >&2
+    exit 1
+  fi
   FOCUSED_TERMINAL_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"focused-terminal-third-slot-smoke"}')"
   FOCUSED_TERMINAL_SCREENSHOT_PATH="$(extract_string_field "$FOCUSED_TERMINAL_SCREENSHOT_RESPONSE" "path")"
   if [[ -z "$FOCUSED_TERMINAL_SCREENSHOT_PATH" || ! -f "$FOCUSED_TERMINAL_SCREENSHOT_PATH" ]]; then
     echo "error: focused terminal screenshot path missing or file not found" >&2
     echo "capture response: ${FOCUSED_TERMINAL_SCREENSHOT_RESPONSE}" >&2
+    exit 1
+  fi
+  send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}' >/dev/null
+  # Match the reported manual repro: focus on, restore layout, then focus on again.
+  sleep 0.2
+  send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}' >/dev/null
+  FOCUSED_TERMINAL_VISIBLE_RESPONSE=""
+  FOCUSED_TERMINAL_MARKER_FOUND=0
+  for _ in $(seq 1 40); do
+    FOCUSED_TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${FOCUSED_TERMINAL_EXPECTED_OUTPUT}\",\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}")"
+    if echo "$FOCUSED_TERMINAL_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
+      FOCUSED_TERMINAL_MARKER_FOUND=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$FOCUSED_TERMINAL_MARKER_FOUND" -ne 1 ]]; then
+    echo "error: focused terminal output not visible after second focus-mode toggle" >&2
+    echo "target panel id: ${FOCUSED_TERMINAL_PANEL_ID}" >&2
+    echo "last terminal response: ${FOCUSED_TERMINAL_VISIBLE_RESPONSE}" >&2
+    exit 1
+  fi
+  FOCUSED_TERMINAL_SECOND_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"focused-terminal-third-slot-second-pass-smoke"}')"
+  FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH="$(extract_string_field "$FOCUSED_TERMINAL_SECOND_SCREENSHOT_RESPONSE" "path")"
+  if [[ -z "$FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH" || ! -f "$FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH" ]]; then
+    echo "error: second-pass focused terminal screenshot path missing or file not found" >&2
+    echo "capture response: ${FOCUSED_TERMINAL_SECOND_SCREENSHOT_RESPONSE}" >&2
     exit 1
   fi
   send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}' >/dev/null
@@ -680,6 +725,7 @@ echo "socket path: $SOCKET_PATH"
 echo "font hud screenshot: ${FONT_SCREENSHOT_PATH:-unknown}"
 echo "terminal viewport screenshot: ${TERMINAL_VIEWPORT_SCREENSHOT_PATH:-skipped}"
 echo "focused terminal screenshot: ${FOCUSED_TERMINAL_SCREENSHOT_PATH:-skipped}"
+echo "focused terminal second screenshot: ${FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH:-skipped}"
 echo "focused screenshot: ${FOCUSED_SCREENSHOT_PATH:-unknown}"
 echo "screenshot: ${SCREENSHOT_PATH:-unknown}"
 echo "state dump: ${STATE_PATH:-unknown}"
