@@ -1,116 +1,66 @@
-# Repo Workflow Notes
+# Toastty — Agent Workflow Guide
 
-## Live-App Validation Expectations
-- For any UI/runtime change, validate in the running `ToasttyApp`, not only reducer/unit tests.
-- Use both paths whenever possible: automation (`./scripts/automation/smoke-ui.sh`) and manual live interaction (launch app, interact, inspect screenshots).
-- Primary baseline smoke run: `./scripts/automation/smoke-ui.sh`
-- Ghostty-path smoke run: `./scripts/automation/smoke-ui.sh` (Ghostty checks run automatically when dependency artifacts exist and Ghostty is not disabled via env).
-- Explicit fallback smoke run: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
-- Required ordering when running both paths:
-  - run fallback first: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
-  - run Ghostty-enabled second: `./scripts/automation/smoke-ui.sh`
-  - leave workspace generated in Ghostty-enabled mode before handoff: `TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate`
-- For Ghostty-related runtime changes, run both baseline smoke and Ghostty-path smoke before considering validation complete.
-- Full build/test gate: `./scripts/automation/check.sh`
-- Store manual validation captures in `artifacts/manual/`; `artifacts/` is gitignored and should stay uncommitted.
-- After scripted interaction, inspect screenshot artifacts to confirm focus, prompt position, scrolling, and layout behavior.
+## Reference Architecture
+- When solving tricky problems, improving architecture, or looking for good patterns/best practices, consult the Ghostty source at `~/GiantThings/playground/ghostty`. It's a well-architected Swift/macOS codebase and a good source of inspiration for terminal, split-pane, keyboard bridging, and config patterns.
 
-## Tuist Day-to-Day (Generate, Build, Settings)
-- `Project.swift` is the source of truth for targets, dependencies, and build settings.
-- Do not hand-edit generated Xcode project/workspace files; regenerate from `Project.swift`.
-- Regenerate after project/dependency/build-setting changes: `tuist generate`
-- Generated workspace path: `toastty.xcworkspace`
-- Deterministic app build command: `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
-- If the shell process runs under Rosetta, `uname -m` typically reports `x86_64`; set `ARCH` explicitly when needed.
-- If scheme settings constrain architectures, prefer invocation-scoped overrides (for example `ARCHS="${ARCH}"` and `ONLY_ACTIVE_ARCH=YES`) instead of mutating project settings.
+## Build & Generate
+- **Source of truth:** `Project.swift` — never hand-edit generated Xcode project/workspace files.
+- **Regenerate:** `tuist generate` (after any project/dependency/build-setting change)
+- **Build:** `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
+- **Full gate:** `./scripts/automation/check.sh` (generate + build + test)
+- If Rosetta is active, set `ARCH` explicitly. Prefer invocation-scoped overrides (`ARCHS`, `ONLY_ACTIVE_ARCH=YES`) over mutating project settings.
 
-## Ghostty Configuration Nuts and Bolts
-- Ghostty integration is default-on at `tuist generate` time when at least one local Ghostty xcframework artifact exists (`GhosttyKit.Debug`, `GhosttyKit.Release`, or legacy `GhosttyKit`).
-- Opt out with either `TUIST_DISABLE_GHOSTTY=1` (preferred for Tuist flows) or compatibility alias `TOASTTY_DISABLE_GHOSTTY=1`.
-- Ghostty is linked only when both conditions are true: dependency xcframework artifacts exist and disable env var is not set.
-- Variant selection behavior:
-  - `Debug` builds prefer `Dependencies/GhosttyKit.Debug.xcframework`, then fall back to legacy `Dependencies/GhosttyKit.xcframework`, then `Dependencies/GhosttyKit.Release.xcframework`.
-  - `Release` builds prefer `Dependencies/GhosttyKit.Release.xcframework`, then fall back to legacy `Dependencies/GhosttyKit.xcframework`, then `Dependencies/GhosttyKit.Debug.xcframework`.
-  - macOS slice resolution prefers `macos-arm64_x86_64`, then `macos-arm64`, then `macos-x86_64`.
-- Embedded Ghostty config loading order:
-  - `TOASTTY_GHOSTTY_CONFIG_PATH` when set and file exists.
-  - fallback explicit user path: `$XDG_CONFIG_HOME/ghostty/config` when present.
-  - fallback explicit user path: `~/.config/ghostty/config` when present.
-  - final fallback: Ghostty default search paths (`ghostty_config_load_default_files`).
-- Embedded runtime does not parse Ghostty CLI args by default (avoids Toastty launch flags being reported as Ghostty config diagnostics).
-- Opt-in Ghostty CLI arg parsing with `TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1`.
-- Toastty terminal font override is stored in `~/.toastty/config` as `terminal-font-size`.
-  - legacy `~/.config/toastty/config` is auto-migrated on launch.
-  - when unset, Toastty follows Ghostty `font-size`.
-  - Toastty keeps this override until an explicit `Reset Terminal Font`.
-  - `Reset Terminal Font` clears Toastty override and returns to Ghostty baseline.
-- Currently applied host-side Ghostty split styling keys:
-  - `unfocused-split-opacity` (mapped to an unfocused pane fill overlay alpha of `1 - configured_opacity`)
-  - `unfocused-split-fill` (fallback to Ghostty `background` when unset)
-- App menu now includes `Toastty -> Reload Configuration`, which triggers Ghostty config reload in-process.
-- For deterministic fallback builds in CI, set `TUIST_DISABLE_GHOSTTY=1` explicitly.
-- When linked, app target adds `TOASTTY_HAS_GHOSTTY_KIT` and Ghostty transitive linker flags from `Project.swift` (`-lc++`, `-framework Carbon`).
-- Default generate path falls back automatically when the xcframework is absent or integration is explicitly disabled.
-- Install/update local Ghostty artifact: `./scripts/ghostty/install-local-xcframework.sh`
-- Optional installer controls:
-  - source override: `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework ./scripts/ghostty/install-local-xcframework.sh`
-  - variant override: `GHOSTTY_XCFRAMEWORK_VARIANT=release ./scripts/ghostty/install-local-xcframework.sh` (accepted: `debug`, `release`, `legacy`)
-- After changing Ghostty artifacts or Ghostty settings, regenerate and rebuild before validating runtime behavior.
+## Validation
+For any UI/runtime change, validate beyond unit tests — run automation and inspect visually.
 
-## Automation Nuts and Bolts
-- `scripts/automation/smoke-ui.sh` builds/runs the app in automation mode, drives socket actions, and emits screenshots/state dumps.
-- `scripts/automation/shortcut-trace.sh` drives real keyboard shortcuts through AppKit (`cmd+ctrl+right`, `cmd+ctrl+=`) and verifies:
-  - split/focus workflow via real key chords (`cmd+d`, `cmd+shift+d`, `cmd+[`, `cmd+]`) and pane/focus snapshots.
-  - split ratio change/equalization via real key chords (`cmd+ctrl+right`, `cmd+ctrl+=`) and `automation.workspace_snapshot`.
-  - Ghostty/runtime intent logs in `/tmp/toastty.log`
-  - key event forwarding logs (`category=input`).
-  - default focus targeting uses coordinates (`CLICK_X=760`, `CLICK_Y=420`); override for different display/window layouts.
-- Key smoke env overrides: `RUN_ID`, `FIXTURE`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`.
-- Shortcut-trace env overrides: `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`.
-- Readiness file shape: `artifacts/automation/automation-ready-<run-id>.json`
-- App log shape: `artifacts/automation/app-<run-id>.log`
-- `scripts/automation/check.sh` runs `tuist generate`, `tuist build`, and `xcodebuild test` for scheme `toastty-Workspace` (update the script if scheme naming changes).
-- `check.sh` follows manifest defaults: Ghostty links automatically when xcframework is present unless disabled by env.
-- split/focus workflow assertions in smoke:
-  - `automation.workspace_snapshot` now reports focused panel and slot counts for deterministic assertions.
-  - smoke script validates:
-    - `workspace.focus-slot.next` changes focus
-    - `workspace.focus-slot.previous` restores baseline focus
-    - `workspace.split.right` increases slot count
-    - `workspace.resize-split.right` increases root split ratio
-    - `workspace.equalize-splits` normalizes root split ratio to `0.5`
-  - Ghostty terminal viewport I/O assertion is deterministic in smoke (Ghostty-enabled path):
-    - smoke now fails if no candidate terminal surface is available for `automation.terminal_send_text`.
-    - smoke now fails if terminal marker text is not observed before screenshot capture.
-- shortcut-trace prerequisites:
-  - Accessibility + Automation permissions for `osascript` / `System Events` (for synthetic key chords).
-  - Ghostty-enabled build path (`TUIST_DISABLE_GHOSTTY` and `TOASTTY_DISABLE_GHOSTTY` unset).
-  - CLI deps: `nc`, `osascript`, `uuidgen` (`jq` optional, used when available for robust JSON parsing).
+**Smoke automation:**
+```bash
+# Fallback (no Ghostty) first, then Ghostty-enabled
+TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh
+./scripts/automation/smoke-ui.sh
 
-## Logging and Diagnostics
-- Reminder: when not overridden, Toastty logs to `/tmp/toastty.log`.
-- App/runtime logging now uses `ToasttyLog` (Core module) with category + level metadata.
-- Default log file: `/tmp/toastty.log` (rotates to `/tmp/toastty.previous.log` after 5 MB).
-- `/tmp` logging is for local development diagnostics; avoid sharing raw logs without review.
-- Tail live logs while reproducing issues:
-  - `tail -f /tmp/toastty.log`
-  - JSON pretty view: `tail -f /tmp/toastty.log | jq`
-- Key env vars:
-  - `TOASTTY_LOG_LEVEL=debug|info|warning|error`
-  - `TOASTTY_LOG_FILE=/custom/path.log` (set to `none` to disable file sink)
-  - `TOASTTY_LOG_STDERR=1` (mirror logs to stderr)
-  - `TOASTTY_LOG_DISABLE=1` (disable logging)
-- Shortcut/terminal debugging is instrumented across:
-  - key event forwarding (`TerminalHostView`)
-  - Ghostty action callback routing (`GhosttyRuntimeManager`)
-  - runtime action dispatch to reducer (`TerminalRuntimeRegistry`)
-  - reducer outcomes for split resize/equalize (`AppReducer`)
+# Leave workspace in Ghostty-enabled mode when done
+TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
+```
 
-## Manual Interaction Scripting Tips
-- Activation alone is often insufficient; click into the target terminal panel before typing.
-- `System Events` UI scripting requires both macOS Accessibility permission and Automation permission (caller controlling `System Events`).
-- Coordinate clicks are machine/layout specific; adjust coordinates per active display/window layout.
-- Example robust sequence (single AppleScript block with explicit ordering/delay):
+**Manual QA** (launch app and verify):
+- `cmd+d` / `cmd+shift+d` / `cmd+[` / `cmd+]` on real panes
+- Focused panel toggle (`cmd+shift+f`) round-trip
+- Terminal viewport follows output growth (no stuck scroll)
+- Inspect screenshot artifacts: top bar, sidebar, pane separators, focused panel border
+
+**Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
+
+## Ghostty Integration
+- **Default-on** when a local xcframework exists in `Dependencies/` and disable env is not set.
+- **Opt out:** `TUIST_DISABLE_GHOSTTY=1` (or alias `TOASTTY_DISABLE_GHOSTTY=1`)
+- **Install/update artifact:** `./scripts/ghostty/install-local-xcframework.sh`
+  - `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug|legacy` to pick variant
+  - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework` to override source
+- **Config loading order:** `TOASTTY_GHOSTTY_CONFIG_PATH` > `$XDG_CONFIG_HOME/ghostty/config` > `~/.config/ghostty/config` > Ghostty defaults.
+- **Font override:** `~/.toastty/config` key `terminal-font-size` (cleared by `Reset Terminal Font`).
+- **Host-side split styling:** `unfocused-split-opacity`, `unfocused-split-fill` (falls back to Ghostty `background`).
+- **Reload config at runtime:** `Toastty -> Reload Configuration` menu item.
+- When linked, `Project.swift` adds `TOASTTY_HAS_GHOSTTY_KIT` and linker flags (`-lc++`, `-framework Carbon`).
+- After changing artifacts or settings, always regenerate and rebuild before validating.
+
+## Automation Details
+- **`smoke-ui.sh`** — builds/runs app in automation mode, drives socket actions, emits screenshots/state dumps.
+- **`shortcut-trace.sh`** — drives real keyboard shortcuts via AppKit and verifies split/focus/resize workflows.
+  - Requires: Accessibility + Automation permissions, Ghostty-enabled build, `nc`, `osascript`, `uuidgen`.
+  - Default focus coordinates: `CLICK_X=760`, `CLICK_Y=420` (override for your display layout).
+- **Smoke env:** `RUN_ID`, `FIXTURE`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`
+- **Shortcut-trace env:** `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`
+
+## Logging
+- Default log: `/tmp/toastty.log` (rotates at 5 MB to `/tmp/toastty.previous.log`)
+- Tail: `tail -f /tmp/toastty.log` (or pipe to `jq` for pretty JSON)
+- Env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` to disable), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`
+- Key instrumentation points: `TerminalHostView` (key events), `GhosttyRuntimeManager` (action routing), `TerminalRuntimeRegistry` (dispatch), `AppReducer` (split resize/equalize)
+
+## Manual Interaction Scripting
+Click into the target terminal panel before typing — activation alone is insufficient.
+
 ```bash
 osascript <<'OSA'
 tell application "ToasttyApp" to activate
@@ -123,38 +73,11 @@ tell application "System Events"
 end tell
 OSA
 ```
-- Delay values are machine/load dependent; tune upward if activation/focus races still occur.
-- In the `System Events` process-level `click at {x, y}` pattern, coordinates are absolute screen coordinates.
-- For non-US keyboard layouts, clipboard paste is usually more reliable than literal `keystroke`.
-- `key code 36` is the hardware key code for Return and is layout-independent.
-- Clipboard-based examples overwrite the system clipboard; account for that side effect.
+- Coordinates are absolute screen coordinates; adjust per display layout.
+- `key code 36` = Return (layout-independent). Clipboard paste is more reliable than `keystroke` for non-US layouts.
+- Tune delay values upward if focus races occur.
 
-## Daily-Driver QA Checklist
-- Run baseline + Ghostty smoke:
-  - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
-  - `./scripts/automation/smoke-ui.sh` (Ghostty path only if xcframework exists and Ghostty is not disabled)
-  - finish with `TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate` so local Xcode builds default to Ghostty-enabled.
-- Launch app manually and verify:
-  - `cmd+d`, `cmd+shift+d`, `cmd+[`, `cmd+]` on real terminal panes.
-  - focused panel toggle (`cmd+shift+f`) round-trip.
-  - terminal viewport follows output growth (no stuck scroll position).
-- Inspect latest screenshot artifacts before handoff:
-  - top bar chrome state, sidebar selection state, pane separators, focused panel border.
+## Ghostty Shortcut Parity
+Currently mapped via `action_cb`: `new_split`, `goto_split`, `resize_split`, `equalize_splits`, `toggle_split_zoom`.
 
-## Ghostty Shortcut Parity Snapshot
-- currently mapped via Ghostty `action_cb`:
-  - `new_split:{right,down,left,up}`
-  - `goto_split:{previous,next,left,right,up,down}`
-  - `resize_split:{up,down,left,right}`
-  - `equalize_splits`
-  - `toggle_split_zoom`
-- known gaps (deferred):
-  - Ghostty font-size actions via callback (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
-  - tabs/windows/clipboard action parity beyond current Toastty primitives
-
-## Current Project Snapshot (as of 2026-02-28; verify against current code when in doubt)
-- Current local state supports Ghostty-enabled app builds/runs when local Ghostty xcframework dependencies are present (default-on, explicit opt-out available).
-- Terminal focus + keyboard bridging is in place; regressions in cursor-follow/scrolling still need manual visual validation.
-- Smoke automation validates layout actions (split, aux toggles, focused panel, font HUD), deterministic Ghostty terminal send/read marker flow (when Ghostty is enabled), and captures artifacts.
-- Viewport scrolling smoothness still requires manual visual validation in the running app.
-- Ghostty xcframeworks remain local dependencies (`Dependencies/GhosttyKit.Debug.xcframework`, `Dependencies/GhosttyKit.Release.xcframework`, with legacy fallback `Dependencies/GhosttyKit.xcframework`), not a fully managed/pinned remote artifact.
+Known gaps (deferred): font-size actions (`increase/decrease/reset_font_size`), tabs/windows/clipboard beyond current Toastty primitives.
