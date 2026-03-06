@@ -1,8 +1,8 @@
-# Toastty Pane Re-Architecture Plan
+# Toastty Layout/Slot Re-Architecture Plan
 
 ## Status
 - Drafted: 2026-03-05
-- Updated: 2026-03-05 after removing in-slot tabbing
+- Updated: 2026-03-06 after the terminology rename
 - Scope owner: Codex + Vishal
 - Execution model: new git worktree branch, direct cutover
 
@@ -17,15 +17,14 @@
 ## Terminology
 - This document uses:
   - `layout tree` = the split topology inside a workspace
-  - `slot` = one visible leaf position in that layout
+  - `slot` = one visible terminal/content position in that layout
   - `panel` = the content/runtime hosted in a slot
-- Current code still uses `pane` names. In implementation terms today:
-  - `layout tree` maps to `paneTree`
-  - `slot` maps to `PaneNode.leaf` / `paneID`
-- Recommendation:
-  - do not start with the terminology rename
-  - land the behavior/identity/lifecycle rearchitecture first
-  - do the `pane` -> `slot` / `paneTree` -> `layoutTree` rename as a follow-up mechanical pass once the new behavior is stable
+- Current code now uses that terminology internally:
+  - `WorkspaceState.layoutTree`
+  - `LayoutNode.slot(slotID:panelID:)`
+- Public automation protocol names stay stable for compatibility:
+  - `workspace.focus-pane.*`
+  - `paneCount`
 
 ## Constraints (Explicit Decisions)
 - Do the work in a new worktree branch.
@@ -54,7 +53,7 @@ Panel-to-panel interaction is not implemented in this pass, but the layout/lifec
 ## Current Baseline
 - Single-panel slots are already in place.
 - In-slot panel tabbing has been removed from the state model and reducer behavior.
-- `PaneNode.leaf` now represents one slot containing one panel.
+- `LayoutNode.slot` now represents one slot containing one panel.
 
 This plan starts from that baseline.
 
@@ -98,7 +97,7 @@ The keying contract must be explicit:
 - No whole-window tabbing implementation.
 - No multi-window architecture redesign beyond preserving current behavior.
 - No broad redesign of unrelated app state, sidebar flows, or workspace management.
-- No migration of previously persisted multi-tab leaf state.
+- No migration of previously persisted multi-slot/tab state.
 - No dedicated panel-to-panel interaction bus in this pass.
 
 ## Required Chunk Order
@@ -106,7 +105,7 @@ The keying contract must be explicit:
 - Chunk 2 must land before any structural-identity-based keying work.
 - The host lifecycle seam must land before or with the workspace projection refactor.
 - Close/focus path unification depends on the layout identity contract and the host lifecycle seam being in place.
-- The terminology rename stays out of this sequence and happens later as a mechanical cleanup pass.
+- The terminology rename is already complete and is not part of the execution sequence anymore.
 
 ## Implementation Chunks (Commit-Oriented)
 
@@ -156,8 +155,8 @@ The keying contract must be explicit:
 - Add tests for slot ID, panel ID, and structural identity behavior.
 
 **Likely files**
-- `Sources/Core/PaneNode.swift` or extracted `Sources/Core/Layout/*`
-- `Tests/Core/PaneNodeMutationTests.swift`
+- `Sources/Core/LayoutNode.swift` or extracted `Sources/Core/Layout/*`
+- `Tests/Core/LayoutNodeMutationTests.swift`
 - new dedicated structural-identity tests if needed
 
 **Acceptance**

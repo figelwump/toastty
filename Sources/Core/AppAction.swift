@@ -1,13 +1,13 @@
 import Foundation
 
-public enum PaneSplitDirection: String, Codable, Equatable, Sendable {
+public enum SlotSplitDirection: String, Codable, Equatable, Sendable {
     case right
     case down
     case left
     case up
 }
 
-public enum PaneFocusDirection: String, Codable, Equatable, Sendable {
+public enum SlotFocusDirection: String, Codable, Equatable, Sendable {
     case previous
     case next
     case up
@@ -16,7 +16,7 @@ public enum PaneFocusDirection: String, Codable, Equatable, Sendable {
     case right
 }
 
-public enum PaneResizeDirection: String, Codable, Equatable, Sendable {
+public enum SplitResizeDirection: String, Codable, Equatable, Sendable {
     case up
     case down
     case left
@@ -30,8 +30,8 @@ public enum AppAction: Equatable, Sendable {
     case renameWorkspace(workspaceID: UUID, title: String)
     case closeWorkspace(workspaceID: UUID)
     case focusPanel(workspaceID: UUID, panelID: UUID)
-    case movePanelToPane(panelID: UUID, targetPaneID: UUID)
-    case movePanelToWorkspace(panelID: UUID, targetWorkspaceID: UUID, targetPaneID: UUID?)
+    case movePanelToSlot(panelID: UUID, targetSlotID: UUID)
+    case movePanelToWorkspace(panelID: UUID, targetWorkspaceID: UUID, targetSlotID: UUID?)
     case detachPanelToNewWindow(panelID: UUID)
     case closePanel(panelID: UUID)
     case reopenLastClosedPanel(workspaceID: UUID)
@@ -42,12 +42,12 @@ public enum AppAction: Equatable, Sendable {
     case increaseGlobalTerminalFont
     case decreaseGlobalTerminalFont
     case resetGlobalTerminalFont
-    case splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation)
-    case splitFocusedPaneInDirection(workspaceID: UUID, direction: PaneSplitDirection)
-    case focusPane(workspaceID: UUID, direction: PaneFocusDirection)
-    case resizeFocusedPaneSplit(workspaceID: UUID, direction: PaneResizeDirection, amount: Int)
-    case equalizePaneSplits(workspaceID: UUID)
-    case createTerminalPanel(workspaceID: UUID, paneID: UUID)
+    case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
+    case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
+    case focusSlot(workspaceID: UUID, direction: SlotFocusDirection)
+    case resizeFocusedSlotSplit(workspaceID: UUID, direction: SplitResizeDirection, amount: Int)
+    case equalizeLayoutSplits(workspaceID: UUID)
+    case createTerminalPanel(workspaceID: UUID, slotID: UUID)
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
@@ -68,8 +68,8 @@ public extension AppAction {
             return "closeWorkspace"
         case .focusPanel:
             return "focusPanel"
-        case .movePanelToPane:
-            return "movePanelToPane"
+        case .movePanelToSlot:
+            return "movePanelToSlot"
         case .movePanelToWorkspace:
             return "movePanelToWorkspace"
         case .detachPanelToNewWindow:
@@ -92,16 +92,16 @@ public extension AppAction {
             return "decreaseGlobalTerminalFont"
         case .resetGlobalTerminalFont:
             return "resetGlobalTerminalFont"
-        case .splitFocusedPane:
-            return "splitFocusedPane"
-        case .splitFocusedPaneInDirection:
-            return "splitFocusedPaneInDirection"
-        case .focusPane:
-            return "focusPane"
-        case .resizeFocusedPaneSplit:
-            return "resizeFocusedPaneSplit"
-        case .equalizePaneSplits:
-            return "equalizePaneSplits"
+        case .splitFocusedSlot:
+            return "splitFocusedSlot"
+        case .splitFocusedSlotInDirection:
+            return "splitFocusedSlotInDirection"
+        case .focusSlot:
+            return "focusSlot"
+        case .resizeFocusedSlotSplit:
+            return "resizeFocusedSlotSplit"
+        case .equalizeLayoutSplits:
+            return "equalizeLayoutSplits"
         case .createTerminalPanel:
             return "createTerminalPanel"
         case .updateTerminalPanelMetadata:

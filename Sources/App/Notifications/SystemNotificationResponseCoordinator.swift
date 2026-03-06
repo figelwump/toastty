@@ -52,7 +52,7 @@ final class SystemNotificationResponseCoordinator: NSObject {
         }
 
         NSApp.activate(ignoringOtherApps: true)
-        terminalRuntimeRegistry?.scheduleSelectedWorkspacePaneFocusRestore()
+        terminalRuntimeRegistry?.scheduleSelectedWorkspaceSlotFocusRestore()
     }
 }
 

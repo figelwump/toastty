@@ -9,18 +9,18 @@ struct WorkspaceLayoutSnapshotTests {
         let workspaceID = UUID()
         let leftPanelID = UUID()
         let rightPanelID = UUID()
-        let leftPaneID = UUID()
-        let rightPaneID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
 
         let workspace = WorkspaceState(
             id: workspaceID,
             title: "Infra",
-            paneTree: .split(
+            layoutTree: .split(
                 nodeID: UUID(),
                 orientation: .horizontal,
                 ratio: 0.62,
-                first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
-                second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+                first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+                second: .slot(slotID: rightSlotID, panelID: rightPanelID)
             ),
             panels: [
                 leftPanelID: .terminal(TerminalPanelState(title: "Server", shell: "zsh", cwd: "/tmp/infra")),
@@ -35,7 +35,7 @@ struct WorkspaceLayoutSnapshotTests {
                 ClosedPanelRecord(
                     panelState: .terminal(TerminalPanelState(title: "Old", shell: "zsh", cwd: "/tmp/old")),
                     closedAt: Date(),
-                    sourceLeafPaneID: leftPaneID
+                    sourceSlotID: leftSlotID
                 ),
             ]
         )
@@ -60,7 +60,7 @@ struct WorkspaceLayoutSnapshotTests {
 
         let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
         #expect(restoredWorkspace.title == "Infra")
-        #expect(restoredWorkspace.paneTree == workspace.paneTree)
+        #expect(restoredWorkspace.layoutTree == workspace.layoutTree)
         #expect(restoredWorkspace.focusedPanelID == rightPanelID)
         #expect(restoredWorkspace.auxPanelVisibility == [.diff])
 
@@ -94,15 +94,15 @@ struct WorkspaceLayoutSnapshotTests {
         let windowID = UUID()
         let workspaceOneID = UUID()
         let workspaceTwoID = UUID()
-        let workspaceOnePaneID = UUID()
-        let workspaceTwoPaneID = UUID()
+        let workspaceOneSlotID = UUID()
+        let workspaceTwoSlotID = UUID()
         let workspaceOnePanelID = UUID()
         let workspaceTwoPanelID = UUID()
 
         let workspaceOne = WorkspaceState(
             id: workspaceOneID,
             title: "One",
-            paneTree: .leaf(paneID: workspaceOnePaneID, panelID: workspaceOnePanelID),
+            layoutTree: .slot(slotID: workspaceOneSlotID, panelID: workspaceOnePanelID),
             panels: [
                 workspaceOnePanelID: .terminal(
                     TerminalPanelState(title: "Agent A", shell: "zsh", cwd: "/tmp/one")
@@ -115,7 +115,7 @@ struct WorkspaceLayoutSnapshotTests {
         let workspaceTwo = WorkspaceState(
             id: workspaceTwoID,
             title: "Two",
-            paneTree: .leaf(paneID: workspaceTwoPaneID, panelID: workspaceTwoPanelID),
+            layoutTree: .slot(slotID: workspaceTwoSlotID, panelID: workspaceTwoPanelID),
             panels: [
                 workspaceTwoPanelID: .terminal(
                     TerminalPanelState(title: "Agent B", shell: "zsh", cwd: "/tmp/two")

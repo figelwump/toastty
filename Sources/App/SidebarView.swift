@@ -206,7 +206,7 @@ struct SidebarView: View {
         isSelected: Bool,
         @ViewBuilder titleView: () -> Title
     ) -> some View {
-        let paneCount = workspace.paneTree.allLeafInfos.count
+        let paneCount = workspace.layoutTree.allSlotInfos.count
         let subtitle = workspaceSubtitle(workspace: workspace, paneCount: paneCount)
 
         return VStack(alignment: .leading, spacing: 2) {
@@ -283,7 +283,7 @@ struct SidebarView: View {
     private func commitWorkspaceRename(workspaceID: UUID) {
         guard let workspace = store.state.workspacesByID[workspaceID] else {
             cancelWorkspaceRename()
-            scheduleWorkspacePaneFocusRestore()
+            scheduleWorkspaceSlotFocusRestore()
             return
         }
 
@@ -291,13 +291,13 @@ struct SidebarView: View {
         guard trimmedTitle.isEmpty == false else {
             renameDraftTitle = workspace.title
             cancelWorkspaceRename()
-            scheduleWorkspacePaneFocusRestore()
+            scheduleWorkspaceSlotFocusRestore()
             return
         }
 
         _ = store.send(.renameWorkspace(workspaceID: workspaceID, title: trimmedTitle))
         cancelWorkspaceRename()
-        scheduleWorkspacePaneFocusRestore()
+        scheduleWorkspaceSlotFocusRestore()
     }
 
     private func cancelWorkspaceRename() {
@@ -306,15 +306,15 @@ struct SidebarView: View {
         renameDraftTitle = ""
     }
 
-    private func scheduleWorkspacePaneFocusRestore(attempt: Int = 0) {
+    private func scheduleWorkspaceSlotFocusRestore(attempt: Int = 0) {
         let delay = attempt == 0 ? 0 : 16
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
-            if terminalRuntimeRegistry.focusSelectedWorkspacePaneIfPossible() {
+            if terminalRuntimeRegistry.focusSelectedWorkspaceSlotIfPossible() {
                 return
             }
 
             guard attempt < 12 else { return }
-            scheduleWorkspacePaneFocusRestore(attempt: attempt + 1)
+            scheduleWorkspaceSlotFocusRestore(attempt: attempt + 1)
         }
     }
 

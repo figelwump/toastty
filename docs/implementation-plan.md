@@ -114,7 +114,7 @@ struct WindowState: Codable, Identifiable {
 struct WorkspaceState: Codable, Identifiable {
     let id: UUID
     var title: String
-    var paneTree: PaneNode
+    var layoutTree: LayoutNode
     var panels: [UUID: PanelState]
     var focusedPanelID: UUID?
     var auxPanelVisibility: Set<PanelKind> // per-workspace aux panel toggles
@@ -122,9 +122,9 @@ struct WorkspaceState: Codable, Identifiable {
     var recentlyClosedPanels: [ClosedPanelRecord] // bounded stack for reopen
 }
 
-indirect enum PaneNode: Codable {
-    case leaf(paneID: UUID, panelID: UUID)
-    case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
+indirect enum LayoutNode: Codable {
+    case slot(slotID: UUID, panelID: UUID)
+    case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: LayoutNode, second: LayoutNode)
 }
 
 enum PanelState: Codable {
@@ -137,21 +137,21 @@ enum PanelState: Codable {
 struct ClosedPanelRecord: Codable {
     let panelState: PanelState
     let closedAt: Date
-    let sourceLeafPaneID: UUID // where to re-insert if possible
+    let sourceSlotID: UUID // where to re-insert if possible
 }
 ```
 
-Note: `PaneNode.split` has a `nodeID` so that interior nodes can be addressed as drag-drop targets. Without this, there is no way to identify which split edge the user is dropping onto. All node IDs (leaf `paneID` and split `nodeID`) must be unique within a workspace tree.
+Note: `LayoutNode.split` has a `nodeID` so that interior nodes can be addressed as drag-drop targets. Without this, there is no way to identify which split edge the user is dropping onto. All node IDs (slot `slotID` and split `nodeID`) must be unique within a workspace tree.
 
 state invariants:
 - `WindowState.workspaceIDs` is ordered and is the source of truth for workspace ordering in that window
 - every id in `WindowState.workspaceIDs` must exist in `AppState.workspacesByID`
 - a workspace belongs to exactly one window at a time
 - aux panel visibility is persisted per workspace (`WorkspaceState.auxPanelVisibility`)
-- every panel id in any `PaneNode.leaf.panelID` must exist in `WorkspaceState.panels`
-- every key in `WorkspaceState.panels` must appear exactly once in a workspace `PaneNode.leaf`
-- empty pane leaves are not allowed after reducer actions
-- all node IDs (leaf `paneID` and split `nodeID`) must be unique within a workspace tree
+- every panel id in any `LayoutNode.slot.panelID` must exist in `WorkspaceState.panels`
+- every key in `WorkspaceState.panels` must appear exactly once in a workspace `LayoutNode.slot`
+- empty slots are not allowed after reducer actions
+- all node IDs (slot `slotID` and split `nodeID`) must be unique within a workspace tree
 
 Detailed invariant contract: `docs/state-invariants.md`.
 
@@ -236,11 +236,11 @@ Visual spec: see Paper designs in "Toastty — All Panels Active" and "Toastty �
 
 When an aux panel toggle is turned on and no instance exists:
 
-1. If the pane tree is a single leaf: create a vertical split (orientation: `.horizontal`, ratio: `0.65`) with the existing leaf on the left and a new leaf containing the aux panel on the right.
-2. If the pane tree already has a rightmost leaf (traverse `split.second` recursively): insert the aux panel as a new tab in that rightmost leaf, or stack it vertically within the right column if multiple aux panels are visible.
+1. If the layout tree is a single slot: create a vertical split (orientation: `.horizontal`, ratio: `0.65`) with the existing slot on the left and a new slot containing the aux panel on the right.
+2. If the layout tree already has a rightmost slot (traverse `split.second` recursively): insert the aux panel as a new tab in that rightmost slot, or stack it vertically within the right column if multiple aux panels are visible.
 3. If the user has previously moved the panel to a custom position, re-toggling on creates it in the right column (not the old custom position).
 
-The "right column" is defined structurally: the rightmost leaf reachable by always following `split.second` in horizontal splits. This is a heuristic, not a reserved slot — the user can freely rearrange after creation.
+The "right column" is defined structurally: the rightmost slot reachable by always following `split.second` in horizontal splits. This is a heuristic, not a reserved slot — the user can freely rearrange after creation.
 
 ### keyboard-driven panel movement
 
@@ -254,7 +254,7 @@ These supplement drag-drop and menu-initiated moves. Command palette integration
 
 ### lifecycle cascade rules
 
-- **Close last panel in a leaf**: collapse the leaf out of the split tree (parent split replaced by sibling node).
+- **Close last panel in a slot**: collapse the slot out of the split tree (parent split replaced by sibling node).
 - **Close last panel in a workspace**: close the workspace. Remove workspace from its window's `workspaceIDs`. If it was `selectedWorkspaceID`, select the nearest sibling.
 - **Close last workspace in a window**: close the window. Remove from `AppState.windows`. If it was the last window, the app remains running with no windows (macOS dock icon persists; re-activate creates a fresh default window).
 
@@ -395,13 +395,13 @@ approach:
 - after move commit, `SessionRegistry` updates denormalized location fields (workspace/window) from panel location; `sessionID` remains unchanged
 - `detachPanelToNewWindow` always creates:
   - new `WindowState` with a new frame and one workspace id
-  - new `WorkspaceState` with a single leaf pane containing the detached panel
+  - new `WorkspaceState` with a single slot pane containing the detached panel
   - new window `selectedWorkspaceID` set to the created workspace
 - menu-initiated move actions do not auto-focus destination window unless action explicitly requests focus
 
 drag/drop targets:
 - pane tab strip: reorder in-pane or move cross-pane
-- pane body edges: move panel as split target (left/right/up/down) — addressed via `PaneNode.split.nodeID` + edge direction
+- pane body edges: move panel as split target (left/right/up/down) — addressed via `LayoutNode.split.nodeID` + edge direction
 - vertical workspace tab row: move panel to workspace
 - outside window bounds: create new window and attach panel
 
@@ -591,8 +591,8 @@ goal:
 v1 behavior:
 - action `toggleFocusedPanelMode` on current workspace:
   - if not in focused-panel mode:
-    - capture current workspace layout snapshot (`paneTree`, `focusedPanelID`).
-    - show only the currently focused panel in a single leaf that fills the workspace view.
+    - capture current workspace layout snapshot (`layoutTree`, `focusedPanelID`).
+    - show only the currently focused panel in a single slot that fills the workspace view.
   - if already in focused-panel mode:
     - restore the captured layout snapshot.
 - keyboard shortcut: `⌘⇧F` toggles focused-panel mode for the selected workspace.
@@ -603,7 +603,7 @@ v1 behavior:
 
 state model note:
 - add a per-workspace transient snapshot field for focused-panel mode restore:
-  - `focusedPanelModeSnapshot? { paneTree, focusedPanelID }`
+  - `focusedPanelModeSnapshot? { layoutTree, focusedPanelID }`
 - this snapshot is runtime/session-local and not persisted across app relaunch for v1.
 
 acceptance:
@@ -625,7 +625,7 @@ Sources/
       WindowState.swift
       WorkspaceState.swift
       PanelState.swift
-      PaneNode.swift
+      LayoutNode.swift
     Actions/
       AppAction.swift
       AppReducer.swift
@@ -665,7 +665,7 @@ Sources/
       WorkspaceRow.swift
     Workspace/
       WorkspaceView.swift
-      PaneSplitView.swift
+      LayoutSplitView.swift
     Panels/
       PanelHeaderView.swift
       DiffPanelView.swift
@@ -720,7 +720,7 @@ See also: `docs/ghostty-integration.md` (to be created during the spike with fin
     - `tuist build` (or `xcodebuild` when needed for edge cases/tooling gaps)
     - `tuist test`
 - integrate Ghostty surface from spike into app scaffold
-- implement minimal pane tree + terminal panel
+- implement minimal layout tree + terminal panel
 - implement sidebar with workspace list
 
 ### step 3: automation harness (lightweight)
@@ -854,9 +854,9 @@ unit tests:
 - session registry conflict resolution
 - diff attribution reconciliation
 - notification deduplication and suppression logic
-- panel tree invariants (`panels` map <-> `PaneNode` references + selected index bounds)
+- panel tree invariants (`panels` map <-> `LayoutNode` references + selected index bounds)
 - codable migration roundtrip tests for `PanelState` and snapshot schema versions
-- lifecycle cascade (close panel → empty leaf collapse → workspace close → window close)
+- lifecycle cascade (close panel → empty slot collapse → workspace close → window close)
 
 test harness/fakes:
 - `FakePanelRuntime` for integration tests that do not require Ghostty surfaces
@@ -964,13 +964,13 @@ Chunk A (phase 0 step 2 + step 3 foundation):
 - technical note: Tuist 4.68 uses `.target(... product: .unitTests ...)` instead of `.testTarget(...)` in `Project.swift`.
 
 Chunk A review reconciliation (post-commit second opinion on `99363fa`):
-- accepted: recover from stale `focusedPanelID` in `splitFocusedPane` by resolving fallback focus from pane tree.
-- accepted: validate `focusedPanelID` invariants (`focused panel exists` and `focused panel is present in pane tree`).
+- accepted: recover from stale `focusedPanelID` in `splitFocusedSlot` by resolving fallback focus from layout tree.
+- accepted: validate `focusedPanelID` invariants (`focused panel exists` and `focused panel is present in layout tree`).
 - accepted: validate split ratio bounds (`0 < ratio < 1`).
-- accepted: make pane-tree mutation in `replaceLeaf`/`appendPanel` explicit with immutable branch copies.
+- accepted: make layout-tree mutation in `replaceLeaf`/`appendPanel` explicit with immutable branch copies.
 - accepted: make terminal default titles monotonic (`Terminal N`) based on max existing ordinal instead of panel count.
 - rejected: removing `@discardableResult` from reducer send; keeping non-throwing action dispatch is intentional for app-level no-op handling.
-- rejected: splitting leaf/split node id namespaces at this stage; current invariant intentionally enforces uniqueness across both id categories.
+- rejected: splitting slot/split node id namespaces at this stage; current invariant intentionally enforces uniqueness across both id categories.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` and expanded tests (9 passing).
 
 Chunk B (phase 0 step 3 automation baseline + workspace UX baseline):
@@ -1003,8 +1003,8 @@ Chunk C (phase 1 state-layer panel mobility foundation):
   - `movePanelToPane`
   - `movePanelToWorkspace`
   - `detachPanelToNewWindow`
-- extended pane-tree mutation primitives with:
-  - panel removal with automatic empty-leaf collapse
+- extended layout-tree mutation primitives with:
+  - panel removal with automatic empty-slot collapse
 - note:
   - the early `reorderPanel` and in-pane tab mutation work was later removed when the workspace model moved to single-panel leaves.
 - implemented workspace/window lifecycle updates during panel moves:
@@ -1027,9 +1027,9 @@ Chunk D (phase 1 top-bar panel toggles + aux panel state behavior):
 - added `toggleAuxPanel` reducer action and wired top-bar toggle controls for Diff and Markdown.
 - implemented per-workspace aux panel visibility updates and single-instance enforcement per aux panel kind.
 - implemented right-column placement behavior:
-  - single-leaf workspace -> create horizontal split and place aux panel in right leaf
+  - single-slot workspace -> create horizontal split and place aux panel in right slot
   - existing split layout -> insert aux panel into right-column pane heuristic
-- added aux panel close-on-toggle-off behavior with pane-tree collapse handling.
+- added aux panel close-on-toggle-off behavior with layout-tree collapse handling.
 - added reducer/tree regression tests for aux toggle creation, placement, and removal.
 - validation passed: `./scripts/automation/check.sh` with 27 passing tests.
 
@@ -1050,7 +1050,7 @@ Chunk E (phase 1 close/reopen panel behavior):
   - restore panel state into original pane when still present
   - fallback to focused/first pane when original pane no longer exists
   - restore aux visibility for reopened aux panels
-- integrated close behavior with existing lifecycle collapse rules (empty leaf/workspace/window handling).
+- integrated close behavior with existing lifecycle collapse rules (empty slot/workspace/window handling).
 - added regression tests for close/reopen roundtrip, aux visibility restore, and missing-pane fallback reinsertion.
 - validation passed: `./scripts/automation/check.sh` with 32 passing tests.
 
@@ -1163,43 +1163,43 @@ Chunk I review reconciliation (post-commit second opinion on `e0cdb96`):
 
 Chunk J (aux panel layout: one aux panel per pane):
 - changed aux panel insertion behavior:
-  - first aux toggle from single-leaf workspace still creates a right column (`horizontal` split).
+  - first aux toggle from single-slot workspace still creates a right column (`horizontal` split).
   - additional aux toggles now split the right column pane (`vertical` split) instead of appending tabs to the same pane.
 - adjusted right-column target resolution for nested vertical splits so additional aux panes append toward the bottom of the right column.
 - expanded reducer coverage:
   - verify aux panel added from existing split creates a new pane (not a tab in prior right pane).
   - verify diff + markdown toggles result in separate pane hosts.
-- updated pane-node behavior test to match bottom-pane preference in nested right-column vertical splits.
+- updated layout-node behavior test to match bottom-pane preference in nested right-column vertical splits.
 - validation passed: `./scripts/automation/check.sh` with 53 passing tests.
 
 Chunk J review reconciliation (post-commit second opinion on `e6a6ffa`):
-- accepted: avoid reconstructing right-column leaf nodes from `PaneLeafInfo`; use direct pane-tree node lookup (`leafNode(paneID:)`) before replacement.
+- accepted: avoid reconstructing right-column slot nodes from `SlotInfo`; use direct layout-tree node lookup (`slotNode(slotID:)`) before replacement.
 - accepted: add explicit regression coverage for multi-aux close behavior (closing one aux panel collapses only its pane and preserves remaining aux pane state).
 - accepted: simplify nested right-column split ratio from `0.55` to `0.5` to reduce compounding size bias during repeated aux-pane splits.
 - rejected: unbounded re-toggle pane growth concern; existing early-return branch removes an already-open aux panel before any split insertion path.
 - rejected: focus-steal suggestion for new aux pane; current UX intentionally preserves focused terminal panel on aux toggles.
-- rejected: pane-ID tracking concern; pane identity is represented solely by `PaneNode` structure in current model.
+- rejected: pane-ID tracking concern; pane identity is represented solely by `LayoutNode` structure in current model.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 54 passing tests.
 
 Chunk K (aux-column heuristic simplification for mixed terminal layouts):
 - revised aux-toggle insertion policy to remove terminal-mixing ambiguity:
-  - first aux panel now always creates a dedicated right aux column by wrapping the existing workspace pane tree in a horizontal split.
+  - first aux panel now always creates a dedicated right aux column by wrapping the existing workspace layout tree in a horizontal split.
   - subsequent aux panels always split within the existing aux column subtree (vertical stacking), never into terminal-only panes.
 - added reducer helpers:
   - `auxPanelIDs(in:)` to derive currently active aux panel identities.
-  - `resolveAuxColumnPaneID(in:auxPanelIDs:)` to target the existing aux subtree deterministically.
+  - `resolveAuxColumnSlotID(in:auxPanelIDs:)` to target the existing aux subtree deterministically.
 - design decision:
 - keep behavior intentionally simple for now: aux panels are anchored to a dedicated right column until explicit user panel move preferences are implemented.
 - added regression coverage for a complex terminal-only layout (multiple terminal splits) to ensure diff/markdown panes do not share leaves with terminal panels.
 - validation passed: `./scripts/automation/check.sh` with 55 passing tests.
 
 Chunk K review reconciliation (post-commit second opinion on `55542de`):
-- accepted: make aux-pane targeting deterministic for 3+ aux panels by selecting the last aux-containing leaf in traversal order (`resolveAuxColumnPaneID` now uses `last(where:)` over aux-host leaves).
+- accepted: make aux-pane targeting deterministic for 3+ aux panels by selecting the last aux-containing slot in traversal order (`resolveAuxColumnSlotID` now uses `last(where:)` over aux-host leaves).
 - accepted: strengthen aux-type selection to explicit auxiliary kinds (`.diff`, `.markdown`, `.scratchpad`) rather than broad non-terminal negation.
 - accepted: add stronger structural assertions in complex-layout test to verify aux panels reside in the root right subtree and stay disjoint from terminal subtree panel IDs.
 - accepted: add third-aux regression coverage (`.scratchpad`) to validate continued vertical stacking within the dedicated aux column.
-- rejected: concern that first aux wrap fails to discover aux leaf on second toggle; current tree mutation + aux panel ID scan makes that path deterministic.
-- rejected: replace-leaf leak claim; failed replacement path reverts panel dictionary mutation and does not insert transient split nodes into `paneTree`.
+- rejected: concern that first aux wrap fails to discover aux slot on second toggle; current tree mutation + aux panel ID scan makes that path deterministic.
+- rejected: replace-slot leak claim; failed replacement path reverts panel dictionary mutation and does not insert transient split nodes into `layoutTree`.
 - follow-up validation passed after fixes: `./scripts/automation/check.sh` with 56 passing tests.
 
 Plan adjustment note:
@@ -1344,7 +1344,7 @@ Chunk P (focused panel mode v1: maximize/restore with shortcut + automation cove
   - workspace state now tracks `focusedPanelModeActive` (per-workspace mode flag).
   - reducer now blocks pane split + aux-panel toggle actions while focused mode is active.
 - implementation simplification decision:
-  - use non-destructive focused-mode rendering (hide non-focused panes at render-time) rather than mutating `paneTree` into a temporary single-leaf snapshot.
+  - use non-destructive focused-mode rendering (hide non-focused panes at render-time) rather than mutating `layoutTree` into a temporary single-slot snapshot.
   - this keeps restore semantics lossless and avoids snapshot merge logic for close/reopen mutations.
 - updated workspace UI behavior:
   - added top-bar toggle button (`Focus Panel` / `Restore Layout`) with `⌘⇧F`.
@@ -1652,7 +1652,7 @@ Chunk Z (W-1 follow-up: automation terminal input + viewport assertion hooks):
     - optional `contains` marker check returns boolean for deterministic polling/assertion.
 - panel-targeting behavior:
   - explicit `panelID` targeting is supported.
-  - otherwise resolves workspace (`workspaceID` or selected workspace) and targets focused terminal panel with fallback to first terminal in pane-tree order.
+  - otherwise resolves workspace (`workspaceID` or selected workspace) and targets focused terminal panel with fallback to first terminal in layout-tree order.
 - runtime wiring:
   - `AutomationSocketServer` now receives `TerminalRuntimeRegistry` from app bootstrap/wiring.
   - `TerminalRuntimeRegistry` + `TerminalSurfaceController` now expose automation-only helpers:

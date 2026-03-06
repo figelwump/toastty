@@ -34,16 +34,16 @@ struct AppRootView: View {
         .task {
             terminalRuntimeRegistry.synchronize(with: store.state)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
-            terminalRuntimeRegistry.scheduleSelectedWorkspacePaneFocusRestore()
+            terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
         }
         .onChange(of: store.state) { _, nextState in
             terminalRuntimeRegistry.synchronize(with: nextState)
         }
-        .onChange(of: selectedPaneFocusSignature) { _, _ in
-            terminalRuntimeRegistry.scheduleSelectedWorkspacePaneFocusRestore()
+        .onChange(of: selectedSlotFocusSignature) { _, _ in
+            terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            terminalRuntimeRegistry.scheduleSelectedWorkspacePaneFocusRestore()
+            terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
         }
         .onChange(of: store.state.globalTerminalFontPoints) { previousPoints, nextPoints in
             terminalRuntimeRegistry.applyGlobalFontChange(from: previousPoints, to: nextPoints)
@@ -71,9 +71,9 @@ struct AppRootView: View {
         }
     }
 
-    private var selectedPaneFocusSignature: SelectedPaneFocusSignature? {
+    private var selectedSlotFocusSignature: SelectedSlotFocusSignature? {
         guard let selectedWindow = store.selectedWindow else { return nil }
-        return SelectedPaneFocusSignature(
+        return SelectedSlotFocusSignature(
             windowID: selectedWindow.id,
             workspaceID: selectedWindow.selectedWorkspaceID,
             focusedPanelID: store.selectedWorkspace?.focusedPanelID
@@ -81,7 +81,7 @@ struct AppRootView: View {
     }
 }
 
-private struct SelectedPaneFocusSignature: Equatable {
+private struct SelectedSlotFocusSignature: Equatable {
     let windowID: UUID
     let workspaceID: UUID?
     let focusedPanelID: UUID?

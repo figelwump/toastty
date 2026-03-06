@@ -13,9 +13,9 @@ protocol GhosttyRuntimeActionHandling: AnyObject {
 
 struct GhosttyRuntimeAction: Sendable {
     enum Intent: Sendable {
-        case split(PaneSplitDirection)
-        case focus(PaneFocusDirection)
-        case resizeSplit(PaneResizeDirection, amount: Int)
+        case split(SlotSplitDirection)
+        case focus(SlotFocusDirection)
+        case resizeSplit(SplitResizeDirection, amount: Int)
         case equalizeSplits
         case toggleFocusedPanelMode
         case setTerminalTitle(String)
@@ -110,19 +110,19 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
     let intent: GhosttyRuntimeAction.Intent
     switch action.tag {
     case GHOSTTY_ACTION_NEW_SPLIT:
-        guard let direction = PaneSplitDirection(ghosttyDirection: action.action.new_split) else {
+        guard let direction = SlotSplitDirection(ghosttyDirection: action.action.new_split) else {
             return nil
         }
         intent = .split(direction)
 
     case GHOSTTY_ACTION_GOTO_SPLIT:
-        guard let direction = PaneFocusDirection(ghosttyDirection: action.action.goto_split) else {
+        guard let direction = SlotFocusDirection(ghosttyDirection: action.action.goto_split) else {
             return nil
         }
         intent = .focus(direction)
 
     case GHOSTTY_ACTION_RESIZE_SPLIT:
-        guard let direction = PaneResizeDirection(ghosttyDirection: action.action.resize_split.direction) else {
+        guard let direction = SplitResizeDirection(ghosttyDirection: action.action.resize_split.direction) else {
             return nil
         }
         intent = .resizeSplit(direction, amount: Int(action.action.resize_split.amount))
@@ -463,7 +463,7 @@ private func ghosttyWriteClipboardCallback(
     }
 }
 
-private extension PaneSplitDirection {
+private extension SlotSplitDirection {
     init?(ghosttyDirection: ghostty_action_split_direction_e) {
         switch ghosttyDirection {
         case GHOSTTY_SPLIT_DIRECTION_RIGHT:
@@ -480,7 +480,7 @@ private extension PaneSplitDirection {
     }
 }
 
-private extension PaneFocusDirection {
+private extension SlotFocusDirection {
     init?(ghosttyDirection: ghostty_action_goto_split_e) {
         switch ghosttyDirection {
         case GHOSTTY_GOTO_SPLIT_PREVIOUS:
@@ -501,7 +501,7 @@ private extension PaneFocusDirection {
     }
 }
 
-private extension PaneResizeDirection {
+private extension SplitResizeDirection {
     init?(ghosttyDirection: ghostty_action_resize_split_direction_e) {
         switch ghosttyDirection {
         case GHOSTTY_RESIZE_SPLIT_UP:

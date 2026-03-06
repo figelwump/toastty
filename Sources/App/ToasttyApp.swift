@@ -205,7 +205,7 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry
         )
         systemNotificationResponseCoordinator.installDelegate()
-        let paneFocusRestoreCoordinator = PaneFocusRestoreCoordinator()
+        let slotFocusRestoreCoordinator = SlotFocusRestoreCoordinator()
         if persistTerminalFontPreference {
             Self.applyInitialTerminalFontState(to: store)
         }
@@ -213,7 +213,7 @@ struct ToasttyApp: App {
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
-            paneFocusRestoreCoordinator: paneFocusRestoreCoordinator
+            slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(
@@ -341,25 +341,25 @@ struct ToasttyApp: App {
             CommandMenu("Pane") {
                 Button("Split Right") {
                     guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right))
+                    store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
                 }
                 .keyboardShortcut("d", modifiers: [.command])
 
                 Button("Split Down") {
                     guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .down))
+                    store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .down))
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
 
                 Button("Focus Previous Pane") {
                     guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.focusPane(workspaceID: workspaceID, direction: .previous))
+                    store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
                 }
                 .keyboardShortcut("[", modifiers: [.command])
 
                 Button("Focus Next Pane") {
                     guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.focusPane(workspaceID: workspaceID, direction: .next))
+                    store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
                 }
                 .keyboardShortcut("]", modifiers: [.command])
             }

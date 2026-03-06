@@ -79,7 +79,7 @@ struct WorkspaceView: View {
 
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
-        terminalRuntimeRegistry.splitFocusedPane(workspaceID: workspaceID, orientation: orientation)
+        terminalRuntimeRegistry.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
     }
 
     private func workspaceStack(for window: WindowState) -> some View {
@@ -111,8 +111,8 @@ struct WorkspaceView: View {
         let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
             limit: TerminalShortcutConfig.maxShortcutCount
         )
-        PaneNodeView(
-            node: workspace.paneTree,
+        LayoutNodeView(
+            node: workspace.layoutTree,
             workspace: workspace,
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -264,8 +264,8 @@ private struct SelectedWorkspaceUnreadSignature: Equatable {
     let unreadPanelIDs: Set<UUID>
 }
 
-private struct PaneNodeView: View {
-    let node: PaneNode
+private struct LayoutNodeView: View {
+    let node: LayoutNode
     let workspace: WorkspaceState
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -278,7 +278,7 @@ private struct PaneNodeView: View {
 
     var body: some View {
         switch node {
-        case .leaf(let paneID, let panelID):
+        case .slot(let slotID, let panelID):
             Group {
                 if let panelState = workspace.panels[panelID] {
                     PanelCardView(
@@ -300,7 +300,7 @@ private struct PaneNodeView: View {
             }
             // Slot containers stay keyed by stable slot identity so panel swaps
             // do not remount the outer card chrome.
-            .id(paneID)
+            .id(slotID)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
         case .split(_, let orientation, let ratio, let first, let second):
@@ -331,7 +331,7 @@ private struct PaneNodeView: View {
 
                         HStack(spacing: 0) {
                             if showFirst {
-                                PaneNodeView(
+                                LayoutNodeView(
                                     node: first,
                                     workspace: workspace,
                                     store: store,
@@ -350,12 +350,12 @@ private struct PaneNodeView: View {
 
                             if showDivider {
                                 Rectangle()
-                                    .fill(ToastyTheme.paneDivider)
+                                    .fill(ToastyTheme.slotDivider)
                                     .frame(width: dividerThickness, height: geometry.size.height)
                             }
 
                             if showSecond {
-                                PaneNodeView(
+                                LayoutNodeView(
                                     node: second,
                                     workspace: workspace,
                                     store: store,
@@ -393,7 +393,7 @@ private struct PaneNodeView: View {
 
                         VStack(spacing: 0) {
                             if showFirst {
-                                PaneNodeView(
+                                LayoutNodeView(
                                     node: first,
                                     workspace: workspace,
                                     store: store,
@@ -411,12 +411,12 @@ private struct PaneNodeView: View {
 
                             if showDivider {
                                 Rectangle()
-                                    .fill(ToastyTheme.paneDivider)
+                                    .fill(ToastyTheme.slotDivider)
                                     .frame(width: geometry.size.width, height: dividerThickness)
                             }
 
                             if showSecond {
-                                PaneNodeView(
+                                LayoutNodeView(
                                     node: second,
                                     workspace: workspace,
                                     store: store,
@@ -455,12 +455,12 @@ private struct PaneNodeView: View {
         return min(max(Double(minimumVisibleDimension / availableDimension), 0.0001), 0.5)
     }
 
-    private func effectiveSplitRatio(baseRatio: Double, first: PaneNode, second: PaneNode) -> Double {
+    private func effectiveSplitRatio(baseRatio: Double, first: LayoutNode, second: LayoutNode) -> Double {
         guard focusedPanelModeActive, let focusedPanelID else {
             return baseRatio
         }
-        let firstContainsFocused = first.leafContaining(panelID: focusedPanelID) != nil
-        let secondContainsFocused = second.leafContaining(panelID: focusedPanelID) != nil
+        let firstContainsFocused = first.slotContaining(panelID: focusedPanelID) != nil
+        let secondContainsFocused = second.slotContaining(panelID: focusedPanelID) != nil
 
         if firstContainsFocused && secondContainsFocused {
             assertionFailure("Focused panel unexpectedly appears in both split branches.")
@@ -476,12 +476,12 @@ private struct PaneNodeView: View {
         return baseRatio
     }
 
-    private func focusModeBranchVisibility(first: PaneNode, second: PaneNode) -> (showFirst: Bool, showSecond: Bool) {
+    private func focusModeBranchVisibility(first: LayoutNode, second: LayoutNode) -> (showFirst: Bool, showSecond: Bool) {
         guard focusedPanelModeActive, let focusedPanelID else {
             return (true, true)
         }
-        let firstContainsFocused = first.leafContaining(panelID: focusedPanelID) != nil
-        let secondContainsFocused = second.leafContaining(panelID: focusedPanelID) != nil
+        let firstContainsFocused = first.slotContaining(panelID: focusedPanelID) != nil
+        let secondContainsFocused = second.slotContaining(panelID: focusedPanelID) != nil
         if firstContainsFocused == secondContainsFocused {
             return (true, true)
         }
@@ -604,7 +604,7 @@ private struct PanelCardView: View {
         guard case .terminal = panelState else {
             return ToastyTheme.fontMonoHeader
         }
-        return ToastyTheme.fontMonoTerminalPaneTitle
+        return ToastyTheme.fontMonoTerminalSlotTitle
     }
 
     private var panelTitleTextColor: Color {

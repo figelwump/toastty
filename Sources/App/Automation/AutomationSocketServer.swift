@@ -801,43 +801,43 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let didMutate: Bool
         switch actionID {
         case "workspace.split.horizontal":
-            didMutate = store.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal))
+            didMutate = store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal))
 
         case "workspace.split.vertical":
-            didMutate = store.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical))
+            didMutate = store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical))
 
         case "workspace.split.right":
-            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
 
         case "workspace.split.down":
-            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .down))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .down))
 
         case "workspace.split.left":
-            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .left))
 
         case "workspace.split.up":
-            didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .up))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .up))
 
         case "workspace.close-focused-panel":
             didMutate = focusedPanelCommandController.closeFocusedPanel(in: workspaceID)
 
         case "workspace.focus-pane.previous":
-            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .previous))
+            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
 
         case "workspace.focus-pane.next":
-            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .next))
+            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
 
         case "workspace.focus-pane.left":
-            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .left))
+            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .left))
 
         case "workspace.focus-pane.right":
-            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .right))
+            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .right))
 
         case "workspace.focus-pane.up":
-            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .up))
+            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .up))
 
         case "workspace.focus-pane.down":
-            didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .down))
+            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .down))
 
         case "workspace.focus-panel":
             guard let panelID = args.uuid("panelID") else {
@@ -847,7 +847,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "workspace.resize-split.left":
             didMutate = store.send(
-                .resizeFocusedPaneSplit(
+                .resizeFocusedSlotSplit(
                     workspaceID: workspaceID,
                     direction: .left,
                     amount: max(args.int("amount") ?? 1, 1)
@@ -856,7 +856,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "workspace.resize-split.right":
             didMutate = store.send(
-                .resizeFocusedPaneSplit(
+                .resizeFocusedSlotSplit(
                     workspaceID: workspaceID,
                     direction: .right,
                     amount: max(args.int("amount") ?? 1, 1)
@@ -865,7 +865,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "workspace.resize-split.up":
             didMutate = store.send(
-                .resizeFocusedPaneSplit(
+                .resizeFocusedSlotSplit(
                     workspaceID: workspaceID,
                     direction: .up,
                     amount: max(args.int("amount") ?? 1, 1)
@@ -874,7 +874,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "workspace.resize-split.down":
             didMutate = store.send(
-                .resizeFocusedPaneSplit(
+                .resizeFocusedSlotSplit(
                     workspaceID: workspaceID,
                     direction: .down,
                     amount: max(args.int("amount") ?? 1, 1)
@@ -882,7 +882,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             )
 
         case "workspace.equalize-splits":
-            didMutate = store.send(.equalizePaneSplits(workspaceID: workspaceID))
+            didMutate = store.send(.equalizeLayoutSplits(workspaceID: workspaceID))
 
         case "topbar.toggle.diff":
             didMutate = store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff))
@@ -974,7 +974,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return (workspaceID, focusedPanelID)
         }
 
-        for leaf in workspace.paneTree.allLeafInfos {
+        for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
             if let panelState = workspace.panels[panelID], case .terminal = panelState {
                 return (workspaceID, panelID)
@@ -1029,20 +1029,20 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             throw AutomationSocketError.invalidPayload("workspaceID does not exist")
         }
 
-        let leafInfos = workspace.paneTree.allLeafInfos
-        let leafPaneIDs = leafInfos.map { AutomationJSONValue.string($0.paneID.uuidString) }
+        let leafInfos = workspace.layoutTree.allSlotInfos
+        let leafSlotIDs = leafInfos.map { AutomationJSONValue.string($0.slotID.uuidString) }
         let leafPanelIDs = leafInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
         let slotMappings = leafInfos.map { leafInfo in
             AutomationJSONValue.object([
-                "paneID": .string(leafInfo.paneID.uuidString),
+                "slotID": .string(leafInfo.slotID.uuidString),
                 "panelID": .string(leafInfo.panelID.uuidString),
             ])
         }
         let rootSplitRatio: AutomationJSONValue
-        switch workspace.paneTree {
+        switch workspace.layoutTree {
         case .split(_, _, let ratio, _, _):
             rootSplitRatio = .double(ratio)
-        case .leaf:
+        case .slot:
             rootSplitRatio = .null
         }
 
@@ -1052,7 +1052,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             "panelCount": .int(workspace.panels.count),
             "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
             "rootSplitRatio": rootSplitRatio,
-            "leafPaneIDs": .array(leafPaneIDs),
+            "leafSlotIDs": .array(leafSlotIDs),
             "leafPanelIDs": .array(leafPanelIDs),
             "slotMappings": .array(slotMappings),
             "layoutSignature": .string(layoutSignature(for: workspace)),
@@ -1065,8 +1065,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             throw AutomationSocketError.invalidPayload("workspaceID does not exist")
         }
 
-        let terminalPanelIDs: [UUID] = workspace.paneTree.allLeafInfos.compactMap { paneInfo in
-            let panelID = paneInfo.panelID
+        let terminalPanelIDs: [UUID] = workspace.layoutTree.allSlotInfos.compactMap { slotInfo in
+            let panelID = slotInfo.panelID
             guard let panelState = workspace.panels[panelID] else {
                 return nil
             }
@@ -1110,16 +1110,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     private func layoutSignature(for workspace: WorkspaceState) -> String {
-        let slotSignature = workspace.paneTree.allLeafInfos
-            .map { "\($0.paneID.uuidString):\($0.panelID.uuidString)" }
+        let slotSignature = workspace.layoutTree.allSlotInfos
+            .map { "\($0.slotID.uuidString):\($0.panelID.uuidString)" }
             .joined(separator: ",")
         let focusSignature = workspace.focusedPanelID?.uuidString ?? "nil"
         let rootSignature: String
-        switch workspace.paneTree {
+        switch workspace.layoutTree {
         case .split(_, _, let ratio, _, _):
             rootSignature = String(format: "%.6f", ratio)
-        case .leaf:
-            rootSignature = "leaf"
+        case .slot:
+            rootSignature = "slot"
         }
         return "focus=\(focusSignature);root=\(rootSignature);slots=\(slotSignature)"
     }
@@ -1195,7 +1195,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         guard selectedWorkspace.focusedPanelID == panelID else {
             return false
         }
-        return selectedWorkspace.paneTree.leafContaining(panelID: panelID) != nil
+        return selectedWorkspace.layoutTree.slotContaining(panelID: panelID) != nil
     }
 
     @MainActor

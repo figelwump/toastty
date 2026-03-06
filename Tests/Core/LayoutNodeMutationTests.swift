@@ -2,11 +2,11 @@ import CoreState
 import Foundation
 import Testing
 
-struct PaneNodeMutationTests {
+struct LayoutNodeMutationTests {
     @Test
     func removingSingleLeafPanelRemovesTree() {
         let panelID = UUID()
-        let tree = PaneNode.leaf(paneID: UUID(), panelID: panelID)
+        let tree = LayoutNode.slot(slotID: UUID(), panelID: panelID)
 
         let result = tree.removingPanel(panelID)
 
@@ -16,70 +16,70 @@ struct PaneNodeMutationTests {
 
     @Test
     func removingLeafFromSplitCollapsesToSibling() {
-        let leftPaneID = UUID()
-        let rightPaneID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
         let leftPanelID = UUID()
         let rightPanelID = UUID()
 
-        let tree = PaneNode.split(
+        let tree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.5,
-            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
-            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+            first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
         )
 
         let result = tree.removingPanel(leftPanelID)
         let updatedTree = result.node
 
         #expect(result.removed)
-        #expect(updatedTree == .leaf(paneID: rightPaneID, panelID: rightPanelID))
+        #expect(updatedTree == .slot(slotID: rightSlotID, panelID: rightPanelID))
     }
 
     @Test
-    func rightColumnPanePrefersBottomPaneWithinVerticalRightColumn() {
-        let leftPaneID = UUID()
-        let topRightPaneID = UUID()
-        let bottomRightPaneID = UUID()
+    func rightColumnSlotPrefersBottomSlotWithinVerticalRightColumn() {
+        let leftSlotID = UUID()
+        let topRightSlotID = UUID()
+        let bottomRightSlotID = UUID()
 
-        let tree = PaneNode.split(
+        let tree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.65,
-            first: .leaf(paneID: leftPaneID, panelID: UUID()),
+            first: .slot(slotID: leftSlotID, panelID: UUID()),
             second: .split(
                 nodeID: UUID(),
                 orientation: .vertical,
                 ratio: 0.5,
-                first: .leaf(paneID: topRightPaneID, panelID: UUID()),
-                second: .leaf(paneID: bottomRightPaneID, panelID: UUID())
+                first: .slot(slotID: topRightSlotID, panelID: UUID()),
+                second: .slot(slotID: bottomRightSlotID, panelID: UUID())
             )
         )
 
-        #expect(tree.rightColumnPaneID() == bottomRightPaneID)
+        #expect(tree.rightColumnSlotID() == bottomRightSlotID)
     }
 
     @Test
     func structuralIdentityIgnoresSplitRatioChanges() {
-        let leftPaneID = UUID()
-        let rightPaneID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
         let leftPanelID = UUID()
         let rightPanelID = UUID()
         let nodeID = UUID()
 
-        let originalTree = PaneNode.split(
+        let originalTree = LayoutNode.split(
             nodeID: nodeID,
             orientation: .horizontal,
             ratio: 0.35,
-            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
-            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+            first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
         )
-        let resizedTree = PaneNode.split(
+        let resizedTree = LayoutNode.split(
             nodeID: nodeID,
             orientation: .horizontal,
             ratio: 0.8,
-            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
-            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+            first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
         )
 
         #expect(originalTree.structuralIdentity == resizedTree.structuralIdentity)
@@ -87,23 +87,23 @@ struct PaneNodeMutationTests {
 
     @Test
     func structuralIdentityIgnoresPanelReplacementInExistingSlot() {
-        let leftPaneID = UUID()
-        let rightPaneID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
         let nodeID = UUID()
 
-        let originalTree = PaneNode.split(
+        let originalTree = LayoutNode.split(
             nodeID: nodeID,
             orientation: .horizontal,
             ratio: 0.5,
-            first: .leaf(paneID: leftPaneID, panelID: UUID()),
-            second: .leaf(paneID: rightPaneID, panelID: UUID())
+            first: .slot(slotID: leftSlotID, panelID: UUID()),
+            second: .slot(slotID: rightSlotID, panelID: UUID())
         )
-        let replacedPanelTree = PaneNode.split(
+        let replacedPanelTree = LayoutNode.split(
             nodeID: nodeID,
             orientation: .horizontal,
             ratio: 0.5,
-            first: .leaf(paneID: leftPaneID, panelID: UUID()),
-            second: .leaf(paneID: rightPaneID, panelID: UUID())
+            first: .slot(slotID: leftSlotID, panelID: UUID()),
+            second: .slot(slotID: rightSlotID, panelID: UUID())
         )
 
         #expect(originalTree.structuralIdentity == replacedPanelTree.structuralIdentity)
@@ -111,19 +111,19 @@ struct PaneNodeMutationTests {
 
     @Test
     func structuralIdentityChangesOnlyForAffectedBranchTopology() {
-        let leftTopPaneID = UUID()
-        let leftBottomPaneID = UUID()
-        let rightPaneID = UUID()
+        let leftTopSlotID = UUID()
+        let leftBottomSlotID = UUID()
+        let rightSlotID = UUID()
 
-        let originalLeftBranch = PaneNode.split(
+        let originalLeftBranch = LayoutNode.split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.5,
-            first: .leaf(paneID: leftTopPaneID, panelID: UUID()),
-            second: .leaf(paneID: leftBottomPaneID, panelID: UUID())
+            first: .slot(slotID: leftTopSlotID, panelID: UUID()),
+            second: .slot(slotID: leftBottomSlotID, panelID: UUID())
         )
-        let originalRightBranch = PaneNode.leaf(paneID: rightPaneID, panelID: UUID())
-        let originalTree = PaneNode.split(
+        let originalRightBranch = LayoutNode.slot(slotID: rightSlotID, panelID: UUID())
+        let originalTree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.5,
@@ -131,14 +131,14 @@ struct PaneNodeMutationTests {
             second: originalRightBranch
         )
 
-        let mutatedLeftBranch = PaneNode.split(
+        let mutatedLeftBranch = LayoutNode.split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.5,
             first: originalLeftBranch,
-            second: .leaf(paneID: UUID(), panelID: UUID())
+            second: .slot(slotID: UUID(), panelID: UUID())
         )
-        let mutatedTree = PaneNode.split(
+        let mutatedTree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.5,

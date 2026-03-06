@@ -4,7 +4,7 @@ import Testing
 
 struct AppReducerTests {
     @Test
-    func splitFocusedPaneCreatesSplitAndNewTerminalPanel() throws {
+    func splitFocusedSlotCreatesSplitAndNewTerminalPanel() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
 
@@ -12,12 +12,12 @@ struct AppReducerTests {
         let workspaceBefore = try #require(state.workspacesByID[workspaceID])
         let oldPanelCount = workspaceBefore.panels.count
 
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
         #expect(workspaceAfter.panels.count == oldPanelCount + 1)
 
-        if case .split(_, .horizontal, _, _, _) = workspaceAfter.paneTree {
+        if case .split(_, .horizontal, _, _, _) = workspaceAfter.layoutTree {
             // expected shape after first split
         } else {
             Issue.record("expected split root after first split")
@@ -27,7 +27,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func splitFocusedPaneInheritsFocusedTerminalCWD() throws {
+    func splitFocusedSlotInheritsFocusedTerminalCWD() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -42,7 +42,7 @@ struct AppReducerTests {
         workspace.panels[focusedPanelID] = .terminal(terminalState)
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
         let newFocusedPanelID = try #require(workspaceAfter.focusedPanelID)
@@ -57,7 +57,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func splitFocusedPaneFallsBackToHomeCWDWhenFocusedPanelIsNonTerminal() throws {
+    func splitFocusedSlotFallsBackToHomeCWDWhenFocusedPanelIsNonTerminal() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -68,7 +68,7 @@ struct AppReducerTests {
         let diffPanelID = try #require(workspaceWithDiff.panels.first(where: { $0.value.kind == .diff })?.key)
         #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: diffPanelID), state: &state))
 
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
 
         let workspaceAfterSplit = try #require(state.workspacesByID[workspaceID])
         let newFocusedPanelID = try #require(workspaceAfterSplit.focusedPanelID)
@@ -82,24 +82,24 @@ struct AppReducerTests {
     }
 
     @Test
-    func splitFocusedPaneInDirectionSupportsLeadingPlacements() throws {
+    func splitFocusedSlotInDirectionSupportsLeadingPlacements() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspaceBefore = try #require(state.workspacesByID[workspaceID])
         let sourcePanelID = try #require(workspaceBefore.focusedPanelID)
 
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .left), state: &state))
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, let orientation, _, let first, let second) = workspaceAfter.paneTree else {
+        guard case .split(_, let orientation, _, let first, let second) = workspaceAfter.layoutTree else {
             Issue.record("expected split root after directional split")
             return
         }
 
         #expect(orientation == .horizontal)
-        guard case .leaf(_, let firstPanelID) = first,
-              case .leaf(_, let secondPanelID) = second else {
+        guard case .slot(_, let firstPanelID) = first,
+              case .slot(_, let secondPanelID) = second else {
             Issue.record("expected leaf children in split root")
             return
         }
@@ -111,19 +111,19 @@ struct AppReducerTests {
     }
 
     @Test
-    func focusPaneMovesToNextAndPreviousLeaf() throws {
+    func focusSlotMovesToNextAndPreviousLeaf() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let initialWorkspace = try #require(state.workspacesByID[workspaceID])
         let sourcePanelID = try #require(initialWorkspace.focusedPanelID)
 
-        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .next), state: &state))
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .next), state: &state))
         let nextWorkspace = try #require(state.workspacesByID[workspaceID])
         let nextPanelID = try #require(nextWorkspace.focusedPanelID)
         #expect(nextPanelID != sourcePanelID)
 
-        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .previous), state: &state))
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .previous), state: &state))
         let previousWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(previousWorkspace.focusedPanelID == sourcePanelID)
 
@@ -131,21 +131,21 @@ struct AppReducerTests {
     }
 
     @Test
-    func focusPaneDirectionalMovesToSpatialNeighbor() throws {
+    func focusSlotDirectionalMovesToSpatialNeighbor() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
         let workspaceAfterSplit = try #require(state.workspacesByID[workspaceID])
         let panelAfterSplit = try #require(workspaceAfterSplit.focusedPanelID)
 
-        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .up), state: &state))
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .up), state: &state))
         let workspaceAfterMove = try #require(state.workspacesByID[workspaceID])
         let movedPanelID = try #require(workspaceAfterMove.focusedPanelID)
         #expect(movedPanelID != panelAfterSplit)
         #expect(
-            reducer.send(.focusPane(workspaceID: workspaceID, direction: .down), state: &state),
+            reducer.send(.focusSlot(workspaceID: workspaceID, direction: .down), state: &state),
             "downward move should return to lower pane"
         )
         let workspaceAfterReturn = try #require(state.workspacesByID[workspaceID])
@@ -161,16 +161,16 @@ struct AppReducerTests {
 
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspace = try #require(state.workspacesByID[workspaceID])
-        let paneID = try #require(workspace.paneTree.allLeafInfos.first?.paneID)
+        let slotID = try #require(workspace.layoutTree.allSlotInfos.first?.slotID)
         let originalPanelID = try #require(workspace.focusedPanelID)
-        let originalLeafCount = workspace.paneTree.allLeafInfos.count
+        let originalLeafCount = workspace.layoutTree.allSlotInfos.count
 
-        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, slotID: slotID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        let updatedLeaves = updatedWorkspace.paneTree.allLeafInfos
+        let updatedLeaves = updatedWorkspace.layoutTree.allSlotInfos
         #expect(updatedLeaves.count == originalLeafCount + 1)
-        #expect(updatedLeaves.contains(where: { $0.paneID == paneID && $0.panelID == originalPanelID }))
+        #expect(updatedLeaves.contains(where: { $0.slotID == slotID && $0.panelID == originalPanelID }))
         let newFocusedPanelID = try #require(updatedWorkspace.focusedPanelID)
         #expect(newFocusedPanelID != originalPanelID)
         #expect(updatedLeaves.contains(where: { $0.panelID == newFocusedPanelID }))
@@ -179,7 +179,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func splitFocusedPaneRecoversFromStaleFocusedPanel() throws {
+    func splitFocusedSlotRecoversFromStaleFocusedPanel() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
 
@@ -188,7 +188,7 @@ struct AppReducerTests {
         workspace.focusedPanelID = UUID()
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
         let focusedPanelID = try #require(updatedWorkspace.focusedPanelID)
@@ -203,7 +203,7 @@ struct AppReducerTests {
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         var workspace = try #require(state.workspacesByID[workspaceID])
-        let paneID = try #require(workspace.paneTree.allLeafInfos.first?.paneID)
+        let slotID = try #require(workspace.layoutTree.allSlotInfos.first?.slotID)
 
         let panelOne = UUID()
         let panelThree = UUID()
@@ -211,17 +211,17 @@ struct AppReducerTests {
             panelOne: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
             panelThree: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
         ]
-        workspace.paneTree = .split(
+        workspace.layoutTree = .split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.5,
-            first: .leaf(paneID: paneID, panelID: panelOne),
-            second: .leaf(paneID: UUID(), panelID: panelThree)
+            first: .slot(slotID: slotID, panelID: panelOne),
+            second: .slot(slotID: UUID(), panelID: panelThree)
         )
         workspace.focusedPanelID = panelThree
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, slotID: slotID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
         let newPanelIDs = Set(updatedWorkspace.panels.keys).subtracting([panelOne, panelThree])
@@ -426,24 +426,24 @@ struct AppReducerTests {
     }
 
     @Test
-    func movePanelToPaneCollapsesEmptySourceLeaf() throws {
+    func movePanelToSlotCollapsesEmptySourceLeaf() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspace = try #require(state.workspacesByID[workspaceID])
-        let leaves = workspace.paneTree.allLeafInfos
+        let leaves = workspace.layoutTree.allSlotInfos
         let sourceLeaf = try #require(leaves.first)
         let targetLeaf = try #require(leaves.last)
         let panelToMove = sourceLeaf.panelID
 
-        #expect(reducer.send(.movePanelToPane(panelID: panelToMove, targetPaneID: targetLeaf.paneID), state: &state))
+        #expect(reducer.send(.movePanelToSlot(panelID: panelToMove, targetSlotID: targetLeaf.slotID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        let updatedLeaves = updatedWorkspace.paneTree.allLeafInfos
+        let updatedLeaves = updatedWorkspace.layoutTree.allSlotInfos
         #expect(updatedLeaves.count == 2)
-        #expect(updatedLeaves.contains(where: { $0.paneID == targetLeaf.paneID && $0.panelID == targetLeaf.panelID }))
+        #expect(updatedLeaves.contains(where: { $0.slotID == targetLeaf.slotID && $0.panelID == targetLeaf.panelID }))
         #expect(updatedLeaves.contains(where: { $0.panelID == panelToMove }))
-        #expect(updatedLeaves.contains(where: { $0.paneID == sourceLeaf.paneID }) == false)
+        #expect(updatedLeaves.contains(where: { $0.slotID == sourceLeaf.slotID }) == false)
         #expect(updatedWorkspace.focusedPanelID == panelToMove)
 
         try StateValidator.validate(state)
@@ -460,7 +460,7 @@ struct AppReducerTests {
         let sourceWorkspace = try #require(state.workspacesByID[sourceWorkspaceID])
         let panelID = try #require(sourceWorkspace.focusedPanelID)
 
-        #expect(reducer.send(.movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspaceID, targetPaneID: nil), state: &state))
+        #expect(reducer.send(.movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspaceID, targetSlotID: nil), state: &state))
 
         #expect(state.workspacesByID[sourceWorkspaceID] == nil)
         let window = try #require(state.windows.first(where: { $0.id == windowID }))
@@ -480,9 +480,9 @@ struct AppReducerTests {
         let reducer = AppReducer()
 
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+        let slotID = try #require(state.workspacesByID[workspaceID]?.layoutTree.allSlotInfos.first?.slotID)
 
-        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, slotID: slotID), state: &state))
         let panelToDetach = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
 
         #expect(reducer.send(.detachPanelToNewWindow(panelID: panelToDetach), state: &state))
@@ -502,7 +502,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func movePanelToWorkspaceWithUnknownTargetPaneDoesNotMutateSource() throws {
+    func movePanelToWorkspaceWithUnknownTargetSlotDoesNotMutateSource() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
         let reducer = AppReducer()
 
@@ -515,7 +515,7 @@ struct AppReducerTests {
         let targetWorkspaceBefore = try #require(state.workspacesByID[targetWorkspaceID])
         let targetPanelCountBefore = targetWorkspaceBefore.panels.count
 
-        #expect(reducer.send(.movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspaceID, targetPaneID: UUID()), state: &state) == false)
+        #expect(reducer.send(.movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspaceID, targetSlotID: UUID()), state: &state) == false)
 
         let sourceWorkspaceAfter = try #require(state.workspacesByID[sourceWorkspaceID])
         let targetWorkspaceAfter = try #require(state.workspacesByID[targetWorkspaceID])
@@ -543,7 +543,7 @@ struct AppReducerTests {
         #expect(diffPanels.count == 1)
         #expect(workspace.focusedPanelID == originalFocusedPanelID)
 
-        if case .split(_, .horizontal, _, _, _) = workspace.paneTree {
+        if case .split(_, .horizontal, _, _, _) = workspace.layoutTree {
             // expected
         } else {
             Issue.record("expected horizontal split for first aux panel")
@@ -564,29 +564,29 @@ struct AppReducerTests {
         let workspace = try #require(state.workspacesByID[workspaceID])
         #expect(workspace.auxPanelVisibility.contains(.markdown) == false)
         #expect(workspace.panels.values.contains(where: { $0.kind == .markdown }) == false)
-        #expect(workspace.paneTree.allLeafInfos.count == 1)
+        #expect(workspace.layoutTree.allSlotInfos.count == 1)
 
         try StateValidator.validate(state)
     }
 
     @Test
-    func toggleAuxPanelAddsSeparatePaneInRightColumn() throws {
+    func toggleAuxPanelAddsSeparateSlotInRightColumn() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspaceBefore = try #require(state.workspacesByID[workspaceID])
-        let rightPaneIDBefore = try #require(workspaceBefore.paneTree.rightColumnPaneID())
+        let rightSlotIDBefore = try #require(workspaceBefore.layoutTree.rightColumnSlotID())
 
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfter.paneTree.allLeafInfos.count == 3)
-        let rightPaneAfter = try #require(workspaceAfter.paneTree.allLeafInfos.first(where: { $0.paneID == rightPaneIDBefore }))
+        #expect(workspaceAfter.layoutTree.allSlotInfos.count == 3)
+        let rightSlotAfter = try #require(workspaceAfter.layoutTree.allSlotInfos.first(where: { $0.slotID == rightSlotIDBefore }))
         let markdownPanelIDs = workspaceAfter.panels.filter { $0.value.kind == .markdown }.map(\.key)
         #expect(markdownPanelIDs.count == 1)
-        #expect(rightPaneAfter.panelID != markdownPanelIDs[0])
+        #expect(rightSlotAfter.panelID != markdownPanelIDs[0])
         let markdownPane = try #require(
-            workspaceAfter.paneTree.allLeafInfos.first(where: { $0.panelID == markdownPanelIDs[0] })
+            workspaceAfter.layoutTree.allSlotInfos.first(where: { $0.panelID == markdownPanelIDs[0] })
         )
         #expect(markdownPane.panelID == markdownPanelIDs[0])
 
@@ -603,14 +603,14 @@ struct AppReducerTests {
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
 
         let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.paneTree.allLeafInfos.count == 3)
+        #expect(workspace.layoutTree.allSlotInfos.count == 3)
 
         let diffPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .diff })?.key)
         let markdownPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .markdown })?.key)
-        let diffPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.panelID == diffPanelID }))
-        let markdownPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.panelID == markdownPanelID }))
+        let diffPane = try #require(workspace.layoutTree.allSlotInfos.first(where: { $0.panelID == diffPanelID }))
+        let markdownPane = try #require(workspace.layoutTree.allSlotInfos.first(where: { $0.panelID == markdownPanelID }))
 
-        #expect(diffPane.paneID != markdownPane.paneID)
+        #expect(diffPane.slotID != markdownPane.slotID)
         #expect(diffPane.panelID == diffPanelID)
         #expect(markdownPane.panelID == markdownPanelID)
 
@@ -629,7 +629,7 @@ struct AppReducerTests {
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
 
         let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.paneTree.allLeafInfos.count == 2)
+        #expect(workspace.layoutTree.allSlotInfos.count == 2)
         #expect(workspace.auxPanelVisibility.contains(.diff))
         #expect(workspace.auxPanelVisibility.contains(.markdown) == false)
         #expect(workspace.panels.values.contains(where: { $0.kind == .diff }))
@@ -644,34 +644,34 @@ struct AppReducerTests {
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state))
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
 
         let workspaceBeforeAux = try #require(state.workspacesByID[workspaceID])
         let terminalPanelIDs = Set(workspaceBeforeAux.panels.compactMap { panelID, panelState in
             panelState.kind == .terminal ? panelID : nil
         })
-        let leafCountBeforeAux = workspaceBeforeAux.paneTree.allLeafInfos.count
+        let leafCountBeforeAux = workspaceBeforeAux.layoutTree.allSlotInfos.count
 
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
 
         let workspaceAfterAux = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfterAux.paneTree.allLeafInfos.count == leafCountBeforeAux + 2)
+        #expect(workspaceAfterAux.layoutTree.allSlotInfos.count == leafCountBeforeAux + 2)
 
         let auxPanelIDs = Set(workspaceAfterAux.panels.compactMap { panelID, panelState in
             panelState.kind == .terminal ? nil : panelID
         })
         #expect(auxPanelIDs.count == 2)
 
-        let auxLeaves = workspaceAfterAux.paneTree.allLeafInfos.filter { leaf in
+        let auxLeaves = workspaceAfterAux.layoutTree.allSlotInfos.filter { leaf in
             auxPanelIDs.contains(leaf.panelID)
         }
         #expect(auxLeaves.count == 2)
-        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspaceAfterAux.paneTree {
-            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.map(\.panelID))
-            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.map(\.panelID))
+        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspaceAfterAux.layoutTree {
+            let terminalSubtreePanelIDs = Set(terminalSubtree.allSlotInfos.map(\.panelID))
+            let auxSubtreePanelIDs = Set(auxSubtree.allSlotInfos.map(\.panelID))
             #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
             #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
         } else {
@@ -696,23 +696,23 @@ struct AppReducerTests {
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .scratchpad), state: &state))
 
         let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.paneTree.allLeafInfos.count == 4)
+        #expect(workspace.layoutTree.allSlotInfos.count == 4)
 
         let auxPanelIDs = Set(workspace.panels.compactMap { panelID, panelState in
             panelState.kind == .terminal ? nil : panelID
         })
         #expect(auxPanelIDs.count == 3)
 
-        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspace.paneTree {
-            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.map(\.panelID))
-            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.map(\.panelID))
+        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspace.layoutTree {
+            let terminalSubtreePanelIDs = Set(terminalSubtree.allSlotInfos.map(\.panelID))
+            let auxSubtreePanelIDs = Set(auxSubtree.allSlotInfos.map(\.panelID))
             #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
             #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
         } else {
             Issue.record("expected root horizontal split with dedicated aux subtree")
         }
 
-        let auxLeaves = workspace.paneTree.allLeafInfos.filter { leaf in
+        let auxLeaves = workspace.layoutTree.allSlotInfos.filter { leaf in
             auxPanelIDs.contains(leaf.panelID)
         }
         #expect(auxLeaves.count == 3)
@@ -743,9 +743,9 @@ struct AppReducerTests {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+        let slotID = try #require(state.workspacesByID[workspaceID]?.layoutTree.allSlotInfos.first?.slotID)
 
-        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, slotID: slotID), state: &state))
         let panelToClose = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
         let panelStateBeforeClose = try #require(state.workspacesByID[workspaceID]?.panels[panelToClose])
 
@@ -765,16 +765,16 @@ struct AppReducerTests {
     }
 
     @Test
-    func closeFocusedPanelSelectsPreviousPaneInTraversalOrder() throws {
+    func closeFocusedPanelSelectsPreviousSlotInTraversalOrder() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
 
         let workspaceBeforeClose = try #require(state.workspacesByID[workspaceID])
-        let leavesBeforeClose = workspaceBeforeClose.paneTree.allLeafInfos
+        let leavesBeforeClose = workspaceBeforeClose.layoutTree.allSlotInfos
         #expect(leavesBeforeClose.count == 3)
         let focusedPanelID = try #require(workspaceBeforeClose.focusedPanelID)
         let lastLeafPanelID = try #require(leavesBeforeClose.last?.panelID)
@@ -791,16 +791,16 @@ struct AppReducerTests {
     }
 
     @Test
-    func closeFocusedPanelInFirstPaneWrapsToLastPane() throws {
+    func closeFocusedPanelInFirstSlotWrapsToLastSlot() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
 
         let workspaceBeforeFocus = try #require(state.workspacesByID[workspaceID])
-        let leavesBeforeClose = workspaceBeforeFocus.paneTree.allLeafInfos
+        let leavesBeforeClose = workspaceBeforeFocus.layoutTree.allSlotInfos
         #expect(leavesBeforeClose.count == 3)
 
         let panelToClose = try #require(leavesBeforeClose.first?.panelID)
@@ -820,10 +820,10 @@ struct AppReducerTests {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+        let slotID = try #require(state.workspacesByID[workspaceID]?.layoutTree.allSlotInfos.first?.slotID)
         let originalFocusedPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
 
-        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, slotID: slotID), state: &state))
         let panelToClose = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
 
         #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
@@ -840,10 +840,10 @@ struct AppReducerTests {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+        let slotID = try #require(state.workspacesByID[workspaceID]?.layoutTree.allSlotInfos.first?.slotID)
         let focusedPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
 
-        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, slotID: slotID), state: &state))
         let panelToClose = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
         #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: focusedPanelID), state: &state))
         #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
@@ -880,21 +880,21 @@ struct AppReducerTests {
     }
 
     @Test
-    func reopenFallsBackToFocusedPaneWhenOriginalPaneWasRemoved() throws {
+    func reopenFallsBackToFocusedSlotWhenOriginalSlotWasRemoved() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspace = try #require(state.workspacesByID[workspaceID])
-        let sourcePane = try #require(workspace.paneTree.allLeafInfos.first)
+        let sourcePane = try #require(workspace.layoutTree.allSlotInfos.first)
         let panelToClose = sourcePane.panelID
 
         #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
         let collapsedWorkspace = try #require(state.workspacesByID[workspaceID])
-        #expect(collapsedWorkspace.paneTree.allLeafInfos.count == 1)
+        #expect(collapsedWorkspace.layoutTree.allSlotInfos.count == 1)
 
         #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
         let reopenedWorkspace = try #require(state.workspacesByID[workspaceID])
-        let reopenedLeaves = reopenedWorkspace.paneTree.allLeafInfos
+        let reopenedLeaves = reopenedWorkspace.layoutTree.allSlotInfos
         #expect(reopenedLeaves.count == 2)
         let reopenedPanelID = try #require(reopenedWorkspace.focusedPanelID)
         #expect(reopenedLeaves.contains(where: { $0.panelID == reopenedPanelID }))
@@ -932,13 +932,13 @@ struct AppReducerTests {
     }
 
     @Test
-    func resizeFocusedPaneSplitAdjustsNearestMatchingRatio() throws {
+    func resizeFocusedSlotSplitAdjustsNearestMatchingRatio() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let initialWorkspace = try #require(state.workspacesByID[workspaceID])
 
-        guard case .split(_, let orientation, let initialRatio, _, _) = initialWorkspace.paneTree else {
+        guard case .split(_, let orientation, let initialRatio, _, _) = initialWorkspace.layoutTree else {
             Issue.record("expected split-workspace fixture to have split root")
             return
         }
@@ -946,13 +946,13 @@ struct AppReducerTests {
 
         #expect(
             reducer.send(
-                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .right, amount: 2),
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 2),
                 state: &state
             )
         )
 
         let resizedWorkspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, _, let resizedRatio, _, _) = resizedWorkspace.paneTree else {
+        guard case .split(_, _, let resizedRatio, _, _) = resizedWorkspace.layoutTree else {
             Issue.record("expected split root after resize")
             return
         }
@@ -963,7 +963,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func resizeFocusedPaneSplitReturnsFalseWhenNoMatchingSplitOrientationExists() throws {
+    func resizeFocusedSlotSplitReturnsFalseWhenNoMatchingSplitOrientationExists() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -971,18 +971,18 @@ struct AppReducerTests {
 
         #expect(
             reducer.send(
-                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .up, amount: 1),
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .up, amount: 1),
                 state: &state
             ) == false
         )
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfter.paneTree == workspaceBefore.paneTree)
+        #expect(workspaceAfter.layoutTree == workspaceBefore.layoutTree)
         try StateValidator.validate(state)
     }
 
     @Test
-    func resizeFocusedPaneSplitUsesNearestMatchingAncestor() throws {
+    func resizeFocusedSlotSplitUsesNearestMatchingAncestor() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -997,12 +997,12 @@ struct AppReducerTests {
             rightPanelID: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
         ]
 
-        let focusedPaneID = UUID()
-        let siblingPaneID = UUID()
-        let rightPaneID = UUID()
+        let focusedSlotID = UUID()
+        let siblingSlotID = UUID()
+        let rightSlotID = UUID()
         let nestedSplitNodeID = UUID()
         let rootSplitNodeID = UUID()
-        workspace.paneTree = .split(
+        workspace.layoutTree = .split(
             nodeID: rootSplitNodeID,
             orientation: .horizontal,
             ratio: 0.5,
@@ -1010,23 +1010,23 @@ struct AppReducerTests {
                 nodeID: nestedSplitNodeID,
                 orientation: .horizontal,
                 ratio: 0.6,
-                first: .leaf(paneID: focusedPaneID, panelID: focusedPanelID),
-                second: .leaf(paneID: siblingPaneID, panelID: siblingPanelID)
+                first: .slot(slotID: focusedSlotID, panelID: focusedPanelID),
+                second: .slot(slotID: siblingSlotID, panelID: siblingPanelID)
             ),
-            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
         )
         workspace.focusedPanelID = focusedPanelID
         state.workspacesByID[workspaceID] = workspace
 
         #expect(
             reducer.send(
-                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .right, amount: 1),
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 1),
                 state: &state
             )
         )
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, _, let rootRatio, let firstNode, _) = updatedWorkspace.paneTree,
+        guard case .split(_, _, let rootRatio, let firstNode, _) = updatedWorkspace.layoutTree,
               case .split(_, _, let nestedRatio, _, _) = firstNode else {
             Issue.record("expected nested horizontal split tree after resize")
             return
@@ -1038,20 +1038,20 @@ struct AppReducerTests {
     }
 
     @Test
-    func resizeFocusedPaneSplitClampsAtUpperBound() throws {
+    func resizeFocusedSlotSplitClampsAtUpperBound() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
         #expect(
             reducer.send(
-                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .right, amount: Int.max),
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: Int.max),
                 state: &state
             )
         )
 
         let workspaceAfterFirstResize = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, _, let ratioAfterFirstResize, _, _) = workspaceAfterFirstResize.paneTree else {
+        guard case .split(_, _, let ratioAfterFirstResize, _, _) = workspaceAfterFirstResize.layoutTree else {
             Issue.record("expected split tree after clamped resize")
             return
         }
@@ -1059,55 +1059,55 @@ struct AppReducerTests {
 
         #expect(
             reducer.send(
-                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .right, amount: 1),
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 1),
                 state: &state
             ) == false
         )
         let workspaceAfterSecondResize = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfterSecondResize.paneTree == workspaceAfterFirstResize.paneTree)
+        #expect(workspaceAfterSecondResize.layoutTree == workspaceAfterFirstResize.layoutTree)
         try StateValidator.validate(state)
     }
 
     @Test
-    func equalizePaneSplitsNormalizesNestedRatios() throws {
+    func equalizeLayoutSplitsNormalizesNestedRatios() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         var workspace = try #require(state.workspacesByID[workspaceID])
 
-        guard case .split(_, _, _, let first, let second) = workspace.paneTree,
-              case .leaf(let leftPaneID, let leftPanelID) = first,
-              case .leaf(let rightPaneID, let rightPanelID) = second else {
+        guard case .split(_, _, _, let first, let second) = workspace.layoutTree,
+              case .slot(let leftSlotID, let leftPanelID) = first,
+              case .slot(let rightSlotID, let rightPanelID) = second else {
             Issue.record("expected split-workspace fixture to expose two terminal leaves")
             return
         }
 
         let extraPanelID = UUID()
-        let extraPaneID = UUID()
+        let extraSlotID = UUID()
         workspace.panels[extraPanelID] = .terminal(
             TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")
         )
-        let nestedSecond = PaneNode.split(
+        let nestedSecond = LayoutNode.split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.8,
-            first: .leaf(paneID: rightPaneID, panelID: rightPanelID),
-            second: .leaf(paneID: extraPaneID, panelID: extraPanelID)
+            first: .slot(slotID: rightSlotID, panelID: rightPanelID),
+            second: .slot(slotID: extraSlotID, panelID: extraPanelID)
         )
-        workspace.paneTree = .split(
+        workspace.layoutTree = .split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.7,
-            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
+            first: .slot(slotID: leftSlotID, panelID: leftPanelID),
             second: nestedSecond
         )
         workspace.focusedPanelID = leftPanelID
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, _, let rootRatio, _, let updatedSecond) = updatedWorkspace.paneTree,
+        guard case .split(_, _, let rootRatio, _, let updatedSecond) = updatedWorkspace.layoutTree,
               case .split(_, _, let nestedRatio, _, _) = updatedSecond else {
             Issue.record("expected nested split tree after equalize")
             return
@@ -1117,22 +1117,22 @@ struct AppReducerTests {
         // opposite-orientation subtrees count as a single weight unit.
         #expect(abs(rootRatio - 0.5) < 0.0001)
         #expect(nestedRatio == 0.5)
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }
 
     @Test
-    func equalizePaneSplitsBalancesRightSplitChainIntoThirds() throws {
+    func equalizeLayoutSplitsBalancesRightSplitChainIntoThirds() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state))
 
         let workspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, .horizontal, let rootRatio, _, let second) = workspace.paneTree,
+        guard case .split(_, .horizontal, let rootRatio, _, let second) = workspace.layoutTree,
               case .split(_, .horizontal, let nestedRatio, _, _) = second else {
             Issue.record("expected right-leaning horizontal split chain")
             return
@@ -1140,22 +1140,22 @@ struct AppReducerTests {
 
         #expect(abs(rootRatio - (1.0 / 3.0)) < 0.0001)
         #expect(abs(nestedRatio - 0.5) < 0.0001)
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }
 
     @Test
-    func equalizePaneSplitsBalancesLeftSplitChainIntoThirds() throws {
+    func equalizeLayoutSplitsBalancesLeftSplitChainIntoThirds() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left), state: &state))
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .left), state: &state))
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .left), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .left), state: &state))
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state))
 
         let workspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, .horizontal, let rootRatio, let first, _) = workspace.paneTree,
+        guard case .split(_, .horizontal, let rootRatio, let first, _) = workspace.layoutTree,
               case .split(_, .horizontal, let nestedRatio, _, _) = first else {
             Issue.record("expected left-leaning horizontal split chain")
             return
@@ -1163,23 +1163,23 @@ struct AppReducerTests {
 
         #expect(abs(rootRatio - (2.0 / 3.0)) < 0.0001)
         #expect(abs(nestedRatio - 0.5) < 0.0001)
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }
 
     @Test
-    func equalizePaneSplitsBalancesDeepRightSplitChain() throws {
+    func equalizeLayoutSplitsBalancesDeepRightSplitChain() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
-        #expect(reducer.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .right), state: &state))
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right), state: &state))
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state))
 
         let workspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, .horizontal, let rootRatio, _, let secondNode) = workspace.paneTree,
+        guard case .split(_, .horizontal, let rootRatio, _, let secondNode) = workspace.layoutTree,
               case .split(_, .horizontal, let secondRatio, _, let thirdNode) = secondNode,
               case .split(_, .horizontal, let thirdRatio, _, _) = thirdNode else {
             Issue.record("expected deep right-leaning horizontal split chain")
@@ -1189,20 +1189,20 @@ struct AppReducerTests {
         #expect(abs(rootRatio - 0.25) < 0.0001)
         #expect(abs(secondRatio - (1.0 / 3.0)) < 0.0001)
         #expect(abs(thirdRatio - 0.5) < 0.0001)
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }
 
     @Test
-    func equalizePaneSplitsUsesOrientationAwareWeightsForMixedTree() throws {
+    func equalizeLayoutSplitsUsesOrientationAwareWeightsForMixedTree() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         var workspace = try #require(state.workspacesByID[workspaceID])
 
-        guard case .split(_, _, _, let first, let second) = workspace.paneTree,
-              case .leaf(let leftPaneID, let leftPanelID) = first,
-              case .leaf(let rightPaneID, let rightPanelID) = second else {
+        guard case .split(_, _, _, let first, let second) = workspace.layoutTree,
+              case .slot(let leftSlotID, let leftPanelID) = first,
+              case .slot(let rightSlotID, let rightPanelID) = second else {
             Issue.record("expected split-workspace fixture to expose two terminal leaves")
             return
         }
@@ -1220,32 +1220,32 @@ struct AppReducerTests {
             TerminalPanelState(title: "Terminal R4", shell: "zsh", cwd: "/tmp")
         )
 
-        let leftSecondPaneID = UUID()
-        let rightThirdPaneID = UUID()
-        let rightFourthPaneID = UUID()
+        let leftSecondSlotID = UUID()
+        let rightThirdSlotID = UUID()
+        let rightFourthSlotID = UUID()
 
-        let leftSubtree = PaneNode.split(
+        let leftSubtree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.9,
-            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
-            second: .leaf(paneID: leftSecondPaneID, panelID: leftSecondPanelID)
+            first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+            second: .slot(slotID: leftSecondSlotID, panelID: leftSecondPanelID)
         )
-        let rightNestedSubtree = PaneNode.split(
+        let rightNestedSubtree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.9,
-            first: .leaf(paneID: rightThirdPaneID, panelID: rightThirdPanelID),
-            second: .leaf(paneID: rightFourthPaneID, panelID: rightFourthPanelID)
+            first: .slot(slotID: rightThirdSlotID, panelID: rightThirdPanelID),
+            second: .slot(slotID: rightFourthSlotID, panelID: rightFourthPanelID)
         )
-        let rightSubtree = PaneNode.split(
+        let rightSubtree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.9,
-            first: .leaf(paneID: rightPaneID, panelID: rightPanelID),
+            first: .slot(slotID: rightSlotID, panelID: rightPanelID),
             second: rightNestedSubtree
         )
-        workspace.paneTree = .split(
+        workspace.layoutTree = .split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.9,
@@ -1255,10 +1255,10 @@ struct AppReducerTests {
         workspace.focusedPanelID = leftPanelID
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, .horizontal, let rootRatio, let updatedLeft, let updatedRight) = updatedWorkspace.paneTree,
+        guard case .split(_, .horizontal, let rootRatio, let updatedLeft, let updatedRight) = updatedWorkspace.layoutTree,
               case .split(_, .horizontal, let leftRatio, _, _) = updatedLeft,
               case .split(_, .vertical, let rightRatio, _, let updatedRightNested) = updatedRight,
               case .split(_, .vertical, let rightNestedRatio, _, _) = updatedRightNested else {
@@ -1270,20 +1270,20 @@ struct AppReducerTests {
         #expect(abs(leftRatio - 0.5) < 0.0001)
         #expect(abs(rightRatio - (1.0 / 3.0)) < 0.0001)
         #expect(abs(rightNestedRatio - 0.5) < 0.0001)
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }
 
     @Test
-    func equalizePaneSplitsTreatsOppositeOrientationSubtreeAsSingleWeight() throws {
+    func equalizeLayoutSplitsTreatsOppositeOrientationSubtreeAsSingleWeight() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         var workspace = try #require(state.workspacesByID[workspaceID])
 
-        guard case .split(_, _, _, let first, let second) = workspace.paneTree,
-              case .leaf(let leftPaneID, let leftPanelID) = first,
-              case .leaf(let rightPaneID, let rightPanelID) = second else {
+        guard case .split(_, _, _, let first, let second) = workspace.layoutTree,
+              case .slot(let leftSlotID, let leftPanelID) = first,
+              case .slot(let rightSlotID, let rightPanelID) = second else {
             Issue.record("expected split-workspace fixture to expose two terminal leaves")
             return
         }
@@ -1292,29 +1292,29 @@ struct AppReducerTests {
         workspace.panels[topRightPanelID] = .terminal(
             TerminalPanelState(title: "Terminal Top Right", shell: "zsh", cwd: "/tmp")
         )
-        let topRightPaneID = UUID()
+        let topRightSlotID = UUID()
 
-        let topSubtree = PaneNode.split(
+        let topSubtree = LayoutNode.split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.8,
-            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
-            second: .leaf(paneID: topRightPaneID, panelID: topRightPanelID)
+            first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+            second: .slot(slotID: topRightSlotID, panelID: topRightPanelID)
         )
-        workspace.paneTree = .split(
+        workspace.layoutTree = .split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.8,
             first: topSubtree,
-            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
         )
         workspace.focusedPanelID = leftPanelID
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state))
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        guard case .split(_, .vertical, let rootRatio, let updatedFirst, _) = updatedWorkspace.paneTree,
+        guard case .split(_, .vertical, let rootRatio, let updatedFirst, _) = updatedWorkspace.layoutTree,
               case .split(_, .horizontal, let topRatio, _, _) = updatedFirst else {
             Issue.record("expected vertical root with horizontal top subtree after equalize")
             return
@@ -1322,7 +1322,7 @@ struct AppReducerTests {
 
         #expect(abs(rootRatio - 0.5) < 0.0001)
         #expect(abs(topRatio - 0.5) < 0.0001)
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
         try StateValidator.validate(state)
     }
 
@@ -1423,13 +1423,13 @@ struct AppReducerTests {
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
         let focusedModeWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(focusedModeWorkspace.focusedPanelModeActive)
-        #expect(focusedModeWorkspace.paneTree == workspaceBefore.paneTree)
+        #expect(focusedModeWorkspace.layoutTree == workspaceBefore.layoutTree)
         #expect(focusedModeWorkspace.focusedPanelID == workspaceBefore.focusedPanelID)
 
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
         let restoredWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(restoredWorkspace.focusedPanelModeActive == false)
-        #expect(restoredWorkspace.paneTree == workspaceBefore.paneTree)
+        #expect(restoredWorkspace.layoutTree == workspaceBefore.layoutTree)
         #expect(restoredWorkspace.focusedPanelID == workspaceBefore.focusedPanelID)
 
         try StateValidator.validate(state)
@@ -1464,7 +1464,7 @@ struct AppReducerTests {
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
         let workspaceInFocusMode = try #require(state.workspacesByID[workspaceID])
 
-        #expect(reducer.send(.splitFocusedPane(workspaceID: workspaceID, orientation: .horizontal), state: &state) == false)
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state) == false)
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state) == false)
 
         let workspaceAfterBlockedActions = try #require(state.workspacesByID[workspaceID])
@@ -1478,9 +1478,9 @@ struct AppReducerTests {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        let paneID = try #require(state.workspacesByID[workspaceID]?.paneTree.allLeafInfos.first?.paneID)
+        let slotID = try #require(state.workspacesByID[workspaceID]?.layoutTree.allSlotInfos.first?.slotID)
 
-        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
+        #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, slotID: slotID), state: &state))
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
 
         let panelToClose = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
@@ -1502,11 +1502,11 @@ struct AppReducerTests {
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         var workspace = try #require(state.workspacesByID[workspaceID])
 
-        guard case .split(let nodeID, let orientation, _, let first, let second) = workspace.paneTree else {
+        guard case .split(let nodeID, let orientation, _, let first, let second) = workspace.layoutTree else {
             Issue.record("expected split-workspace fixture to have split root")
             return
         }
-        workspace.paneTree = .split(
+        workspace.layoutTree = .split(
             nodeID: nodeID,
             orientation: orientation,
             ratio: 0.7,
@@ -1520,11 +1520,11 @@ struct AppReducerTests {
 
         #expect(
             reducer.send(
-                .resizeFocusedPaneSplit(workspaceID: workspaceID, direction: .right, amount: 1),
+                .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 1),
                 state: &state
             ) == false
         )
-        #expect(reducer.send(.equalizePaneSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
 
         let workspaceAfterBlockedActions = try #require(state.workspacesByID[workspaceID])
         #expect(workspaceAfterBlockedActions == focusedModeWorkspace)
@@ -1723,7 +1723,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func focusPaneClearsUnreadNotificationForFocusedTargetPanel() throws {
+    func focusSlotClearsUnreadNotificationForFocusedTargetPanel() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -1732,7 +1732,7 @@ struct AppReducerTests {
         workspace.unreadPanelIDs = Set(panelIDs)
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .next), state: &state))
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .next), state: &state))
         let workspaceAfterFocus = try #require(state.workspacesByID[workspaceID])
         let focusedPanelID = try #require(workspaceAfterFocus.focusedPanelID)
         #expect(workspaceAfterFocus.unreadPanelIDs.contains(focusedPanelID) == false)
@@ -1740,7 +1740,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func focusPaneNoopDoesNotClearUnreadNotificationCount() throws {
+    func focusSlotNoopDoesNotClearUnreadNotificationCount() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -1749,7 +1749,7 @@ struct AppReducerTests {
         workspace.unreadPanelIDs = [panelID]
         state.workspacesByID[workspaceID] = workspace
 
-        #expect(reducer.send(.focusPane(workspaceID: workspaceID, direction: .next), state: &state) == false)
+        #expect(reducer.send(.focusSlot(workspaceID: workspaceID, direction: .next), state: &state) == false)
         #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 1)
     }
 

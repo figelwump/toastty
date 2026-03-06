@@ -58,7 +58,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
-    private var selectedPaneFocusRestoreTask: Task<Void, Never>?
+    private var selectedSlotFocusRestoreTask: Task<Void, Never>?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
@@ -74,7 +74,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     #endif
 
     deinit {
-        selectedPaneFocusRestoreTask?.cancel()
+        selectedSlotFocusRestoreTask?.cancel()
         #if TOASTTY_HAS_GHOSTTY_KIT
         visibilityPulseTask?.cancel()
         processWorkingDirectoryRefreshTask?.cancel()
@@ -103,18 +103,18 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     @discardableResult
-    func splitFocusedPane(workspaceID: UUID, orientation: SplitOrientation) -> Bool {
+    func splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation) -> Bool {
         sendSplitAction(
             workspaceID: workspaceID,
-            action: .splitFocusedPane(workspaceID: workspaceID, orientation: orientation)
+            action: .splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
         )
     }
 
     @discardableResult
-    func splitFocusedPaneInDirection(workspaceID: UUID, direction: PaneSplitDirection) -> Bool {
+    func splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection) -> Bool {
         sendSplitAction(
             workspaceID: workspaceID,
-            action: .splitFocusedPaneInDirection(workspaceID: workspaceID, direction: direction)
+            action: .splitFocusedSlotInDirection(workspaceID: workspaceID, direction: direction)
         )
     }
 
@@ -225,10 +225,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     /// Attempts to return keyboard focus to the currently selected workspace's
-    /// focused terminal pane host view. Returns `false` when there is no active
-    /// focused terminal pane or no attached host view.
+    /// focused terminal slot host view. Returns `false` when there is no active
+    /// focused terminal slot or no attached host view.
     @discardableResult
-    func focusSelectedWorkspacePaneIfPossible() -> Bool {
+    func focusSelectedWorkspaceSlotIfPossible() -> Bool {
         guard let workspace = store?.selectedWorkspace,
               let panelID = workspace.focusedPanelID else {
             return false
@@ -243,11 +243,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     /// Retries first-responder restoration for the selected workspace's focused
-    /// pane. This covers launch/layout races where the host view exists in state
+    /// slot. This covers launch/layout races where the host view exists in state
     /// but is not yet attached when focus should be applied.
-    func scheduleSelectedWorkspacePaneFocusRestore() {
-        selectedPaneFocusRestoreTask?.cancel()
-        selectedPaneFocusRestoreTask = Task { @MainActor [weak self] in
+    func scheduleSelectedWorkspaceSlotFocusRestore() {
+        selectedSlotFocusRestoreTask?.cancel()
+        selectedSlotFocusRestoreTask = Task { @MainActor [weak self] in
             let maxAttempts = 12
             let retryDelayNanoseconds: UInt64 = 16_000_000
             for attempt in 0..<maxAttempts {
@@ -256,7 +256,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
                 if NSApp.isActive, self.shouldAvoidStealingKeyboardFocus() {
                     return
                 }
-                if NSApp.isActive, self.focusSelectedWorkspacePaneIfPossible() {
+                if NSApp.isActive, self.focusSelectedWorkspaceSlotIfPossible() {
                     return
                 }
                 guard attempt < maxAttempts - 1 else { return }
@@ -435,9 +435,9 @@ private extension TerminalRuntimeRegistry {
     ) {
         let splitWorkspaceID: UUID
         switch action {
-        case .splitFocusedPane(workspaceID: let workspaceID, orientation: _):
+        case .splitFocusedSlot(workspaceID: let workspaceID, orientation: _):
             splitWorkspaceID = workspaceID
-        case .splitFocusedPaneInDirection(workspaceID: let workspaceID, direction: _):
+        case .splitFocusedSlotInDirection(workspaceID: let workspaceID, direction: _):
             splitWorkspaceID = workspaceID
         default:
             return
@@ -508,15 +508,15 @@ private extension TerminalRuntimeRegistry {
 
     private func resolveSplitSourcePanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
-           workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil,
+           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil,
            let focusedPanelState = workspace.panels[focusedPanelID],
            focusedPanelState.kind == .terminal {
             return focusedPanelID
         }
 
-        for leaf in workspace.paneTree.allLeafInfos {
+        for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
-            guard workspace.paneTree.leafContaining(panelID: panelID) != nil,
+            guard workspace.layoutTree.slotContaining(panelID: panelID) != nil,
                   let panelState = workspace.panels[panelID] else {
                 continue
             }
@@ -586,11 +586,11 @@ private extension TerminalRuntimeRegistry {
     func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
            workspace.panels[focusedPanelID] != nil,
-           workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil {
+           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil {
             return focusedPanelID
         }
 
-        for leaf in workspace.paneTree.allLeafInfos {
+        for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
             if workspace.panels[panelID] != nil {
                 return panelID
@@ -605,7 +605,7 @@ private extension TerminalRuntimeRegistry {
               let workspace = state.workspacesByID[workspaceID],
               let panelState = workspace.panels[panelID],
               case .terminal = panelState,
-              workspace.paneTree.leafContaining(panelID: panelID) != nil else {
+              workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
             return false
         }
         return true
@@ -702,7 +702,7 @@ private extension TerminalRuntimeRegistry {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
                 guard workspace.panels[panelID] != nil else { continue }
-                if workspace.paneTree.leafContaining(panelID: panelID) != nil {
+                if workspace.layoutTree.slotContaining(panelID: panelID) != nil {
                     return workspaceID
                 }
             }
@@ -1036,7 +1036,7 @@ private extension TerminalRuntimeRegistry {
             visibleText: visibleText
         )
         guard let inferredAgentKind else {
-            // Clear stale agent activity after the pane returns to an
+            // Clear stale agent activity after the slot returns to an
             // interactive shell prompt. This avoids lingering sidebar status
             // while also tolerating transient inference misses mid-run.
             if Self.visibleTextShowsInteractiveShellPrompt(visibleText) {
@@ -1212,7 +1212,7 @@ private extension TerminalRuntimeRegistry {
 
     func visibleTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
         var panelIDs: Set<UUID> = []
-        for leaf in workspace.paneTree.allLeafInfos {
+        for leaf in workspace.layoutTree.allSlotInfos {
             let selectedPanelID = leaf.panelID
             guard let panelState = workspace.panels[selectedPanelID],
                   case .terminal = panelState else {
@@ -1346,14 +1346,14 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         let handled: Bool
         switch action.intent {
         case .split(let direction):
-            handled = splitFocusedPaneInDirection(workspaceID: workspaceIDForAction, direction: direction)
+            handled = splitFocusedSlotInDirection(workspaceID: workspaceIDForAction, direction: direction)
 
         case .focus(let direction):
-            handled = store.send(.focusPane(workspaceID: workspaceIDForAction, direction: direction))
+            handled = store.send(.focusSlot(workspaceID: workspaceIDForAction, direction: direction))
 
         case .resizeSplit(let direction, let amount):
             handled = store.send(
-                .resizeFocusedPaneSplit(
+                .resizeFocusedSlotSplit(
                     workspaceID: workspaceIDForAction,
                     direction: direction,
                     amount: amount
@@ -1361,7 +1361,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             )
 
         case .equalizeSplits:
-            handled = store.send(.equalizePaneSplits(workspaceID: workspaceIDForAction))
+            handled = store.send(.equalizeLayoutSplits(workspaceID: workspaceIDForAction))
 
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
@@ -1486,7 +1486,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
            currentSelectedWorkspaceID == workspaceID,
            let workspace = state.workspacesByID[workspaceID] {
             panelIsFocused = workspace.focusedPanelID == panelID
-                && workspace.paneTree.leafContaining(panelID: panelID) != nil
+                && workspace.layoutTree.slotContaining(panelID: panelID) != nil
         } else {
             panelIsFocused = false
         }
@@ -1520,7 +1520,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
            let workspace = state.workspacesByID[selectedWorkspaceID],
            let resolvedPanelID = resolvedActionPanelID(in: workspace),
            workspace.focusedPanelID == resolvedPanelID,
-           workspace.paneTree.leafContaining(panelID: resolvedPanelID) != nil {
+           workspace.layoutTree.slotContaining(panelID: resolvedPanelID) != nil {
             ToasttyLog.debug(
                 "Suppressed unresolved desktop notification for focused panel in single-workspace window",
                 category: .notifications,

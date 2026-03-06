@@ -5,17 +5,17 @@ public enum SplitOrientation: String, Codable, Equatable, Sendable {
     case vertical
 }
 
-public struct PaneLeafInfo: Equatable, Sendable {
-    public let paneID: UUID
+public struct SlotInfo: Equatable, Sendable {
+    public let slotID: UUID
     public let panelID: UUID
 
-    public init(paneID: UUID, panelID: UUID) {
-        self.paneID = paneID
+    public init(slotID: UUID, panelID: UUID) {
+        self.slotID = slotID
         self.panelID = panelID
     }
 }
 
-public struct PaneSplitInfo: Equatable, Sendable {
+public struct LayoutSplitInfo: Equatable, Sendable {
     public let nodeID: UUID
     public let orientation: SplitOrientation
     public let ratio: Double
@@ -30,24 +30,24 @@ public struct PaneSplitInfo: Equatable, Sendable {
 /// Derived render identity for layout topology.
 /// This intentionally ignores split ratios and panel content so only topology
 /// and stable slot placement force split-subtree remounts.
-public indirect enum PaneStructuralIdentity: Equatable, Hashable, Sendable {
-    case leaf(paneID: UUID)
+public indirect enum LayoutStructuralIdentity: Equatable, Hashable, Sendable {
+    case slot(slotID: UUID)
     case split(
         orientation: SplitOrientation,
-        first: PaneStructuralIdentity,
-        second: PaneStructuralIdentity
+        first: LayoutStructuralIdentity,
+        second: LayoutStructuralIdentity
     )
 }
 
-public indirect enum PaneNode: Equatable, Sendable {
-    case leaf(paneID: UUID, panelID: UUID)
-    case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
+public indirect enum LayoutNode: Equatable, Sendable {
+    case slot(slotID: UUID, panelID: UUID)
+    case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: LayoutNode, second: LayoutNode)
 }
 
-extension PaneNode: Codable {
+extension LayoutNode: Codable {
     private enum CodingKeys: String, CodingKey {
         case type
-        case paneID
+        case slotID
         case panelID
         case nodeID
         case orientation
@@ -57,7 +57,7 @@ extension PaneNode: Codable {
     }
 
     private enum NodeType: String, Codable {
-        case leaf
+        case slot
         case split
     }
 
@@ -66,9 +66,9 @@ extension PaneNode: Codable {
         let type = try container.decode(NodeType.self, forKey: .type)
 
         switch type {
-        case .leaf:
-            self = .leaf(
-                paneID: try container.decode(UUID.self, forKey: .paneID),
+        case .slot:
+            self = .slot(
+                slotID: try container.decode(UUID.self, forKey: .slotID),
                 panelID: try container.decode(UUID.self, forKey: .panelID)
             )
         case .split:
@@ -76,8 +76,8 @@ extension PaneNode: Codable {
                 nodeID: try container.decode(UUID.self, forKey: .nodeID),
                 orientation: try container.decode(SplitOrientation.self, forKey: .orientation),
                 ratio: try container.decode(Double.self, forKey: .ratio),
-                first: try container.decode(PaneNode.self, forKey: .first),
-                second: try container.decode(PaneNode.self, forKey: .second)
+                first: try container.decode(LayoutNode.self, forKey: .first),
+                second: try container.decode(LayoutNode.self, forKey: .second)
             )
         }
     }
@@ -86,9 +86,9 @@ extension PaneNode: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
         switch self {
-        case .leaf(let paneID, let panelID):
-            try container.encode(NodeType.leaf, forKey: .type)
-            try container.encode(paneID, forKey: .paneID)
+        case .slot(let slotID, let panelID):
+            try container.encode(NodeType.slot, forKey: .type)
+            try container.encode(slotID, forKey: .slotID)
             try container.encode(panelID, forKey: .panelID)
         case .split(let nodeID, let orientation, let ratio, let first, let second):
             try container.encode(NodeType.split, forKey: .type)
@@ -101,11 +101,11 @@ extension PaneNode: Codable {
     }
 }
 
-public extension PaneNode {
-    var structuralIdentity: PaneStructuralIdentity {
+public extension LayoutNode {
+    var structuralIdentity: LayoutStructuralIdentity {
         switch self {
-        case .leaf(let paneID, _):
-            return .leaf(paneID: paneID)
+        case .slot(let slotID, _):
+            return .slot(slotID: slotID)
         case .split(_, let orientation, _, let first, let second):
             return .split(
                 orientation: orientation,
@@ -115,80 +115,80 @@ public extension PaneNode {
         }
     }
 
-    var allLeafInfos: [PaneLeafInfo] {
+    var allSlotInfos: [SlotInfo] {
         switch self {
-        case .leaf(let paneID, let panelID):
-            return [PaneLeafInfo(paneID: paneID, panelID: panelID)]
+        case .slot(let slotID, let panelID):
+            return [SlotInfo(slotID: slotID, panelID: panelID)]
         case .split(_, _, _, let first, let second):
-            return first.allLeafInfos + second.allLeafInfos
+            return first.allSlotInfos + second.allSlotInfos
         }
     }
 
     var allNodeIDs: [UUID] {
         switch self {
-        case .leaf(let paneID, _):
-            return [paneID]
+        case .slot(let slotID, _):
+            return [slotID]
         case .split(let nodeID, _, _, let first, let second):
             return [nodeID] + first.allNodeIDs + second.allNodeIDs
         }
     }
 
-    var allSplitInfos: [PaneSplitInfo] {
+    var allSplitInfos: [LayoutSplitInfo] {
         switch self {
-        case .leaf:
+        case .slot:
             return []
         case .split(let nodeID, let orientation, let ratio, let first, let second):
-            return [PaneSplitInfo(nodeID: nodeID, orientation: orientation, ratio: ratio)] + first.allSplitInfos + second.allSplitInfos
+            return [LayoutSplitInfo(nodeID: nodeID, orientation: orientation, ratio: ratio)] + first.allSplitInfos + second.allSplitInfos
         }
     }
 
-    func leafContaining(panelID: UUID) -> PaneLeafInfo? {
+    func slotContaining(panelID: UUID) -> SlotInfo? {
         switch self {
-        case .leaf(let paneID, let currentPanelID):
+        case .slot(let slotID, let currentPanelID):
             guard currentPanelID == panelID else { return nil }
-            return PaneLeafInfo(paneID: paneID, panelID: currentPanelID)
+            return SlotInfo(slotID: slotID, panelID: currentPanelID)
         case .split(_, _, _, let first, let second):
-            return first.leafContaining(panelID: panelID) ?? second.leafContaining(panelID: panelID)
+            return first.slotContaining(panelID: panelID) ?? second.slotContaining(panelID: panelID)
         }
     }
 
-    func leafNode(paneID: UUID) -> PaneNode? {
+    func slotNode(slotID: UUID) -> LayoutNode? {
         switch self {
-        case .leaf(let currentPaneID, _):
-            guard currentPaneID == paneID else { return nil }
+        case .slot(let currentSlotID, _):
+            guard currentSlotID == slotID else { return nil }
             return self
         case .split(_, _, _, let first, let second):
-            return first.leafNode(paneID: paneID) ?? second.leafNode(paneID: paneID)
+            return first.slotNode(slotID: slotID) ?? second.slotNode(slotID: slotID)
         }
     }
 
-    func rightColumnPaneID() -> UUID? {
+    func rightColumnSlotID() -> UUID? {
         switch self {
-        case .leaf(let paneID, _):
-            return paneID
+        case .slot(let slotID, _):
+            return slotID
         case .split(_, let orientation, _, let first, let second):
             if orientation == .horizontal {
-                return second.rightColumnPaneID()
+                return second.rightColumnSlotID()
             }
-            return second.rightColumnPaneID() ?? first.rightColumnPaneID()
+            return second.rightColumnSlotID() ?? first.rightColumnSlotID()
         }
     }
 
-    mutating func replaceLeaf(paneID: UUID, with replacement: PaneNode) -> Bool {
+    mutating func replaceSlot(slotID: UUID, with replacement: LayoutNode) -> Bool {
         switch self {
-        case .leaf(let currentPaneID, _):
-            guard currentPaneID == paneID else { return false }
+        case .slot(let currentSlotID, _):
+            guard currentSlotID == slotID else { return false }
             self = replacement
             return true
         case .split(let nodeID, let orientation, let ratio, let first, let second):
             var updatedFirst = first
-            if updatedFirst.replaceLeaf(paneID: paneID, with: replacement) {
+            if updatedFirst.replaceSlot(slotID: slotID, with: replacement) {
                 self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second)
                 return true
             }
 
             var updatedSecond = second
-            if updatedSecond.replaceLeaf(paneID: paneID, with: replacement) {
+            if updatedSecond.replaceSlot(slotID: slotID, with: replacement) {
                 self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond)
                 return true
             }
@@ -197,9 +197,9 @@ public extension PaneNode {
         }
     }
 
-    func removingPanel(_ panelID: UUID) -> (node: PaneNode?, removed: Bool) {
+    func removingPanel(_ panelID: UUID) -> (node: LayoutNode?, removed: Bool) {
         switch self {
-        case .leaf(_, let currentPanelID):
+        case .slot(_, let currentPanelID):
             guard currentPanelID == panelID else {
                 return (self, false)
             }

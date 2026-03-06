@@ -11,17 +11,17 @@ struct StateValidatorTests {
     @Test
     func duplicatePanelReferenceFailsValidation() throws {
         let panelID = UUID()
-        let paneID = UUID()
+        let slotID = UUID()
 
         let workspace = WorkspaceState(
             id: UUID(),
             title: "Broken",
-            paneTree: .split(
+            layoutTree: .split(
                 nodeID: UUID(),
                 orientation: .horizontal,
                 ratio: 0.5,
-                first: .leaf(paneID: paneID, panelID: panelID),
-                second: .leaf(paneID: UUID(), panelID: panelID)
+                first: .slot(slotID: slotID, panelID: panelID),
+                second: .slot(slotID: UUID(), panelID: panelID)
             ),
             panels: [panelID: .terminal(TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/tmp"))],
             focusedPanelID: panelID
@@ -50,12 +50,12 @@ struct StateValidatorTests {
     func staleFocusedPanelFailsValidation() throws {
         let panelID = UUID()
         let staleFocusedPanelID = UUID()
-        let paneID = UUID()
+        let slotID = UUID()
 
         let workspace = WorkspaceState(
             id: UUID(),
             title: "Broken focus",
-            paneTree: .leaf(paneID: paneID, panelID: panelID),
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
             panels: [panelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp"))],
             focusedPanelID: staleFocusedPanelID
         )
@@ -83,19 +83,19 @@ struct StateValidatorTests {
     func outOfBoundsSplitRatioFailsValidation() throws {
         let panelID = UUID()
         let secondPanelID = UUID()
-        let firstPaneID = UUID()
-        let secondPaneID = UUID()
+        let firstSlotID = UUID()
+        let secondSlotID = UUID()
         let splitID = UUID()
 
         let workspace = WorkspaceState(
             id: UUID(),
             title: "Broken ratio",
-            paneTree: .split(
+            layoutTree: .split(
                 nodeID: splitID,
                 orientation: .horizontal,
                 ratio: 1.3,
-                first: .leaf(paneID: firstPaneID, panelID: panelID),
-                second: .leaf(paneID: secondPaneID, panelID: secondPanelID)
+                first: .slot(slotID: firstSlotID, panelID: panelID),
+                second: .slot(slotID: secondSlotID, panelID: secondPanelID)
             ),
             panels: [
                 panelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),

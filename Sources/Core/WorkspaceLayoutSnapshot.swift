@@ -119,7 +119,7 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
 public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var title: String
-    public var paneTree: PaneNode
+    public var layoutTree: LayoutNode
     public var panels: [UUID: WorkspaceLayoutPanelSnapshot]
     public var focusedPanelID: UUID?
     public var auxPanelVisibility: Set<PanelKind>
@@ -127,14 +127,14 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public init(
         id: UUID,
         title: String,
-        paneTree: PaneNode,
+        layoutTree: LayoutNode,
         panels: [UUID: WorkspaceLayoutPanelSnapshot],
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind>
     ) {
         self.id = id
         self.title = title
-        self.paneTree = paneTree
+        self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
         self.auxPanelVisibility = auxPanelVisibility
@@ -143,7 +143,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     init(workspace: WorkspaceState) {
         id = workspace.id
         title = workspace.title
-        paneTree = workspace.paneTree
+        layoutTree = workspace.layoutTree
         panels = workspace.panels.reduce(into: [:]) { partialResult, entry in
             partialResult[entry.key] = WorkspaceLayoutPanelSnapshot(panelState: entry.value)
         }
@@ -156,7 +156,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         return WorkspaceState(
             id: id,
             title: title,
-            paneTree: paneTree,
+            layoutTree: layoutTree,
             panels: restoredPanels,
             focusedPanelID: focusedPanelID,
             auxPanelVisibility: auxPanelVisibility,
@@ -200,7 +200,7 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
             nextTerminalNumber += 1
         }
 
-        for leaf in paneTree.allLeafInfos {
+        for leaf in layoutTree.allSlotInfos {
             let panelID = leaf.panelID
             guard let panelSnapshot = panels[panelID],
                   case .terminal = panelSnapshot else {

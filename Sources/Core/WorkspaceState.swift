@@ -3,19 +3,19 @@ import Foundation
 public struct ClosedPanelRecord: Codable, Equatable, Sendable {
     public let panelState: PanelState
     public let closedAt: Date
-    public let sourceLeafPaneID: UUID
+    public let sourceSlotID: UUID
 
-    public init(panelState: PanelState, closedAt: Date, sourceLeafPaneID: UUID) {
+    public init(panelState: PanelState, closedAt: Date, sourceSlotID: UUID) {
         self.panelState = panelState
         self.closedAt = closedAt
-        self.sourceLeafPaneID = sourceLeafPaneID
+        self.sourceSlotID = sourceSlotID
     }
 }
 
 public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
     public var title: String
-    public var paneTree: PaneNode
+    public var layoutTree: LayoutNode
     public var panels: [UUID: PanelState]
     public var focusedPanelID: UUID?
     public var auxPanelVisibility: Set<PanelKind>
@@ -30,7 +30,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public init(
         id: UUID,
         title: String,
-        paneTree: PaneNode,
+        layoutTree: LayoutNode,
         panels: [UUID: PanelState],
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind> = [],
@@ -41,7 +41,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     ) {
         self.id = id
         self.title = title
-        self.paneTree = paneTree
+        self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
         self.auxPanelVisibility = auxPanelVisibility
@@ -53,11 +53,11 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
 
     public static func bootstrap(title: String = "Workspace 1") -> WorkspaceState {
         let panelID = UUID()
-        let paneID = UUID()
+        let slotID = UUID()
         return WorkspaceState(
             id: UUID(),
             title: title,
-            paneTree: .leaf(paneID: paneID, panelID: panelID),
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
             panels: [
                 panelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: NSHomeDirectory())),
             ],
@@ -68,7 +68,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case title
-        case paneTree
+        case layoutTree
         case panels
         case focusedPanelID
         case auxPanelVisibility
@@ -82,7 +82,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
-        paneTree = try container.decode(PaneNode.self, forKey: .paneTree)
+        layoutTree = try container.decode(LayoutNode.self, forKey: .layoutTree)
         panels = try container.decode([UUID: PanelState].self, forKey: .panels)
         focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
         auxPanelVisibility = try container.decodeIfPresent(Set<PanelKind>.self, forKey: .auxPanelVisibility) ?? []
@@ -100,7 +100,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
         try container.encode(title, forKey: .title)
-        try container.encode(paneTree, forKey: .paneTree)
+        try container.encode(layoutTree, forKey: .layoutTree)
         try container.encode(panels, forKey: .panels)
         try container.encodeIfPresent(focusedPanelID, forKey: .focusedPanelID)
         try container.encode(auxPanelVisibility, forKey: .auxPanelVisibility)

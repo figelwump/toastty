@@ -13,24 +13,24 @@ struct WorkspaceStateTerminalOrderingTests {
         let workspace = WorkspaceState(
             id: UUID(),
             title: "Workspace 1",
-            paneTree: .split(
+            layoutTree: .split(
                 nodeID: UUID(),
                 orientation: .horizontal,
                 ratio: 0.6,
-                first: .leaf(
-                    paneID: UUID(),
+                first: .slot(
+                    slotID: UUID(),
                     panelID: leftTerminalID
                 ),
                 second: .split(
                     nodeID: UUID(),
                     orientation: .vertical,
                     ratio: 0.5,
-                    first: .leaf(
-                        paneID: UUID(),
+                    first: .slot(
+                        slotID: UUID(),
                         panelID: topRightTerminalID
                     ),
-                    second: .leaf(
-                        paneID: UUID(),
+                    second: .slot(
+                        slotID: UUID(),
                         panelID: hiddenDiffID
                     )
                 )
@@ -45,12 +45,12 @@ struct WorkspaceStateTerminalOrderingTests {
         )
 
         var workspaceWithTrailingTerminal = workspace
-        workspaceWithTrailingTerminal.paneTree = .split(
+        workspaceWithTrailingTerminal.layoutTree = .split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.6,
-            first: workspace.paneTree,
-            second: .leaf(paneID: UUID(), panelID: bottomRightTerminalID)
+            first: workspace.layoutTree,
+            second: .slot(slotID: UUID(), panelID: bottomRightTerminalID)
         )
 
         #expect(
@@ -99,8 +99,8 @@ struct WorkspaceStateTerminalOrderingTests {
         let orderedBefore = workspace.terminalPanelIDsInDisplayOrder
         let removedPanelID = orderedBefore[1]
 
-        let removal = workspace.paneTree.removingPanel(removedPanelID)
-        workspace.paneTree = try #require(removal.node)
+        let removal = workspace.layoutTree.removingPanel(removedPanelID)
+        workspace.layoutTree = try #require(removal.node)
         workspace.panels.removeValue(forKey: removedPanelID)
 
         let orderedAfter = workspace.terminalPanelIDsInDisplayOrder
@@ -119,17 +119,17 @@ struct WorkspaceStateTerminalOrderingTests {
         return WorkspaceState(
             id: UUID(),
             title: "Workspace 1",
-            paneTree: .split(
+            layoutTree: .split(
                 nodeID: UUID(),
                 orientation: .horizontal,
                 ratio: 0.5,
-                first: .leaf(paneID: UUID(), panelID: firstPanelID),
+                first: .slot(slotID: UUID(), panelID: firstPanelID),
                 second: .split(
                     nodeID: UUID(),
                     orientation: .vertical,
                     ratio: 0.5,
-                    first: .leaf(paneID: UUID(), panelID: secondPanelID),
-                    second: .leaf(paneID: UUID(), panelID: thirdPanelID)
+                    first: .slot(slotID: UUID(), panelID: secondPanelID),
+                    second: .slot(slotID: UUID(), panelID: thirdPanelID)
                 )
             ),
             panels: [

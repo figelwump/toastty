@@ -1,8 +1,8 @@
 import Foundation
 
 @MainActor
-final class PaneFocusRestoreCoordinator {
-    // Keep retries short and bounded to cover SwiftUI/AppKit layout handoff after pane close.
+final class SlotFocusRestoreCoordinator {
+    // Keep retries short and bounded to cover SwiftUI/AppKit layout handoff after slot close.
     private static let maxAttempts = 12
     private static let retryDelayNanoseconds: UInt64 = 16_000_000
     private var restoreTask: Task<Void, Never>?
@@ -23,7 +23,7 @@ final class PaneFocusRestoreCoordinator {
                 guard let store, let runtimeRegistry else { return }
                 // Stop retrying if focus moved elsewhere after close.
                 guard store.selectedWorkspace?.focusedPanelID == expectedFocusedPanelID else { return }
-                if runtimeRegistry.focusSelectedWorkspacePaneIfPossible() {
+                if runtimeRegistry.focusSelectedWorkspaceSlotIfPossible() {
                     return
                 }
                 guard attempt < Self.maxAttempts - 1 else { return }
@@ -37,16 +37,16 @@ final class PaneFocusRestoreCoordinator {
 final class FocusedPanelCommandController {
     private weak var store: AppStore?
     private weak var runtimeRegistry: TerminalRuntimeRegistry?
-    private let paneFocusRestoreCoordinator: PaneFocusRestoreCoordinator
+    private let slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator
 
     init(
         store: AppStore,
         runtimeRegistry: TerminalRuntimeRegistry,
-        paneFocusRestoreCoordinator: PaneFocusRestoreCoordinator
+        slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator
     ) {
         self.store = store
         self.runtimeRegistry = runtimeRegistry
-        self.paneFocusRestoreCoordinator = paneFocusRestoreCoordinator
+        self.slotFocusRestoreCoordinator = slotFocusRestoreCoordinator
     }
 
     @discardableResult
@@ -71,7 +71,7 @@ final class FocusedPanelCommandController {
             return true
         }
 
-        paneFocusRestoreCoordinator.schedule(
+        slotFocusRestoreCoordinator.schedule(
             store: store,
             runtimeRegistry: runtimeRegistry,
             expectedFocusedPanelID: nextFocusedPanelID

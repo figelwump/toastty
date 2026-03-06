@@ -34,15 +34,15 @@ Reducers and migration code must preserve these rules.
 - `WorkspaceState.focusedPanelID`, if non-nil, must exist in `WorkspaceState.panels`.
 - `WorkspaceState.auxPanelVisibility` only contains aux kinds (`diff`, `markdown`, `scratchpad`) in v1.
 
-## 3) pane tree invariants
+## 3) layout tree invariants
 
 For each workspace:
 
-- Every `PaneNode.leaf.panelID` must exist in `WorkspaceState.panels`.
-- Every key in `WorkspaceState.panels` must appear in exactly one leaf.
-- Empty leaves are not allowed after reducer actions.
+- Every `LayoutNode.slot.panelID` must exist in `WorkspaceState.panels`.
+- Every key in `WorkspaceState.panels` must appear in exactly one slot.
+- Empty slots are not allowed after reducer actions.
 - Split `ratio` must satisfy `0.05 <= ratio <= 0.95`.
-- `paneID` values (on leaves) and `nodeID` values (on splits) must all be unique within a workspace tree. No ID may appear on both a leaf and a split node.
+- `slotID` values (on slots) and `nodeID` values (on splits) must all be unique within a workspace tree. No ID may appear on both a slot and a split node.
 
 ## 4) panel-kind and toggle invariants
 
@@ -82,13 +82,13 @@ Every reducer action that mutates layout/panels must be atomic with respect to r
 
 - create panel:
   - insert into `WorkspaceState.panels`
-  - insert id into exactly one leaf
+  - insert id into exactly one slot
 - close panel:
-  - remove id from its leaf
+  - remove id from its slot
   - remove from `WorkspaceState.panels`
   - push `ClosedPanelRecord` onto `recentlyClosedPanels` (bounded stack, max 10)
   - clear/adjust focus if needed
-  - if a leaf becomes empty, collapse the split tree so no empty leaf remains
+  - if a slot becomes empty, collapse the split tree so no empty slot remains
 - close last panel in workspace (lifecycle cascade):
   - close the workspace: remove from `AppState.workspacesByID`
   - remove workspace id from owning window's `workspaceIDs`
@@ -98,11 +98,11 @@ Every reducer action that mutates layout/panels must be atomic with respect to r
 - reopen panel:
   - pop from `recentlyClosedPanels`
   - re-insert panel state into `WorkspaceState.panels`
-  - split the original source leaf if it still exists, otherwise split the focused leaf
+  - split the original source slot if it still exists, otherwise split the focused slot
   - runtime is re-created (terminal process is not recoverable; new shell session starts)
 - move panel:
-  - remove id from source leaf
-  - split destination leaf and insert into the new sibling leaf
+  - remove id from source slot
+  - split destination slot and insert into the new sibling slot
   - preserve panel object identity
   - preserve session identity; only location metadata may change
 - detach panel to new window:
@@ -127,8 +127,8 @@ enum StateInvariantError: Error, Equatable {
     case missingWorkspace(UUID)
     case duplicateWorkspaceReference(UUID)
     case panelMissingFromWorkspace(panelID: UUID, workspaceID: UUID)
-    case panelUnreachableInPaneTree(panelID: UUID, workspaceID: UUID)
-    case duplicateNodeID(UUID) // covers both leaf paneID and split nodeID
+    case panelUnreachableInLayoutTree(panelID: UUID, workspaceID: UUID)
+    case duplicateNodeID(UUID) // covers both slot slotID and split nodeID
     case invalidSplitRatio(Double)
     case invalidFocusPanel(workspaceID: UUID, panelID: UUID)
     case auxToggleInconsistency(workspaceID: UUID, panelKind: PanelKind)

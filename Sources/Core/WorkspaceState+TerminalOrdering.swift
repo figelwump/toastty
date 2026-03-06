@@ -1,12 +1,12 @@
 import Foundation
 
 public extension WorkspaceState {
-    /// Returns one terminal panel per leaf in deterministic display order.
-    /// The order matches the pane tree traversal (first branch before second branch)
-    /// for the single panel hosted in each leaf.
+    /// Returns one terminal panel per slot in deterministic display order.
+    /// The order matches the layout-tree traversal (first branch before second branch)
+    /// for the single panel hosted in each slot.
     var terminalPanelIDsInDisplayOrder: [UUID] {
-        paneTree.allLeafInfos.compactMap { leaf in
-            let panelID = leaf.panelID
+        layoutTree.allSlotInfos.compactMap { slot in
+            let panelID = slot.panelID
             guard panels[panelID] != nil else {
                 return nil
             }

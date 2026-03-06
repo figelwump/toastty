@@ -28,7 +28,7 @@ public enum AutomationFixtureLoader {
     private static func makeTwoWorkspaceFixture() -> AppState {
         let first = makeWorkspace(
             workspaceID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D601")!,
-            paneID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D602")!,
+            slotID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D602")!,
             panelID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D603")!,
             title: "Workspace 1",
             terminalTitle: "Terminal 1"
@@ -36,7 +36,7 @@ public enum AutomationFixtureLoader {
 
         let second = makeWorkspace(
             workspaceID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D611")!,
-            paneID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D612")!,
+            slotID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D612")!,
             panelID: UUID(uuidString: "A8E51458-95CC-44A1-96D5-ABCF4EF8D613")!,
             title: "Workspace 2",
             terminalTitle: "Terminal 2"
@@ -63,20 +63,20 @@ public enum AutomationFixtureLoader {
 
     private static func makeSplitWorkspaceFixture() -> AppState {
         let workspaceID = UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706901")!
-        let leftPaneID = UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706902")!
-        let rightPaneID = UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706903")!
+        let leftSlotID = UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706902")!
+        let rightSlotID = UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706903")!
         let leftPanelID = UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706904")!
         let rightPanelID = UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706905")!
 
         let workspace = WorkspaceState(
             id: workspaceID,
             title: "Workspace 1",
-            paneTree: .split(
+            layoutTree: .split(
                 nodeID: UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706906")!,
                 orientation: .horizontal,
                 ratio: 0.6,
-                first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
-                second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+                first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+                second: .slot(slotID: rightSlotID, panelID: rightPanelID)
             ),
             panels: [
                 leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
@@ -103,7 +103,7 @@ public enum AutomationFixtureLoader {
 
     private static func makeWorkspace(
         workspaceID: UUID,
-        paneID: UUID,
+        slotID: UUID,
         panelID: UUID,
         title: String,
         terminalTitle: String
@@ -111,7 +111,7 @@ public enum AutomationFixtureLoader {
         WorkspaceState(
             id: workspaceID,
             title: title,
-            paneTree: .leaf(paneID: paneID, panelID: panelID),
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
             panels: [
                 panelID: .terminal(TerminalPanelState(title: terminalTitle, shell: "zsh", cwd: "/tmp")),
             ],
