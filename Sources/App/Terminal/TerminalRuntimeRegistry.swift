@@ -2607,14 +2607,42 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let sourceContainerChanged = activeSourceContainer !== container
         let hostedViewWillReattach = hostedView.superview !== container
         let attachmentChanged = activeAttachment != attachment
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let shouldDeferVisibleTransfer = shouldDeferHostTransfer(to: container)
+        #else
+        let shouldDeferVisibleTransfer = false
+        #endif
+        // Claim the newest token even if the move is deferred so stale callbacks
+        // from the previous SwiftUI container cannot reclaim the host. The
+        // controller continues to receive attachHost/update retries while
+        // activeSourceContainer still points at the old container.
         activeAttachment = attachment
         #if TOASTTY_HAS_GHOSTTY_KIT
         diagnostics.attachCount += 1
         #endif
 
+        if shouldDeferVisibleTransfer {
+            ToasttyLog.debug(
+                "Deferring panel host transfer until replacement container is ready",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "attachment_id": attachment.rawValue.uuidString,
+                    "target_has_window": container.window == nil ? "false" : "true",
+                    "target_hidden": container.isHidden ? "true" : "false",
+                    "target_hidden_ancestor": container.hasHiddenAncestor ? "true" : "false",
+                    "target_width": String(format: "%.1f", container.bounds.width),
+                    "target_height": String(format: "%.1f", container.bounds.height),
+                ]
+            )
+            return
+        }
+
         activeSourceContainer = container
         if hostedViewWillReattach {
-            hostedView.removeFromSuperview()
+            // Let AppKit move the live host view directly between containers.
+            // An explicit remove first creates a transient window=nil hop, which
+            // drives Ghostty occlusion false/true churn during split remounts.
             container.addSubview(hostedView)
             hostedView.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([
@@ -2635,6 +2663,33 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         }
         #endif
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    private func shouldDeferHostTransfer(to container: NSView) -> Bool {
+        let minimumHostDimension = 48
+        // updateNSView/layout retries attachHost until the source container and
+        // hosted view actually converge. Returning true here only preserves the
+        // last visible host while the replacement container is still mounting.
+        guard activeSourceContainer !== container else {
+            return false
+        }
+        guard hostedView.superview != nil else {
+            return false
+        }
+        guard let currentSourceContainer = activeSourceContainer,
+              currentSourceContainer.window != nil,
+              currentSourceContainer.isHidden == false,
+              currentSourceContainer.hasHiddenAncestor == false else {
+            return false
+        }
+        guard container.window == nil || container.isHidden || container.hasHiddenAncestor else {
+            let width = Int(container.bounds.width.rounded(.down))
+            let height = Int(container.bounds.height.rounded(.down))
+            return width < minimumHostDimension || height < minimumHostDimension
+        }
+        return true
+    }
+    #endif
 
     func detachHost(attachment: PanelHostAttachmentToken) {
         guard let currentAttachment = activeAttachment else { return }
@@ -2768,9 +2823,13 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             width: logicalWidth,
             height: logicalHeight
         ) {
-            // Keep the hosted terminal hidden until layout is stable enough for
-            // a valid viewport update; otherwise stale tiny geometry can flash.
-            hostedView.isHidden = true
+            // For an existing live surface, keeping the last good frame visible
+            // is less disruptive than blanking the source panel during split
+            // remount churn. Newly created surfaces still stay hidden until the
+            // first stable viewport arrives.
+            if lastPresentationSignature == nil {
+                hostedView.isHidden = true
+            }
             temporarilyHiddenForViewportDeferral = true
             diagnostics.viewportDeferredCount += 1
             let reasonChanged = lastViewportDeferralReason != viewportDeferralReason
@@ -3560,6 +3619,7 @@ final class TerminalHostView: NSView {
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
     private var pendingImageFileDrop: PreparedImageFileDrop?
+    private var pendingVisibilitySyncTask: Task<Void, Never>?
     private weak var observedWindow: NSWindow?
     private var windowOcclusionObserver: NSObjectProtocol?
     private var lastKnownSurfaceVisibility: Bool?
@@ -3603,6 +3663,7 @@ final class TerminalHostView: NSView {
 
     @MainActor deinit {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        pendingVisibilitySyncTask?.cancel()
         if let windowOcclusionObserver {
             NotificationCenter.default.removeObserver(windowOcclusionObserver)
         }
@@ -3687,6 +3748,43 @@ final class TerminalHostView: NSView {
 
     private func syncSurfaceVisibility(reason: String) {
         let visible = resolvedSurfaceVisibility()
+        if shouldDeferInvisibleVisibilityUpdate(visible: visible) {
+            scheduleDeferredVisibilitySync()
+            return
+        }
+
+        pendingVisibilitySyncTask?.cancel()
+        pendingVisibilitySyncTask = nil
+        applySurfaceVisibility(visible: visible, reason: reason)
+    }
+
+    private func shouldDeferInvisibleVisibilityUpdate(visible: Bool) -> Bool {
+        guard visible == false else {
+            return false
+        }
+        guard window == nil,
+              isHidden == false,
+              hasHiddenAncestor == false,
+              lastKnownSurfaceVisibility == true else {
+            return false
+        }
+        return true
+    }
+
+    private func scheduleDeferredVisibilitySync() {
+        pendingVisibilitySyncTask?.cancel()
+        pendingVisibilitySyncTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard let self else { return }
+            self.pendingVisibilitySyncTask = nil
+            self.applySurfaceVisibility(
+                visible: self.resolvedSurfaceVisibility(),
+                reason: "deferred_window_reattach_check"
+            )
+        }
+    }
+
+    private func applySurfaceVisibility(visible: Bool, reason: String) {
         isEffectivelyVisible = visible
 
         guard let ghosttySurface else {
