@@ -819,7 +819,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .up))
 
         case "workspace.close-focused-panel":
-            didMutate = focusedPanelCommandController.closeFocusedPanel(in: workspaceID)
+            didMutate = focusedPanelCommandController.closeFocusedPanel(in: workspaceID).didMutateState
 
         case "workspace.focus-slot.previous":
             didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))

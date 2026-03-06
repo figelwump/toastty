@@ -192,6 +192,26 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return controller.automationReadVisibleText()
     }
 
+    func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
+        guard let controller = controllers[panelID] else {
+            ToasttyLog.warning(
+                "Skipping terminal close confirmation because the surface controller is unavailable",
+                category: .terminal,
+                metadata: ["panel_id": panelID.uuidString]
+            )
+            return nil
+        }
+        guard let visibleText = controller.automationReadVisibleText() else {
+            ToasttyLog.warning(
+                "Skipping terminal close confirmation because visible terminal text is unavailable",
+                category: .terminal,
+                metadata: ["panel_id": panelID.uuidString]
+            )
+            return nil
+        }
+        return TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+    }
+
     func automationRenderSnapshot(panelID: UUID) -> TerminalPanelRenderAttachmentSnapshot {
         guard let controller = controllers[panelID] else {
             return .missingController(panelID: panelID)
@@ -1060,7 +1080,7 @@ private extension TerminalRuntimeRegistry {
         }
 
         let inferredPhase = Self.inferredAgentPhase(visibleText: visibleText, visibleLines: visibleLines)
-        let inferredRunningCommand = Self.inferredRunningCommand(visibleLines: visibleLines)
+        let inferredRunningCommand = TerminalVisibleTextInspector.inferredRunningCommand(visibleText)
         panelActivityByPanelID[panelID] = PanelActivityState(
             workspaceID: workspaceID,
             agent: inferredAgentKind,
@@ -2010,59 +2030,14 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     }
 
     private static func visibleTextShowsInteractiveShellPrompt(_ visibleText: String) -> Bool {
-        guard let promptContext = recentPromptContext(visibleText) else {
-            return false
-        }
-
-        switch promptContext {
-        case .interactive:
-            return true
-        case .command(let token):
-            return agentLaunchCommandTokens.contains(token) == false
-        }
+        TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText)
     }
 
     private static func visibleTextShowsRecentAgentLaunchCommand(_ visibleText: String) -> Bool {
-        guard let promptContext = recentPromptContext(visibleText) else {
+        guard let commandToken = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) else {
             return false
         }
-
-        switch promptContext {
-        case .interactive:
-            return false
-        case .command(let token):
-            return agentLaunchCommandTokens.contains(token)
-        }
-    }
-
-    private static func recentPromptContext(_ visibleText: String) -> PromptContext? {
-        let lines = sanitizedVisibleTerminalLines(visibleText)
-        guard lines.isEmpty == false else { return nil }
-        let candidateLines = Array(lines.suffix(agentTitleDetectionLineWindow))
-
-        for (offset, line) in candidateLines.reversed().enumerated() {
-            guard offset <= recentPromptLineMaxDistanceFromBottom else {
-                break
-            }
-            guard let promptLine = promptLineDetails(line) else {
-                continue
-            }
-
-            guard let command = promptLine.command else {
-                return .interactive
-            }
-
-            let commandToken = command
-                .split(whereSeparator: { $0.isWhitespace })
-                .first?
-                .lowercased() ?? ""
-            if commandToken.isEmpty {
-                return .interactive
-            }
-            return .command(token: commandToken)
-        }
-
-        return nil
+        return agentLaunchCommandTokens.contains(commandToken)
     }
 
     private static func promptLineDetails(_ line: String) -> PromptLineDetails? {
@@ -2233,10 +2208,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return inferredTitle == "Codex" ? .codex : .claudeCode
         }
 
-        guard let promptContext = recentPromptContext(visibleText) else {
-            return nil
-        }
-        guard case .command(let token) = promptContext else {
+        guard let token = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) else {
             return nil
         }
         return agentKind(forPromptToken: token)
@@ -2276,44 +2248,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         return false
-    }
-
-    private static func inferredRunningCommand(visibleLines: [String]) -> String? {
-        guard visibleLines.isEmpty == false else { return nil }
-        let candidateLines = Array(visibleLines.suffix(agentTitleDetectionLineWindow))
-
-        for (offset, line) in candidateLines.reversed().enumerated() {
-            guard offset <= recentPromptLineMaxDistanceFromBottom else {
-                break
-            }
-            guard let command = promptLineDetails(line)?.command else {
-                continue
-            }
-
-            let normalized = collapsedWhitespace(command)
-            guard normalized.isEmpty == false else {
-                continue
-            }
-            let commandToken = normalized
-                .split(whereSeparator: { $0.isWhitespace })
-                .first?
-                .lowercased() ?? ""
-            guard commandToken.isEmpty == false else {
-                continue
-            }
-            // Keep agent launch commands out of the activity command slot so
-            // long-running foreground shell jobs stay visible.
-            guard agentLaunchCommandTokens.contains(commandToken) == false else {
-                continue
-            }
-            return String(normalized.prefix(activityCommandCharacterLimit))
-        }
-
-        return nil
-    }
-
-    private static func collapsedWhitespace(_ line: String) -> String {
-        line.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
 
     private static func workspaceActivitySubtext(from activities: [PanelActivityState], now: Date) -> String? {
@@ -2417,7 +2351,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let nativeCWDSignalFreshnessInterval: TimeInterval = 120
     // Keep process-based cwd sync as a low-frequency fallback once native callbacks are observed.
     private static let nativeCWDProcessFallbackPollInterval: TimeInterval = 30
-    private static let activityCommandCharacterLimit = 96
     // Keep command-first summaries short-lived so stale process labels clear quickly.
     private static let activityCommandFreshnessInterval: TimeInterval = 60
     // Compact labels preserve room for status details in the sidebar.
@@ -2447,13 +2380,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         case idle
     }
 
-    private enum PromptContext {
-        case interactive
-        case command(token: String)
-    }
-
     private static let agentTitleDetectionLineWindow = 16
-    private static let recentPromptLineMaxDistanceFromBottom = 5
     private static let loosePromptMarkerScanTokenLimit = 5
     private static let agentLaunchCommandTokens: Set<String> = ["cdx", "codex", "cc", "claude"]
     private static let promptMarkerTokens: Set<String> = ["%", "#", "$", ">"]

@@ -63,13 +63,20 @@ public struct AutomationConfig: Equatable, Sendable {
         )
     }
 
-    public static func shouldBypassQuitConfirmation(
+    public static func shouldBypassInteractiveConfirmation(
         arguments: [String],
         environment: [String: String]
     ) -> Bool {
         let isExplicitBypassRequested = arguments.contains(skipQuitConfirmationArgument)
             || isEnabledFlag(environment[skipQuitConfirmationEnvironmentFlag])
         return isExplicitBypassRequested || isAutomationSession(arguments: arguments, environment: environment)
+    }
+
+    public static func shouldBypassQuitConfirmation(
+        arguments: [String],
+        environment: [String: String]
+    ) -> Bool {
+        shouldBypassInteractiveConfirmation(arguments: arguments, environment: environment)
     }
 
     private static func argumentValue(after flag: String, in arguments: [String]) -> String? {

@@ -11,7 +11,7 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
 
     override init() {
         let processInfo = ProcessInfo.processInfo
-        shouldConfirmQuit = !AutomationConfig.shouldBypassQuitConfirmation(
+        shouldConfirmQuit = !AutomationConfig.shouldBypassInteractiveConfirmation(
             arguments: processInfo.arguments,
             environment: processInfo.environment
         )
@@ -88,9 +88,9 @@ private final class ClosePanelShortcutInterceptor {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             guard Self.isClosePanelShortcut(event) else { return event }
-            let didClosePanel = self.commandController.closeFocusedPanel()
-            // If we didn't close a panel, fall back to default key handling.
-            return didClosePanel ? nil : event
+            let closeResult = self.commandController.closeFocusedPanel()
+            // Only fall back to AppKit when Toastty could not resolve a panel close target.
+            return closeResult.consumesShortcut ? nil : event
         }
     }
 
