@@ -111,20 +111,38 @@ struct WorkspaceView: View {
         let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
             limit: TerminalShortcutConfig.maxShortcutCount
         )
+        let renderedLayoutNode = focusedRenderNode(in: workspace)
         LayoutNodeView(
-            node: workspace.layoutTree,
+            node: renderedLayoutNode,
             workspace: workspace,
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             globalFontPoints: store.state.globalTerminalFontPoints,
             focusedPanelID: workspace.focusedPanelID,
-            focusedPanelModeActive: workspace.focusedPanelModeActive,
             appIsActive: appIsActive,
             unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
             terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
         )
-        .id(workspace.id)
+        .id(WorkspaceRenderIdentity(
+            workspaceID: workspace.id,
+            layoutIdentity: renderedLayoutNode.structuralIdentity
+        ))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func focusedRenderNode(in workspace: WorkspaceState) -> LayoutNode {
+        guard workspace.focusedPanelModeActive else {
+            return workspace.layoutTree
+        }
+        guard let focusedPanelID = workspace.focusedPanelID,
+              let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID),
+              let focusedNode = workspace.layoutTree.slotNode(slotID: focusedSlot.slotID) else {
+            assertionFailure("Focused panel mode requires the focused panel to resolve to a live layout slot.")
+            return workspace.layoutTree
+        }
+        // Focused-panel mode intentionally renders the focused slot leaf as the
+        // workspace root, mirroring Ghostty's zoomed split rendering.
+        return focusedNode
     }
 
     @ViewBuilder
@@ -258,6 +276,11 @@ struct WorkspaceView: View {
     }
 }
 
+private struct WorkspaceRenderIdentity: Hashable {
+    let workspaceID: UUID
+    let layoutIdentity: LayoutStructuralIdentity
+}
+
 private struct SelectedWorkspaceUnreadSignature: Equatable {
     let workspaceID: UUID
     let focusedPanelID: UUID?
@@ -271,7 +294,6 @@ private struct LayoutNodeView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let globalFontPoints: Double
     let focusedPanelID: UUID?
-    let focusedPanelModeActive: Bool
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
@@ -306,186 +328,96 @@ private struct LayoutNodeView: View {
         case .split(_, let orientation, let ratio, let first, let second):
             GeometryReader { geometry in
                 let baseRatio = min(max(ratio, 0.1), 0.9)
-                let effectiveRatio = effectiveSplitRatio(baseRatio: baseRatio, first: first, second: second)
-                let focusBranchVisibility = focusModeBranchVisibility(first: first, second: second)
 
                 Group {
                     if orientation == .horizontal {
-                        let availableWidth = max(geometry.size.width, 0)
-                        let collapseRatioThreshold = collapseRatioThreshold(
-                            availableDimension: availableWidth,
-                            minimumVisibleDimension: Self.minimumAnimatedBranchDimension
-                        )
-                        let isCollapsed = effectiveRatio <= collapseRatioThreshold
-                            || effectiveRatio >= (1 - collapseRatioThreshold)
-                        let showFirst = focusBranchVisibility.showFirst || !isCollapsed
-                        let showSecond = focusBranchVisibility.showSecond || !isCollapsed
-                        let bothBranchesVisible = showFirst && showSecond
-                        let dividerThickness: CGFloat = bothBranchesVisible ? 1 : 0
+                        let dividerThickness: CGFloat = 1
                         let adjustedAvailableWidth = max(geometry.size.width - dividerThickness, 0)
-                        let firstWidth = adjustedAvailableWidth * effectiveRatio
+                        let firstWidth = adjustedAvailableWidth * baseRatio
                         let secondWidth = max(adjustedAvailableWidth - firstWidth, 0)
-                        let showDivider = dividerThickness > 0 && showFirst && showSecond
-                        let displayFirstWidth: CGFloat = showFirst ? (showSecond ? firstWidth : adjustedAvailableWidth) : 0
-                        let displaySecondWidth: CGFloat = showSecond ? (showFirst ? secondWidth : adjustedAvailableWidth) : 0
 
                         HStack(spacing: 0) {
-                            if showFirst {
-                                LayoutNodeView(
-                                    node: first,
-                                    workspace: workspace,
-                                    store: store,
-                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                    globalFontPoints: globalFontPoints,
-                                    focusedPanelID: focusedPanelID,
-                                    focusedPanelModeActive: focusedPanelModeActive,
-                                    appIsActive: appIsActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle,
-                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                                )
-                                // Split subtree identity is derived from layout topology.
-                                .id(first.structuralIdentity)
-                                .frame(width: displayFirstWidth, height: geometry.size.height)
-                            }
+                            LayoutNodeView(
+                                node: first,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                appIsActive: appIsActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle,
+                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
+                            )
+                            // Split subtree identity is derived from layout topology.
+                            .id(first.structuralIdentity)
+                            .frame(width: firstWidth, height: geometry.size.height)
 
-                            if showDivider {
-                                Rectangle()
-                                    .fill(ToastyTheme.slotDivider)
-                                    .frame(width: dividerThickness, height: geometry.size.height)
-                            }
+                            Rectangle()
+                                .fill(ToastyTheme.slotDivider)
+                                .frame(width: dividerThickness, height: geometry.size.height)
 
-                            if showSecond {
-                                LayoutNodeView(
-                                    node: second,
-                                    workspace: workspace,
-                                    store: store,
-                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                    globalFontPoints: globalFontPoints,
-                                    focusedPanelID: focusedPanelID,
-                                    focusedPanelModeActive: focusedPanelModeActive,
-                                    appIsActive: appIsActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle,
-                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                                )
-                                .id(second.structuralIdentity)
-                                .frame(width: displaySecondWidth, height: geometry.size.height)
-                            }
+                            LayoutNodeView(
+                                node: second,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                appIsActive: appIsActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle,
+                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
+                            )
+                            .id(second.structuralIdentity)
+                            .frame(width: secondWidth, height: geometry.size.height)
                         }
                         .clipped()
                     } else {
-                        let availableHeight = max(geometry.size.height, 0)
-                        let collapseRatioThreshold = collapseRatioThreshold(
-                            availableDimension: availableHeight,
-                            minimumVisibleDimension: Self.minimumAnimatedBranchDimension
-                        )
-                        let isCollapsed = effectiveRatio <= collapseRatioThreshold
-                            || effectiveRatio >= (1 - collapseRatioThreshold)
-                        let showFirst = focusBranchVisibility.showFirst || !isCollapsed
-                        let showSecond = focusBranchVisibility.showSecond || !isCollapsed
-                        let bothBranchesVisible = showFirst && showSecond
-                        let dividerThickness: CGFloat = bothBranchesVisible ? 1 : 0
+                        let dividerThickness: CGFloat = 1
                         let adjustedAvailableHeight = max(geometry.size.height - dividerThickness, 0)
-                        let firstHeight = adjustedAvailableHeight * effectiveRatio
+                        let firstHeight = adjustedAvailableHeight * baseRatio
                         let secondHeight = max(adjustedAvailableHeight - firstHeight, 0)
-                        let showDivider = dividerThickness > 0 && showFirst && showSecond
-                        let displayFirstHeight: CGFloat = showFirst ? (showSecond ? firstHeight : adjustedAvailableHeight) : 0
-                        let displaySecondHeight: CGFloat = showSecond ? (showFirst ? secondHeight : adjustedAvailableHeight) : 0
 
                         VStack(spacing: 0) {
-                            if showFirst {
-                                LayoutNodeView(
-                                    node: first,
-                                    workspace: workspace,
-                                    store: store,
-                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                    globalFontPoints: globalFontPoints,
-                                    focusedPanelID: focusedPanelID,
-                                    focusedPanelModeActive: focusedPanelModeActive,
-                                    appIsActive: appIsActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle,
-                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                                )
-                                .id(first.structuralIdentity)
-                                .frame(width: geometry.size.width, height: displayFirstHeight)
-                            }
+                            LayoutNodeView(
+                                node: first,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                appIsActive: appIsActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle,
+                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
+                            )
+                            .id(first.structuralIdentity)
+                            .frame(width: geometry.size.width, height: firstHeight)
 
-                            if showDivider {
-                                Rectangle()
-                                    .fill(ToastyTheme.slotDivider)
-                                    .frame(width: geometry.size.width, height: dividerThickness)
-                            }
+                            Rectangle()
+                                .fill(ToastyTheme.slotDivider)
+                                .frame(width: geometry.size.width, height: dividerThickness)
 
-                            if showSecond {
-                                LayoutNodeView(
-                                    node: second,
-                                    workspace: workspace,
-                                    store: store,
-                                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                    globalFontPoints: globalFontPoints,
-                                    focusedPanelID: focusedPanelID,
-                                    focusedPanelModeActive: focusedPanelModeActive,
-                                    appIsActive: appIsActive,
-                                    unfocusedSplitStyle: unfocusedSplitStyle,
-                                    terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                                )
-                                .id(second.structuralIdentity)
-                                .frame(width: geometry.size.width, height: displaySecondHeight)
-                            }
+                            LayoutNodeView(
+                                node: second,
+                                workspace: workspace,
+                                store: store,
+                                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                                globalFontPoints: globalFontPoints,
+                                focusedPanelID: focusedPanelID,
+                                appIsActive: appIsActive,
+                                unfocusedSplitStyle: unfocusedSplitStyle,
+                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
+                            )
+                            .id(second.structuralIdentity)
+                            .frame(width: geometry.size.width, height: secondHeight)
                         }
                         .clipped()
                     }
                 }
                 .animation(.easeInOut(duration: 0.2), value: baseRatio)
-                .animation(.easeInOut(duration: 0.2), value: focusedPanelModeActive)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .id(node.structuralIdentity)
         }
-    }
-
-    private static let minimumAnimatedBranchDimension: CGFloat = 64
-
-    private func collapseRatioThreshold(
-        availableDimension: CGFloat,
-        minimumVisibleDimension: CGFloat
-    ) -> Double {
-        guard availableDimension > 0 else {
-            return 0.0001
-        }
-        return min(max(Double(minimumVisibleDimension / availableDimension), 0.0001), 0.5)
-    }
-
-    private func effectiveSplitRatio(baseRatio: Double, first: LayoutNode, second: LayoutNode) -> Double {
-        guard focusedPanelModeActive, let focusedPanelID else {
-            return baseRatio
-        }
-        let firstContainsFocused = first.slotContaining(panelID: focusedPanelID) != nil
-        let secondContainsFocused = second.slotContaining(panelID: focusedPanelID) != nil
-
-        if firstContainsFocused && secondContainsFocused {
-            assertionFailure("Focused panel unexpectedly appears in both split branches.")
-            return baseRatio
-        }
-
-        if firstContainsFocused && !secondContainsFocused {
-            return 1
-        }
-        if secondContainsFocused && !firstContainsFocused {
-            return 0
-        }
-        return baseRatio
-    }
-
-    private func focusModeBranchVisibility(first: LayoutNode, second: LayoutNode) -> (showFirst: Bool, showSecond: Bool) {
-        guard focusedPanelModeActive, let focusedPanelID else {
-            return (true, true)
-        }
-        let firstContainsFocused = first.slotContaining(panelID: focusedPanelID) != nil
-        let secondContainsFocused = second.slotContaining(panelID: focusedPanelID) != nil
-        if firstContainsFocused == secondContainsFocused {
-            return (true, true)
-        }
-        return (firstContainsFocused, secondContainsFocused)
     }
 }
 

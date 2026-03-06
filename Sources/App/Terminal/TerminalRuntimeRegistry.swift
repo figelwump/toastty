@@ -69,7 +69,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var panelActivityByPanelID: [UUID: PanelActivityState] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
-    private var focusedPanelTransitionTask: Task<Void, Never>?
     private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
     private let processWorkingDirectoryResolver = TerminalProcessWorkingDirectoryResolver()
     #endif
@@ -78,7 +77,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
         selectedSlotFocusRestoreTask?.cancel()
         #if TOASTTY_HAS_GHOSTTY_KIT
         visibilityPulseTask?.cancel()
-        focusedPanelTransitionTask?.cancel()
         processWorkingDirectoryRefreshTask?.cancel()
         #endif
     }
@@ -449,7 +447,7 @@ private extension TerminalRuntimeRegistry {
                 nextState: nextState
             )
         case .toggleFocusedPanelMode(workspaceID: let workspaceID):
-            scheduleFocusedPanelTransitionStabilizationIfNeeded(
+            scheduleFocusedPanelFocusRestoreIfNeeded(
                 workspaceID: workspaceID,
                 previousState: previousState,
                 nextState: nextState
@@ -501,7 +499,7 @@ private extension TerminalRuntimeRegistry {
         )
     }
 
-    func scheduleFocusedPanelTransitionStabilizationIfNeeded(
+    func scheduleFocusedPanelFocusRestoreIfNeeded(
         workspaceID: UUID,
         previousState: AppState,
         nextState: AppState
@@ -514,29 +512,6 @@ private extension TerminalRuntimeRegistry {
         }
 
         scheduleSelectedWorkspaceSlotFocusRestore()
-        scheduleVisibilityRefreshPulseAfterFocusedPanelTransition(in: workspaceID)
-    }
-
-    func scheduleVisibilityRefreshPulseAfterFocusedPanelTransition(in workspaceID: UUID) {
-        focusedPanelTransitionTask?.cancel()
-        focusedPanelTransitionTask = Task { @MainActor [weak self] in
-            guard Task.isCancelled == false else { return }
-            guard let self else { return }
-
-            // Focused panel mode animates over 0.2s in WorkspaceView. Pulse once
-            // immediately, once mid-transition, and once after the layout settles
-            // so Ghostty gets a reliable redraw on zoom/unzoom round-trips.
-            self.pulseVisibleSurfaces(in: workspaceID)
-
-            try? await Task.sleep(nanoseconds: 80_000_000)
-            guard Task.isCancelled == false else { return }
-            self.pulseVisibleSurfaces(in: workspaceID)
-
-            try? await Task.sleep(nanoseconds: 180_000_000)
-            guard Task.isCancelled == false else { return }
-            self.pulseVisibleSurfaces(in: workspaceID)
-            self.scheduleSelectedWorkspaceSlotFocusRestore()
-        }
     }
 
     func splitSourceSurfaceState(for newPanelID: UUID) -> SplitSourceSurfaceState {
@@ -2855,7 +2830,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastPresentationSignature = presentationSignature
 
         if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
-            requestImmediateSurfaceRedraw(ghosttySurface)
+            requestImmediateSurfaceRefresh(ghosttySurface)
         }
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
@@ -3427,7 +3402,7 @@ extension TerminalSurfaceController {
     private func refreshSurfaceAfterContainerMove(sourceContainer: NSView) {
         guard let ghosttySurface else { return }
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
-        requestImmediateSurfaceRedraw(ghosttySurface)
+        requestImmediateSurfaceRefresh(ghosttySurface)
     }
 
     private func updateDisplayIDIfNeeded(surface: ghostty_surface_t, sourceContainer: NSView) {
@@ -3535,16 +3510,12 @@ extension TerminalSurfaceController {
 
     func pulseVisibilityRefresh() {
         guard let ghosttySurface else { return }
-        requestImmediateSurfaceRedraw(ghosttySurface)
+        requestImmediateSurfaceRefresh(ghosttySurface)
     }
 
-    private func requestImmediateSurfaceRedraw(_ surface: ghostty_surface_t) {
-        // The embedded Ghostty API exposes `draw` as an immediate render
-        // scheduling hint. Use it alongside `refresh` after layout/focus
-        // transitions so stale frames are flushed before the next terminal IO.
+    private func requestImmediateSurfaceRefresh(_ surface: ghostty_surface_t) {
         ghosttyManager.requestImmediateTick()
         ghostty_surface_refresh(surface)
-        ghostty_surface_draw(surface)
     }
     #endif
 }
@@ -3697,7 +3668,6 @@ final class TerminalHostView: NSView {
             ghostty_surface_set_focus(ghosttySurface, shouldRestoreFocus)
             GhosttyRuntimeManager.shared.requestImmediateTick()
             ghostty_surface_refresh(ghosttySurface)
-            ghostty_surface_draw(ghosttySurface)
         } else {
             ghostty_surface_set_focus(ghosttySurface, false)
         }
