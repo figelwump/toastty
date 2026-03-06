@@ -2477,6 +2477,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private let hostedView: NSView
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
+    private var pendingDetachAttachment: PanelHostAttachmentToken?
+    private var pendingDetachTask: Task<Void, Never>?
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private let terminalHostView: TerminalHostView
@@ -2578,6 +2580,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let sourceContainer = activeSourceContainer
         let attachedToContainer = sourceContainer != nil && hostedView.superview === sourceContainer
         let attachedToWindow = hostedView.window != nil && sourceContainer?.window != nil
+        if pendingDetachAttachment == activeAttachment {
+            return .attached(activeAttachment)
+        }
         return attachedToContainer && attachedToWindow ? .ready(activeAttachment) : .attached(activeAttachment)
     }
 
@@ -2596,6 +2601,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
             return
         }
+        pendingDetachTask?.cancel()
+        pendingDetachTask = nil
+        pendingDetachAttachment = nil
         let sourceContainerChanged = activeSourceContainer !== container
         let hostedViewWillReattach = hostedView.superview !== container
         let attachmentChanged = activeAttachment != attachment
@@ -2658,18 +2666,42 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
             return
         }
+        pendingDetachTask?.cancel()
+        pendingDetachAttachment = attachment
         ToasttyLog.debug(
-            "Detaching panel host controller",
+            "Scheduling panel host detach",
             category: .terminal,
             metadata: [
                 "panel_id": panelID.uuidString,
                 "attachment_id": attachment.rawValue.uuidString
             ]
         )
-        activeAttachment = nil
-        activeSourceContainer = nil
-        hostedView.removeFromSuperview()
-        fallbackView.removeFromSuperview()
+        pendingDetachTask = Task { @MainActor [weak self] in
+            // SwiftUI commonly remounts the source panel host when split topology
+            // changes. Yield once so a replacement container can claim the stable
+            // host view before we tear it down and flash the old panel.
+            await Task.yield()
+            guard Task.isCancelled == false else { return }
+            guard let self,
+                  self.pendingDetachAttachment == attachment,
+                  self.activeAttachment == attachment else {
+                return
+            }
+            self.pendingDetachTask = nil
+            self.pendingDetachAttachment = nil
+            self.activeAttachment = nil
+            self.activeSourceContainer = nil
+            self.hostedView.removeFromSuperview()
+            self.fallbackView.removeFromSuperview()
+            ToasttyLog.debug(
+                "Detaching panel host controller",
+                category: .terminal,
+                metadata: [
+                    "panel_id": self.panelID.uuidString,
+                    "attachment_id": attachment.rawValue.uuidString
+                ]
+            )
+        }
     }
 
     func update(
@@ -2681,7 +2713,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         sourceContainer: NSView,
         attachment: PanelHostAttachmentToken
     ) {
-        guard activeAttachment == attachment else {
+        guard activeAttachment == attachment,
+              pendingDetachAttachment != attachment else {
             ToasttyLog.debug(
                 "Skipping terminal update from stale host attachment",
                 category: .terminal,
@@ -2847,6 +2880,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 "has_source_container": activeSourceContainer == nil ? "false" : "true"
             ]
         )
+        pendingDetachTask?.cancel()
+        pendingDetachTask = nil
+        pendingDetachAttachment = nil
         #if TOASTTY_HAS_GHOSTTY_KIT
         terminalHostView.setGhosttySurface(nil)
         if let ghosttySurface {
