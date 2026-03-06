@@ -2529,8 +2529,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         guard let activeAttachment else {
             return .detached
         }
-        let attachedToContainer = hostedView.superview === activeSourceContainer
-        let attachedToWindow = hostedView.window != nil && activeSourceContainer?.window != nil
+        let sourceContainer = activeSourceContainer
+        let attachedToContainer = sourceContainer != nil && hostedView.superview === sourceContainer
+        let attachedToWindow = hostedView.window != nil && sourceContainer?.window != nil
         return attachedToContainer && attachedToWindow ? .ready(activeAttachment) : .attached(activeAttachment)
     }
 
@@ -2582,9 +2583,23 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
 
     func detachHost(attachment: PanelHostAttachmentToken) {
         guard let currentAttachment = activeAttachment else { return }
-        guard attachment.generation >= currentAttachment.generation else {
+        guard attachment == currentAttachment else {
+            if attachment.generation < currentAttachment.generation {
+                ToasttyLog.debug(
+                    "Ignoring stale panel host detach",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "attachment_id": attachment.rawValue.uuidString,
+                        "attachment_generation": String(attachment.generation),
+                        "active_attachment_id": currentAttachment.rawValue.uuidString,
+                        "active_attachment_generation": String(currentAttachment.generation)
+                    ]
+                )
+                return
+            }
             ToasttyLog.debug(
-                "Ignoring stale panel host detach",
+                "Ignoring detach for non-current panel host attachment",
                 category: .terminal,
                 metadata: [
                     "panel_id": panelID.uuidString,
@@ -2596,7 +2611,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
             return
         }
-        guard currentAttachment == attachment else { return }
         ToasttyLog.debug(
             "Detaching panel host controller",
             category: .terminal,
@@ -2620,15 +2634,16 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         sourceContainer: NSView,
         attachment: PanelHostAttachmentToken
     ) {
-        #if TOASTTY_HAS_GHOSTTY_KIT
         guard activeAttachment == attachment else {
             ToasttyLog.debug(
                 "Skipping terminal update from stale host attachment",
-                category: .ghostty,
+                category: .terminal,
                 metadata: ["panel_id": panelID.uuidString]
             )
             return
         }
+
+        #if TOASTTY_HAS_GHOSTTY_KIT
         diagnostics.updateCount += 1
         if activeSourceContainer !== sourceContainer || hostedView.superview !== sourceContainer {
             attachHost(to: sourceContainer, attachment: attachment)

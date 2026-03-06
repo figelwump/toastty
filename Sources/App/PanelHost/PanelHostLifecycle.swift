@@ -72,6 +72,8 @@ final class PanelHostContainerCoordinator {
     ) -> PanelHostAttachmentToken {
         let controllerChanged = lifecycleController.map(ObjectIdentifier.init) != ObjectIdentifier(controller)
         if activeContainer !== container || controllerChanged || activeAttachment == nil {
+            // Container and controller changes always mint a newer attachment
+            // token so stale AppKit callbacks cannot reclaim host ownership.
             reset()
             activeContainer = container
             lifecycleController = controller
