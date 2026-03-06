@@ -5,7 +5,7 @@
 
 ## Build & Generate
 - **Source of truth:** `Project.swift` — never hand-edit generated Xcode project/workspace files.
-- **Regenerate:** `tuist generate` (after any project/dependency/build-setting change)
+- **Regenerate:** `tuist generate` after any project/dependency/build-setting change, or after source file adds/renames/deletes or branch switches. The generated `.xcodeproj`/`.xcworkspace` are gitignored and never updated by Git, leaving Xcode with stale references (symptom: `Build input file cannot be found`).
 - **Build:** `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
 - **Full gate:** `./scripts/automation/check.sh` (generate + build + test)
 - If Rosetta is active, set `ARCH` explicitly. Prefer invocation-scoped overrides (`ARCHS`, `ONLY_ACTIVE_ARCH=YES`) over mutating project settings.
