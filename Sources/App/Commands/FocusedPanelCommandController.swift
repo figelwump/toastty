@@ -52,6 +52,7 @@ final class FocusedPanelCommandController {
     @discardableResult
     func closeFocusedPanel(in workspaceID: UUID? = nil) -> Bool {
         guard let store else { return false }
+        let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
         let resolvedWorkspaceID = workspaceID ?? store.selectedWorkspace?.id
         guard let resolvedWorkspaceID,
               let workspace = store.state.workspacesByID[resolvedWorkspaceID],
@@ -62,8 +63,10 @@ final class FocusedPanelCommandController {
         let didClosePanel = store.send(.closePanel(panelID: focusedPanelID))
         guard didClosePanel else { return false }
 
-        guard let runtimeRegistry,
-              store.selectedWorkspace?.id == resolvedWorkspaceID,
+        // Only restore focus when the close originated from the visible workspace.
+        let shouldRestoreFocus = workspaceID == nil || selectedWorkspaceIDBeforeClose == resolvedWorkspaceID
+        guard shouldRestoreFocus,
+              let runtimeRegistry,
               let nextFocusedPanelID = store.selectedWorkspace?.focusedPanelID else {
             return true
         }
