@@ -298,7 +298,7 @@ Pending:
 
 2026-02-28 (Chunk M2 follow-up: reviewer fixes):
 - accepted points:
-  - added assertion-backed recovery for out-of-range `selectedIndex` in `PaneNodeView` (fallback to first tab panel with debug assertion).
+  - at the time, added assertion-backed recovery for out-of-range `selectedIndex` in `PaneNodeView` (this path was later removed when leaves became single-panel-only).
   - switched panel border overlay from `stroke` to `strokeBorder` for cleaner square edge rendering.
   - removed dead `expanded` branching from `PanelCardView` and simplified to always fill pane bounds.
 - rejected point:

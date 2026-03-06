@@ -57,7 +57,7 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         return WorkspaceState(
             id: UUID(),
             title: title,
-            paneTree: .leaf(paneID: paneID, tabPanelIDs: [panelID], selectedIndex: 0),
+            paneTree: .leaf(paneID: paneID, panelID: panelID),
             panels: [
                 panelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: NSHomeDirectory())),
             ],

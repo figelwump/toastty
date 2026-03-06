@@ -123,7 +123,7 @@ struct WorkspaceState: Codable, Identifiable {
 }
 
 indirect enum PaneNode: Codable {
-    case leaf(paneID: UUID, tabPanelIDs: [UUID], selectedIndex: Int)
+    case leaf(paneID: UUID, panelID: UUID)
     case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
 }
 
@@ -148,10 +148,9 @@ state invariants:
 - every id in `WindowState.workspaceIDs` must exist in `AppState.workspacesByID`
 - a workspace belongs to exactly one window at a time
 - aux panel visibility is persisted per workspace (`WorkspaceState.auxPanelVisibility`)
-- every panel id in any `PaneNode.leaf.tabPanelIDs` must exist in `WorkspaceState.panels`
-- every key in `WorkspaceState.panels` must appear exactly once in `PaneNode.leaf.tabPanelIDs` in that workspace
+- every panel id in any `PaneNode.leaf.panelID` must exist in `WorkspaceState.panels`
+- every key in `WorkspaceState.panels` must appear exactly once in a workspace `PaneNode.leaf`
 - empty pane leaves are not allowed after reducer actions
-- `PaneNode.leaf.selectedIndex` must be in-bounds (`0 <= selectedIndex < tabPanelIDs.count`) after every reducer action
 - all node IDs (leaf `paneID` and split `nodeID`) must be unique within a workspace tree
 
 Detailed invariant contract: `docs/state-invariants.md`.
@@ -385,8 +384,7 @@ requirements:
 
 approach:
 - core actions:
-  - `reorderPanel(panelID, toIndex, inPaneID)`
-  - `movePanelToPane(panelID, targetPaneID, index?)`
+  - `movePanelToPane(panelID, targetPaneID)`
   - `movePanelToWorkspace(panelID, targetWorkspaceID, targetPaneID?, splitHint?)`
   - `movePanelToWindow(panelID, targetWindowID, targetWorkspaceID, targetPaneID?)`
   - `detachPanelToNewWindow(panelID, targetDisplayID?)`
@@ -1002,14 +1000,13 @@ Chunk B review reconciliation (post-commit second opinion on `dfd617e`):
 
 Chunk C (phase 1 state-layer panel mobility foundation):
 - added reducer actions for panel mobility:
-  - `reorderPanel`
   - `movePanelToPane`
   - `movePanelToWorkspace`
   - `detachPanelToNewWindow`
 - extended pane-tree mutation primitives with:
-  - indexed insert into pane tabs
-  - in-pane reorder
   - panel removal with automatic empty-leaf collapse
+- note:
+  - the early `reorderPanel` and in-pane tab mutation work was later removed when the workspace model moved to single-panel leaves.
 - implemented workspace/window lifecycle updates during panel moves:
   - remove empty source workspace when its last panel moves out
   - remove empty source window when its last workspace is removed

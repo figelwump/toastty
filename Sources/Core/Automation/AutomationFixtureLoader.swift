@@ -75,8 +75,8 @@ public enum AutomationFixtureLoader {
                 nodeID: UUID(uuidString: "C41A0426-5A58-4ECF-8F0F-2AFC7A706906")!,
                 orientation: .horizontal,
                 ratio: 0.6,
-                first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: 0),
-                second: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: 0)
+                first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
+                second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
             ),
             panels: [
                 leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
@@ -111,7 +111,7 @@ public enum AutomationFixtureLoader {
         WorkspaceState(
             id: workspaceID,
             title: title,
-            paneTree: .leaf(paneID: paneID, tabPanelIDs: [panelID], selectedIndex: 0),
+            paneTree: .leaf(paneID: paneID, panelID: panelID),
             panels: [
                 panelID: .terminal(TerminalPanelState(title: terminalTitle, shell: "zsh", cwd: "/tmp")),
             ],

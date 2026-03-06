@@ -201,13 +201,12 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         }
 
         for leaf in paneTree.allLeafInfos {
-            for panelID in leaf.tabPanelIDs {
-                guard let panelSnapshot = panels[panelID],
-                      case .terminal = panelSnapshot else {
-                    continue
-                }
-                assignTitleIfNeeded(panelID)
+            let panelID = leaf.panelID
+            guard let panelSnapshot = panels[panelID],
+                  case .terminal = panelSnapshot else {
+                continue
             }
+            assignTitleIfNeeded(panelID)
         }
 
         let sortedPanelIDs = panels.keys.sorted { $0.uuidString < $1.uuidString }

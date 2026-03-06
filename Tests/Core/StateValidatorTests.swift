@@ -20,8 +20,8 @@ struct StateValidatorTests {
                 nodeID: UUID(),
                 orientation: .horizontal,
                 ratio: 0.5,
-                first: .leaf(paneID: paneID, tabPanelIDs: [panelID], selectedIndex: 0),
-                second: .leaf(paneID: UUID(), tabPanelIDs: [panelID], selectedIndex: 0)
+                first: .leaf(paneID: paneID, panelID: panelID),
+                second: .leaf(paneID: UUID(), panelID: panelID)
             ),
             panels: [panelID: .terminal(TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/tmp"))],
             focusedPanelID: panelID
@@ -55,7 +55,7 @@ struct StateValidatorTests {
         let workspace = WorkspaceState(
             id: UUID(),
             title: "Broken focus",
-            paneTree: .leaf(paneID: paneID, tabPanelIDs: [panelID], selectedIndex: 0),
+            paneTree: .leaf(paneID: paneID, panelID: panelID),
             panels: [panelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp"))],
             focusedPanelID: staleFocusedPanelID
         )
@@ -94,8 +94,8 @@ struct StateValidatorTests {
                 nodeID: splitID,
                 orientation: .horizontal,
                 ratio: 1.3,
-                first: .leaf(paneID: firstPaneID, tabPanelIDs: [panelID], selectedIndex: 0),
-                second: .leaf(paneID: secondPaneID, tabPanelIDs: [secondPanelID], selectedIndex: 0)
+                first: .leaf(paneID: firstPaneID, panelID: panelID),
+                second: .leaf(paneID: secondPaneID, panelID: secondPanelID)
             ),
             panels: [
                 panelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),

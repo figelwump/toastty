@@ -98,13 +98,13 @@ struct AppReducerTests {
         }
 
         #expect(orientation == .horizontal)
-        guard case .leaf(_, let firstTabs, _ ) = first,
-              case .leaf(_, let secondTabs, _ ) = second else {
+        guard case .leaf(_, let firstPanelID) = first,
+              case .leaf(_, let secondPanelID) = second else {
             Issue.record("expected leaf children in split root")
             return
         }
-        #expect(firstTabs.contains(sourcePanelID) == false)
-        #expect(secondTabs.contains(sourcePanelID))
+        #expect(firstPanelID != sourcePanelID)
+        #expect(secondPanelID == sourcePanelID)
         #expect(workspaceAfter.focusedPanelID != sourcePanelID)
 
         try StateValidator.validate(state)
@@ -155,20 +155,25 @@ struct AppReducerTests {
     }
 
     @Test
-    func createTerminalPanelAppendsToTargetPane() throws {
+    func createTerminalPanelSplitsTargetPane() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
 
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspace = try #require(state.workspacesByID[workspaceID])
         let paneID = try #require(workspace.paneTree.allLeafInfos.first?.paneID)
-        let existingCount = workspace.paneTree.allLeafInfos.first?.tabPanelIDs.count ?? 0
+        let originalPanelID = try #require(workspace.focusedPanelID)
+        let originalLeafCount = workspace.paneTree.allLeafInfos.count
 
         #expect(reducer.send(.createTerminalPanel(workspaceID: workspaceID, paneID: paneID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        let updatedLeaf = try #require(updatedWorkspace.paneTree.allLeafInfos.first)
-        #expect(updatedLeaf.tabPanelIDs.count == existingCount + 1)
+        let updatedLeaves = updatedWorkspace.paneTree.allLeafInfos
+        #expect(updatedLeaves.count == originalLeafCount + 1)
+        #expect(updatedLeaves.contains(where: { $0.paneID == paneID && $0.panelID == originalPanelID }))
+        let newFocusedPanelID = try #require(updatedWorkspace.focusedPanelID)
+        #expect(newFocusedPanelID != originalPanelID)
+        #expect(updatedLeaves.contains(where: { $0.panelID == newFocusedPanelID }))
 
         try StateValidator.validate(state)
     }
@@ -206,7 +211,13 @@ struct AppReducerTests {
             panelOne: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
             panelThree: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
         ]
-        workspace.paneTree = .leaf(paneID: paneID, tabPanelIDs: [panelOne, panelThree], selectedIndex: 1)
+        workspace.paneTree = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .leaf(paneID: paneID, panelID: panelOne),
+            second: .leaf(paneID: UUID(), panelID: panelThree)
+        )
         workspace.focusedPanelID = panelThree
         state.workspacesByID[workspaceID] = workspace
 
@@ -415,36 +426,6 @@ struct AppReducerTests {
     }
 
     @Test
-    func reorderPanelRepositionsTabWithinPane() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        var workspace = try #require(state.workspacesByID[workspaceID])
-        let paneID = try #require(workspace.paneTree.allLeafInfos.first?.paneID)
-
-        let panelA = UUID()
-        let panelB = UUID()
-        let panelC = UUID()
-        workspace.panels = [
-            panelA: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
-            panelB: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
-            panelC: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
-        ]
-        workspace.paneTree = .leaf(paneID: paneID, tabPanelIDs: [panelA, panelB, panelC], selectedIndex: 1)
-        workspace.focusedPanelID = panelB
-        state.workspacesByID[workspaceID] = workspace
-
-        #expect(reducer.send(.reorderPanel(panelID: panelA, toIndex: 2, inPaneID: paneID), state: &state))
-
-        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
-        let updatedLeaf = try #require(updatedWorkspace.paneTree.allLeafInfos.first)
-        #expect(updatedLeaf.tabPanelIDs == [panelB, panelC, panelA])
-        #expect(updatedLeaf.selectedIndex == 0)
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
     func movePanelToPaneCollapsesEmptySourceLeaf() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
@@ -453,15 +434,16 @@ struct AppReducerTests {
         let leaves = workspace.paneTree.allLeafInfos
         let sourceLeaf = try #require(leaves.first)
         let targetLeaf = try #require(leaves.last)
-        let panelToMove = try #require(sourceLeaf.tabPanelIDs.first)
+        let panelToMove = sourceLeaf.panelID
 
-        #expect(reducer.send(.movePanelToPane(panelID: panelToMove, targetPaneID: targetLeaf.paneID, index: nil), state: &state))
+        #expect(reducer.send(.movePanelToPane(panelID: panelToMove, targetPaneID: targetLeaf.paneID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
         let updatedLeaves = updatedWorkspace.paneTree.allLeafInfos
-        #expect(updatedLeaves.count == 1)
-        #expect(updatedLeaves[0].paneID == targetLeaf.paneID)
-        #expect(updatedLeaves[0].tabPanelIDs.contains(panelToMove))
+        #expect(updatedLeaves.count == 2)
+        #expect(updatedLeaves.contains(where: { $0.paneID == targetLeaf.paneID && $0.panelID == targetLeaf.panelID }))
+        #expect(updatedLeaves.contains(where: { $0.panelID == panelToMove }))
+        #expect(updatedLeaves.contains(where: { $0.paneID == sourceLeaf.paneID }) == false)
         #expect(updatedWorkspace.focusedPanelID == panelToMove)
 
         try StateValidator.validate(state)
@@ -602,11 +584,11 @@ struct AppReducerTests {
         let rightPaneAfter = try #require(workspaceAfter.paneTree.allLeafInfos.first(where: { $0.paneID == rightPaneIDBefore }))
         let markdownPanelIDs = workspaceAfter.panels.filter { $0.value.kind == .markdown }.map(\.key)
         #expect(markdownPanelIDs.count == 1)
-        #expect(rightPaneAfter.tabPanelIDs.contains(markdownPanelIDs[0]) == false)
+        #expect(rightPaneAfter.panelID != markdownPanelIDs[0])
         let markdownPane = try #require(
-            workspaceAfter.paneTree.allLeafInfos.first(where: { $0.tabPanelIDs.contains(markdownPanelIDs[0]) })
+            workspaceAfter.paneTree.allLeafInfos.first(where: { $0.panelID == markdownPanelIDs[0] })
         )
-        #expect(markdownPane.tabPanelIDs.count == 1)
+        #expect(markdownPane.panelID == markdownPanelIDs[0])
 
         try StateValidator.validate(state)
     }
@@ -625,12 +607,12 @@ struct AppReducerTests {
 
         let diffPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .diff })?.key)
         let markdownPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .markdown })?.key)
-        let diffPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.tabPanelIDs.contains(diffPanelID) }))
-        let markdownPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.tabPanelIDs.contains(markdownPanelID) }))
+        let diffPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.panelID == diffPanelID }))
+        let markdownPane = try #require(workspace.paneTree.allLeafInfos.first(where: { $0.panelID == markdownPanelID }))
 
         #expect(diffPane.paneID != markdownPane.paneID)
-        #expect(diffPane.tabPanelIDs.count == 1)
-        #expect(markdownPane.tabPanelIDs.count == 1)
+        #expect(diffPane.panelID == diffPanelID)
+        #expect(markdownPane.panelID == markdownPanelID)
 
         try StateValidator.validate(state)
     }
@@ -684,12 +666,12 @@ struct AppReducerTests {
         #expect(auxPanelIDs.count == 2)
 
         let auxLeaves = workspaceAfterAux.paneTree.allLeafInfos.filter { leaf in
-            leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
+            auxPanelIDs.contains(leaf.panelID)
         }
         #expect(auxLeaves.count == 2)
         if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspaceAfterAux.paneTree {
-            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
-            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
+            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.map(\.panelID))
+            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.map(\.panelID))
             #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
             #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
         } else {
@@ -697,8 +679,7 @@ struct AppReducerTests {
         }
 
         for leaf in auxLeaves {
-            #expect(leaf.tabPanelIDs.count == 1)
-            #expect(leaf.tabPanelIDs.contains(where: { terminalPanelIDs.contains($0) }) == false)
+            #expect(terminalPanelIDs.contains(leaf.panelID) == false)
         }
 
         try StateValidator.validate(state)
@@ -723,8 +704,8 @@ struct AppReducerTests {
         #expect(auxPanelIDs.count == 3)
 
         if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspace.paneTree {
-            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
-            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.flatMap(\.tabPanelIDs))
+            let terminalSubtreePanelIDs = Set(terminalSubtree.allLeafInfos.map(\.panelID))
+            let auxSubtreePanelIDs = Set(auxSubtree.allLeafInfos.map(\.panelID))
             #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
             #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
         } else {
@@ -732,12 +713,9 @@ struct AppReducerTests {
         }
 
         let auxLeaves = workspace.paneTree.allLeafInfos.filter { leaf in
-            leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
+            auxPanelIDs.contains(leaf.panelID)
         }
         #expect(auxLeaves.count == 3)
-        for leaf in auxLeaves {
-            #expect(leaf.tabPanelIDs.count == 1)
-        }
 
         try StateValidator.validate(state)
     }
@@ -799,8 +777,8 @@ struct AppReducerTests {
         let leavesBeforeClose = workspaceBeforeClose.paneTree.allLeafInfos
         #expect(leavesBeforeClose.count == 3)
         let focusedPanelID = try #require(workspaceBeforeClose.focusedPanelID)
-        let lastLeafPanelID = try #require(leavesBeforeClose.last?.tabPanelIDs.first)
-        let expectedFocusedPanelID = try #require(leavesBeforeClose[1].tabPanelIDs.first)
+        let lastLeafPanelID = try #require(leavesBeforeClose.last?.panelID)
+        let expectedFocusedPanelID = leavesBeforeClose[1].panelID
         #expect(focusedPanelID == lastLeafPanelID)
 
         #expect(reducer.send(.closePanel(panelID: focusedPanelID), state: &state))
@@ -825,8 +803,8 @@ struct AppReducerTests {
         let leavesBeforeClose = workspaceBeforeFocus.paneTree.allLeafInfos
         #expect(leavesBeforeClose.count == 3)
 
-        let panelToClose = try #require(leavesBeforeClose.first?.tabPanelIDs.first)
-        let expectedFocusedPanelID = try #require(leavesBeforeClose.last?.tabPanelIDs.first)
+        let panelToClose = try #require(leavesBeforeClose.first?.panelID)
+        let expectedFocusedPanelID = try #require(leavesBeforeClose.last?.panelID)
         #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: panelToClose), state: &state))
         #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
 
@@ -838,7 +816,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func closeFocusedPanelInTabbedPaneKeepsFocusInSamePane() throws {
+    func closeFocusedPanelCreatedBySplitReturnsFocusToSiblingPane() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -908,7 +886,7 @@ struct AppReducerTests {
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspace = try #require(state.workspacesByID[workspaceID])
         let sourcePane = try #require(workspace.paneTree.allLeafInfos.first)
-        let panelToClose = try #require(sourcePane.tabPanelIDs.first)
+        let panelToClose = sourcePane.panelID
 
         #expect(reducer.send(.closePanel(panelID: panelToClose), state: &state))
         let collapsedWorkspace = try #require(state.workspacesByID[workspaceID])
@@ -916,8 +894,10 @@ struct AppReducerTests {
 
         #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
         let reopenedWorkspace = try #require(state.workspacesByID[workspaceID])
-        let onlyLeaf = try #require(reopenedWorkspace.paneTree.allLeafInfos.first)
-        #expect(onlyLeaf.tabPanelIDs.count == 2)
+        let reopenedLeaves = reopenedWorkspace.paneTree.allLeafInfos
+        #expect(reopenedLeaves.count == 2)
+        let reopenedPanelID = try #require(reopenedWorkspace.focusedPanelID)
+        #expect(reopenedLeaves.contains(where: { $0.panelID == reopenedPanelID }))
 
         try StateValidator.validate(state)
     }
@@ -1030,10 +1010,10 @@ struct AppReducerTests {
                 nodeID: nestedSplitNodeID,
                 orientation: .horizontal,
                 ratio: 0.6,
-                first: .leaf(paneID: focusedPaneID, tabPanelIDs: [focusedPanelID], selectedIndex: 0),
-                second: .leaf(paneID: siblingPaneID, tabPanelIDs: [siblingPanelID], selectedIndex: 0)
+                first: .leaf(paneID: focusedPaneID, panelID: focusedPanelID),
+                second: .leaf(paneID: siblingPaneID, panelID: siblingPanelID)
             ),
-            second: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: 0)
+            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
         )
         workspace.focusedPanelID = focusedPanelID
         state.workspacesByID[workspaceID] = workspace
@@ -1096,10 +1076,8 @@ struct AppReducerTests {
         var workspace = try #require(state.workspacesByID[workspaceID])
 
         guard case .split(_, _, _, let first, let second) = workspace.paneTree,
-              case .leaf(let leftPaneID, let leftTabs, let leftSelectedIndex) = first,
-              case .leaf(let rightPaneID, let rightTabs, let rightSelectedIndex) = second,
-              let leftPanelID = leftTabs.first,
-              let rightPanelID = rightTabs.first else {
+              case .leaf(let leftPaneID, let leftPanelID) = first,
+              case .leaf(let rightPaneID, let rightPanelID) = second else {
             Issue.record("expected split-workspace fixture to expose two terminal leaves")
             return
         }
@@ -1113,14 +1091,14 @@ struct AppReducerTests {
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.8,
-            first: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: rightSelectedIndex),
-            second: .leaf(paneID: extraPaneID, tabPanelIDs: [extraPanelID], selectedIndex: 0)
+            first: .leaf(paneID: rightPaneID, panelID: rightPanelID),
+            second: .leaf(paneID: extraPaneID, panelID: extraPanelID)
         )
         workspace.paneTree = .split(
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.7,
-            first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: leftSelectedIndex),
+            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
             second: nestedSecond
         )
         workspace.focusedPanelID = leftPanelID
@@ -1223,10 +1201,8 @@ struct AppReducerTests {
         var workspace = try #require(state.workspacesByID[workspaceID])
 
         guard case .split(_, _, _, let first, let second) = workspace.paneTree,
-              case .leaf(let leftPaneID, let leftTabs, let leftSelectedIndex) = first,
-              case .leaf(let rightPaneID, let rightTabs, let rightSelectedIndex) = second,
-              let leftPanelID = leftTabs.first,
-              let rightPanelID = rightTabs.first else {
+              case .leaf(let leftPaneID, let leftPanelID) = first,
+              case .leaf(let rightPaneID, let rightPanelID) = second else {
             Issue.record("expected split-workspace fixture to expose two terminal leaves")
             return
         }
@@ -1252,21 +1228,21 @@ struct AppReducerTests {
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.9,
-            first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: leftSelectedIndex),
-            second: .leaf(paneID: leftSecondPaneID, tabPanelIDs: [leftSecondPanelID], selectedIndex: 0)
+            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
+            second: .leaf(paneID: leftSecondPaneID, panelID: leftSecondPanelID)
         )
         let rightNestedSubtree = PaneNode.split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.9,
-            first: .leaf(paneID: rightThirdPaneID, tabPanelIDs: [rightThirdPanelID], selectedIndex: 0),
-            second: .leaf(paneID: rightFourthPaneID, tabPanelIDs: [rightFourthPanelID], selectedIndex: 0)
+            first: .leaf(paneID: rightThirdPaneID, panelID: rightThirdPanelID),
+            second: .leaf(paneID: rightFourthPaneID, panelID: rightFourthPanelID)
         )
         let rightSubtree = PaneNode.split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.9,
-            first: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: rightSelectedIndex),
+            first: .leaf(paneID: rightPaneID, panelID: rightPanelID),
             second: rightNestedSubtree
         )
         workspace.paneTree = .split(
@@ -1306,10 +1282,8 @@ struct AppReducerTests {
         var workspace = try #require(state.workspacesByID[workspaceID])
 
         guard case .split(_, _, _, let first, let second) = workspace.paneTree,
-              case .leaf(let leftPaneID, let leftTabs, let leftSelectedIndex) = first,
-              case .leaf(let rightPaneID, let rightTabs, let rightSelectedIndex) = second,
-              let leftPanelID = leftTabs.first,
-              let rightPanelID = rightTabs.first else {
+              case .leaf(let leftPaneID, let leftPanelID) = first,
+              case .leaf(let rightPaneID, let rightPanelID) = second else {
             Issue.record("expected split-workspace fixture to expose two terminal leaves")
             return
         }
@@ -1324,15 +1298,15 @@ struct AppReducerTests {
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.8,
-            first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: leftSelectedIndex),
-            second: .leaf(paneID: topRightPaneID, tabPanelIDs: [topRightPanelID], selectedIndex: 0)
+            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
+            second: .leaf(paneID: topRightPaneID, panelID: topRightPanelID)
         )
         workspace.paneTree = .split(
             nodeID: UUID(),
             orientation: .vertical,
             ratio: 0.8,
             first: topSubtree,
-            second: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: rightSelectedIndex)
+            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
         )
         workspace.focusedPanelID = leftPanelID
         state.workspacesByID[workspaceID] = workspace

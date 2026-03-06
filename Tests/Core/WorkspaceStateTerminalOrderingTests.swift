@@ -4,12 +4,11 @@ import Testing
 
 struct WorkspaceStateTerminalOrderingTests {
     @Test
-    func terminalPanelIDsInDisplayOrderUsesLeafTraversalAndSelectedTab() {
+    func terminalPanelIDsInDisplayOrderUsesLeafTraversal() {
         let leftTerminalID = UUID()
         let topRightTerminalID = UUID()
-        let topRightDiffID = UUID()
         let bottomRightTerminalID = UUID()
-        let hiddenPanelID = UUID()
+        let hiddenDiffID = UUID()
 
         let workspace = WorkspaceState(
             id: UUID(),
@@ -20,8 +19,7 @@ struct WorkspaceStateTerminalOrderingTests {
                 ratio: 0.6,
                 first: .leaf(
                     paneID: UUID(),
-                    tabPanelIDs: [leftTerminalID],
-                    selectedIndex: 0
+                    panelID: leftTerminalID
                 ),
                 second: .split(
                     nodeID: UUID(),
@@ -29,26 +27,36 @@ struct WorkspaceStateTerminalOrderingTests {
                     ratio: 0.5,
                     first: .leaf(
                         paneID: UUID(),
-                        tabPanelIDs: [topRightTerminalID, topRightDiffID],
-                        selectedIndex: 0
+                        panelID: topRightTerminalID
                     ),
                     second: .leaf(
                         paneID: UUID(),
-                        tabPanelIDs: [hiddenPanelID, bottomRightTerminalID],
-                        selectedIndex: 8
+                        panelID: hiddenDiffID
                     )
                 )
             ),
             panels: [
                 leftTerminalID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
                 topRightTerminalID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
-                topRightDiffID: .diff(DiffPanelState()),
                 bottomRightTerminalID: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
+                hiddenDiffID: .diff(DiffPanelState()),
             ],
             focusedPanelID: leftTerminalID
         )
 
-        #expect(workspace.terminalPanelIDsInDisplayOrder == [leftTerminalID, topRightTerminalID, bottomRightTerminalID])
+        var workspaceWithTrailingTerminal = workspace
+        workspaceWithTrailingTerminal.paneTree = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.6,
+            first: workspace.paneTree,
+            second: .leaf(paneID: UUID(), panelID: bottomRightTerminalID)
+        )
+
+        #expect(
+            workspaceWithTrailingTerminal.terminalPanelIDsInDisplayOrder ==
+                [leftTerminalID, topRightTerminalID, bottomRightTerminalID]
+        )
     }
 
     @Test
@@ -115,13 +123,13 @@ struct WorkspaceStateTerminalOrderingTests {
                 nodeID: UUID(),
                 orientation: .horizontal,
                 ratio: 0.5,
-                first: .leaf(paneID: UUID(), tabPanelIDs: [firstPanelID], selectedIndex: 0),
+                first: .leaf(paneID: UUID(), panelID: firstPanelID),
                 second: .split(
                     nodeID: UUID(),
                     orientation: .vertical,
                     ratio: 0.5,
-                    first: .leaf(paneID: UUID(), tabPanelIDs: [secondPanelID], selectedIndex: 0),
-                    second: .leaf(paneID: UUID(), tabPanelIDs: [thirdPanelID], selectedIndex: 0)
+                    first: .leaf(paneID: UUID(), panelID: secondPanelID),
+                    second: .leaf(paneID: UUID(), panelID: thirdPanelID)
                 )
             ),
             panels: [

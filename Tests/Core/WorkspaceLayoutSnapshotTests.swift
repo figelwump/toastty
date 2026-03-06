@@ -19,8 +19,8 @@ struct WorkspaceLayoutSnapshotTests {
                 nodeID: UUID(),
                 orientation: .horizontal,
                 ratio: 0.62,
-                first: .leaf(paneID: leftPaneID, tabPanelIDs: [leftPanelID], selectedIndex: 0),
-                second: .leaf(paneID: rightPaneID, tabPanelIDs: [rightPanelID], selectedIndex: 0)
+                first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
+                second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
             ),
             panels: [
                 leftPanelID: .terminal(TerminalPanelState(title: "Server", shell: "zsh", cwd: "/tmp/infra")),
@@ -102,7 +102,7 @@ struct WorkspaceLayoutSnapshotTests {
         let workspaceOne = WorkspaceState(
             id: workspaceOneID,
             title: "One",
-            paneTree: .leaf(paneID: workspaceOnePaneID, tabPanelIDs: [workspaceOnePanelID], selectedIndex: 0),
+            paneTree: .leaf(paneID: workspaceOnePaneID, panelID: workspaceOnePanelID),
             panels: [
                 workspaceOnePanelID: .terminal(
                     TerminalPanelState(title: "Agent A", shell: "zsh", cwd: "/tmp/one")
@@ -115,7 +115,7 @@ struct WorkspaceLayoutSnapshotTests {
         let workspaceTwo = WorkspaceState(
             id: workspaceTwoID,
             title: "Two",
-            paneTree: .leaf(paneID: workspaceTwoPaneID, tabPanelIDs: [workspaceTwoPanelID], selectedIndex: 0),
+            paneTree: .leaf(paneID: workspaceTwoPaneID, panelID: workspaceTwoPanelID),
             panels: [
                 workspaceTwoPanelID: .terminal(
                     TerminalPanelState(title: "Agent B", shell: "zsh", cwd: "/tmp/two")

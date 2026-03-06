@@ -7,13 +7,11 @@ public enum SplitOrientation: String, Codable, Equatable, Sendable {
 
 public struct PaneLeafInfo: Equatable, Sendable {
     public let paneID: UUID
-    public let tabPanelIDs: [UUID]
-    public let selectedIndex: Int
+    public let panelID: UUID
 
-    public init(paneID: UUID, tabPanelIDs: [UUID], selectedIndex: Int) {
+    public init(paneID: UUID, panelID: UUID) {
         self.paneID = paneID
-        self.tabPanelIDs = tabPanelIDs
-        self.selectedIndex = selectedIndex
+        self.panelID = panelID
     }
 }
 
@@ -30,7 +28,7 @@ public struct PaneSplitInfo: Equatable, Sendable {
 }
 
 public indirect enum PaneNode: Equatable, Sendable {
-    case leaf(paneID: UUID, tabPanelIDs: [UUID], selectedIndex: Int)
+    case leaf(paneID: UUID, panelID: UUID)
     case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
 }
 
@@ -38,8 +36,7 @@ extension PaneNode: Codable {
     private enum CodingKeys: String, CodingKey {
         case type
         case paneID
-        case tabPanelIDs
-        case selectedIndex
+        case panelID
         case nodeID
         case orientation
         case ratio
@@ -60,8 +57,7 @@ extension PaneNode: Codable {
         case .leaf:
             self = .leaf(
                 paneID: try container.decode(UUID.self, forKey: .paneID),
-                tabPanelIDs: try container.decode([UUID].self, forKey: .tabPanelIDs),
-                selectedIndex: try container.decode(Int.self, forKey: .selectedIndex)
+                panelID: try container.decode(UUID.self, forKey: .panelID)
             )
         case .split:
             self = .split(
@@ -78,11 +74,10 @@ extension PaneNode: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
 
         switch self {
-        case .leaf(let paneID, let tabPanelIDs, let selectedIndex):
+        case .leaf(let paneID, let panelID):
             try container.encode(NodeType.leaf, forKey: .type)
             try container.encode(paneID, forKey: .paneID)
-            try container.encode(tabPanelIDs, forKey: .tabPanelIDs)
-            try container.encode(selectedIndex, forKey: .selectedIndex)
+            try container.encode(panelID, forKey: .panelID)
         case .split(let nodeID, let orientation, let ratio, let first, let second):
             try container.encode(NodeType.split, forKey: .type)
             try container.encode(nodeID, forKey: .nodeID)
@@ -97,8 +92,8 @@ extension PaneNode: Codable {
 public extension PaneNode {
     var allLeafInfos: [PaneLeafInfo] {
         switch self {
-        case .leaf(let paneID, let tabPanelIDs, let selectedIndex):
-            return [PaneLeafInfo(paneID: paneID, tabPanelIDs: tabPanelIDs, selectedIndex: selectedIndex)]
+        case .leaf(let paneID, let panelID):
+            return [PaneLeafInfo(paneID: paneID, panelID: panelID)]
         case .split(_, _, _, let first, let second):
             return first.allLeafInfos + second.allLeafInfos
         }
@@ -106,7 +101,7 @@ public extension PaneNode {
 
     var allNodeIDs: [UUID] {
         switch self {
-        case .leaf(let paneID, _, _):
+        case .leaf(let paneID, _):
             return [paneID]
         case .split(let nodeID, _, _, let first, let second):
             return [nodeID] + first.allNodeIDs + second.allNodeIDs
@@ -124,9 +119,9 @@ public extension PaneNode {
 
     func leafContaining(panelID: UUID) -> PaneLeafInfo? {
         switch self {
-        case .leaf(let paneID, let tabPanelIDs, let selectedIndex):
-            guard tabPanelIDs.contains(panelID) else { return nil }
-            return PaneLeafInfo(paneID: paneID, tabPanelIDs: tabPanelIDs, selectedIndex: selectedIndex)
+        case .leaf(let paneID, let currentPanelID):
+            guard currentPanelID == panelID else { return nil }
+            return PaneLeafInfo(paneID: paneID, panelID: currentPanelID)
         case .split(_, _, _, let first, let second):
             return first.leafContaining(panelID: panelID) ?? second.leafContaining(panelID: panelID)
         }
@@ -134,7 +129,7 @@ public extension PaneNode {
 
     func leafNode(paneID: UUID) -> PaneNode? {
         switch self {
-        case .leaf(let currentPaneID, _, _):
+        case .leaf(let currentPaneID, _):
             guard currentPaneID == paneID else { return nil }
             return self
         case .split(_, _, _, let first, let second):
@@ -144,7 +139,7 @@ public extension PaneNode {
 
     func rightColumnPaneID() -> UUID? {
         switch self {
-        case .leaf(let paneID, _, _):
+        case .leaf(let paneID, _):
             return paneID
         case .split(_, let orientation, _, let first, let second):
             if orientation == .horizontal {
@@ -156,7 +151,7 @@ public extension PaneNode {
 
     mutating func replaceLeaf(paneID: UUID, with replacement: PaneNode) -> Bool {
         switch self {
-        case .leaf(let currentPaneID, _, _):
+        case .leaf(let currentPaneID, _):
             guard currentPaneID == paneID else { return false }
             self = replacement
             return true
@@ -177,109 +172,13 @@ public extension PaneNode {
         }
     }
 
-    mutating func appendPanel(_ panelID: UUID, toPane paneID: UUID, select: Bool) -> Bool {
-        insertPanel(panelID, toPane: paneID, at: nil, select: select)
-    }
-
-    mutating func insertPanel(_ panelID: UUID, toPane paneID: UUID, at index: Int?, select: Bool) -> Bool {
-        switch self {
-        case .leaf(let currentPaneID, let tabPanelIDs, let selectedIndex):
-            guard currentPaneID == paneID else { return false }
-            var tabs = tabPanelIDs
-            let insertionIndex = clampedInsertionIndex(index, count: tabs.count)
-            tabs.insert(panelID, at: insertionIndex)
-            let nextSelectedIndex: Int
-            if select {
-                nextSelectedIndex = insertionIndex
-            } else if insertionIndex <= selectedIndex {
-                nextSelectedIndex = selectedIndex + 1
-            } else {
-                nextSelectedIndex = selectedIndex
-            }
-            self = .leaf(paneID: currentPaneID, tabPanelIDs: tabs, selectedIndex: nextSelectedIndex)
-            return true
-        case .split(let nodeID, let orientation, let ratio, let first, let second):
-            var updatedFirst = first
-            if updatedFirst.insertPanel(panelID, toPane: paneID, at: index, select: select) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second)
-                return true
-            }
-
-            var updatedSecond = second
-            if updatedSecond.insertPanel(panelID, toPane: paneID, at: index, select: select) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond)
-                return true
-            }
-
-            return false
-        }
-    }
-
-    mutating func reorderPanel(_ panelID: UUID, inPane paneID: UUID, toIndex: Int) -> Bool {
-        switch self {
-        case .leaf(let currentPaneID, let tabPanelIDs, let selectedIndex):
-            guard currentPaneID == paneID else { return false }
-            guard let currentIndex = tabPanelIDs.firstIndex(of: panelID) else { return false }
-
-            var tabs = tabPanelIDs
-            tabs.remove(at: currentIndex)
-            let insertionIndex = clampedInsertionIndex(toIndex, count: tabs.count)
-            tabs.insert(panelID, at: insertionIndex)
-
-            let focusedIndex: Int
-            if selectedIndex == currentIndex {
-                focusedIndex = insertionIndex
-            } else if selectedIndex > currentIndex && selectedIndex <= insertionIndex {
-                focusedIndex = selectedIndex - 1
-            } else if selectedIndex < currentIndex && selectedIndex >= insertionIndex {
-                focusedIndex = selectedIndex + 1
-            } else {
-                focusedIndex = selectedIndex
-            }
-
-            self = .leaf(paneID: currentPaneID, tabPanelIDs: tabs, selectedIndex: focusedIndex)
-            return true
-
-        case .split(let nodeID, let orientation, let ratio, let first, let second):
-            var updatedFirst = first
-            if updatedFirst.reorderPanel(panelID, inPane: paneID, toIndex: toIndex) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second)
-                return true
-            }
-
-            var updatedSecond = second
-            if updatedSecond.reorderPanel(panelID, inPane: paneID, toIndex: toIndex) {
-                self = .split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond)
-                return true
-            }
-
-            return false
-        }
-    }
-
     func removingPanel(_ panelID: UUID) -> (node: PaneNode?, removed: Bool) {
         switch self {
-        case .leaf(let paneID, let tabPanelIDs, let selectedIndex):
-            guard let index = tabPanelIDs.firstIndex(of: panelID) else {
+        case .leaf(_, let currentPanelID):
+            guard currentPanelID == panelID else {
                 return (self, false)
             }
-
-            var tabs = tabPanelIDs
-            tabs.remove(at: index)
-
-            guard tabs.isEmpty == false else {
-                return (nil, true)
-            }
-
-            let nextSelectedIndex: Int
-            if selectedIndex >= tabs.count {
-                nextSelectedIndex = tabs.count - 1
-            } else if index < selectedIndex {
-                nextSelectedIndex = selectedIndex - 1
-            } else {
-                nextSelectedIndex = selectedIndex
-            }
-            return (.leaf(paneID: paneID, tabPanelIDs: tabs, selectedIndex: nextSelectedIndex), true)
+            return (nil, true)
 
         case .split(let nodeID, let orientation, let ratio, let first, let second):
             let firstResult = first.removingPanel(panelID)
@@ -300,12 +199,5 @@ public extension PaneNode {
 
             return (self, false)
         }
-    }
-
-    private func clampedInsertionIndex(_ requestedIndex: Int?, count: Int) -> Int {
-        guard let requestedIndex else { return count }
-        if requestedIndex < 0 { return 0 }
-        if requestedIndex > count { return count }
-        return requestedIndex
     }
 }

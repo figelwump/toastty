@@ -38,11 +38,9 @@ Reducers and migration code must preserve these rules.
 
 For each workspace:
 
-- Every panel id in every `PaneNode.leaf.tabPanelIDs` must exist in `WorkspaceState.panels`.
-- Every key in `WorkspaceState.panels` must appear in exactly one leaf tab list.
-- Leaf `tabPanelIDs` must not contain duplicates.
+- Every `PaneNode.leaf.panelID` must exist in `WorkspaceState.panels`.
+- Every key in `WorkspaceState.panels` must appear in exactly one leaf.
 - Empty leaves are not allowed after reducer actions.
-- Leaf `selectedIndex` must satisfy `0 <= selectedIndex < tabPanelIDs.count`.
 - Split `ratio` must satisfy `0.05 <= ratio <= 0.95`.
 - `paneID` values (on leaves) and `nodeID` values (on splits) must all be unique within a workspace tree. No ID may appear on both a leaf and a split node.
 
@@ -84,12 +82,12 @@ Every reducer action that mutates layout/panels must be atomic with respect to r
 
 - create panel:
   - insert into `WorkspaceState.panels`
-  - insert id into exactly one leaf tab list
+  - insert id into exactly one leaf
 - close panel:
-  - remove id from leaf tab list
+  - remove id from its leaf
   - remove from `WorkspaceState.panels`
   - push `ClosedPanelRecord` onto `recentlyClosedPanels` (bounded stack, max 10)
-  - clear/adjust focus and selected index if needed
+  - clear/adjust focus if needed
   - if a leaf becomes empty, collapse the split tree so no empty leaf remains
 - close last panel in workspace (lifecycle cascade):
   - close the workspace: remove from `AppState.workspacesByID`
@@ -100,11 +98,11 @@ Every reducer action that mutates layout/panels must be atomic with respect to r
 - reopen panel:
   - pop from `recentlyClosedPanels`
   - re-insert panel state into `WorkspaceState.panels`
-  - insert panel id into original source leaf if it still exists, otherwise into focused leaf
+  - split the original source leaf if it still exists, otherwise split the focused leaf
   - runtime is re-created (terminal process is not recoverable; new shell session starts)
 - move panel:
   - remove id from source leaf
-  - insert id into destination leaf
+  - split destination leaf and insert into the new sibling leaf
   - preserve panel object identity
   - preserve session identity; only location metadata may change
 - detach panel to new window:
@@ -131,7 +129,6 @@ enum StateInvariantError: Error, Equatable {
     case panelMissingFromWorkspace(panelID: UUID, workspaceID: UUID)
     case panelUnreachableInPaneTree(panelID: UUID, workspaceID: UUID)
     case duplicateNodeID(UUID) // covers both leaf paneID and split nodeID
-    case invalidSelectedIndex(paneID: UUID, selectedIndex: Int, tabCount: Int)
     case invalidSplitRatio(Double)
     case invalidFocusPanel(workspaceID: UUID, panelID: UUID)
     case auxToggleInconsistency(workspaceID: UUID, panelKind: PanelKind)
@@ -150,7 +147,6 @@ func validateAppState(_ state: AppState) throws
 - Release builds:
   - emit telemetry/log event with invariant error details
   - apply only safe auto-recovery actions:
-    - `invalidSelectedIndex`: clamp to nearest valid index
     - missing selected focus panel: clear `focusedPanelID`
     - missing selected workspace id: clear `selectedWorkspaceID`
   - do not auto-recover structural corruption:

@@ -278,15 +278,9 @@ private struct PaneNodeView: View {
 
     var body: some View {
         switch node {
-        case .leaf(_, let tabPanelIDs, let selectedIndex):
-            let selectedPanelID = paneSelectedPanelID(
-                tabPanelIDs: tabPanelIDs,
-                selectedIndex: selectedIndex
-            )
-
+        case .leaf(_, let panelID):
             Group {
-                if let panelID = selectedPanelID,
-                   let panelState = workspace.panels[panelID] {
+                if let panelState = workspace.panels[panelID] {
                     PanelCardView(
                         workspaceID: workspace.id,
                         panelID: panelID,
@@ -471,22 +465,6 @@ private struct PaneNodeView: View {
             return 0
         }
         return baseRatio
-    }
-
-    private func paneSelectedPanelID(tabPanelIDs: [UUID], selectedIndex: Int) -> UUID? {
-        if focusedPanelModeActive,
-           let focusedPanelID,
-           tabPanelIDs.contains(focusedPanelID) {
-            return focusedPanelID
-        }
-        if tabPanelIDs.indices.contains(selectedIndex) {
-            return tabPanelIDs[selectedIndex]
-        }
-        if tabPanelIDs.isEmpty {
-            return nil
-        }
-        assertionFailure("PaneNodeView received an out-of-range selected index.")
-        return tabPanelIDs.first
     }
 
     private func focusModeBranchVisibility(first: PaneNode, second: PaneNode) -> (showFirst: Bool, showSecond: Bool) {

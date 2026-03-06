@@ -4,39 +4,40 @@ import Testing
 
 struct PaneNodeMutationTests {
     @Test
-    func insertPanelWithoutSelectionShiftsSelectedIndex() {
-        let paneID = UUID()
-        let panelA = UUID()
-        let panelB = UUID()
-        let panelC = UUID()
+    func removingSingleLeafPanelRemovesTree() {
+        let panelID = UUID()
+        let tree = PaneNode.leaf(paneID: UUID(), panelID: panelID)
 
-        var tree = PaneNode.leaf(paneID: paneID, tabPanelIDs: [panelA, panelB], selectedIndex: 1)
-        let inserted = tree.insertPanel(panelC, toPane: paneID, at: 0, select: false)
-        #expect(inserted)
+        let result = tree.removingPanel(panelID)
 
-        let leaf = tree.allLeafInfos[0]
-        #expect(leaf.tabPanelIDs == [panelC, panelA, panelB])
-        #expect(leaf.selectedIndex == 2)
+        #expect(result.removed)
+        #expect(result.node == nil)
     }
 
     @Test
-    func removingPanelBeforeSelectedIndexShiftsSelectionLeft() throws {
-        let paneID = UUID()
-        let panelA = UUID()
-        let panelB = UUID()
-        let panelC = UUID()
+    func removingLeafFromSplitCollapsesToSibling() {
+        let leftPaneID = UUID()
+        let rightPaneID = UUID()
+        let leftPanelID = UUID()
+        let rightPanelID = UUID()
 
-        let tree = PaneNode.leaf(paneID: paneID, tabPanelIDs: [panelA, panelB, panelC], selectedIndex: 2)
-        let result = tree.removingPanel(panelA)
-        let updatedTree = try #require(result.node)
+        let tree = PaneNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .leaf(paneID: leftPaneID, panelID: leftPanelID),
+            second: .leaf(paneID: rightPaneID, panelID: rightPanelID)
+        )
 
-        let leaf = updatedTree.allLeafInfos[0]
-        #expect(leaf.tabPanelIDs == [panelB, panelC])
-        #expect(leaf.selectedIndex == 1)
+        let result = tree.removingPanel(leftPanelID)
+        let updatedTree = result.node
+
+        #expect(result.removed)
+        #expect(updatedTree == .leaf(paneID: rightPaneID, panelID: rightPanelID))
     }
 
     @Test
-    func rightColumnPanePrefersBottomPaneWithinVerticalRightColumn() throws {
+    func rightColumnPanePrefersBottomPaneWithinVerticalRightColumn() {
         let leftPaneID = UUID()
         let topRightPaneID = UUID()
         let bottomRightPaneID = UUID()
@@ -45,13 +46,13 @@ struct PaneNodeMutationTests {
             nodeID: UUID(),
             orientation: .horizontal,
             ratio: 0.65,
-            first: .leaf(paneID: leftPaneID, tabPanelIDs: [UUID()], selectedIndex: 0),
+            first: .leaf(paneID: leftPaneID, panelID: UUID()),
             second: .split(
                 nodeID: UUID(),
                 orientation: .vertical,
                 ratio: 0.5,
-                first: .leaf(paneID: topRightPaneID, tabPanelIDs: [UUID()], selectedIndex: 0),
-                second: .leaf(paneID: bottomRightPaneID, tabPanelIDs: [UUID()], selectedIndex: 0)
+                first: .leaf(paneID: topRightPaneID, panelID: UUID()),
+                second: .leaf(paneID: bottomRightPaneID, panelID: UUID())
             )
         )
 

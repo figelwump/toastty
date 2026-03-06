@@ -57,38 +57,25 @@ public struct AppReducer {
             state.workspacesByID[workspaceID] = workspace
             return true
 
-        case .reorderPanel(let panelID, let toIndex, let paneID):
-            guard let location = locatePanel(panelID, in: state) else { return false }
-            guard location.paneID == paneID else { return false }
-            guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
-
-            guard workspace.paneTree.reorderPanel(panelID, inPane: paneID, toIndex: toIndex) else {
-                return false
-            }
-
-            workspace.focusedPanelID = panelID
-            state.workspacesByID[location.workspaceID] = workspace
-            return true
-
-        case .movePanelToPane(let panelID, let targetPaneID, let index):
+        case .movePanelToPane(let panelID, let targetPaneID):
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard let targetWorkspaceID = locateWorkspaceID(containingPaneID: targetPaneID, in: state) else { return false }
             guard sourceLocation.workspaceID == targetWorkspaceID else { return false }
             guard var workspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
+            guard sourceLocation.paneID != targetPaneID else { return false }
 
-            if sourceLocation.paneID == targetPaneID {
-                if let index {
-                    guard workspace.paneTree.reorderPanel(panelID, inPane: targetPaneID, toIndex: index) else {
-                        return false
-                    }
-                }
-            } else {
-                let removal = workspace.paneTree.removingPanel(panelID)
-                guard removal.removed, var updatedTree = removal.node else { return false }
-                guard updatedTree.insertPanel(panelID, toPane: targetPaneID, at: index, select: true) else { return false }
-                workspace.paneTree = updatedTree
+            let removal = workspace.paneTree.removingPanel(panelID)
+            guard removal.removed, var updatedTree = removal.node else { return false }
+            guard splitLeaf(
+                paneID: targetPaneID,
+                in: &updatedTree,
+                insertingPanelID: panelID,
+                orientation: .horizontal,
+                placeInsertedPanelSecond: true
+            ) else {
+                return false
             }
-
+            workspace.paneTree = updatedTree
             workspace.focusedPanelID = panelID
             state.workspacesByID[sourceLocation.workspaceID] = workspace
             return true
@@ -100,9 +87,9 @@ public struct AppReducer {
             guard let panelState = sourceWorkspace.panels[panelID] else { return false }
 
             if sourceLocation.workspaceID == targetWorkspaceID {
-                let paneDestination = targetPaneID ?? sourceLocation.paneID
+                guard let paneDestination = targetPaneID else { return false }
                 return reduce(
-                    action: .movePanelToPane(panelID: panelID, targetPaneID: paneDestination, index: nil),
+                    action: .movePanelToPane(panelID: panelID, targetPaneID: paneDestination),
                     state: &state
                 )
             }
@@ -127,7 +114,13 @@ public struct AppReducer {
 
             targetWorkspace.panels[panelID] = panelState
             var targetTree = targetWorkspace.paneTree
-            guard targetTree.insertPanel(panelID, toPane: insertionPaneID, at: nil, select: true) else {
+            guard splitLeaf(
+                paneID: insertionPaneID,
+                in: &targetTree,
+                insertingPanelID: panelID,
+                orientation: .horizontal,
+                placeInsertedPanelSecond: true
+            ) else {
                 return false
             }
             targetWorkspace.paneTree = targetTree
@@ -167,7 +160,7 @@ public struct AppReducer {
             let detachedWorkspace = WorkspaceState(
                 id: detachedWorkspaceID,
                 title: "Workspace 1",
-                paneTree: .leaf(paneID: detachedPaneID, tabPanelIDs: [panelID], selectedIndex: 0),
+                paneTree: .leaf(paneID: detachedPaneID, panelID: panelID),
                 panels: [panelID: panelState],
                 focusedPanelID: panelID,
                 unreadPanelIDs: didTransferUnreadBadge ? [panelID] : []
@@ -251,7 +244,13 @@ public struct AppReducer {
             let panelID = UUID()
             workspace.panels[panelID] = closedRecord.panelState
 
-            guard workspace.paneTree.insertPanel(panelID, toPane: targetPaneID, at: nil, select: true) else {
+            guard splitLeaf(
+                paneID: targetPaneID,
+                in: &workspace.paneTree,
+                insertingPanelID: panelID,
+                orientation: .horizontal,
+                placeInsertedPanelSecond: true
+            ) else {
                 workspace.panels.removeValue(forKey: panelID)
                 return false
             }
@@ -300,8 +299,7 @@ public struct AppReducer {
                 let terminalTree = workspace.paneTree
                 let auxLeaf = PaneNode.leaf(
                     paneID: UUID(),
-                    tabPanelIDs: [panelID],
-                    selectedIndex: 0
+                    panelID: panelID
                 )
                 workspace.paneTree = .split(
                     nodeID: UUID(),
@@ -322,8 +320,7 @@ public struct AppReducer {
 
                 let auxLeaf = PaneNode.leaf(
                     paneID: UUID(),
-                    tabPanelIDs: [panelID],
-                    selectedIndex: 0
+                    panelID: panelID
                 )
                 let splitRightColumn = PaneNode.split(
                     nodeID: UUID(),
@@ -429,7 +426,13 @@ public struct AppReducer {
                 )
             )
 
-            guard workspace.paneTree.appendPanel(panelID, toPane: paneID, select: true) else {
+            guard splitLeaf(
+                paneID: paneID,
+                in: &workspace.paneTree,
+                insertingPanelID: panelID,
+                orientation: .horizontal,
+                placeInsertedPanelSecond: true
+            ) else {
                 workspace.panels.removeValue(forKey: panelID)
                 return false
             }
@@ -515,11 +518,10 @@ public struct AppReducer {
             )
         )
 
-        let newLeaf = PaneNode.leaf(paneID: newPaneID, tabPanelIDs: [newPanelID], selectedIndex: 0)
+        let newLeaf = PaneNode.leaf(paneID: newPaneID, panelID: newPanelID)
         let originalLeaf = PaneNode.leaf(
             paneID: sourceLeaf.paneID,
-            tabPanelIDs: sourceLeaf.tabPanelIDs,
-            selectedIndex: sourceLeaf.selectedIndex
+            panelID: sourceLeaf.panelID
         )
 
         let orientation: SplitOrientation = switch direction {
@@ -743,7 +745,7 @@ public struct AppReducer {
         delta: Double
     ) -> SplitResizeResult {
         switch node {
-        case .leaf(let paneID, _, _):
+        case .leaf(let paneID, _):
             return SplitResizeResult(node: node, containsFocusedPane: paneID == focusedPaneID, didResize: false)
 
         case .split(let nodeID, let orientation, let ratio, let first, let second):
@@ -945,14 +947,9 @@ public struct AppReducer {
     }
 
     private static func selectedPanelID(in leafNode: PaneNode, workspace: WorkspaceState) -> UUID? {
-        guard case .leaf(_, let tabPanelIDs, let selectedIndex) = leafNode else {
+        guard case .leaf(_, let panelID) = leafNode else {
             return nil
         }
-        guard tabPanelIDs.isEmpty == false else {
-            return nil
-        }
-        let resolvedIndex = min(max(selectedIndex, 0), tabPanelIDs.count - 1)
-        let panelID = tabPanelIDs[resolvedIndex]
         guard workspace.panels[panelID] != nil else {
             return nil
         }
@@ -984,7 +981,7 @@ public struct AppReducer {
 
         func walk(_ node: PaneNode, rect: NormalizedRect) -> [PaneFrame] {
             switch node {
-            case .leaf(let paneID, _, _):
+            case .leaf(let paneID, _):
                 return [
                     PaneFrame(
                         paneID: paneID,
@@ -1067,8 +1064,8 @@ public struct AppReducer {
         }
 
         for leaf in workspace.paneTree.allLeafInfos {
-            for panelID in leaf.tabPanelIDs where workspace.panels[panelID] != nil {
-                return (panelID, leaf)
+            if workspace.panels[leaf.panelID] != nil {
+                return (leaf.panelID, leaf)
             }
         }
 
@@ -1091,11 +1088,6 @@ public struct AppReducer {
            workspace.panels[focusedPanelID] != nil,
            workspace.paneTree.leafContaining(panelID: focusedPanelID) != nil {
             return focusedPanelID
-        }
-
-        if let sourceLeaf = workspace.paneTree.leafNode(paneID: sourcePaneID),
-           let selectedSourcePanelID = selectedPanelID(in: sourceLeaf, workspace: workspace) {
-            return selectedSourcePanelID
         }
 
         if let previousPaneIDBeforeRemoval,
@@ -1178,8 +1170,34 @@ public struct AppReducer {
     private static func resolveAuxColumnPaneID(in workspace: WorkspaceState, auxPanelIDs: Set<UUID>) -> UUID? {
         guard auxPanelIDs.isEmpty == false else { return nil }
         return workspace.paneTree.allLeafInfos.last(where: { leaf in
-            leaf.tabPanelIDs.contains(where: { auxPanelIDs.contains($0) })
+            auxPanelIDs.contains(leaf.panelID)
         })?.paneID
+    }
+
+    private static func splitLeaf(
+        paneID: UUID,
+        in paneTree: inout PaneNode,
+        insertingPanelID: UUID,
+        orientation: SplitOrientation,
+        placeInsertedPanelSecond: Bool
+    ) -> Bool {
+        guard let existingLeafNode = paneTree.leafNode(paneID: paneID),
+              case .leaf(_, let existingPanelID) = existingLeafNode else {
+            return false
+        }
+
+        let existingNode = PaneNode.leaf(paneID: paneID, panelID: existingPanelID)
+        let insertedNode = PaneNode.leaf(paneID: UUID(), panelID: insertingPanelID)
+        let firstNode = placeInsertedPanelSecond ? existingNode : insertedNode
+        let secondNode = placeInsertedPanelSecond ? insertedNode : existingNode
+        let splitNode = PaneNode.split(
+            nodeID: UUID(),
+            orientation: orientation,
+            ratio: 0.5,
+            first: firstNode,
+            second: secondNode
+        )
+        return paneTree.replaceLeaf(paneID: paneID, with: splitNode)
     }
 
     @discardableResult

@@ -3,10 +3,11 @@ import Foundation
 public extension WorkspaceState {
     /// Returns one terminal panel per leaf in deterministic display order.
     /// The order matches the pane tree traversal (first branch before second branch)
-    /// and resolves the selected tab in each leaf.
+    /// for the single panel hosted in each leaf.
     var terminalPanelIDsInDisplayOrder: [UUID] {
         paneTree.allLeafInfos.compactMap { leaf in
-            guard let panelID = selectedPanelID(in: leaf) else {
+            let panelID = leaf.panelID
+            guard panels[panelID] != nil else {
                 return nil
             }
             guard case .terminal = panels[panelID] else {
@@ -35,16 +36,6 @@ public extension WorkspaceState {
                 .map { offset, panelID in
                     (panelID, offset + 1)
                 }
-        )
-    }
-
-    private func selectedPanelID(in leaf: PaneLeafInfo) -> UUID? {
-        if leaf.tabPanelIDs.indices.contains(leaf.selectedIndex) {
-            let selectedPanelID = leaf.tabPanelIDs[leaf.selectedIndex]
-            if panels[selectedPanelID] != nil {
-                return selectedPanelID
-            }
-        }
-        return leaf.tabPanelIDs.first(where: { panels[$0] != nil })
+            )
     }
 }

@@ -965,10 +965,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         }
 
         for leaf in workspace.paneTree.allLeafInfos {
-            for panelID in leaf.tabPanelIDs {
-                if let panelState = workspace.panels[panelID], case .terminal = panelState {
-                    return (workspaceID, panelID)
-                }
+            let panelID = leaf.panelID
+            if let panelState = workspace.panels[panelID], case .terminal = panelState {
+                return (workspaceID, panelID)
             }
         }
 
@@ -1022,9 +1021,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         let leafInfos = workspace.paneTree.allLeafInfos
         let leafPaneIDs = leafInfos.map { AutomationJSONValue.string($0.paneID.uuidString) }
-        let leafPanelIDs = leafInfos.flatMap { info in
-            info.tabPanelIDs.map { AutomationJSONValue.string($0.uuidString) }
-        }
+        let leafPanelIDs = leafInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
         let rootSplitRatio: AutomationJSONValue
         switch workspace.paneTree {
         case .split(_, _, let ratio, _, _):
@@ -1050,16 +1047,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             throw AutomationSocketError.invalidPayload("workspaceID does not exist")
         }
 
-        let terminalPanelIDs: [UUID] = workspace.paneTree.allLeafInfos.flatMap { paneInfo in
-            paneInfo.tabPanelIDs.filter { panelID in
-                guard let panelState = workspace.panels[panelID] else {
-                    return false
-                }
-                if case .terminal = panelState {
-                    return true
-                }
-                return false
+        let terminalPanelIDs: [UUID] = workspace.paneTree.allLeafInfos.compactMap { paneInfo in
+            let panelID = paneInfo.panelID
+            guard let panelState = workspace.panels[panelID] else {
+                return nil
             }
+            if case .terminal = panelState {
+                return panelID
+            }
+            return nil
         }
 
         var allRenderable = true

@@ -7,7 +7,6 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case workspaceWithoutWindow(workspaceID: UUID)
     case splitRatioOutOfBounds(workspaceID: UUID, nodeID: UUID, ratio: Double)
     case emptyPaneLeaf(workspaceID: UUID, paneID: UUID)
-    case selectedIndexOutOfBounds(workspaceID: UUID, paneID: UUID, selectedIndex: Int, tabCount: Int)
     case missingPanel(workspaceID: UUID, panelID: UUID)
     case panelMissingFromPaneTree(workspaceID: UUID, panelID: UUID)
     case panelReferencedMultipleTimes(workspaceID: UUID, panelID: UUID)
@@ -62,25 +61,10 @@ public enum StateValidator {
             var panePanelCounts: [UUID: Int] = [:]
 
             for leaf in workspace.paneTree.allLeafInfos {
-                if leaf.tabPanelIDs.isEmpty {
-                    throw StateInvariantViolation.emptyPaneLeaf(workspaceID: workspace.id, paneID: leaf.paneID)
+                guard workspace.panels[leaf.panelID] != nil else {
+                    throw StateInvariantViolation.missingPanel(workspaceID: workspace.id, panelID: leaf.panelID)
                 }
-
-                if leaf.selectedIndex < 0 || leaf.selectedIndex >= leaf.tabPanelIDs.count {
-                    throw StateInvariantViolation.selectedIndexOutOfBounds(
-                        workspaceID: workspace.id,
-                        paneID: leaf.paneID,
-                        selectedIndex: leaf.selectedIndex,
-                        tabCount: leaf.tabPanelIDs.count
-                    )
-                }
-
-                for panelID in leaf.tabPanelIDs {
-                    guard workspace.panels[panelID] != nil else {
-                        throw StateInvariantViolation.missingPanel(workspaceID: workspace.id, panelID: panelID)
-                    }
-                    panePanelCounts[panelID, default: 0] += 1
-                }
+                panePanelCounts[leaf.panelID, default: 0] += 1
             }
 
             for panelID in workspace.panels.keys {
