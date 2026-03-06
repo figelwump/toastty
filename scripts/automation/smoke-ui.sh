@@ -274,38 +274,58 @@ if [[ "$SPLIT_DOWN_FOCUSED_PANEL_ID" == "$SPLIT_RIGHT_FOCUSED_PANEL_ID" ]]; then
   exit 1
 fi
 
-send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}'
-EXPECTED_CLOSE_PANE_COUNT=$((SPLIT_DOWN_PANE_COUNT - 1))
 CLOSE_SNAPSHOT_RESPONSE=""
 RENDER_SNAPSHOT_RESPONSE=""
-CLOSE_PANE_COUNT=""
+CLOSE_PANE_COUNT="$SPLIT_DOWN_PANE_COUNT"
 ALL_RENDERABLE=""
-for _ in $(seq 1 40); do
-  CLOSE_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
-  CLOSE_PANE_COUNT="$(extract_int_field "$CLOSE_SNAPSHOT_RESPONSE" "paneCount")"
-  RENDER_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
-  ALL_RENDERABLE="$(extract_bool_field "$RENDER_SNAPSHOT_RESPONSE" "allRenderable")"
-  if [[ "$CLOSE_PANE_COUNT" == "$EXPECTED_CLOSE_PANE_COUNT" && "$ALL_RENDERABLE" == "true" ]]; then
-    break
+FINAL_CLOSE_LAYOUT_SIGNATURE=""
+FINAL_CLOSE_FOCUSED_PANEL_ID=""
+while (( CLOSE_PANE_COUNT > 1 )); do
+  send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}'
+  EXPECTED_CLOSE_PANE_COUNT=$((CLOSE_PANE_COUNT - 1))
+
+  for _ in $(seq 1 40); do
+    CLOSE_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+    CLOSE_PANE_COUNT="$(extract_int_field "$CLOSE_SNAPSHOT_RESPONSE" "paneCount")"
+    FINAL_CLOSE_LAYOUT_SIGNATURE="$(extract_string_field "$CLOSE_SNAPSHOT_RESPONSE" "layoutSignature")"
+    FINAL_CLOSE_FOCUSED_PANEL_ID="$(extract_string_field "$CLOSE_SNAPSHOT_RESPONSE" "focusedPanelID")"
+    RENDER_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
+    ALL_RENDERABLE="$(extract_bool_field "$RENDER_SNAPSHOT_RESPONSE" "allRenderable")"
+    if [[ "$CLOSE_PANE_COUNT" == "$EXPECTED_CLOSE_PANE_COUNT" && "$ALL_RENDERABLE" == "true" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+
+  if [[ "$CLOSE_PANE_COUNT" != "$EXPECTED_CLOSE_PANE_COUNT" ]]; then
+    echo "error: workspace.close-focused-panel did not reduce pane count as expected" >&2
+    echo "expected pane count: ${EXPECTED_CLOSE_PANE_COUNT}" >&2
+    echo "actual pane count: ${CLOSE_PANE_COUNT:-missing}" >&2
+    echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
+    exit 1
   fi
-  sleep 0.1
+  if [[ -z "$ALL_RENDERABLE" ]]; then
+    echo "error: render snapshot missing allRenderable field after close-focused-panel" >&2
+    echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
+    exit 1
+  fi
+  if [[ "$ALL_RENDERABLE" != "true" ]]; then
+    echo "error: one or more terminal panes are not render-attached after close-focused-panel" >&2
+    echo "workspace snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
+    echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
+    exit 1
+  fi
 done
-if [[ "$CLOSE_PANE_COUNT" != "$EXPECTED_CLOSE_PANE_COUNT" ]]; then
-  echo "error: workspace.close-focused-panel did not reduce pane count as expected" >&2
-  echo "expected pane count: ${EXPECTED_CLOSE_PANE_COUNT}" >&2
-  echo "actual pane count: ${CLOSE_PANE_COUNT:-missing}" >&2
+
+if [[ "$CLOSE_PANE_COUNT" != "1" ]]; then
+  echo "error: repeated close-focused-panel loop did not converge to a single pane" >&2
+  echo "final pane count: ${CLOSE_PANE_COUNT:-missing}" >&2
   echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
   exit 1
 fi
-if [[ -z "$ALL_RENDERABLE" ]]; then
-  echo "error: render snapshot missing allRenderable field after close-focused-panel" >&2
-  echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
-  exit 1
-fi
-if [[ "$ALL_RENDERABLE" != "true" ]]; then
-  echo "error: one or more terminal panes are not render-attached after close-focused-panel" >&2
-  echo "workspace snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
-  echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
+if [[ -z "$FINAL_CLOSE_LAYOUT_SIGNATURE" ]]; then
+  echo "error: workspace snapshot missing layoutSignature after repeated close-focused-panel checks" >&2
+  echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
   exit 1
 fi
 
@@ -320,6 +340,7 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
   TERMINAL_TARGET_PANEL_ID=""
   # Prioritize the freshly focused split panel, then fall back to known focused panels.
   TERMINAL_CANDIDATE_PANEL_IDS=(
+    "$FINAL_CLOSE_FOCUSED_PANEL_ID"
     "$SPLIT_RIGHT_FOCUSED_PANEL_ID"
     "$BASELINE_FOCUSED_PANEL_ID"
     "$NEXT_FOCUSED_PANEL_ID"

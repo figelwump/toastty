@@ -1022,6 +1022,12 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let leafInfos = workspace.paneTree.allLeafInfos
         let leafPaneIDs = leafInfos.map { AutomationJSONValue.string($0.paneID.uuidString) }
         let leafPanelIDs = leafInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
+        let slotMappings = leafInfos.map { leafInfo in
+            AutomationJSONValue.object([
+                "paneID": .string(leafInfo.paneID.uuidString),
+                "panelID": .string(leafInfo.panelID.uuidString),
+            ])
+        }
         let rootSplitRatio: AutomationJSONValue
         switch workspace.paneTree {
         case .split(_, _, let ratio, _, _):
@@ -1038,6 +1044,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             "rootSplitRatio": rootSplitRatio,
             "leafPaneIDs": .array(leafPaneIDs),
             "leafPanelIDs": .array(leafPanelIDs),
+            "slotMappings": .array(slotMappings),
+            "layoutSignature": .string(layoutSignature(for: workspace)),
         ]
     }
 
@@ -1088,6 +1096,21 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let directory = try ensureRunArtifactDirectory().appendingPathComponent("state", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         return directory
+    }
+
+    private func layoutSignature(for workspace: WorkspaceState) -> String {
+        let slotSignature = workspace.paneTree.allLeafInfos
+            .map { "\($0.paneID.uuidString):\($0.panelID.uuidString)" }
+            .joined(separator: ",")
+        let focusSignature = workspace.focusedPanelID?.uuidString ?? "nil"
+        let rootSignature: String
+        switch workspace.paneTree {
+        case .split(_, _, let ratio, _, _):
+            rootSignature = String(format: "%.6f", ratio)
+        case .leaf:
+            rootSignature = "leaf"
+        }
+        return "focus=\(focusSignature);root=\(rootSignature);slots=\(slotSignature)"
     }
 
     private func screenshotURL(fixture: String, step: String) throws -> URL {

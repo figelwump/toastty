@@ -119,6 +119,19 @@ extract_string_field() {
     | sed -nE "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"([^\"]+)\".*/\\1/p"
 }
 
+extract_bool_field() {
+  local json="$1"
+  local field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "boolean")'
+    return
+  fi
+
+  echo "$json" \
+    | tr -d '\n' \
+    | sed -nE "s/.*\"${field}\"[[:space:]]*:[[:space:]]*(true|false).*/\\1/p"
+}
+
 count_intent_logs() {
   local intent="$1"
   awk -v intent="\"intent\":\"${intent}\"" 'index($0, intent) { c++ } END { print c + 0 }' "$TRACE_LOG_PATH"
@@ -162,6 +175,137 @@ send_resize_shortcut() {
 
 send_equalize_shortcut() {
   osascript -e "tell application \"System Events\" to key code ${EQUALIZE_KEY_CODE} using {command down, control down}"
+}
+
+send_close_shortcut() {
+  osascript -e 'tell application "System Events" to keystroke "w" using {command down}'
+}
+
+send_workspace_close_menu() {
+  osascript <<'OSA'
+tell application "ToasttyApp" to activate
+delay 0.2
+tell application "System Events"
+  tell process "ToasttyApp"
+    click menu item "Close Panel" of menu "Workspace" of menu bar item "Workspace" of menu bar 1
+  end tell
+end tell
+OSA
+}
+
+strip_focus_from_layout_signature() {
+  local signature="$1"
+  echo "${signature#*;}"
+}
+
+prepare_close_equivalence_fixture() {
+  local baseline_snapshot=""
+  local baseline_pane_count_raw=""
+  local baseline_pane_count=""
+  local split_right_snapshot=""
+  local split_right_pane_count_raw=""
+  local split_down_snapshot=""
+  local split_down_pane_count_raw=""
+
+  send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+
+  for _ in $(seq 1 20); do
+    baseline_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
+    baseline_pane_count_raw="$(extract_double_field "$baseline_snapshot" "paneCount")"
+    if [[ -n "$baseline_pane_count_raw" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "$baseline_pane_count_raw" ]]; then
+    echo "error: close-equivalence baseline snapshot missing paneCount" >&2
+    echo "snapshot response: ${baseline_snapshot}" >&2
+    exit 1
+  fi
+  baseline_pane_count="${baseline_pane_count_raw%.*}"
+
+  send_request "automation.perform_action" '{"action":"workspace.split.right"}' >/dev/null
+  for _ in $(seq 1 20); do
+    split_right_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
+    split_right_pane_count_raw="$(extract_double_field "$split_right_snapshot" "paneCount")"
+    if [[ -n "$split_right_pane_count_raw" && "${split_right_pane_count_raw%.*}" -ge $((baseline_pane_count + 1)) ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "$split_right_pane_count_raw" ]]; then
+    echo "error: close-equivalence split-right snapshot missing paneCount" >&2
+    echo "snapshot response: ${split_right_snapshot}" >&2
+    exit 1
+  fi
+
+  send_request "automation.perform_action" '{"action":"workspace.split.down"}' >/dev/null
+  for _ in $(seq 1 20); do
+    split_down_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
+    split_down_pane_count_raw="$(extract_double_field "$split_down_snapshot" "paneCount")"
+    if [[ -n "$split_down_pane_count_raw" && "${split_down_pane_count_raw%.*}" -ge $((baseline_pane_count + 2)) ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "$split_down_pane_count_raw" ]]; then
+    echo "error: close-equivalence split-down snapshot missing paneCount" >&2
+    echo "snapshot response: ${split_down_snapshot}" >&2
+    exit 1
+  fi
+
+  PREPARED_CLOSE_PANE_COUNT="${split_down_pane_count_raw%.*}"
+}
+
+capture_close_outcome() {
+  local path_kind="$1"
+  local close_snapshot=""
+  local render_snapshot=""
+  local close_pane_count=""
+  local all_renderable=""
+  local layout_signature=""
+  local expected_close_count=""
+
+  prepare_close_equivalence_fixture
+  expected_close_count=$((PREPARED_CLOSE_PANE_COUNT - 1))
+  focus_app_terminal
+
+  case "$path_kind" in
+    action)
+      send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}' >/dev/null
+      ;;
+    menu)
+      send_workspace_close_menu
+      ;;
+    shortcut)
+      send_close_shortcut
+      ;;
+    *)
+      echo "error: unknown close path kind: $path_kind" >&2
+      exit 1
+      ;;
+  esac
+
+  for _ in $(seq 1 40); do
+    close_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
+    close_pane_count="$(extract_double_field "$close_snapshot" "paneCount")"
+    layout_signature="$(extract_string_field "$close_snapshot" "layoutSignature")"
+    render_snapshot="$(send_request "automation.workspace_render_snapshot" '{}')"
+    all_renderable="$(extract_bool_field "$render_snapshot" "allRenderable")"
+    if [[ -n "$close_pane_count" && "${close_pane_count%.*}" == "$expected_close_count" && -n "$layout_signature" && "$all_renderable" == "true" ]]; then
+      printf '%s' "$layout_signature"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "error: ${path_kind} close path did not reach expected close outcome" >&2
+  echo "expected pane count: ${expected_close_count}" >&2
+  echo "observed pane count: ${close_pane_count:-<missing>}" >&2
+  echo "layout signature: ${layout_signature:-<missing>}" >&2
+  echo "workspace snapshot response: ${close_snapshot}" >&2
+  echo "render snapshot response: ${render_snapshot}" >&2
+  exit 1
 }
 
 cd "$ROOT_DIR"
@@ -390,6 +534,24 @@ if [[ -z "$SPLIT_DOWN_PANE_COUNT" || "$SPLIT_DOWN_PANE_COUNT" -lt "$EXPECTED_SPL
   exit 1
 fi
 
+ACTION_CLOSE_SIGNATURE="$(capture_close_outcome action)"
+MENU_CLOSE_SIGNATURE="$(capture_close_outcome menu)"
+SHORTCUT_CLOSE_SIGNATURE="$(capture_close_outcome shortcut)"
+ACTION_CLOSE_STRUCTURE="$(strip_focus_from_layout_signature "$ACTION_CLOSE_SIGNATURE")"
+MENU_CLOSE_STRUCTURE="$(strip_focus_from_layout_signature "$MENU_CLOSE_SIGNATURE")"
+SHORTCUT_CLOSE_STRUCTURE="$(strip_focus_from_layout_signature "$SHORTCUT_CLOSE_SIGNATURE")"
+
+if [[ "$ACTION_CLOSE_STRUCTURE" != "$MENU_CLOSE_STRUCTURE" || "$ACTION_CLOSE_STRUCTURE" != "$SHORTCUT_CLOSE_STRUCTURE" ]]; then
+  echo "error: close paths diverged structurally between action, menu, and Cmd+W" >&2
+  echo "action close structure: ${ACTION_CLOSE_STRUCTURE}" >&2
+  echo "menu close structure: ${MENU_CLOSE_STRUCTURE}" >&2
+  echo "shortcut close structure: ${SHORTCUT_CLOSE_STRUCTURE}" >&2
+  echo "action close layout signature: ${ACTION_CLOSE_SIGNATURE}" >&2
+  echo "menu close layout signature: ${MENU_CLOSE_SIGNATURE}" >&2
+  echo "shortcut close layout signature: ${SHORTCUT_CLOSE_SIGNATURE}" >&2
+  exit 1
+fi
+
 if [[ ! -f "$TRACE_LOG_PATH" ]]; then
   echo "error: trace log file was not created: $TRACE_LOG_PATH" >&2
   exit 1
@@ -447,6 +609,12 @@ echo "focus baseline panel: $SPLIT_BASELINE_FOCUS_ID"
 echo "focus after split-right: $SPLIT_RIGHT_FOCUS_ID"
 echo "focus after focus-next: $FOCUS_NEXT_PANEL_ID"
 echo "focus after focus-previous: $FOCUS_PREVIOUS_PANEL_ID"
+echo "action close structure: $ACTION_CLOSE_STRUCTURE"
+echo "menu close structure: $MENU_CLOSE_STRUCTURE"
+echo "shortcut close structure: $SHORTCUT_CLOSE_STRUCTURE"
+echo "action close layout signature: $ACTION_CLOSE_SIGNATURE"
+echo "menu close layout signature: $MENU_CLOSE_SIGNATURE"
+echo "shortcut close layout signature: $SHORTCUT_CLOSE_SIGNATURE"
 echo "split.right intent logs: $SPLIT_RIGHT_LOG_COUNT"
 echo "split.down intent logs: $SPLIT_DOWN_LOG_COUNT"
 echo "focus.next intent logs: $FOCUS_NEXT_LOG_COUNT"

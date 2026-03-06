@@ -509,11 +509,13 @@ private extension TerminalRuntimeRegistry {
         }
 
         for leaf in workspace.paneTree.allLeafInfos {
-            for panelID in leaf.tabPanelIDs where workspace.paneTree.leafContaining(panelID: panelID) != nil {
-                guard let panelState = workspace.panels[panelID] else { continue }
-                if panelState.kind == .terminal {
-                    return panelID
-                }
+            let panelID = leaf.panelID
+            guard workspace.paneTree.leafContaining(panelID: panelID) != nil,
+                  let panelState = workspace.panels[panelID] else {
+                continue
+            }
+            if panelState.kind == .terminal {
+                return panelID
             }
         }
         return nil
@@ -583,15 +585,9 @@ private extension TerminalRuntimeRegistry {
         }
 
         for leaf in workspace.paneTree.allLeafInfos {
-            guard leaf.tabPanelIDs.isEmpty == false else { continue }
-            let selectedIndex = min(max(leaf.selectedIndex, 0), leaf.tabPanelIDs.count - 1)
-            let preferredPanelID = leaf.tabPanelIDs[selectedIndex]
-            if workspace.panels[preferredPanelID] != nil {
-                return preferredPanelID
-            }
-
-            if let firstValidPanelID = leaf.tabPanelIDs.first(where: { workspace.panels[$0] != nil }) {
-                return firstValidPanelID
+            let panelID = leaf.panelID
+            if workspace.panels[panelID] != nil {
+                return panelID
             }
         }
 
@@ -1211,9 +1207,7 @@ private extension TerminalRuntimeRegistry {
     func visibleTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
         var panelIDs: Set<UUID> = []
         for leaf in workspace.paneTree.allLeafInfos {
-            guard leaf.tabPanelIDs.isEmpty == false else { continue }
-            let selectedIndex = min(max(leaf.selectedIndex, 0), leaf.tabPanelIDs.count - 1)
-            let selectedPanelID = leaf.tabPanelIDs[selectedIndex]
+            let selectedPanelID = leaf.panelID
             guard let panelState = workspace.panels[selectedPanelID],
                   case .terminal = panelState else {
                 continue
