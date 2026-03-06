@@ -967,53 +967,23 @@ public struct AppReducer {
     }
 
     private static func slotFrames(for layoutTree: LayoutNode) -> [SlotFrame] {
-        struct NormalizedRect {
-            let minX: Double
-            let minY: Double
-            let width: Double
-            let height: Double
-
-            var maxX: Double { minX + width }
-            var maxY: Double { minY + height }
-            var centerX: Double { minX + (width * 0.5) }
-            var centerY: Double { minY + (height * 0.5) }
-        }
-
-        func walk(_ node: LayoutNode, rect: NormalizedRect) -> [SlotFrame] {
-            switch node {
-            case .slot(let slotID, _):
-                return [
-                    SlotFrame(
-                        slotID: slotID,
-                        minX: rect.minX,
-                        minY: rect.minY,
-                        maxX: rect.maxX,
-                        maxY: rect.maxY,
-                        centerX: rect.centerX,
-                        centerY: rect.centerY
-                    ),
-                ]
-            case .split(_, let orientation, let ratio, let first, let second):
-                if orientation == .horizontal {
-                    let firstWidth = rect.width * ratio
-                    let secondWidth = max(rect.width - firstWidth, 0)
-                    let firstRect = NormalizedRect(minX: rect.minX, minY: rect.minY, width: firstWidth, height: rect.height)
-                    let secondRect = NormalizedRect(minX: rect.minX + firstWidth, minY: rect.minY, width: secondWidth, height: rect.height)
-                    return walk(first, rect: firstRect) + walk(second, rect: secondRect)
-                }
-
-                let firstHeight = rect.height * ratio
-                let secondHeight = max(rect.height - firstHeight, 0)
-                let firstRect = NormalizedRect(minX: rect.minX, minY: rect.minY, width: rect.width, height: firstHeight)
-                let secondRect = NormalizedRect(minX: rect.minX, minY: rect.minY + firstHeight, width: rect.width, height: secondHeight)
-                return walk(first, rect: firstRect) + walk(second, rect: secondRect)
-            }
-        }
-
-        return walk(
-            layoutTree,
-            rect: NormalizedRect(minX: 0, minY: 0, width: 1, height: 1)
+        layoutTree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 1, height: 1),
+            dividerThickness: 0
         )
+        .slots
+        .map { placement in
+            let frame = placement.frame
+            return SlotFrame(
+                slotID: placement.slotID,
+                minX: frame.minX,
+                minY: frame.minY,
+                maxX: frame.maxX,
+                maxY: frame.maxY,
+                centerX: frame.midX,
+                centerY: frame.midY
+            )
+        }
     }
 
     private static func closestSlotID(

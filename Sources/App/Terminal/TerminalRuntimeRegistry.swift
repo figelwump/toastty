@@ -179,17 +179,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
         guard let controller = controllers[panelID] else {
             return false
         }
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        let hasResolvedShell = processWorkingDirectoryResolver.resolveWorkingDirectory(for: panelID) != nil
-        let hasNativeCWDSignal = panelHasNativeCWDSignal(panelID: panelID)
-        let readyForInput = hasResolvedShell || hasNativeCWDSignal
-        #else
-        let readyForInput = false
-        #endif
         return controller.automationSendText(
             text,
-            submit: submit,
-            readyForInput: readyForInput
+            submit: submit
         )
     }
 
@@ -2979,9 +2971,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         return window.makeFirstResponder(hostedView)
     }
 
-    func automationSendText(_ text: String, submit: Bool, readyForInput: Bool) -> Bool {
+    func automationSendText(_ text: String, submit: Bool) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        guard let ghosttySurface, readyForInput, isReadyForAutomationInput(), focusHostViewIfNeeded() else {
+        // Automation input should follow actual surface/host readiness. Process
+        // cwd inference can lag behind fresh split creation and block panels
+        // that are already interactive from Ghostty's perspective.
+        guard let ghosttySurface, isReadyForAutomationInput(), focusHostViewIfNeeded() else {
             return false
         }
 

@@ -112,21 +112,49 @@ struct WorkspaceView: View {
             limit: TerminalShortcutConfig.maxShortcutCount
         )
         let renderedLayoutNode = focusedRenderNode(in: workspace)
-        LayoutNodeView(
-            node: renderedLayoutNode,
-            workspace: workspace,
-            store: store,
-            terminalRuntimeRegistry: terminalRuntimeRegistry,
-            globalFontPoints: store.state.globalTerminalFontPoints,
-            focusedPanelID: workspace.focusedPanelID,
-            appIsActive: appIsActive,
-            unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
-            terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-        )
-        .id(WorkspaceRenderIdentity(
-            workspaceID: workspace.id,
-            layoutIdentity: renderedLayoutNode.structuralIdentity
-        ))
+        let renderIdentity = workspaceRenderIdentity(for: workspace)
+        GeometryReader { geometry in
+            let projection = renderedLayoutNode.projectLayout(
+                in: LayoutFrame(
+                    minX: 0,
+                    minY: 0,
+                    width: geometry.size.width,
+                    height: geometry.size.height
+                ),
+                dividerThickness: 1
+            )
+            ZStack(alignment: .topLeading) {
+                ForEach(projection.slots) { placement in
+                    SlotPlacementView(
+                        placement: placement,
+                        workspace: workspace,
+                        store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        globalFontPoints: store.state.globalTerminalFontPoints,
+                        appIsActive: appIsActive,
+                        unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
+                        terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
+                    )
+                }
+
+                ForEach(projection.dividers) { placement in
+                    Rectangle()
+                        .fill(ToastyTheme.slotDivider)
+                        .frame(
+                            width: CGFloat(placement.frame.width),
+                            height: CGFloat(placement.frame.height)
+                        )
+                        .offset(
+                            x: CGFloat(placement.frame.minX),
+                            y: CGFloat(placement.frame.minY)
+                        )
+                        .allowsHitTesting(false)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .clipped()
+        }
+        .id(renderIdentity)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
@@ -143,6 +171,15 @@ struct WorkspaceView: View {
         // Focused-panel mode intentionally renders the focused slot leaf as the
         // workspace root, mirroring Ghostty's zoomed split rendering.
         return focusedNode
+    }
+
+    private func workspaceRenderIdentity(for workspace: WorkspaceState) -> WorkspaceRenderIdentity {
+        guard workspace.focusedPanelModeActive,
+              let focusedPanelID = workspace.focusedPanelID,
+              let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID) else {
+            return WorkspaceRenderIdentity(workspaceID: workspace.id, zoomedSlotID: nil)
+        }
+        return WorkspaceRenderIdentity(workspaceID: workspace.id, zoomedSlotID: focusedSlot.slotID)
     }
 
     @ViewBuilder
@@ -278,7 +315,7 @@ struct WorkspaceView: View {
 
 private struct WorkspaceRenderIdentity: Hashable {
     let workspaceID: UUID
-    let layoutIdentity: LayoutStructuralIdentity
+    let zoomedSlotID: UUID?
 }
 
 private struct SelectedWorkspaceUnreadSignature: Equatable {
@@ -287,137 +324,48 @@ private struct SelectedWorkspaceUnreadSignature: Equatable {
     let unreadPanelIDs: Set<UUID>
 }
 
-private struct LayoutNodeView: View {
-    let node: LayoutNode
+private struct SlotPlacementView: View {
+    let placement: LayoutSlotPlacement
     let workspace: WorkspaceState
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let globalFontPoints: Double
-    let focusedPanelID: UUID?
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
 
     var body: some View {
-        switch node {
-        case .slot(let slotID, let panelID):
-            Group {
-                if let panelState = workspace.panels[panelID] {
-                    PanelCardView(
-                        workspaceID: workspace.id,
-                        panelID: panelID,
-                        panelState: panelState,
-                        focusedPanelID: workspace.focusedPanelID,
-                        hasUnreadNotification: workspace.unreadPanelIDs.contains(panelID),
-                        shortcutNumber: terminalShortcutNumbersByPanelID[panelID],
-                        globalFontPoints: globalFontPoints,
-                        appIsActive: appIsActive,
-                        unfocusedSplitStyle: unfocusedSplitStyle,
-                        store: store,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry
-                    )
-                } else {
-                    Color.clear
-                }
+        Group {
+            if let panelState = workspace.panels[placement.panelID] {
+                PanelCardView(
+                    workspaceID: workspace.id,
+                    panelID: placement.panelID,
+                    panelState: panelState,
+                    focusedPanelID: workspace.focusedPanelID,
+                    hasUnreadNotification: workspace.unreadPanelIDs.contains(placement.panelID),
+                    shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
+                    globalFontPoints: globalFontPoints,
+                    appIsActive: appIsActive,
+                    unfocusedSplitStyle: unfocusedSplitStyle,
+                    store: store,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                )
+            } else {
+                Color.clear
             }
-            // Slot containers stay keyed by stable slot identity so panel swaps
-            // do not remount the outer card chrome.
-            .id(slotID)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-        case .split(_, let orientation, let ratio, let first, let second):
-            GeometryReader { geometry in
-                let baseRatio = min(max(ratio, 0.1), 0.9)
-
-                Group {
-                    if orientation == .horizontal {
-                        let dividerThickness: CGFloat = 1
-                        let adjustedAvailableWidth = max(geometry.size.width - dividerThickness, 0)
-                        let firstWidth = adjustedAvailableWidth * baseRatio
-                        let secondWidth = max(adjustedAvailableWidth - firstWidth, 0)
-
-                        HStack(spacing: 0) {
-                            LayoutNodeView(
-                                node: first,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                appIsActive: appIsActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle,
-                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                            )
-                            // Split subtree identity is derived from layout topology.
-                            .id(first.structuralIdentity)
-                            .frame(width: firstWidth, height: geometry.size.height)
-
-                            Rectangle()
-                                .fill(ToastyTheme.slotDivider)
-                                .frame(width: dividerThickness, height: geometry.size.height)
-
-                            LayoutNodeView(
-                                node: second,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                appIsActive: appIsActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle,
-                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                            )
-                            .id(second.structuralIdentity)
-                            .frame(width: secondWidth, height: geometry.size.height)
-                        }
-                        .clipped()
-                    } else {
-                        let dividerThickness: CGFloat = 1
-                        let adjustedAvailableHeight = max(geometry.size.height - dividerThickness, 0)
-                        let firstHeight = adjustedAvailableHeight * baseRatio
-                        let secondHeight = max(adjustedAvailableHeight - firstHeight, 0)
-
-                        VStack(spacing: 0) {
-                            LayoutNodeView(
-                                node: first,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                appIsActive: appIsActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle,
-                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                            )
-                            .id(first.structuralIdentity)
-                            .frame(width: geometry.size.width, height: firstHeight)
-
-                            Rectangle()
-                                .fill(ToastyTheme.slotDivider)
-                                .frame(width: geometry.size.width, height: dividerThickness)
-
-                            LayoutNodeView(
-                                node: second,
-                                workspace: workspace,
-                                store: store,
-                                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                                globalFontPoints: globalFontPoints,
-                                focusedPanelID: focusedPanelID,
-                                appIsActive: appIsActive,
-                                unfocusedSplitStyle: unfocusedSplitStyle,
-                                terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
-                            )
-                            .id(second.structuralIdentity)
-                            .frame(width: geometry.size.width, height: secondHeight)
-                        }
-                        .clipped()
-                    }
-                }
-                .animation(.easeInOut(duration: 0.2), value: baseRatio)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .id(node.structuralIdentity)
         }
+        // Slot containers stay keyed by stable slot identity so topology changes
+        // do not remount the panel host for an existing slot.
+        .id(placement.slotID)
+        .frame(
+            width: CGFloat(placement.frame.width),
+            height: CGFloat(placement.frame.height),
+            alignment: .topLeading
+        )
+        .offset(
+            x: CGFloat(placement.frame.minX),
+            y: CGFloat(placement.frame.minY)
+        )
     }
 }
 
