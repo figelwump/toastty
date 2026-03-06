@@ -6,6 +6,10 @@
 - Scope owner: Codex + Vishal
 - Execution model: new git worktree branch, direct cutover
 
+## Execution Notes
+- 2026-03-05: Chunk 1 landed close-path automation guardrails and projection snapshot fields in commit `06a259f`.
+- 2026-03-05: Chunk 2 derives structural identity from split orientation plus recursive slot IDs, explicitly ignoring split ratios and panel IDs so resize/equalize and panel replacement do not force split-subtree remounts.
+
 ## Terminology
 - This document uses:
   - `layout tree` = the split topology inside a workspace

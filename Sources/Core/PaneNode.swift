@@ -27,6 +27,18 @@ public struct PaneSplitInfo: Equatable, Sendable {
     }
 }
 
+/// Derived render identity for layout topology.
+/// This intentionally ignores split ratios and panel content so only topology
+/// and stable slot placement force split-subtree remounts.
+public indirect enum PaneStructuralIdentity: Equatable, Hashable, Sendable {
+    case leaf(paneID: UUID)
+    case split(
+        orientation: SplitOrientation,
+        first: PaneStructuralIdentity,
+        second: PaneStructuralIdentity
+    )
+}
+
 public indirect enum PaneNode: Equatable, Sendable {
     case leaf(paneID: UUID, panelID: UUID)
     case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: PaneNode, second: PaneNode)
@@ -90,6 +102,19 @@ extension PaneNode: Codable {
 }
 
 public extension PaneNode {
+    var structuralIdentity: PaneStructuralIdentity {
+        switch self {
+        case .leaf(let paneID, _):
+            return .leaf(paneID: paneID)
+        case .split(_, let orientation, _, let first, let second):
+            return .split(
+                orientation: orientation,
+                first: first.structuralIdentity,
+                second: second.structuralIdentity
+            )
+        }
+    }
+
     var allLeafInfos: [PaneLeafInfo] {
         switch self {
         case .leaf(let paneID, let panelID):
