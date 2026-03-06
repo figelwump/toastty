@@ -1,0 +1,59 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Toastty App Icon Concept 01 - Bakery Window</title>
+  <desc>Warm amber macOS-style app icon featuring a toast character with butter and subtle split-pane hints.</desc>
+  <defs>
+    <linearGradient id="bgA" x1="170" y1="120" x2="870" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F7BC56"/>
+      <stop offset="0.55" stop-color="#DB7F26"/>
+      <stop offset="1" stop-color="#6A3415"/>
+    </linearGradient>
+    <linearGradient id="faceA" x1="512" y1="268" x2="512" y2="758" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F6D8A9"/>
+      <stop offset="1" stop-color="#D59353"/>
+    </linearGradient>
+    <linearGradient id="crustA" x1="512" y1="246" x2="512" y2="770" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8D4A20"/>
+      <stop offset="1" stop-color="#522611"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 462) rotate(90) scale(370 360)">
+      <stop offset="0" stop-color="#FFF2C8"/>
+      <stop offset="0.45" stop-color="#FFD47C" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#F5A623" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="shadowA" x="74" y="68" width="876" height="924" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#381708" flood-opacity="0.36"/>
+    </filter>
+    <filter id="steamBlurA" x="248" y="110" width="534" height="220" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadowA)">
+    <rect x="112" y="88" width="800" height="800" rx="188" fill="url(#bgA)"/>
+    <rect x="112" y="88" width="800" height="800" rx="188" fill="url(#glowA)"/>
+    <rect x="126" y="102" width="772" height="772" rx="174" stroke="rgba(255,255,255,0.18)" stroke-width="2"/>
+    <rect x="146" y="128" width="732" height="732" rx="162" stroke="rgba(90,37,16,0.24)" stroke-width="10"/>
+  </g>
+
+  <g opacity="0.54" filter="url(#steamBlurA)">
+    <path d="M363 298C334 250 346 212 384 179" stroke="#FFF4D3" stroke-width="20" stroke-linecap="round"/>
+    <path d="M507 272C478 224 489 185 531 148" stroke="#FFF4D3" stroke-width="20" stroke-linecap="round"/>
+    <path d="M651 302C619 250 633 210 674 176" stroke="#FFF4D3" stroke-width="20" stroke-linecap="round"/>
+  </g>
+
+  <path d="M350 744V418C350 302 432 246 512 246C592 246 674 302 674 418V744C674 772 651 796 623 796H401C373 796 350 772 350 744Z" fill="url(#crustA)"/>
+  <path d="M382 724V430C382 336 449 288 512 288C575 288 642 336 642 430V724C642 743 627 758 608 758H416C397 758 382 743 382 724Z" fill="url(#faceA)"/>
+  <path d="M420 412C445 360 476 332 512 332C548 332 579 360 604 412" stroke="#FFE6BA" stroke-width="20" stroke-linecap="round" opacity="0.65"/>
+
+  <rect x="460" y="452" width="104" height="82" rx="20" fill="#F7D55B"/>
+  <rect x="471" y="463" width="82" height="60" rx="16" fill="#FFE17B" opacity="0.52"/>
+
+  <rect x="430" y="556" width="24" height="110" rx="12" fill="#9A6233" opacity="0.34"/>
+  <rect x="570" y="556" width="24" height="110" rx="12" fill="#9A6233" opacity="0.34"/>
+  <path d="M468 664C489 686 534 686 556 664" stroke="#5B2A16" stroke-width="18" stroke-linecap="round"/>
+
+  <circle cx="454" cy="614" r="16" fill="#5B2A16"/>
+  <circle cx="570" cy="614" r="16" fill="#5B2A16"/>
+
+  <path d="M290 818H734" stroke="rgba(67,29,12,0.24)" stroke-width="22" stroke-linecap="round"/>
+</svg>
