@@ -72,11 +72,11 @@
 - `scripts/automation/check.sh` runs `tuist generate`, `tuist build`, and `xcodebuild test` for scheme `toastty-Workspace` (update the script if scheme naming changes).
 - `check.sh` follows manifest defaults: Ghostty links automatically when xcframework is present unless disabled by env.
 - split/focus workflow assertions in smoke:
-  - `automation.workspace_snapshot` now reports focused panel and pane counts for deterministic assertions.
+  - `automation.workspace_snapshot` now reports focused panel and slot counts for deterministic assertions.
   - smoke script validates:
-    - `workspace.focus-pane.next` changes focus
-    - `workspace.focus-pane.previous` restores baseline focus
-    - `workspace.split.right` increases pane count
+    - `workspace.focus-slot.next` changes focus
+    - `workspace.focus-slot.previous` restores baseline focus
+    - `workspace.split.right` increases slot count
     - `workspace.resize-split.right` increases root split ratio
     - `workspace.equalize-splits` normalizes root split ratio to `0.5`
   - Ghostty terminal viewport I/O assertion is deterministic in smoke (Ghostty-enabled path):

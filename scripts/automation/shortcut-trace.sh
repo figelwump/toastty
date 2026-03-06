@@ -200,41 +200,41 @@ strip_focus_from_layout_signature() {
 
 prepare_close_equivalence_fixture() {
   local baseline_snapshot=""
-  local baseline_pane_count_raw=""
-  local baseline_pane_count=""
+  local baseline_slot_count_raw=""
+  local baseline_slot_count=""
   local split_right_snapshot=""
-  local split_right_pane_count_raw=""
+  local split_right_slot_count_raw=""
   local split_down_snapshot=""
-  local split_down_pane_count_raw=""
+  local split_down_slot_count_raw=""
 
   send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
 
   for _ in $(seq 1 20); do
     baseline_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
-    baseline_pane_count_raw="$(extract_double_field "$baseline_snapshot" "paneCount")"
-    if [[ -n "$baseline_pane_count_raw" ]]; then
+    baseline_slot_count_raw="$(extract_double_field "$baseline_snapshot" "slotCount")"
+    if [[ -n "$baseline_slot_count_raw" ]]; then
       break
     fi
     sleep 0.1
   done
-  if [[ -z "$baseline_pane_count_raw" ]]; then
-    echo "error: close-equivalence baseline snapshot missing paneCount" >&2
+  if [[ -z "$baseline_slot_count_raw" ]]; then
+    echo "error: close-equivalence baseline snapshot missing slotCount" >&2
     echo "snapshot response: ${baseline_snapshot}" >&2
     exit 1
   fi
-  baseline_pane_count="${baseline_pane_count_raw%.*}"
+  baseline_slot_count="${baseline_slot_count_raw%.*}"
 
   send_request "automation.perform_action" '{"action":"workspace.split.right"}' >/dev/null
   for _ in $(seq 1 20); do
     split_right_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
-    split_right_pane_count_raw="$(extract_double_field "$split_right_snapshot" "paneCount")"
-    if [[ -n "$split_right_pane_count_raw" && "${split_right_pane_count_raw%.*}" -ge $((baseline_pane_count + 1)) ]]; then
+    split_right_slot_count_raw="$(extract_double_field "$split_right_snapshot" "slotCount")"
+    if [[ -n "$split_right_slot_count_raw" && "${split_right_slot_count_raw%.*}" -ge $((baseline_slot_count + 1)) ]]; then
       break
     fi
     sleep 0.1
   done
-  if [[ -z "$split_right_pane_count_raw" ]]; then
-    echo "error: close-equivalence split-right snapshot missing paneCount" >&2
+  if [[ -z "$split_right_slot_count_raw" ]]; then
+    echo "error: close-equivalence split-right snapshot missing slotCount" >&2
     echo "snapshot response: ${split_right_snapshot}" >&2
     exit 1
   fi
@@ -242,32 +242,32 @@ prepare_close_equivalence_fixture() {
   send_request "automation.perform_action" '{"action":"workspace.split.down"}' >/dev/null
   for _ in $(seq 1 20); do
     split_down_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
-    split_down_pane_count_raw="$(extract_double_field "$split_down_snapshot" "paneCount")"
-    if [[ -n "$split_down_pane_count_raw" && "${split_down_pane_count_raw%.*}" -ge $((baseline_pane_count + 2)) ]]; then
+    split_down_slot_count_raw="$(extract_double_field "$split_down_snapshot" "slotCount")"
+    if [[ -n "$split_down_slot_count_raw" && "${split_down_slot_count_raw%.*}" -ge $((baseline_slot_count + 2)) ]]; then
       break
     fi
     sleep 0.1
   done
-  if [[ -z "$split_down_pane_count_raw" ]]; then
-    echo "error: close-equivalence split-down snapshot missing paneCount" >&2
+  if [[ -z "$split_down_slot_count_raw" ]]; then
+    echo "error: close-equivalence split-down snapshot missing slotCount" >&2
     echo "snapshot response: ${split_down_snapshot}" >&2
     exit 1
   fi
 
-  PREPARED_CLOSE_PANE_COUNT="${split_down_pane_count_raw%.*}"
+  PREPARED_CLOSE_SLOT_COUNT="${split_down_slot_count_raw%.*}"
 }
 
 capture_close_outcome() {
   local path_kind="$1"
   local close_snapshot=""
   local render_snapshot=""
-  local close_pane_count=""
+  local close_slot_count=""
   local all_renderable=""
   local layout_signature=""
   local expected_close_count=""
 
   prepare_close_equivalence_fixture
-  expected_close_count=$((PREPARED_CLOSE_PANE_COUNT - 1))
+  expected_close_count=$((PREPARED_CLOSE_SLOT_COUNT - 1))
   focus_app_terminal
 
   case "$path_kind" in
@@ -288,11 +288,11 @@ capture_close_outcome() {
 
   for _ in $(seq 1 40); do
     close_snapshot="$(send_request "automation.workspace_snapshot" '{}')"
-    close_pane_count="$(extract_double_field "$close_snapshot" "paneCount")"
+    close_slot_count="$(extract_double_field "$close_snapshot" "slotCount")"
     layout_signature="$(extract_string_field "$close_snapshot" "layoutSignature")"
     render_snapshot="$(send_request "automation.workspace_render_snapshot" '{}')"
     all_renderable="$(extract_bool_field "$render_snapshot" "allRenderable")"
-    if [[ -n "$close_pane_count" && "${close_pane_count%.*}" == "$expected_close_count" && -n "$layout_signature" && "$all_renderable" == "true" ]]; then
+    if [[ -n "$close_slot_count" && "${close_slot_count%.*}" == "$expected_close_count" && -n "$layout_signature" && "$all_renderable" == "true" ]]; then
       printf '%s' "$layout_signature"
       return 0
     fi
@@ -300,8 +300,8 @@ capture_close_outcome() {
   done
 
   echo "error: ${path_kind} close path did not reach expected close outcome" >&2
-  echo "expected pane count: ${expected_close_count}" >&2
-  echo "observed pane count: ${close_pane_count:-<missing>}" >&2
+  echo "expected slot count: ${expected_close_count}" >&2
+  echo "observed slot count: ${close_slot_count:-<missing>}" >&2
   echo "layout signature: ${layout_signature:-<missing>}" >&2
   echo "workspace snapshot response: ${close_snapshot}" >&2
   echo "render snapshot response: ${render_snapshot}" >&2
@@ -427,48 +427,48 @@ fi
 
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
 SPLIT_BASELINE_SNAPSHOT=""
-SPLIT_BASELINE_PANE_COUNT_RAW=""
+SPLIT_BASELINE_SLOT_COUNT_RAW=""
 SPLIT_BASELINE_FOCUS_ID=""
 for _ in $(seq 1 20); do
   SPLIT_BASELINE_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
-  SPLIT_BASELINE_PANE_COUNT_RAW="$(extract_double_field "$SPLIT_BASELINE_SNAPSHOT" "paneCount")"
+  SPLIT_BASELINE_SLOT_COUNT_RAW="$(extract_double_field "$SPLIT_BASELINE_SNAPSHOT" "slotCount")"
   SPLIT_BASELINE_FOCUS_ID="$(extract_string_field "$SPLIT_BASELINE_SNAPSHOT" "focusedPanelID")"
-  if [[ -n "$SPLIT_BASELINE_PANE_COUNT_RAW" && -n "$SPLIT_BASELINE_FOCUS_ID" ]]; then
+  if [[ -n "$SPLIT_BASELINE_SLOT_COUNT_RAW" && -n "$SPLIT_BASELINE_FOCUS_ID" ]]; then
     break
   fi
   sleep 0.1
 done
-if [[ -z "$SPLIT_BASELINE_PANE_COUNT_RAW" || -z "$SPLIT_BASELINE_FOCUS_ID" ]]; then
+if [[ -z "$SPLIT_BASELINE_SLOT_COUNT_RAW" || -z "$SPLIT_BASELINE_FOCUS_ID" ]]; then
   echo "error: missing split-workflow baseline snapshot fields" >&2
   echo "snapshot response: ${SPLIT_BASELINE_SNAPSHOT}" >&2
   exit 1
 fi
-SPLIT_BASELINE_PANE_COUNT="${SPLIT_BASELINE_PANE_COUNT_RAW%.*}"
+SPLIT_BASELINE_SLOT_COUNT="${SPLIT_BASELINE_SLOT_COUNT_RAW%.*}"
 
 focus_app_terminal
 
 send_split_right_shortcut
 SPLIT_RIGHT_SNAPSHOT=""
-SPLIT_RIGHT_PANE_COUNT=""
+SPLIT_RIGHT_SLOT_COUNT=""
 SPLIT_RIGHT_FOCUS_ID=""
-EXPECTED_SPLIT_RIGHT_COUNT=$((SPLIT_BASELINE_PANE_COUNT + 1))
+EXPECTED_SPLIT_RIGHT_COUNT=$((SPLIT_BASELINE_SLOT_COUNT + 1))
 for _ in $(seq 1 20); do
   SPLIT_RIGHT_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
-  SPLIT_RIGHT_PANE_COUNT_RAW="$(extract_double_field "$SPLIT_RIGHT_SNAPSHOT" "paneCount")"
+  SPLIT_RIGHT_SLOT_COUNT_RAW="$(extract_double_field "$SPLIT_RIGHT_SNAPSHOT" "slotCount")"
   SPLIT_RIGHT_FOCUS_ID="$(extract_string_field "$SPLIT_RIGHT_SNAPSHOT" "focusedPanelID")"
-  if [[ -n "$SPLIT_RIGHT_PANE_COUNT_RAW" ]]; then
-    SPLIT_RIGHT_PANE_COUNT="${SPLIT_RIGHT_PANE_COUNT_RAW%.*}"
+  if [[ -n "$SPLIT_RIGHT_SLOT_COUNT_RAW" ]]; then
+    SPLIT_RIGHT_SLOT_COUNT="${SPLIT_RIGHT_SLOT_COUNT_RAW%.*}"
   fi
-  if [[ -n "$SPLIT_RIGHT_PANE_COUNT" && "$SPLIT_RIGHT_PANE_COUNT" -ge "$EXPECTED_SPLIT_RIGHT_COUNT" && -n "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+  if [[ -n "$SPLIT_RIGHT_SLOT_COUNT" && "$SPLIT_RIGHT_SLOT_COUNT" -ge "$EXPECTED_SPLIT_RIGHT_COUNT" && -n "$SPLIT_RIGHT_FOCUS_ID" ]]; then
     break
   fi
   sleep 0.1
 done
-if [[ -z "$SPLIT_RIGHT_PANE_COUNT" || "$SPLIT_RIGHT_PANE_COUNT" -lt "$EXPECTED_SPLIT_RIGHT_COUNT" || -z "$SPLIT_RIGHT_FOCUS_ID" ]]; then
-  echo "error: split-right shortcut did not increase pane count" >&2
-  echo "baseline pane count: ${SPLIT_BASELINE_PANE_COUNT}" >&2
-  echo "expected minimum pane count: ${EXPECTED_SPLIT_RIGHT_COUNT}" >&2
-  echo "observed pane count: ${SPLIT_RIGHT_PANE_COUNT:-<missing>}" >&2
+if [[ -z "$SPLIT_RIGHT_SLOT_COUNT" || "$SPLIT_RIGHT_SLOT_COUNT" -lt "$EXPECTED_SPLIT_RIGHT_COUNT" || -z "$SPLIT_RIGHT_FOCUS_ID" ]]; then
+  echo "error: split-right shortcut did not increase slot count" >&2
+  echo "baseline slot count: ${SPLIT_BASELINE_SLOT_COUNT}" >&2
+  echo "expected minimum slot count: ${EXPECTED_SPLIT_RIGHT_COUNT}" >&2
+  echo "observed slot count: ${SPLIT_RIGHT_SLOT_COUNT:-<missing>}" >&2
   echo "snapshot response: ${SPLIT_RIGHT_SNAPSHOT}" >&2
   exit 1
 fi
@@ -513,23 +513,23 @@ fi
 
 send_split_down_shortcut
 SPLIT_DOWN_SNAPSHOT=""
-SPLIT_DOWN_PANE_COUNT=""
-EXPECTED_SPLIT_DOWN_COUNT=$((SPLIT_BASELINE_PANE_COUNT + 2))
+SPLIT_DOWN_SLOT_COUNT=""
+EXPECTED_SPLIT_DOWN_COUNT=$((SPLIT_BASELINE_SLOT_COUNT + 2))
 for _ in $(seq 1 20); do
   SPLIT_DOWN_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
-  SPLIT_DOWN_PANE_COUNT_RAW="$(extract_double_field "$SPLIT_DOWN_SNAPSHOT" "paneCount")"
-  if [[ -n "$SPLIT_DOWN_PANE_COUNT_RAW" ]]; then
-    SPLIT_DOWN_PANE_COUNT="${SPLIT_DOWN_PANE_COUNT_RAW%.*}"
+  SPLIT_DOWN_SLOT_COUNT_RAW="$(extract_double_field "$SPLIT_DOWN_SNAPSHOT" "slotCount")"
+  if [[ -n "$SPLIT_DOWN_SLOT_COUNT_RAW" ]]; then
+    SPLIT_DOWN_SLOT_COUNT="${SPLIT_DOWN_SLOT_COUNT_RAW%.*}"
   fi
-  if [[ -n "$SPLIT_DOWN_PANE_COUNT" && "$SPLIT_DOWN_PANE_COUNT" -ge "$EXPECTED_SPLIT_DOWN_COUNT" ]]; then
+  if [[ -n "$SPLIT_DOWN_SLOT_COUNT" && "$SPLIT_DOWN_SLOT_COUNT" -ge "$EXPECTED_SPLIT_DOWN_COUNT" ]]; then
     break
   fi
   sleep 0.1
 done
-if [[ -z "$SPLIT_DOWN_PANE_COUNT" || "$SPLIT_DOWN_PANE_COUNT" -lt "$EXPECTED_SPLIT_DOWN_COUNT" ]]; then
-  echo "error: split-down shortcut did not increase pane count" >&2
-  echo "expected minimum pane count: ${EXPECTED_SPLIT_DOWN_COUNT}" >&2
-  echo "observed pane count: ${SPLIT_DOWN_PANE_COUNT:-<missing>}" >&2
+if [[ -z "$SPLIT_DOWN_SLOT_COUNT" || "$SPLIT_DOWN_SLOT_COUNT" -lt "$EXPECTED_SPLIT_DOWN_COUNT" ]]; then
+  echo "error: split-down shortcut did not increase slot count" >&2
+  echo "expected minimum slot count: ${EXPECTED_SPLIT_DOWN_COUNT}" >&2
+  echo "observed slot count: ${SPLIT_DOWN_SLOT_COUNT:-<missing>}" >&2
   echo "snapshot response: ${SPLIT_DOWN_SNAPSHOT}" >&2
   exit 1
 fi
@@ -602,9 +602,9 @@ fi
 echo "baseline root ratio: $BASELINE_RATIO"
 echo "resized root ratio: $RESIZED_RATIO"
 echo "equalized root ratio: $EQUALIZED_RATIO"
-echo "split baseline pane count: $SPLIT_BASELINE_PANE_COUNT"
-echo "after split-right pane count: $SPLIT_RIGHT_PANE_COUNT"
-echo "after split-down pane count: $SPLIT_DOWN_PANE_COUNT"
+echo "split baseline slot count: $SPLIT_BASELINE_SLOT_COUNT"
+echo "after split-right slot count: $SPLIT_RIGHT_SLOT_COUNT"
+echo "after split-down slot count: $SPLIT_DOWN_SLOT_COUNT"
 echo "focus baseline panel: $SPLIT_BASELINE_FOCUS_ID"
 echo "focus after split-right: $SPLIT_RIGHT_FOCUS_ID"
 echo "focus after focus-next: $FOCUS_NEXT_PANEL_ID"

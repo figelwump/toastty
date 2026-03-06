@@ -821,22 +821,22 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.close-focused-panel":
             didMutate = focusedPanelCommandController.closeFocusedPanel(in: workspaceID)
 
-        case "workspace.focus-pane.previous":
+        case "workspace.focus-slot.previous":
             didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
 
-        case "workspace.focus-pane.next":
+        case "workspace.focus-slot.next":
             didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
 
-        case "workspace.focus-pane.left":
+        case "workspace.focus-slot.left":
             didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .left))
 
-        case "workspace.focus-pane.right":
+        case "workspace.focus-slot.right":
             didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .right))
 
-        case "workspace.focus-pane.up":
+        case "workspace.focus-slot.up":
             didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .up))
 
-        case "workspace.focus-pane.down":
+        case "workspace.focus-slot.down":
             didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .down))
 
         case "workspace.focus-panel":
@@ -1029,13 +1029,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             throw AutomationSocketError.invalidPayload("workspaceID does not exist")
         }
 
-        let leafInfos = workspace.layoutTree.allSlotInfos
-        let leafSlotIDs = leafInfos.map { AutomationJSONValue.string($0.slotID.uuidString) }
-        let leafPanelIDs = leafInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
-        let slotMappings = leafInfos.map { leafInfo in
+        let slotInfos = workspace.layoutTree.allSlotInfos
+        let slotIDs = slotInfos.map { AutomationJSONValue.string($0.slotID.uuidString) }
+        let slotPanelIDs = slotInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
+        let slotMappings = slotInfos.map { slotInfo in
             AutomationJSONValue.object([
-                "slotID": .string(leafInfo.slotID.uuidString),
-                "panelID": .string(leafInfo.panelID.uuidString),
+                "slotID": .string(slotInfo.slotID.uuidString),
+                "panelID": .string(slotInfo.panelID.uuidString),
             ])
         }
         let rootSplitRatio: AutomationJSONValue
@@ -1048,12 +1048,12 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         return [
             "workspaceID": .string(workspaceID.uuidString),
-            "paneCount": .int(leafInfos.count),
+            "slotCount": .int(slotInfos.count),
             "panelCount": .int(workspace.panels.count),
             "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
             "rootSplitRatio": rootSplitRatio,
-            "leafSlotIDs": .array(leafSlotIDs),
-            "leafPanelIDs": .array(leafPanelIDs),
+            "slotIDs": .array(slotIDs),
+            "slotPanelIDs": .array(slotPanelIDs),
             "slotMappings": .array(slotMappings),
             "layoutSignature": .string(layoutSignature(for: workspace)),
         ]

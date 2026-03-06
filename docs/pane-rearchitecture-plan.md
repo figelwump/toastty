@@ -22,9 +22,9 @@
 - Current code now uses that terminology internally:
   - `WorkspaceState.layoutTree`
   - `LayoutNode.slot(slotID:panelID:)`
-- Public automation protocol names stay stable for compatibility:
-  - `workspace.focus-pane.*`
-  - `paneCount`
+- Public automation protocol names now use slot/layout terminology:
+  - `workspace.focus-slot.*`
+  - `slotCount`
 
 ## Constraints (Explicit Decisions)
 - Do the work in a new worktree branch.

@@ -210,9 +210,9 @@ Pending:
 
 2026-02-28 (Chunk M1: Ghostty action router + pane-focus primitives):
 - implemented new core action surface:
-  - `splitFocusedPaneInDirection(workspaceID:direction:)`
-  - `focusPane(workspaceID:direction:)`
-  - new enums: `PaneSplitDirection`, `PaneFocusDirection`
+  - `splitFocusedSlotInDirection(workspaceID:direction:)`
+  - `focusSlot(workspaceID:direction:)`
+  - new enums: `SlotSplitDirection`, `SlotFocusDirection`
 - reducer updates:
   - directional split supports `.left/.right/.up/.down` placement.
   - pane focus supports:
@@ -232,7 +232,7 @@ Pending:
     - `cmd+[`/`cmd+]` focus previous/next pane
 - automation command surface additions for deterministic testing:
   - `workspace.split.{right,down,left,up}`
-  - `workspace.focus-pane.{previous,next,left,right,up,down}`
+  - `workspace.focus-slot.{previous,next,left,right,up,down}`
 - validation:
   - `./scripts/automation/check.sh` (pass, 70 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
@@ -240,7 +240,7 @@ Pending:
   - manual Ghostty shortcut exercise in running app (automation-launched app + System Events key chords):
     - key sequence: `cmd+d`, `cmd+shift+d`, `cmd+]`, `cmd+[`
     - terminal panel count observed from state dump changed from `1` -> `3`
-    - focused panel ID changed after pane navigation
+    - focused panel ID changed after slot navigation
     - screenshot artifact:
       - `artifacts/manual/ui/manual-shortcuts-20260227-185331/single-workspace/ghostty-shortcuts-manual.png`
 
@@ -282,7 +282,7 @@ Pending:
 - made pane layout flush and square:
   - split stacks now use `spacing: 0` with explicit `1px` separators.
   - panel shells and terminal hosts now render with square borders (no rounded clipping).
-  - workspace content no longer applies outer padding around pane tree.
+  - workspace content no longer applies outer padding around layout tree.
 - reduced default terminal sizing:
   - `AppState.defaultTerminalFontPoints` updated from `13` to `11`.
   - automation fixtures now consume `AppState.defaultTerminalFontPoints` to keep smoke state representative of default app behavior.
@@ -298,7 +298,7 @@ Pending:
 
 2026-02-28 (Chunk M2 follow-up: reviewer fixes):
 - accepted points:
-  - at the time, added assertion-backed recovery for out-of-range `selectedIndex` in `PaneNodeView` (this path was later removed when leaves became single-panel-only).
+  - at the time, added assertion-backed recovery for out-of-range `selectedIndex` in `LayoutNodeView` (this path was later removed when leaves became single-slot-only).
   - switched panel border overlay from `stroke` to `strokeBorder` for cleaner square edge rendering.
   - removed dead `expanded` branching from `PanelCardView` and simplified to always fill pane bounds.
 - rejected point:
@@ -344,16 +344,16 @@ Pending:
 - automation runtime surface:
   - added `automation.workspace_snapshot` command in `AutomationSocketServer` returning:
     - `workspaceID`
-    - `paneCount`
+    - `slotCount`
     - `panelCount`
     - `focusedPanelID`
-    - `leafPaneIDs`
-    - `leafPanelIDs`
+    - `slotIDs`
+    - `slotPanelIDs`
 - smoke assertions extended for split/focus workflow:
   - baseline snapshot capture after fixture load.
-  - assert `workspace.focus-pane.next` changes focused panel.
-  - assert `workspace.focus-pane.previous` returns focus to baseline panel.
-  - assert `workspace.split.right` increases pane count.
+  - assert `workspace.focus-slot.next` changes focused panel.
+  - assert `workspace.focus-slot.previous` returns focus to baseline panel.
+  - assert `workspace.split.right` increases slot count.
 - docs/process hardening:
   - updated `AGENTS.md` with:
     - new smoke assertion behavior
@@ -370,11 +370,11 @@ Pending:
 
 2026-02-28 (Chunk M4 follow-up: reviewer fixes):
 - accepted point:
-  - made focus-next/focus-previous smoke assertions conditional on `paneCount > 1` so fixture overrides with single-pane layouts do not fail spuriously.
+  - made focus-next/focus-previous smoke assertions conditional on `slotCount > 1` so fixture overrides with single-slot layouts do not fail spuriously.
 - rejected points (with rationale):
   - `automation.workspace_snapshot` without explicit `workspaceID` is valid by design because `resolveWorkspaceID` falls back to selected workspace.
   - `cmd+shift+f` QA checklist entry is valid; shortcut is wired in `WorkspaceView.focusedPanelToggle`.
-  - `leafPanelIDs` duplication concern is non-issue for current pane model (each panel belongs to a single leaf).
+  - `slotPanelIDs` duplication concern is non-issue for current slot model (each panel belongs to a single slot).
 - re-validation:
   - `./scripts/automation/check.sh` (pass, 71 tests)
   - `./scripts/automation/smoke-ui.sh` (pass)
@@ -389,7 +389,7 @@ Pending:
 - added new core actions for split resizing and equalization:
   - `resizeFocusedPaneSplit(workspaceID:direction:amount:)`
   - `equalizePaneSplits(workspaceID:)`
-  - new direction enum: `PaneResizeDirection` (`up/down/left/right`)
+  - new direction enum: `SplitResizeDirection` (`up/down/left/right`)
 - reducer behavior:
   - resize updates the nearest focused-pane ancestor split matching axis (`horizontal` for left/right, `vertical` for up/down).
   - ratio deltas apply bounded steps (`0.02 * amount`, clamped) with ratio clamped to `0.1...0.9`.
@@ -614,7 +614,7 @@ Pending:
     - `cmd+]` (`focus.next`)
     - `cmd+[` (`focus.previous`)
   - asserts state mutations via `automation.workspace_snapshot`:
-    - pane count increases after split-right and split-down
+    - slot count increases after split-right and split-down
     - focus changes after focus-next and restores after focus-previous
   - verifies matching Ghostty intent logs + forwarded key-event logs for all traced shortcuts.
 - script ergonomics:
@@ -632,7 +632,7 @@ Pending:
   - removed dead/unreachable focus fallback branch in `focus_app_terminal` (explicit coordinate path only).
   - added bounded polling after split-workflow fixture reload before reading baseline pane/focus fields.
 - rejected (with rationale):
-  - concern about `focus-previous` assertion validity was rejected; the check intentionally validates an immediate `next -> previous` round-trip and is independent of total pane count.
+  - concern about `focus-previous` assertion validity was rejected; the check intentionally validates an immediate `next -> previous` round-trip and is independent of total slot count.
   - substring false-positive concern for key-code log matching was rejected; patterns include closing quotes (for example `"key_code":"2"`) so `"20"`/`"21"` lines do not match.
   - splitting key-code override into separate right/down env vars was rejected for now; both actions intentionally share the same physical key with modifier variation (`cmd` vs `cmd+shift`).
 - re-validation:
@@ -667,7 +667,7 @@ Pending:
   - enabled empty-string probes in automation command handler:
     - `automation.terminal_send_text` now requires `text` key presence but no longer rejects empty string values.
 - rejected (with rationale):
-  - suggestion that `NEXT_FOCUSED_PANEL_ID` / `PREVIOUS_FOCUSED_PANEL_ID` are never populated was rejected; they are intentionally initialized and conditionally populated when multi-pane focus assertions run.
+  - suggestion that `NEXT_FOCUSED_PANEL_ID` / `PREVIOUS_FOCUSED_PANEL_ID` are never populated was rejected; they are intentionally initialized and conditionally populated when multi-slot focus assertions run.
 - re-validation:
   - `./scripts/automation/smoke-ui.sh` (pass, Ghostty-enabled path)
   - `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh` (pass, fallback path)
@@ -676,7 +676,7 @@ Pending:
 2026-02-28 (Post-MVP continuation: split-ratio rendering fix for resize visibility):
 - root-cause debug from live logs:
   - Ghostty resize shortcuts were routed and reducer mutations were applied, but pane widths/heights appeared unchanged.
-  - cause: `PaneNodeView` split rendering used equal-size `HStack`/`VStack` branches and ignored model split `ratio`.
+  - cause: `LayoutNodeView` split rendering used equal-size `HStack`/`VStack` branches and ignored model split `ratio`.
 - implemented UI fix in `Sources/App/WorkspaceView.swift`:
   - split nodes now render through `GeometryReader` and explicit first/second dimensions derived from clamped split `ratio`.
   - horizontal split:
@@ -695,7 +695,7 @@ Pending:
 - accepted:
   - no blocking defects; ratio math/path validated.
 - rejected (with rationale):
-  - `GeometryReader` zero-size caveat was considered non-blocking in current layout hierarchy because pane tree is always rendered inside workspace content with explicit max-size constraints.
+  - `GeometryReader` zero-size caveat was considered non-blocking in current layout hierarchy because layout tree is always rendered inside workspace content with explicit max-size constraints.
   - toolchain compatibility caveat (`let` bindings in `ViewBuilder`) is non-blocking; current repo toolchain compiles/tests pass on target environment.
 
 2026-02-28 (Post-MVP continuation: resize step-size tuning):
@@ -841,11 +841,11 @@ Pending:
 - issue observed:
   - toggling `Focus Panel` (aka focused-panel mode) maximized the panel frame but Ghostty content went blank/black.
 - root cause:
-  - focused mode previously switched UI rendering from full `PaneNodeView` tree to a standalone `PanelCardView`.
+  - focused mode previously switched UI rendering from full `LayoutNodeView` tree to a standalone `PanelCardView`.
   - that structural swap re-mounted terminal host views in a way that broke Ghostty rendering continuity.
 - implemented:
   - removed the focused-mode standalone branch from `workspaceContent`.
-  - always render the pane tree (`PaneNodeView`) and, when focused mode is active, collapse split ratios toward the branch containing `focusedPanelID`.
+  - always render the layout tree (`LayoutNodeView`) and, when focused mode is active, collapse split ratios toward the branch containing `focusedPanelID`.
   - in focused mode, leaf tab selection now prefers `focusedPanelID` when it exists in the leaf.
   - when a split is collapsed, hide non-visible branch rendering (`opacity` + hit-testing off) and remove divider thickness to avoid stray 1px artifacts.
 - validation:
@@ -899,7 +899,7 @@ Pending:
 
 2026-02-28 (Post-MVP continuation: focused-panel mode transition animation):
 - implemented:
-  - added explicit split-node animation in `PaneNodeView` so focus-mode enter/exit visibly animates split collapse/restore.
+  - added explicit split-node animation in `LayoutNodeView` so focus-mode enter/exit visibly animates split collapse/restore.
   - animation is bound to `effectiveRatio`, limiting animation to split-size transitions rather than the entire workspace view tree.
   - uses `.easeInOut(duration: 0.2)`; automation runs with `--disable-animations` remain deterministic via existing root transaction disabling.
 - validation:
@@ -1135,7 +1135,7 @@ Pending:
   - `sv exec -- ./scripts/automation/smoke-ui.sh` (pass)
   - `sv exec -- ./scripts/automation/check.sh` (pass, 83 tests)
   - targeted split-close repro (`single-workspace` fixture, `1 -> split.right -> close-focused -> 1`) confirms:
-    - pane counts transition as expected,
+    - slot counts transition as expected,
     - focused panel remains valid after close,
     - terminal surface accepts input and visible-text marker probe after close.
 
@@ -1143,14 +1143,14 @@ Pending:
 - issue observed:
   - during focused-panel mode animation, non-focused pane text (commonly top-left) could visibly compress into narrow columns before being covered.
 - implemented:
-  - refactored split-branch rendering in `PaneNodeView`:
+  - refactored split-branch rendering in `LayoutNodeView`:
     - added shared `splitBranch(...)` helper to centralize branch visibility behavior.
     - replaced opacity-only hiding with a visibility modifier that applies `.hidden()` to non-visible branches while preserving layout footprint.
     - retained branch geometry animation at split level while preventing hidden branch content from drawing during transition.
   - added explicit `allowsHitTesting(show)` per branch to preserve input behavior expectations when a branch is hidden.
 - reviewer follow-up (Claude second-opinion):
   - accepted:
-    - avoid conditional branch removal (`if show { PaneNodeView } else { Color.clear }`) because subtree teardown could churn hosted terminal views and risk lifecycle regressions.
+    - avoid conditional branch removal (`if show { LayoutNodeView } else { Color.clear }`) because subtree teardown could churn hosted terminal views and risk lifecycle regressions.
   - rejected (with rationale):
     - terminal-state reset/focus-loss concerns after adopting `.hidden()` path were not reproducible in existing automation flows; runtime registry keeps panel controllers keyed by panel identity and reattach behavior unchanged.
 - validation:

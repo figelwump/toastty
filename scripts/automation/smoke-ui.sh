@@ -172,20 +172,20 @@ send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
 
 WORKSPACE_BASELINE_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
-BASELINE_PANE_COUNT="$(extract_int_field "$WORKSPACE_BASELINE_RESPONSE" "paneCount")"
+BASELINE_SLOT_COUNT="$(extract_int_field "$WORKSPACE_BASELINE_RESPONSE" "slotCount")"
 BASELINE_FOCUSED_PANEL_ID="$(extract_string_field "$WORKSPACE_BASELINE_RESPONSE" "focusedPanelID")"
 NEXT_FOCUSED_PANEL_ID=""
 PREVIOUS_FOCUSED_PANEL_ID=""
-if [[ -z "$BASELINE_PANE_COUNT" || -z "$BASELINE_FOCUSED_PANEL_ID" ]]; then
+if [[ -z "$BASELINE_SLOT_COUNT" || -z "$BASELINE_FOCUSED_PANEL_ID" ]]; then
   echo "error: failed to read baseline workspace snapshot" >&2
   echo "snapshot response: ${WORKSPACE_BASELINE_RESPONSE}" >&2
   exit 1
 fi
 
-if (( BASELINE_PANE_COUNT > 1 )); then
+if (( BASELINE_SLOT_COUNT > 1 )); then
   BASELINE_ROOT_SPLIT_RATIO="$(extract_double_field "$WORKSPACE_BASELINE_RESPONSE" "rootSplitRatio")"
   if [[ -z "$BASELINE_ROOT_SPLIT_RATIO" ]]; then
-    echo "error: root split ratio missing for multi-pane workspace" >&2
+    echo "error: root split ratio missing for multi-slot workspace" >&2
     echo "snapshot response: ${WORKSPACE_BASELINE_RESPONSE}" >&2
     exit 1
   fi
@@ -221,64 +221,64 @@ if (( BASELINE_PANE_COUNT > 1 )); then
     exit 1
   fi
 
-  send_request "automation.perform_action" '{"action":"workspace.focus-pane.next"}'
+  send_request "automation.perform_action" '{"action":"workspace.focus-slot.next"}'
   FOCUS_NEXT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
   NEXT_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_NEXT_RESPONSE" "focusedPanelID")"
   if [[ -z "$NEXT_FOCUSED_PANEL_ID" ]]; then
-    echo "error: focused panel missing after workspace.focus-pane.next" >&2
+    echo "error: focused panel missing after workspace.focus-slot.next" >&2
     echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
     exit 1
   fi
   if [[ "$NEXT_FOCUSED_PANEL_ID" == "$BASELINE_FOCUSED_PANEL_ID" ]]; then
-    echo "error: workspace.focus-pane.next did not change focused panel" >&2
+    echo "error: workspace.focus-slot.next did not change focused panel" >&2
     echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
     echo "snapshot response: ${FOCUS_NEXT_RESPONSE}" >&2
     exit 1
   fi
 
-  send_request "automation.perform_action" '{"action":"workspace.focus-pane.previous"}'
+  send_request "automation.perform_action" '{"action":"workspace.focus-slot.previous"}'
   FOCUS_PREVIOUS_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
   PREVIOUS_FOCUSED_PANEL_ID="$(extract_string_field "$FOCUS_PREVIOUS_RESPONSE" "focusedPanelID")"
   if [[ "$PREVIOUS_FOCUSED_PANEL_ID" != "$BASELINE_FOCUSED_PANEL_ID" ]]; then
-    echo "error: workspace.focus-pane.previous did not return focus to baseline panel" >&2
+    echo "error: workspace.focus-slot.previous did not return focus to baseline panel" >&2
     echo "baseline focused panel: ${BASELINE_FOCUSED_PANEL_ID}" >&2
     echo "snapshot response: ${FOCUS_PREVIOUS_RESPONSE}" >&2
     exit 1
   fi
 else
-  echo "note: skipping focus-next/previous assertions for single-pane fixture"
+  echo "note: skipping focus-next/previous assertions for single-slot fixture"
 fi
 
 send_request "automation.perform_action" '{"action":"workspace.split.right"}'
 SPLIT_RIGHT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
-SPLIT_RIGHT_PANE_COUNT="$(extract_int_field "$SPLIT_RIGHT_RESPONSE" "paneCount")"
+SPLIT_RIGHT_SLOT_COUNT="$(extract_int_field "$SPLIT_RIGHT_RESPONSE" "slotCount")"
 SPLIT_RIGHT_FOCUSED_PANEL_ID="$(extract_string_field "$SPLIT_RIGHT_RESPONSE" "focusedPanelID")"
-if [[ -z "$SPLIT_RIGHT_PANE_COUNT" || -z "$SPLIT_RIGHT_FOCUSED_PANEL_ID" ]]; then
-  echo "error: pane count or focused panel missing after workspace.split.right" >&2
+if [[ -z "$SPLIT_RIGHT_SLOT_COUNT" || -z "$SPLIT_RIGHT_FOCUSED_PANEL_ID" ]]; then
+  echo "error: slot count or focused panel missing after workspace.split.right" >&2
   echo "snapshot response: ${SPLIT_RIGHT_RESPONSE}" >&2
   exit 1
 fi
-if (( SPLIT_RIGHT_PANE_COUNT <= BASELINE_PANE_COUNT )); then
-  echo "error: workspace.split.right did not increase pane count" >&2
-  echo "baseline pane count: ${BASELINE_PANE_COUNT}" >&2
-  echo "post-split pane count: ${SPLIT_RIGHT_PANE_COUNT}" >&2
+if (( SPLIT_RIGHT_SLOT_COUNT <= BASELINE_SLOT_COUNT )); then
+  echo "error: workspace.split.right did not increase slot count" >&2
+  echo "baseline slot count: ${BASELINE_SLOT_COUNT}" >&2
+  echo "post-split slot count: ${SPLIT_RIGHT_SLOT_COUNT}" >&2
   echo "snapshot response: ${SPLIT_RIGHT_RESPONSE}" >&2
   exit 1
 fi
 
 send_request "automation.perform_action" '{"action":"workspace.split.down"}'
 SPLIT_DOWN_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
-SPLIT_DOWN_PANE_COUNT="$(extract_int_field "$SPLIT_DOWN_RESPONSE" "paneCount")"
+SPLIT_DOWN_SLOT_COUNT="$(extract_int_field "$SPLIT_DOWN_RESPONSE" "slotCount")"
 SPLIT_DOWN_FOCUSED_PANEL_ID="$(extract_string_field "$SPLIT_DOWN_RESPONSE" "focusedPanelID")"
-if [[ -z "$SPLIT_DOWN_PANE_COUNT" || -z "$SPLIT_DOWN_FOCUSED_PANEL_ID" ]]; then
-  echo "error: pane count or focused panel missing after workspace.split.down" >&2
+if [[ -z "$SPLIT_DOWN_SLOT_COUNT" || -z "$SPLIT_DOWN_FOCUSED_PANEL_ID" ]]; then
+  echo "error: slot count or focused panel missing after workspace.split.down" >&2
   echo "snapshot response: ${SPLIT_DOWN_RESPONSE}" >&2
   exit 1
 fi
-if (( SPLIT_DOWN_PANE_COUNT <= SPLIT_RIGHT_PANE_COUNT )); then
-  echo "error: workspace.split.down did not increase pane count" >&2
-  echo "post-split-right pane count: ${SPLIT_RIGHT_PANE_COUNT}" >&2
-  echo "post-split-down pane count: ${SPLIT_DOWN_PANE_COUNT}" >&2
+if (( SPLIT_DOWN_SLOT_COUNT <= SPLIT_RIGHT_SLOT_COUNT )); then
+  echo "error: workspace.split.down did not increase slot count" >&2
+  echo "post-split-right slot count: ${SPLIT_RIGHT_SLOT_COUNT}" >&2
+  echo "post-split-down slot count: ${SPLIT_DOWN_SLOT_COUNT}" >&2
   echo "snapshot response: ${SPLIT_DOWN_RESPONSE}" >&2
   exit 1
 fi
@@ -292,31 +292,31 @@ fi
 
 CLOSE_SNAPSHOT_RESPONSE=""
 RENDER_SNAPSHOT_RESPONSE=""
-CLOSE_PANE_COUNT="$SPLIT_DOWN_PANE_COUNT"
+CLOSE_SLOT_COUNT="$SPLIT_DOWN_SLOT_COUNT"
 ALL_RENDERABLE=""
 FINAL_CLOSE_LAYOUT_SIGNATURE=""
 FINAL_CLOSE_FOCUSED_PANEL_ID=""
-while (( CLOSE_PANE_COUNT > 1 )); do
+while (( CLOSE_SLOT_COUNT > 1 )); do
   send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}'
-  EXPECTED_CLOSE_PANE_COUNT=$((CLOSE_PANE_COUNT - 1))
+  EXPECTED_CLOSE_SLOT_COUNT=$((CLOSE_SLOT_COUNT - 1))
 
   for _ in $(seq 1 40); do
     CLOSE_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
-    CLOSE_PANE_COUNT="$(extract_int_field "$CLOSE_SNAPSHOT_RESPONSE" "paneCount")"
+    CLOSE_SLOT_COUNT="$(extract_int_field "$CLOSE_SNAPSHOT_RESPONSE" "slotCount")"
     FINAL_CLOSE_LAYOUT_SIGNATURE="$(extract_string_field "$CLOSE_SNAPSHOT_RESPONSE" "layoutSignature")"
     FINAL_CLOSE_FOCUSED_PANEL_ID="$(extract_string_field "$CLOSE_SNAPSHOT_RESPONSE" "focusedPanelID")"
     RENDER_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
     ALL_RENDERABLE="$(extract_bool_field "$RENDER_SNAPSHOT_RESPONSE" "allRenderable")"
-    if [[ "$CLOSE_PANE_COUNT" == "$EXPECTED_CLOSE_PANE_COUNT" && "$ALL_RENDERABLE" == "true" && -n "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
+    if [[ "$CLOSE_SLOT_COUNT" == "$EXPECTED_CLOSE_SLOT_COUNT" && "$ALL_RENDERABLE" == "true" && -n "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
       break
     fi
     sleep 0.1
   done
 
-  if [[ "$CLOSE_PANE_COUNT" != "$EXPECTED_CLOSE_PANE_COUNT" ]]; then
-    echo "error: workspace.close-focused-panel did not reduce pane count as expected" >&2
-    echo "expected pane count: ${EXPECTED_CLOSE_PANE_COUNT}" >&2
-    echo "actual pane count: ${CLOSE_PANE_COUNT:-missing}" >&2
+  if [[ "$CLOSE_SLOT_COUNT" != "$EXPECTED_CLOSE_SLOT_COUNT" ]]; then
+    echo "error: workspace.close-focused-panel did not reduce slot count as expected" >&2
+    echo "expected slot count: ${EXPECTED_CLOSE_SLOT_COUNT}" >&2
+    echo "actual slot count: ${CLOSE_SLOT_COUNT:-missing}" >&2
     echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
     exit 1
   fi
@@ -326,16 +326,16 @@ while (( CLOSE_PANE_COUNT > 1 )); do
     exit 1
   fi
   if [[ "$ALL_RENDERABLE" != "true" ]]; then
-    echo "error: one or more terminal panes are not render-attached after close-focused-panel" >&2
+    echo "error: one or more terminal slots are not render-attached after close-focused-panel" >&2
     echo "workspace snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
     echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
     exit 1
   fi
 done
 
-if [[ "$CLOSE_PANE_COUNT" != "1" ]]; then
-  echo "error: repeated close-focused-panel loop did not converge to a single pane" >&2
-  echo "final pane count: ${CLOSE_PANE_COUNT:-missing}" >&2
+if [[ "$CLOSE_SLOT_COUNT" != "1" ]]; then
+  echo "error: repeated close-focused-panel loop did not converge to a single slot" >&2
+  echo "final slot count: ${CLOSE_SLOT_COUNT:-missing}" >&2
   echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
   exit 1
 fi

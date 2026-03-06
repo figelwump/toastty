@@ -366,12 +366,12 @@ Request payload:
 Result:
 
 - `workspaceID: UUID`
-- `paneCount: Int`
+- `slotCount: Int`
 - `panelCount: Int`
 - `focusedPanelID: UUID | null`
 - `rootSplitRatio: Double | null`
-- `leafPaneIDs: [UUID]`
-- `leafPanelIDs: [UUID]`
+- `slotIDs: [UUID]`
+- `slotPanelIDs: [UUID]`
 
 ### `automation.capture_screenshot`
 

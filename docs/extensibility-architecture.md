@@ -113,7 +113,7 @@ toastty font set 14
 **state inspection:**
 
 ```bash
-toastty status                  # workspace snapshot (pane count, focused panel, etc.)
+toastty status                  # workspace snapshot (slot count, focused panel, etc.)
 toastty state [--json]          # full state dump
 ```
 
@@ -160,7 +160,7 @@ $ toastty status
 Workspace: main (3 panes, focused: terminal-abc)
 
 $ toastty status --json
-{"workspaceID":"...","paneCount":3,"focusedPanelID":"...","rootSplitRatio":0.5,...}
+{"workspaceID":"...","slotCount":3,"focusedPanelID":"...","rootSplitRatio":0.5,...}
 ```
 
 ### CLI extensibility
