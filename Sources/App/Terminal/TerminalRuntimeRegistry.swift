@@ -179,7 +179,18 @@ final class TerminalRuntimeRegistry: ObservableObject {
         guard let controller = controllers[panelID] else {
             return false
         }
-        return controller.automationSendText(text, submit: submit)
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let hasResolvedShell = processWorkingDirectoryResolver.resolveWorkingDirectory(for: panelID) != nil
+        let hasNativeCWDSignal = panelHasNativeCWDSignal(panelID: panelID)
+        let readyForInput = hasResolvedShell || hasNativeCWDSignal
+        #else
+        let readyForInput = false
+        #endif
+        return controller.automationSendText(
+            text,
+            submit: submit,
+            readyForInput: readyForInput
+        )
     }
 
     func automationReadVisibleText(panelID: UUID) -> String? {
@@ -2459,12 +2470,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var lastViewportDeferralReason: SurfaceCreationDeferralReason?
     private var temporarilyHiddenForViewportDeferral = false
     private var viewportResumeStabilityPasses = 0
+    private var lastAttachmentTransitionAt: Date?
     private var lastViewportResumeSignature: SurfaceCreationSignature?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
     private let requiredStableViewportResumePasses = 2
+    private let requiredAutomationInputStabilityInterval: TimeInterval = 0.5
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -2573,6 +2586,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
 
         #if TOASTTY_HAS_GHOSTTY_KIT
         if sourceContainerChanged || attachmentChanged || hostedViewWillReattach {
+            lastAttachmentTransitionAt = Date()
             surfaceCreationStabilityPasses = 0
             lastSurfaceCreationSignature = nil
             lastSurfaceDeferralReason = nil
@@ -2803,6 +2817,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastSurfaceDeferralReason = nil
         lastViewportDeferralReason = nil
         temporarilyHiddenForViewportDeferral = false
+        lastAttachmentTransitionAt = nil
         resetViewportResumeStability()
         diagnostics = SurfaceDiagnostics()
         #endif
@@ -2821,9 +2836,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         return window.makeFirstResponder(hostedView)
     }
 
-    func automationSendText(_ text: String, submit: Bool) -> Bool {
+    func automationSendText(_ text: String, submit: Bool, readyForInput: Bool) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        guard let ghosttySurface else {
+        guard let ghosttySurface, readyForInput, isReadyForAutomationInput(), focusHostViewIfNeeded() else {
             return false
         }
 
@@ -2832,12 +2847,35 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         }
 
         if submit {
-            sendSurfaceText("\n", to: ghosttySurface)
+            guard sendSurfaceSubmit(to: ghosttySurface) else {
+                return false
+            }
         }
 
         return true
         #else
         return false
+        #endif
+    }
+
+    private func isReadyForAutomationInput(now: Date = Date()) -> Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard lifecycleState.isReadyForFocus else {
+            return false
+        }
+        guard ghosttySurface != nil else {
+            return false
+        }
+        guard temporarilyHiddenForViewportDeferral == false else {
+            return false
+        }
+        if let lastAttachmentTransitionAt,
+           now.timeIntervalSince(lastAttachmentTransitionAt) < requiredAutomationInputStabilityInterval {
+            return false
+        }
+        return true
+        #else
+        return lifecycleState.isReadyForFocus
         #endif
     }
 
@@ -2945,6 +2983,25 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             let byteCount = max(buffer.count - 1, 0) // drop C-string null terminator
             guard byteCount > 0 else { return }
             ghostty_surface_text(surface, baseAddress, uintptr_t(byteCount))
+        }
+    }
+
+    private func sendSurfaceSubmit(to surface: ghostty_surface_t) -> Bool {
+        // `ghostty_surface_text` is paste-oriented input. Use a real Return key
+        // event so automation submit executes the pending command under bracketed
+        // paste and matches live keyboard behavior.
+        let submitText = "\r"
+        return submitText.withCString { pointer in
+            let keyEvent = ghostty_input_key_s(
+                action: GHOSTTY_ACTION_PRESS,
+                mods: ghostty_input_mods_e(0),
+                consumed_mods: ghostty_input_mods_e(0),
+                keycode: 0x24,
+                text: pointer,
+                unshifted_codepoint: 13,
+                composing: false
+            )
+            return ghostty_surface_key(surface, keyEvent)
         }
     }
 

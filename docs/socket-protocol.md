@@ -294,7 +294,7 @@ Sends raw terminal input text to a resolved terminal panel.
 Request payload:
 
 - `text: String` (required; empty string allowed)
-- `submit?: Bool` (default `false`; appends newline when `true`)
+- `submit?: Bool` (default `false`; sends a Return key event after the text when `true`)
 - `panelID?: UUID` (optional explicit terminal panel target)
 - `workspaceID?: UUID` (optional; used when `panelID` is omitted)
 - `allowUnavailable?: Bool` (default `false`)
@@ -309,6 +309,7 @@ Result:
 Validation:
 
 - rejects deprecated `waitForSurfaceMs` payload key.
+- only reports `available=true` when the resolved terminal host is render-attached and ready to accept focused input.
 - when `allowUnavailable=false`, unavailable terminal surfaces return `INVALID_PAYLOAD`.
 
 ### `automation.terminal_drop_image_files`

@@ -10,6 +10,9 @@
 - 2026-03-05: Chunk 1 landed close-path automation guardrails and projection snapshot fields in commit `06a259f`.
 - 2026-03-05: Chunk 2 derives structural identity from split orientation plus recursive slot IDs, explicitly ignoring split ratios and panel IDs so resize/equalize and panel replacement do not force split-subtree remounts.
 - 2026-03-05: Chunks 3 and 4 landed together by moving terminal host ownership behind a panel-generic lifecycle seam, adding ordered attachment tokens plus explicit detach on representable teardown, and keying workspace split subtrees by derived structural identity. Ordered tokens were required because stale AppKit callbacks from deallocating containers could otherwise reclaim controller ownership after a remount.
+- 2026-03-05: Chunk 5 unified menu close, `Cmd+W`, and automation close behind `FocusedPanelCommandController`, so app-layer close/focus orchestration no longer diverges by entry point.
+- 2026-03-05: Chunk 5 also tightened Ghostty automation input readiness after repeated close flows. `automation.terminal_send_text` now requires a stable attached host, restores focus before reporting availability, and submits commands with a real Return key event rather than pasting a newline. That distinction mattered because Ghostty text injection is paste-oriented and could leave post-close commands sitting at the prompt under bracketed-paste behavior.
+- 2026-03-05: Chunk 6 validation passed with `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`, `./scripts/automation/smoke-ui.sh`, and `./scripts/automation/check.sh`. Latest Ghostty smoke artifacts were visually inspected for focused, terminal viewport, and aux-column layouts. `scripts/automation/shortcut-trace.sh` remains locally blocked by macOS Accessibility/Automation permissions, so that specific shortcut-driver script is still an environment follow-up rather than a code blocker.
 
 ## Terminology
 - This document uses:

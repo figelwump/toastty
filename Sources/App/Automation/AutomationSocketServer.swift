@@ -13,11 +13,17 @@ final class AutomationSocketServer: @unchecked Sendable {
     private var acceptSource: DispatchSourceRead?
     private var clients: [Int32: AutomationSocketClient] = [:]
 
-    init(config: AutomationConfig, store: AppStore, terminalRuntimeRegistry: TerminalRuntimeRegistry) throws {
+    init(
+        config: AutomationConfig,
+        store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        focusedPanelCommandController: FocusedPanelCommandController
+    ) throws {
         self.config = config
         self.commandExecutor = AutomationCommandExecutor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            focusedPanelCommandController: focusedPanelCommandController,
             config: config
         )
         try startListening()
@@ -316,6 +322,7 @@ private final class AutomationSocketClient: @unchecked Sendable {
 private final class AutomationCommandExecutor: @unchecked Sendable {
     private let store: AppStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private let focusedPanelCommandController: FocusedPanelCommandController
     private let config: AutomationConfig
     private let startedAt = Date()
 
@@ -327,9 +334,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private var progressBySessionID: [String: String] = [:]
     private var errorsBySessionID: [String: String] = [:]
 
-    init(store: AppStore, terminalRuntimeRegistry: TerminalRuntimeRegistry, config: AutomationConfig) {
+    init(
+        store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        focusedPanelCommandController: FocusedPanelCommandController,
+        config: AutomationConfig
+    ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.focusedPanelCommandController = focusedPanelCommandController
         self.config = config
         self.currentFixtureName = config.fixtureName ?? "default"
     }
@@ -806,10 +819,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             didMutate = store.send(.splitFocusedPaneInDirection(workspaceID: workspaceID, direction: .up))
 
         case "workspace.close-focused-panel":
-            guard let focusedPanelID = store.state.workspacesByID[workspaceID]?.focusedPanelID else {
-                throw AutomationSocketError.invalidPayload("focused panel missing")
-            }
-            didMutate = store.send(.closePanel(panelID: focusedPanelID))
+            didMutate = focusedPanelCommandController.closeFocusedPanel(in: workspaceID)
 
         case "workspace.focus-pane.previous":
             didMutate = store.send(.focusPane(workspaceID: workspaceID, direction: .previous))

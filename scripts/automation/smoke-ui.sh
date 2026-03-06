@@ -109,24 +109,40 @@ send_request() {
 extract_string_field() {
   local json="$1"
   local field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "string")'
+    return
+  fi
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*\"([^\"]+)\".*/\\1/p" | sed 's#\\/#/#g'
 }
 
 extract_bool_field() {
   local json="$1"
   local field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "boolean")'
+    return
+  fi
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(true|false).*/\\1/p"
 }
 
 extract_int_field() {
   local json="$1"
   local field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "number") | floor'
+    return
+  fi
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(-?[0-9]+).*/\\1/p"
 }
 
 extract_double_field() {
   local json="$1"
   local field="$2"
+  if command -v jq >/dev/null 2>&1; then
+    echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "number")'
+    return
+  fi
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(-?[0-9]+(\\.[0-9]+)?).*/\\1/p"
 }
 
@@ -291,7 +307,7 @@ while (( CLOSE_PANE_COUNT > 1 )); do
     FINAL_CLOSE_FOCUSED_PANEL_ID="$(extract_string_field "$CLOSE_SNAPSHOT_RESPONSE" "focusedPanelID")"
     RENDER_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
     ALL_RENDERABLE="$(extract_bool_field "$RENDER_SNAPSHOT_RESPONSE" "allRenderable")"
-    if [[ "$CLOSE_PANE_COUNT" == "$EXPECTED_CLOSE_PANE_COUNT" && "$ALL_RENDERABLE" == "true" ]]; then
+    if [[ "$CLOSE_PANE_COUNT" == "$EXPECTED_CLOSE_PANE_COUNT" && "$ALL_RENDERABLE" == "true" && -n "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
       break
     fi
     sleep 0.1
@@ -328,6 +344,11 @@ if [[ -z "$FINAL_CLOSE_LAYOUT_SIGNATURE" ]]; then
   echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
   exit 1
 fi
+if [[ -z "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
+  echo "error: workspace snapshot missing focusedPanelID after repeated close-focused-panel checks" >&2
+  echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
+  exit 1
+fi
 
 TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
@@ -338,13 +359,8 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
   fi
 
   TERMINAL_TARGET_PANEL_ID=""
-  # Prioritize the freshly focused split panel, then fall back to known focused panels.
   TERMINAL_CANDIDATE_PANEL_IDS=(
     "$FINAL_CLOSE_FOCUSED_PANEL_ID"
-    "$SPLIT_RIGHT_FOCUSED_PANEL_ID"
-    "$BASELINE_FOCUSED_PANEL_ID"
-    "$NEXT_FOCUSED_PANEL_ID"
-    "$PREVIOUS_FOCUSED_PANEL_ID"
   )
   TERMINAL_MARKER="TOASTTY_VIEWPORT_END_${RUN_ID//[^A-Za-z0-9_]/_}"
   TERMINAL_COMMAND="find /usr/bin -maxdepth 1 | head -n 120; echo ${TERMINAL_MARKER}"
@@ -379,6 +395,23 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
   fi
 
   send_request "automation.perform_action" "{\"action\":\"workspace.focus-panel\",\"args\":{\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}}" >/dev/null
+
+  TERMINAL_SEND_READY=0
+  TERMINAL_PROBE_RESPONSE=""
+  for _ in $(seq 1 "$TERMINAL_READY_ATTEMPTS"); do
+    TERMINAL_PROBE_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
+    if [[ "$(extract_bool_field "$TERMINAL_PROBE_RESPONSE" "available")" == "true" ]]; then
+      TERMINAL_SEND_READY=1
+      break
+    fi
+    sleep "$TERMINAL_READY_INTERVAL_SEC"
+  done
+  if [[ "$TERMINAL_SEND_READY" -ne 1 ]]; then
+    echo "error: terminal surface unavailable after workspace.focus-panel during smoke run" >&2
+    echo "target panel id: ${TERMINAL_TARGET_PANEL_ID}" >&2
+    echo "last terminal probe response: ${TERMINAL_PROBE_RESPONSE}" >&2
+    exit 1
+  fi
 
   CWD_ASSERTION_DIR="/tmp/toastty-smoke-cwd-${RUN_ID//[^A-Za-z0-9_-]/_}"
   mkdir -p "$CWD_ASSERTION_DIR"
