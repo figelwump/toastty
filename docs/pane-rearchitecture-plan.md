@@ -9,6 +9,7 @@
 ## Execution Notes
 - 2026-03-05: Chunk 1 landed close-path automation guardrails and projection snapshot fields in commit `06a259f`.
 - 2026-03-05: Chunk 2 derives structural identity from split orientation plus recursive slot IDs, explicitly ignoring split ratios and panel IDs so resize/equalize and panel replacement do not force split-subtree remounts.
+- 2026-03-05: Chunks 3 and 4 landed together by moving terminal host ownership behind a panel-generic lifecycle seam, adding ordered attachment tokens plus explicit detach on representable teardown, and keying workspace split subtrees by derived structural identity. Ordered tokens were required because stale AppKit callbacks from deallocating containers could otherwise reclaim controller ownership after a remount.
 
 ## Terminology
 - This document uses:
@@ -174,6 +175,7 @@ The keying contract must be explicit:
 - Introduce a minimal panel-generic host lifecycle contract.
 - Move terminal-specific attach/detach behavior behind that seam.
 - Remove epoch/attach-ignore heuristics that only existed to compensate for ambiguous identity/reuse.
+- Keep lifecycle attachment tokens monotonic so stale container callbacks can be rejected after remount/reparent operations.
 - Expose the lifecycle completion or readiness point that later close/focus orchestration can sequence against.
 - Keep terminal as the first concrete adopter.
 
@@ -198,6 +200,7 @@ The keying contract must be explicit:
 - Keep slot containers keyed by stable slot ID.
 - Keep panel hosts keyed by stable panel ID.
 - Remove whole-workspace invalidation or remount hacks that exist only to paper over topology reuse ambiguity.
+- Ensure topology-driven remounts cooperate with the lifecycle seam rather than relying on stale host-container reuse.
 - Update automation snapshot shape here if the projection contract changes from the Chunk 1 baseline.
 
 **Likely files**

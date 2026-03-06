@@ -25,7 +25,7 @@ struct TerminalPanelRenderAttachmentSnapshot {
     let sourceContainerExists: Bool
     let sourceContainerAttachedToWindow: Bool
     let hostSuperviewMatchesSourceContainer: Bool
-    let bindingEpoch: UInt64
+    let lifecycleState: PanelHostLifecycleState
     let ghosttySurfaceAvailable: Bool
 
     var isRenderable: Bool {
@@ -46,7 +46,7 @@ struct TerminalPanelRenderAttachmentSnapshot {
             sourceContainerExists: false,
             sourceContainerAttachedToWindow: false,
             hostSuperviewMatchesSourceContainer: false,
-            bindingEpoch: 0,
+            lifecycleState: .detached,
             ghosttySurfaceAvailable: false
         )
     }
@@ -55,7 +55,6 @@ struct TerminalPanelRenderAttachmentSnapshot {
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
-    private var bindingEpochByPanelID: [UUID: UInt64] = [:]
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
@@ -129,12 +128,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return created
     }
 
-    func nextBindingEpoch(for panelID: UUID) -> UInt64 {
-        let nextEpoch = (bindingEpochByPanelID[panelID] ?? 0) &+ 1
-        bindingEpochByPanelID[panelID] = nextEpoch
-        return nextEpoch
-    }
-
     func synchronize(with state: AppState) {
         let livePanelIDs = Set(
             state.workspacesByID.values.flatMap { workspace in
@@ -150,7 +143,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
         for panelID in controllers.keys where !livePanelIDs.contains(panelID) {
             controllers[panelID]?.invalidate()
             controllers.removeValue(forKey: panelID)
-            bindingEpochByPanelID.removeValue(forKey: panelID)
             #if TOASTTY_HAS_GHOSTTY_KIT
             processWorkingDirectoryResolver.invalidate(panelID: panelID)
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
@@ -231,6 +223,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return false
         }
         guard let controller = controllers[panelID] else {
+            return false
+        }
+        guard controller.lifecycleState.isReadyForFocus else {
             return false
         }
         return controller.focusHostViewIfNeeded()
@@ -2443,12 +2438,12 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 #endif
 
 @MainActor
-final class TerminalSurfaceController {
+final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private let panelID: UUID
     private unowned let registry: TerminalRuntimeRegistry
     private let hostedView: NSView
     private weak var activeSourceContainer: NSView?
-    private var activeBindingEpoch: UInt64 = 0
+    private var activeAttachment: PanelHostAttachmentToken?
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private let terminalHostView: TerminalHostView
@@ -2530,22 +2525,36 @@ final class TerminalSurfaceController {
         #endif
     }
 
-    func attach(into container: NSView, bindingEpoch: UInt64) {
-        guard bindingEpoch >= activeBindingEpoch else { return }
-        let sourceContainerChanged = activeSourceContainer !== container
-        let bindingEpochChanged = bindingEpoch > activeBindingEpoch
-        let hostedViewWillReattach = hostedView.superview !== container
-        activeBindingEpoch = bindingEpoch
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        diagnostics.attachCount += 1
-        if shouldIgnoreAttach(to: container, bindingEpochChanged: bindingEpochChanged) {
+    var lifecycleState: PanelHostLifecycleState {
+        guard let activeAttachment else {
+            return .detached
+        }
+        let attachedToContainer = hostedView.superview === activeSourceContainer
+        let attachedToWindow = hostedView.window != nil && activeSourceContainer?.window != nil
+        return attachedToContainer && attachedToWindow ? .ready(activeAttachment) : .attached(activeAttachment)
+    }
+
+    func attachHost(to container: NSView, attachment: PanelHostAttachmentToken) {
+        if let activeAttachment, attachment.generation < activeAttachment.generation {
             ToasttyLog.debug(
-                "Ignoring terminal attach from detached container callback",
-                category: .ghostty,
-                metadata: ["panel_id": panelID.uuidString]
+                "Ignoring stale panel host attachment",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "attachment_id": attachment.rawValue.uuidString,
+                    "attachment_generation": String(attachment.generation),
+                    "active_attachment_id": activeAttachment.rawValue.uuidString,
+                    "active_attachment_generation": String(activeAttachment.generation)
+                ]
             )
             return
         }
+        let sourceContainerChanged = activeSourceContainer !== container
+        let hostedViewWillReattach = hostedView.superview !== container
+        let attachmentChanged = activeAttachment != attachment
+        activeAttachment = attachment
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        diagnostics.attachCount += 1
         #endif
 
         activeSourceContainer = container
@@ -2562,13 +2571,44 @@ final class TerminalSurfaceController {
         }
 
         #if TOASTTY_HAS_GHOSTTY_KIT
-        if sourceContainerChanged || bindingEpochChanged || hostedViewWillReattach {
+        if sourceContainerChanged || attachmentChanged || hostedViewWillReattach {
             surfaceCreationStabilityPasses = 0
             lastSurfaceCreationSignature = nil
             lastSurfaceDeferralReason = nil
             refreshSurfaceAfterContainerMove(sourceContainer: container)
         }
         #endif
+    }
+
+    func detachHost(attachment: PanelHostAttachmentToken) {
+        guard let currentAttachment = activeAttachment else { return }
+        guard attachment.generation >= currentAttachment.generation else {
+            ToasttyLog.debug(
+                "Ignoring stale panel host detach",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "attachment_id": attachment.rawValue.uuidString,
+                    "attachment_generation": String(attachment.generation),
+                    "active_attachment_id": currentAttachment.rawValue.uuidString,
+                    "active_attachment_generation": String(currentAttachment.generation)
+                ]
+            )
+            return
+        }
+        guard currentAttachment == attachment else { return }
+        ToasttyLog.debug(
+            "Detaching panel host controller",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "attachment_id": attachment.rawValue.uuidString
+            ]
+        )
+        activeAttachment = nil
+        activeSourceContainer = nil
+        hostedView.removeFromSuperview()
+        fallbackView.removeFromSuperview()
     }
 
     func update(
@@ -2578,12 +2618,12 @@ final class TerminalSurfaceController {
         viewportSize: CGSize,
         backingScaleFactor: CGFloat,
         sourceContainer: NSView,
-        bindingEpoch: UInt64
+        attachment: PanelHostAttachmentToken
     ) {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        guard bindingEpoch >= activeBindingEpoch else {
+        guard activeAttachment == attachment else {
             ToasttyLog.debug(
-                "Skipping terminal update from stale binding epoch",
+                "Skipping terminal update from stale host attachment",
                 category: .ghostty,
                 metadata: ["panel_id": panelID.uuidString]
             )
@@ -2591,7 +2631,7 @@ final class TerminalSurfaceController {
         }
         diagnostics.updateCount += 1
         if activeSourceContainer !== sourceContainer || hostedView.superview !== sourceContainer {
-            attach(into: sourceContainer, bindingEpoch: bindingEpoch)
+            attachHost(to: sourceContainer, attachment: attachment)
         }
 
         guard hostedView.superview === sourceContainer else {
@@ -2722,6 +2762,15 @@ final class TerminalSurfaceController {
     }
 
     func invalidate() {
+        ToasttyLog.debug(
+            "Invalidating panel host controller",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "attachment_id": activeAttachment?.rawValue.uuidString ?? "nil",
+                "has_source_container": activeSourceContainer == nil ? "false" : "true"
+            ]
+        )
         #if TOASTTY_HAS_GHOSTTY_KIT
         terminalHostView.setGhosttySurface(nil)
         if let ghosttySurface {
@@ -2743,7 +2792,7 @@ final class TerminalSurfaceController {
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
-        activeBindingEpoch = 0
+        activeAttachment = nil
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }
@@ -2841,7 +2890,7 @@ final class TerminalSurfaceController {
             sourceContainerExists: sourceContainer != nil,
             sourceContainerAttachedToWindow: sourceContainer?.window != nil,
             hostSuperviewMatchesSourceContainer: hostedView.superview === sourceContainer,
-            bindingEpoch: activeBindingEpoch,
+            lifecycleState: lifecycleState,
             ghosttySurfaceAvailable: ghosttySurfaceAvailable
         )
     }
@@ -3229,18 +3278,6 @@ private extension NSView {
 @MainActor
 extension TerminalSurfaceController {
     #if TOASTTY_HAS_GHOSTTY_KIT
-    private func shouldIgnoreAttach(to candidate: NSView, bindingEpochChanged: Bool) -> Bool {
-        // A newer binding epoch should always win, even if the candidate view
-        // is momentarily detached during split/close reparenting.
-        guard bindingEpochChanged == false else { return false }
-        guard let activeSourceContainer else { return false }
-        guard activeSourceContainer !== candidate else { return false }
-        guard hostedView.superview != nil else { return false }
-        let activeAttached = activeSourceContainer.window != nil && activeSourceContainer.superview != nil
-        let candidateClearlyDetached = candidate.window == nil || candidate.superview == nil
-        return activeAttached && candidateClearlyDetached
-    }
-
     private func refreshSurfaceAfterContainerMove(sourceContainer: NSView) {
         guard let ghosttySurface else { return }
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)

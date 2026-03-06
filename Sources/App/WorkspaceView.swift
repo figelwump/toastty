@@ -278,7 +278,7 @@ private struct PaneNodeView: View {
 
     var body: some View {
         switch node {
-        case .leaf(_, let panelID):
+        case .leaf(let paneID, let panelID):
             Group {
                 if let panelState = workspace.panels[panelID] {
                     PanelCardView(
@@ -298,6 +298,9 @@ private struct PaneNodeView: View {
                     Color.clear
                 }
             }
+            // Slot containers stay keyed by stable slot identity so panel swaps
+            // do not remount the outer card chrome.
+            .id(paneID)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
         case .split(_, let orientation, let ratio, let first, let second):
@@ -340,6 +343,8 @@ private struct PaneNodeView: View {
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
+                                // Split subtree identity is derived from layout topology.
+                                .id(first.structuralIdentity)
                                 .frame(width: displayFirstWidth, height: geometry.size.height)
                             }
 
@@ -362,6 +367,7 @@ private struct PaneNodeView: View {
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
+                                .id(second.structuralIdentity)
                                 .frame(width: displaySecondWidth, height: geometry.size.height)
                             }
                         }
@@ -399,6 +405,7 @@ private struct PaneNodeView: View {
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
+                                .id(first.structuralIdentity)
                                 .frame(width: geometry.size.width, height: displayFirstHeight)
                             }
 
@@ -421,6 +428,7 @@ private struct PaneNodeView: View {
                                     unfocusedSplitStyle: unfocusedSplitStyle,
                                     terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
                                 )
+                                .id(second.structuralIdentity)
                                 .frame(width: geometry.size.width, height: displaySecondHeight)
                             }
                         }
@@ -431,6 +439,7 @@ private struct PaneNodeView: View {
                 .animation(.easeInOut(duration: 0.2), value: focusedPanelModeActive)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .id(node.structuralIdentity)
         }
     }
 
@@ -538,7 +547,6 @@ private struct PanelCardView: View {
                     globalFontPoints: globalFontPoints,
                     runtimeRegistry: terminalRuntimeRegistry
                 )
-                .id(panelID)
                 .overlay {
                     if focusedPanelID != nil, !isFocused, unfocusedSplitStyle.fillOverlayOpacity > 0 {
                         Rectangle()

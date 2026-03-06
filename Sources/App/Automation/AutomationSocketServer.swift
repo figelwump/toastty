@@ -1078,7 +1078,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "sourceContainerExists": .bool(snapshot.sourceContainerExists),
                 "sourceContainerAttachedToWindow": .bool(snapshot.sourceContainerAttachedToWindow),
                 "hostSuperviewMatchesSourceContainer": .bool(snapshot.hostSuperviewMatchesSourceContainer),
-                "bindingEpoch": .string(String(snapshot.bindingEpoch)),
+                "hostLifecycleState": .string(snapshot.lifecycleState.automationLabel),
+                "hostAttachmentID": snapshot.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
                 "ghosttySurfaceAvailable": .bool(snapshot.ghosttySurfaceAvailable),
                 "isRenderable": .bool(snapshot.isRenderable),
             ])

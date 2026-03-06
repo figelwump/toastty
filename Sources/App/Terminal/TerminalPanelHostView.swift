@@ -11,41 +11,10 @@ struct TerminalPanelHostView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator {
-        private(set) var bindingGeneration: UInt64 = 0
-        private weak var boundContainer: TerminalPanelContainerView?
-        private var boundPanelID: UUID?
-        private var activeBindingEpoch: UInt64?
+        let containerCoordinator = PanelHostContainerCoordinator()
 
-        @discardableResult
-        func advanceBindingGeneration() -> UInt64 {
-            bindingGeneration &+= 1
-            return bindingGeneration
-        }
-
-        func bindingEpoch(
-            for containerView: TerminalPanelContainerView,
-            panelID: UUID,
-            runtimeRegistry: TerminalRuntimeRegistry
-        ) -> UInt64 {
-            if boundContainer !== containerView || boundPanelID != panelID {
-                let nextEpoch = runtimeRegistry.nextBindingEpoch(for: panelID)
-                activeBindingEpoch = nextEpoch
-                boundContainer = containerView
-                boundPanelID = panelID
-                return nextEpoch
-            }
-            if let activeBindingEpoch {
-                return activeBindingEpoch
-            }
-            let fallbackEpoch = runtimeRegistry.nextBindingEpoch(for: panelID)
-            activeBindingEpoch = fallbackEpoch
-            return fallbackEpoch
-        }
-
-        func resetBindingEpoch() {
-            boundContainer = nil
-            boundPanelID = nil
-            activeBindingEpoch = nil
+        func reset() {
+            containerCoordinator.reset()
         }
     }
 
@@ -59,19 +28,14 @@ struct TerminalPanelHostView: NSViewRepresentable {
 
     func updateNSView(_ containerView: TerminalPanelContainerView, context: Context) {
         let coordinator = context.coordinator
-        let generation = coordinator.advanceBindingGeneration()
         let controller = runtimeRegistry.controller(for: panelID)
-        let bindingEpoch = coordinator.bindingEpoch(
+        let attachment = coordinator.containerCoordinator.attachment(
             for: containerView,
-            panelID: panelID,
-            runtimeRegistry: runtimeRegistry
+            controller: controller
         )
-        controller.attach(into: containerView, bindingEpoch: bindingEpoch)
+        controller.attachHost(to: containerView, attachment: attachment)
 
-        let update = { [weak coordinator] (view: NSView) in
-            guard let coordinator else { return }
-            // Drop stale layout callbacks from previous bindings of this representable.
-            guard coordinator.bindingGeneration == generation else { return }
+        let update = { (view: NSView) in
             let scale = effectiveBackingScaleFactor(for: view)
             controller.update(
                 terminalState: terminalState,
@@ -80,7 +44,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
                 viewportSize: view.bounds.size,
                 backingScaleFactor: scale,
                 sourceContainer: view,
-                bindingEpoch: bindingEpoch
+                attachment: attachment
             )
         }
 
@@ -89,9 +53,8 @@ struct TerminalPanelHostView: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ containerView: TerminalPanelContainerView, coordinator: Coordinator) {
-        coordinator.resetBindingEpoch()
-        _ = coordinator.advanceBindingGeneration()
         containerView.onLayout = nil
+        coordinator.reset()
     }
 
     private func effectiveBackingScaleFactor(for view: NSView) -> CGFloat {
