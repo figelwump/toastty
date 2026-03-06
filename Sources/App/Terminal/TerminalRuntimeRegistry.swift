@@ -2472,6 +2472,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var viewportResumeStabilityPasses = 0
     private var lastAttachmentTransitionAt: Date?
     private var lastViewportResumeSignature: SurfaceCreationSignature?
+    private var lastPresentationSignature: SurfacePresentationSignature?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
@@ -2496,6 +2497,16 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let windowID: ObjectIdentifier
         let width: Int
         let height: Int
+    }
+
+    private struct SurfacePresentationSignature: Equatable {
+        let logicalWidth: Int
+        let logicalHeight: Int
+        let pixelWidth: Int
+        let pixelHeight: Int
+        let scaleThousandths: Int
+        let focused: Bool
+        let pixelSizingEnabled: Bool
     }
 
     private enum SurfaceCreationDeferralReason: String {
@@ -2680,6 +2691,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             hostedView.isHidden = false
             temporarilyHiddenForViewportDeferral = false
             resetViewportResumeStability()
+            lastPresentationSignature = nil
             terminalHostView.setGhosttySurface(nil)
             fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty surface unavailable")
             swapToFallbackIfNeeded()
@@ -2779,9 +2791,23 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         hostedView.isHidden = false
         temporarilyHiddenForViewportDeferral = false
         resetViewportResumeStability()
-        ghostty_surface_set_focus(ghosttySurface, focused)
-        ensureFirstResponderIfNeeded(focused: focused)
-        if resumedFromViewportDeferral {
+        let effectiveFocused = focused && hostView.isEffectivelyVisible
+        ghostty_surface_set_focus(ghosttySurface, effectiveFocused)
+        ensureFirstResponderIfNeeded(focused: effectiveFocused)
+
+        let presentationSignature = SurfacePresentationSignature(
+            logicalWidth: logicalWidth,
+            logicalHeight: logicalHeight,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            scaleThousandths: Int((xScale * 1000).rounded()),
+            focused: effectiveFocused,
+            pixelSizingEnabled: usesBackingPixelSurfaceSizing
+        )
+        let presentationChanged = presentationSignature != lastPresentationSignature
+        lastPresentationSignature = presentationSignature
+
+        if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
             ghosttyManager.requestImmediateTick()
             ghostty_surface_refresh(ghosttySurface)
         }
@@ -2819,6 +2845,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         temporarilyHiddenForViewportDeferral = false
         lastAttachmentTransitionAt = nil
         resetViewportResumeStability()
+        lastPresentationSignature = nil
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -3189,6 +3216,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastViewportDeferralReason = nil
         surfaceCreationStabilityPasses = 0
         lastSurfaceCreationSignature = nil
+        lastPresentationSignature = nil
         logSurfaceDiagnostics(message: "Ghostty surface creation succeeded")
         usesBackingPixelSurfaceSizing = false
         hasDeterminedSurfaceSizingMode = false
@@ -3472,6 +3500,10 @@ final class TerminalHostView: NSView {
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
     private var pendingImageFileDrop: PreparedImageFileDrop?
+    private weak var observedWindow: NSWindow?
+    private var windowOcclusionObserver: NSObjectProtocol?
+    private var lastKnownSurfaceVisibility: Bool?
+    private(set) var isEffectivelyVisible = false
 
     private static let imageFileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
         .urlReadingFileURLsOnly: true,
@@ -3499,10 +3531,43 @@ final class TerminalHostView: NSView {
         true
     }
 
+    override var isHidden: Bool {
+        didSet {
+            #if TOASTTY_HAS_GHOSTTY_KIT
+            syncSurfaceVisibility(reason: "hidden_changed")
+            #else
+            isEffectivelyVisible = window != nil && isHidden == false && hasHiddenAncestor == false
+            #endif
+        }
+    }
+
+    @MainActor deinit {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if let windowOcclusionObserver {
+            NotificationCenter.default.removeObserver(windowOcclusionObserver)
+        }
+        #endif
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        syncSurfaceVisibility(reason: "superview_changed")
+        #else
+        isEffectivelyVisible = window != nil && isHidden == false && hasHiddenAncestor == false
+        #endif
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard window != nil else { return }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        updateWindowOcclusionObservation()
         syncLayerContentsScale()
+        syncSurfaceVisibility(reason: "window_changed")
+        #else
+        syncLayerContentsScale()
+        isEffectivelyVisible = window != nil && isHidden == false && hasHiddenAncestor == false
+        #endif
     }
 
     override func viewDidChangeBackingProperties() {
@@ -3515,6 +3580,86 @@ final class TerminalHostView: NSView {
         ghosttySurface = surface
         rightMousePressWasForwarded = false
         pendingImageFileDrop = nil
+        lastKnownSurfaceVisibility = nil
+        syncSurfaceVisibility(reason: "surface_assignment")
+    }
+
+    private func updateWindowOcclusionObservation() {
+        guard observedWindow !== window else {
+            return
+        }
+
+        stopObservingWindowOcclusion()
+        observedWindow = window
+
+        guard let window else {
+            return
+        }
+
+        windowOcclusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: nil
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.syncSurfaceVisibility(reason: "window_occlusion_changed")
+            }
+        }
+    }
+
+    private func stopObservingWindowOcclusion() {
+        if let windowOcclusionObserver {
+            NotificationCenter.default.removeObserver(windowOcclusionObserver)
+        }
+        windowOcclusionObserver = nil
+        observedWindow = nil
+    }
+
+    private func resolvedSurfaceVisibility() -> Bool {
+        guard let window else {
+            return false
+        }
+        guard isHidden == false, hasHiddenAncestor == false else {
+            return false
+        }
+        return window.occlusionState.contains(.visible)
+    }
+
+    private func syncSurfaceVisibility(reason: String) {
+        let visible = resolvedSurfaceVisibility()
+        isEffectivelyVisible = visible
+
+        guard let ghosttySurface else {
+            lastKnownSurfaceVisibility = nil
+            return
+        }
+        guard lastKnownSurfaceVisibility != visible else {
+            return
+        }
+
+        lastKnownSurfaceVisibility = visible
+        ghostty_surface_set_occlusion(ghosttySurface, visible)
+        if visible {
+            let shouldRestoreFocus = window?.isKeyWindow == true && window?.firstResponder === self
+            ghostty_surface_set_focus(ghosttySurface, shouldRestoreFocus)
+            GhosttyRuntimeManager.shared.requestImmediateTick()
+            ghostty_surface_refresh(ghosttySurface)
+        } else {
+            ghostty_surface_set_focus(ghosttySurface, false)
+        }
+
+        ToasttyLog.debug(
+            "Updated Ghostty surface occlusion",
+            category: .ghostty,
+            metadata: [
+                "visible": visible ? "true" : "false",
+                "reason": reason,
+                "restored_focus": visible && window?.isKeyWindow == true && window?.firstResponder === self ? "true" : "false",
+                "has_window": window == nil ? "false" : "true",
+                "is_hidden": isHidden ? "true" : "false",
+                "has_hidden_ancestor": hasHiddenAncestor ? "true" : "false",
+            ]
+        )
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

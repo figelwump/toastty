@@ -351,6 +351,7 @@ if [[ -z "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
 fi
 
 TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
+FOCUSED_TERMINAL_SCREENSHOT_PATH=""
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
 if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
   if [[ ! -f "$GHOSTTY_XCFRAMEWORK_PATH/Info.plist" ]]; then
@@ -556,6 +557,102 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
     echo "capture response: ${TERMINAL_VIEWPORT_RESPONSE}" >&2
     exit 1
   fi
+
+  send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+  FOCUSED_TERMINAL_BASELINE_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+  FOCUSED_TERMINAL_BASELINE_PANEL_ID="$(extract_string_field "$FOCUSED_TERMINAL_BASELINE_RESPONSE" "focusedPanelID")"
+  if [[ -z "$FOCUSED_TERMINAL_BASELINE_PANEL_ID" ]]; then
+    echo "error: focused terminal baseline panel missing for focused-mode render scenario" >&2
+    echo "snapshot response: ${FOCUSED_TERMINAL_BASELINE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  send_request "automation.perform_action" '{"action":"workspace.focus-slot.next"}' >/dev/null
+  FOCUSED_TERMINAL_RIGHT_RESPONSE=""
+  FOCUSED_TERMINAL_RIGHT_PANEL_ID=""
+  for _ in $(seq 1 20); do
+    FOCUSED_TERMINAL_RIGHT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+    FOCUSED_TERMINAL_RIGHT_PANEL_ID="$(extract_string_field "$FOCUSED_TERMINAL_RIGHT_RESPONSE" "focusedPanelID")"
+    if [[ -n "$FOCUSED_TERMINAL_RIGHT_PANEL_ID" && "$FOCUSED_TERMINAL_RIGHT_PANEL_ID" != "$FOCUSED_TERMINAL_BASELINE_PANEL_ID" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "$FOCUSED_TERMINAL_RIGHT_PANEL_ID" || "$FOCUSED_TERMINAL_RIGHT_PANEL_ID" == "$FOCUSED_TERMINAL_BASELINE_PANEL_ID" ]]; then
+    echo "error: failed to focus right-side terminal before focused-mode render scenario" >&2
+    echo "baseline focused panel: ${FOCUSED_TERMINAL_BASELINE_PANEL_ID}" >&2
+    echo "snapshot response: ${FOCUSED_TERMINAL_RIGHT_RESPONSE}" >&2
+    exit 1
+  fi
+
+  send_request "automation.perform_action" '{"action":"workspace.split.down"}' >/dev/null
+  FOCUSED_TERMINAL_SPLIT_RESPONSE=""
+  FOCUSED_TERMINAL_PANEL_ID=""
+  FOCUSED_TERMINAL_SLOT_COUNT=""
+  for _ in $(seq 1 30); do
+    FOCUSED_TERMINAL_SPLIT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+    FOCUSED_TERMINAL_PANEL_ID="$(extract_string_field "$FOCUSED_TERMINAL_SPLIT_RESPONSE" "focusedPanelID")"
+    FOCUSED_TERMINAL_SLOT_COUNT="$(extract_int_field "$FOCUSED_TERMINAL_SPLIT_RESPONSE" "slotCount")"
+    if [[ -n "$FOCUSED_TERMINAL_PANEL_ID" && -n "$FOCUSED_TERMINAL_SLOT_COUNT" && "$FOCUSED_TERMINAL_SLOT_COUNT" -ge 3 && "$FOCUSED_TERMINAL_PANEL_ID" != "$FOCUSED_TERMINAL_RIGHT_PANEL_ID" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -z "$FOCUSED_TERMINAL_PANEL_ID" || -z "$FOCUSED_TERMINAL_SLOT_COUNT" || "$FOCUSED_TERMINAL_SLOT_COUNT" -lt 3 ]]; then
+    echo "error: focused terminal split-down scenario did not create third slot" >&2
+    echo "snapshot response: ${FOCUSED_TERMINAL_SPLIT_RESPONSE}" >&2
+    exit 1
+  fi
+
+  FOCUSED_TERMINAL_READY=0
+  FOCUSED_TERMINAL_PROBE_RESPONSE=""
+  for _ in $(seq 1 "$TERMINAL_READY_ATTEMPTS"); do
+    FOCUSED_TERMINAL_PROBE_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}")"
+    if [[ "$(extract_bool_field "$FOCUSED_TERMINAL_PROBE_RESPONSE" "available")" == "true" ]]; then
+      FOCUSED_TERMINAL_READY=1
+      break
+    fi
+    sleep "$TERMINAL_READY_INTERVAL_SEC"
+  done
+  if [[ "$FOCUSED_TERMINAL_READY" -ne 1 ]]; then
+    echo "error: third-slot terminal surface unavailable for focused-mode render scenario" >&2
+    echo "target panel id: ${FOCUSED_TERMINAL_PANEL_ID}" >&2
+    echo "last terminal probe response: ${FOCUSED_TERMINAL_PROBE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  FOCUSED_TERMINAL_MARKER="TOASTTY_FOCUSED_RENDER_${RUN_ID//[^A-Za-z0-9_]/_}"
+  FOCUSED_TERMINAL_COMMAND="printf '%s\\n' '${FOCUSED_TERMINAL_MARKER}'"
+  FOCUSED_TERMINAL_COMMAND_JSON="$(json_escape_string "$FOCUSED_TERMINAL_COMMAND")"
+  send_request "automation.terminal_send_text" "{\"text\":\"${FOCUSED_TERMINAL_COMMAND_JSON}\",\"submit\":true,\"allowUnavailable\":false,\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}" >/dev/null
+
+  FOCUSED_TERMINAL_VISIBLE_RESPONSE=""
+  FOCUSED_TERMINAL_MARKER_FOUND=0
+  for _ in $(seq 1 40); do
+    FOCUSED_TERMINAL_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${FOCUSED_TERMINAL_MARKER}\",\"panelID\":\"${FOCUSED_TERMINAL_PANEL_ID}\"}")"
+    if echo "$FOCUSED_TERMINAL_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
+      FOCUSED_TERMINAL_MARKER_FOUND=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$FOCUSED_TERMINAL_MARKER_FOUND" -ne 1 ]]; then
+    echo "error: focused-mode terminal marker not observed before screenshot capture" >&2
+    echo "target panel id: ${FOCUSED_TERMINAL_PANEL_ID}" >&2
+    echo "last terminal response: ${FOCUSED_TERMINAL_VISIBLE_RESPONSE}" >&2
+    exit 1
+  fi
+
+  send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}' >/dev/null
+  FOCUSED_TERMINAL_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"focused-terminal-third-slot-smoke"}')"
+  FOCUSED_TERMINAL_SCREENSHOT_PATH="$(extract_string_field "$FOCUSED_TERMINAL_SCREENSHOT_RESPONSE" "path")"
+  if [[ -z "$FOCUSED_TERMINAL_SCREENSHOT_PATH" || ! -f "$FOCUSED_TERMINAL_SCREENSHOT_PATH" ]]; then
+    echo "error: focused terminal screenshot path missing or file not found" >&2
+    echo "capture response: ${FOCUSED_TERMINAL_SCREENSHOT_RESPONSE}" >&2
+    exit 1
+  fi
+  send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}' >/dev/null
+  send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
 fi
 
 send_request "automation.perform_action" '{"action":"app.font.increase"}'
@@ -582,6 +679,7 @@ echo "ready file: $READY_FILE"
 echo "socket path: $SOCKET_PATH"
 echo "font hud screenshot: ${FONT_SCREENSHOT_PATH:-unknown}"
 echo "terminal viewport screenshot: ${TERMINAL_VIEWPORT_SCREENSHOT_PATH:-skipped}"
+echo "focused terminal screenshot: ${FOCUSED_TERMINAL_SCREENSHOT_PATH:-skipped}"
 echo "focused screenshot: ${FOCUSED_SCREENSHOT_PATH:-unknown}"
 echo "screenshot: ${SCREENSHOT_PATH:-unknown}"
 echo "state dump: ${STATE_PATH:-unknown}"
