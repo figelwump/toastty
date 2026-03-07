@@ -2717,7 +2717,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ensureGhosttySurface(terminalState: terminalState, fontPoints: fontPoints)
         guard let ghosttySurface else {
             // Keep the host visible while retrying Ghostty surface creation.
-            hostedView.isHidden = false
+            if hostedView.isHidden { hostedView.isHidden = false }
             temporarilyHiddenForViewportDeferral = false
             resetViewportResumeStability()
             lastPresentationSignature = nil
@@ -2746,7 +2746,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             // is less disruptive than blanking the source panel during split
             // remount churn. Newly created surfaces still stay hidden until the
             // first stable viewport arrives.
-            if lastPresentationSignature == nil {
+            if lastPresentationSignature == nil, hostedView.isHidden == false {
                 hostedView.isHidden = true
             }
             temporarilyHiddenForViewportDeferral = true
@@ -2821,7 +2821,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             scale: xScale,
             measuredSize: measuredSizeForLogging
         )
-        hostedView.isHidden = false
+        if hostedView.isHidden { hostedView.isHidden = false }
         temporarilyHiddenForViewportDeferral = false
         resetViewportResumeStability()
         let effectiveFocused = focused && hostView.isEffectivelyVisible

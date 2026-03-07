@@ -166,7 +166,15 @@ private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
     DispatchQueue.main.async {
         guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else { return }
         let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
-        manager.scheduleImmediateTick()
+        // Tick directly once on the main queue — matching Ghostty's reference
+        // wakeup implementation. The previous double-hop (dispatch → scheduleImmediateTick
+        // → dispatch → tick) deferred the tick by an extra runloop cycle, allowing
+        // variable amounts of SwiftUI layout work to interleave and cause irregular
+        // cursor blink timing and sporadic input delays.
+        // scheduleImmediateTick remains available for internal callers that need
+        // reentrancy-safe deferral (e.g. requesting a tick from within a callback
+        // that ghostty_app_tick itself triggered).
+        manager.tick()
     }
 }
 
@@ -1180,7 +1188,7 @@ final class GhosttyRuntimeManager {
         scheduleImmediateTick()
     }
 
-    private func tick() {
+    fileprivate func tick() {
         guard let app else { return }
         ghostty_app_tick(app)
     }
