@@ -200,6 +200,18 @@ let project = Project(
                 .target(name: "CoreState"),
             ]
         ),
+        .target(
+            name: "ToasttyAppTests",
+            destinations: .macOS,
+            product: .unitTests,
+            bundleId: "com.GiantThings.toastty.app.tests",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Tests/App/**"],
+            dependencies: [
+                .target(name: "ToasttyApp"),
+            ]
+        ),
     ],
     schemes: [
         .scheme(

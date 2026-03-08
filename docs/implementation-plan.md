@@ -312,10 +312,8 @@ V1 does not track attribution confidence labels. The pipeline sources above are 
 - wrappers are launched by toastty per terminal panel; child processes inherit panel/session env by design
 - adapters emit lifecycle/events to local socket:
   - `session.start`
+  - `session.status`
   - `session.update_files`
-  - `session.needs_input` (drives notification dot + optional macOS notification)
-  - `session.progress` (status update, e.g. "Refactoring dashboard component...")
-  - `session.error` (surface error state)
   - `session.stop`
 
 ## 5.5 local event socket contract
@@ -339,7 +337,7 @@ Agents can emit `session.update_files` at high frequency (e.g., fast-moving agen
 
 - **Coalesce window**: batch `session.update_files` events within a 500ms window per session. Merge file lists, keep latest `cwd` and `repoRoot`.
 - **Diff recompute debounce**: after the coalesce window closes, trigger a single diff recompute. If another update arrives during diff computation, cancel the in-progress computation and restart after the next coalesce window.
-- **Progress events**: `session.progress` events are not debounced (they update a status label, which is cheap).
+- **Status events**: `session.status` events are not debounced (they update lightweight session UI).
 
 event envelope shape:
 ```json
@@ -359,15 +357,14 @@ minimum payloads (v1):
   - `agent: "claude" | "codex"` (required)
   - `cwd?: String` (absolute path)
   - `repoRoot?: String` (absolute path)
+- `session.status`:
+  - `kind: "working" | "needs_approval" | "ready" | "error"`
+  - `summary: String`
+  - `detail?: String`
 - `session.update_files`:
   - `files: [String]` (absolute paths preferred; relative allowed if `cwd` is present)
   - `cwd?: String` (absolute path, required when `files` are relative)
   - `repoRoot?: String` (absolute path)
-- `session.needs_input`:
-  - `title: String`
-  - `body: String`
-- `session.error`:
-  - `message: String`
 - `session.stop`:
   - `reason?: String`
 
@@ -491,7 +488,8 @@ Note: V1 ships without layout profiles. Windows remember their own frame on quit
 ## 6.5 notification and attention system
 
 ### sources
-- agent adapter events: `session.needs_input`, `session.error`, `session.stop`
+- explicit notification events: `notification.emit`
+- session status events: `session.status` (workspace/sidebar state only, not notification delivery)
 - OSC 99 (Kitty notification format) parsed by Ghostty — terminal-native notifications
 - socket/CLI API: `toastty notify --title <text> --body <text>`
 
@@ -1287,10 +1285,8 @@ Chunk N (socket protocol event ingestion + session/notification runtime wiring):
   - event envelopes (`kind: "event"`) for protocol events (`session.*`, `notification.emit`)
 - added event handling in `AutomationCommandExecutor` for:
   - `session.start`
+  - `session.status`
   - `session.update_files`
-  - `session.needs_input`
-  - `session.progress`
-  - `session.error`
   - `session.stop`
   - `notification.emit`
 - wired live runtime services into the command executor:
@@ -1308,7 +1304,7 @@ Chunk N (socket protocol event ingestion + session/notification runtime wiring):
   - `./scripts/automation/check.sh` (60 tests passing).
   - `./scripts/automation/smoke-ui.sh`.
   - manual live running-app event smoke:
-    - sent `session.start`/`session.update_files`/`session.needs_input` over unix socket.
+    - sent `session.start`/`session.status`/`session.update_files` over unix socket.
     - verified runtime dump output contains emitted session + normalized touched files.
 
 Chunk N review reconciliation (post-commit second opinion on `85c2b9b`):
@@ -1316,13 +1312,13 @@ Chunk N review reconciliation (post-commit second opinion on `85c2b9b`):
 - accepted: replace static `"event"` response request-id fallback with per-response UUID fallback for uncorrelated event envelopes.
 - accepted: remove machine-specific absolute path from `SocketEventNormalizerTests` (use generic `/tmp/...` fixture path).
 - rejected: coalescer pre-flush concern on `session.update_files`; current `flushReady` contract is window-based (`>= window`) so same-timestamp bursts do not flush immediately.
-- rejected: `session.needs_input` should store `sessionID` in notification entries; V1 notification model is intentionally panel/workspace-scoped and currently has no session-id field.
+- rejected: notification entries should store `sessionID`; V1 notification model is intentionally panel/workspace-scoped and currently has no session-id field.
 - rejected: `isPanelVisible` semantic strictness as blocker; current suppression behavior intentionally treats selected-workspace presence as visible for v1.
 - rejected: per-event date formatter allocation as correctness issue; current implementation prioritizes Swift concurrency safety and keeps overhead acceptable for current local event volumes.
 - follow-up validation passed after fixes:
   - `./scripts/automation/check.sh` (60 tests passing)
   - `./scripts/automation/smoke-ui.sh`
-  - manual live event smoke re-run (`session.start`, `session.update_files`, `session.needs_input`, `automation.dump_state includeRuntime`)
+  - manual live event smoke re-run (`session.start`, `session.status`, `session.update_files`, `automation.dump_state includeRuntime`)
 
 Chunk O (manual-run feedback: Ghostty fallback messaging + safer enablement gate):
 - validated user-reported manual-run behavior where terminal panel displayed fallback messaging.

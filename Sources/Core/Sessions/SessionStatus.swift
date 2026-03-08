@@ -6,19 +6,6 @@ public enum SessionStatusKind: String, Codable, Equatable, Sendable {
     case ready
     case error
 
-    public var defaultSummary: String {
-        switch self {
-        case .working:
-            return "working"
-        case .needsApproval:
-            return "needs approval"
-        case .ready:
-            return "ready"
-        case .error:
-            return "error"
-        }
-    }
-
     var activeWorkspacePriority: Int {
         switch self {
         case .error:

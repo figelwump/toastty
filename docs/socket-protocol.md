@@ -133,22 +133,6 @@ Normalization:
 - If later `session.update_files` events send a conflicting `repoRoot`, preserve the first accepted root and emit a warning state (`conflicting repo roots`) in app state.
 - If payload exceeds max frame size, sender must split files across multiple `session.update_files` events.
 
-### `session.needs_input`
-
-Required top-level fields:
-
-- `sessionID: String`
-- `panelID: UUID`
-
-Payload:
-
-- `title: String`
-- `body: String`
-
-Semantics:
-
-- Records a workspace attention state and maps to session status kind `needs_approval` for sidebar rendering.
-
 ### `session.status`
 
 Canonical session status event used for sidebar and other session-oriented UI.
@@ -164,35 +148,10 @@ Payload:
 - `summary: String`
 - `detail?: String`
 
-### `session.progress`
+Notes:
 
-Required top-level fields:
-
-- `sessionID: String`
-- `panelID: UUID`
-
-Payload:
-
-- `message: String`
-
-Semantics:
-
-- Legacy convenience event. Maps to `session.status` with `kind: "working"` and `summary = message`.
-
-### `session.error`
-
-Required top-level fields:
-
-- `sessionID: String`
-- `panelID: UUID`
-
-Payload:
-
-- `message: String`
-
-Semantics:
-
-- Legacy convenience event. Maps to `session.status` with `kind: "error"` and `detail = message`.
+- Use `kind: "needs_approval"` when the agent is blocked on user approval or input.
+- `session.status` updates session UI only. If the sender also wants a notification dot or system notification, emit `notification.emit` separately.
 
 ### `session.stop`
 
@@ -458,7 +417,7 @@ Agents may emit `session.update_files` at high frequency. The app is responsible
 
 - **Recommended coalesce window**: 500ms per session. Merge file lists from events within the window. Keep latest `cwd` and `repoRoot`.
 - **Diff recompute**: trigger once after the coalesce window closes. If new events arrive during computation, cancel and restart after the next window.
-- **Other event types**: `session.status`, `session.progress`, and `session.needs_input` are not coalesced (they update lightweight UI elements).
+- **Other event types**: `session.status` and `notification.emit` are not coalesced (they update lightweight UI elements).
 
 This coalescing happens in the app's event processing layer, not in the protocol itself. The protocol delivers events as-is.
 

@@ -701,100 +701,6 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "stateVersion": .int(stateVersion),
             ]
 
-        case "session.needs_input":
-            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("sessionID is required")
-            }
-            let panelID = try event.requiredPanelID()
-            guard let title = event.payload.string("title"), title.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("title is required")
-            }
-            guard let body = event.payload.string("body"), body.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("body is required")
-            }
-            guard let location = locatePanel(panelID) else {
-                throw AutomationSocketError.invalidPayload("panelID does not exist")
-            }
-
-            let decision = notificationStore.record(
-                workspaceID: location.workspaceID,
-                panelID: panelID,
-                title: title,
-                body: body,
-                appIsFocused: NSApplication.shared.isActive,
-                sourcePanelIsFocused: isPanelFocused(panelID),
-                at: now
-            )
-            handleNotificationDelivery(
-                decision: decision,
-                title: title,
-                body: body,
-                workspaceID: location.workspaceID,
-                panelID: panelID
-            )
-            sessionRuntimeStore.updateStatus(
-                sessionID: sessionID,
-                status: SessionStatus(
-                    kind: .needsApproval,
-                    summary: SessionStatusKind.needsApproval.defaultSummary,
-                    detail: normalizedOptionalText(body)
-                ),
-                at: now
-            )
-            stateVersion += 1
-            return [
-                "eventType": .string(event.eventType),
-                "notificationStored": .bool(decision.stored),
-                "sendSystemNotification": .bool(decision.shouldSendSystemNotification),
-                "stateVersion": .int(stateVersion),
-            ]
-
-        case "session.progress":
-            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("sessionID is required")
-            }
-            let _ = try event.requiredPanelID()
-            guard let message = event.payload.string("message"), message.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("message is required")
-            }
-            sessionRuntimeStore.updateStatus(
-                sessionID: sessionID,
-                status: SessionStatus(
-                    kind: .working,
-                    summary: normalizedStatusSummary(message, defaultValue: SessionStatusKind.working.defaultSummary),
-                    detail: normalizedOptionalText(event.payload.string("detail"))
-                ),
-                at: now
-            )
-            stateVersion += 1
-            return [
-                "eventType": .string(event.eventType),
-                "stateVersion": .int(stateVersion),
-            ]
-
-        case "session.error":
-            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("sessionID is required")
-            }
-            let _ = try event.requiredPanelID()
-            guard let message = event.payload.string("message"), message.isEmpty == false else {
-                throw AutomationSocketError.invalidPayload("message is required")
-            }
-            sessionRuntimeStore.updateStatus(
-                sessionID: sessionID,
-                status: SessionStatus(
-                    kind: .error,
-                    summary: SessionStatusKind.error.defaultSummary,
-                    detail: normalizedOptionalText(message)
-                ),
-                at: now
-            )
-            stateVersion += 1
-            return [
-                "eventType": .string(event.eventType),
-                "stateVersion": .int(stateVersion),
-            ]
-
         case "session.stop":
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
@@ -1247,11 +1153,6 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             allowed.contains(scalar) ? String(scalar) : "-"
         }.joined()
         return transformed.isEmpty ? "value" : transformed
-    }
-
-    private func normalizedStatusSummary(_ value: String?, defaultValue: String) -> String {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? defaultValue : trimmed
     }
 
     private func normalizedOptionalText(_ value: String?) -> String? {

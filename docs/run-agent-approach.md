@@ -143,8 +143,8 @@ Toastty still provides operational summaries from:
 
 Richer summaries come from telemetry support:
 
-- skill/hook-emitted `session.progress` and `session.update-files`
-- optional structured progress payloads for higher-fidelity feed/sidebar summaries
+- skill/hook-emitted `session.status` and `session.update_files`
+- structured `kind` / `summary` / `detail` payloads for higher-fidelity feed/sidebar summaries
 
 Current practical note:
 

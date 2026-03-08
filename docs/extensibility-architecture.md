@@ -378,8 +378,7 @@ An agent posts content (feed item, markdown annotation). The user reads it and w
 
 Toastty consumes session metadata from `session.*` events, but wrappers are optional:
 
-1. Primary path: globally installed Claude Code/Codex skills call `toastty session start/update-files/progress/needs-input/error/stop` while the agent runs.
-   Preferred status updates use `toastty session status`; legacy `progress` and `error` commands remain compatibility shims.
+1. Primary path: globally installed Claude Code/Codex skills call `toastty session start/status/update-files/stop` while the agent runs.
 2. Optional path: wrapper/adapter processes can emit the same `session.*` events directly over the socket.
 3. Fallback path when no telemetry is emitted: feedback routing uses panel/workspace context and terminal injection, then spawns a new agent invocation when needed.
 
