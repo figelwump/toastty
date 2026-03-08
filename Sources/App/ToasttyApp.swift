@@ -187,6 +187,7 @@ struct ToasttyApp: App {
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
+    private let agentLaunchService: AgentLaunchService
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
@@ -251,6 +252,12 @@ struct ToasttyApp: App {
 
         let socketPath = bootstrap.automationConfig?.socketPath
             ?? AutomationConfig.resolveSocketPath(environment: ProcessInfo.processInfo.environment)
+        agentLaunchService = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            socketPath: socketPath
+        )
         do {
             automationSocketServer = try AutomationSocketServer(
                 socketPath: socketPath,
@@ -258,7 +265,8 @@ struct ToasttyApp: App {
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
-                focusedPanelCommandController: focusedPanelCommandController
+                focusedPanelCommandController: focusedPanelCommandController,
+                agentLaunchService: agentLaunchService
             )
             automationStartupError = nil
         } catch {
@@ -341,6 +349,18 @@ struct ToasttyApp: App {
                 }
             }
 
+            CommandMenu("Agent") {
+                Button("Run Codex") {
+                    launchAgentFromSelection(.codex)
+                }
+                .disabled(!canLaunchAgentFromSelection)
+
+                Button("Run Claude Code") {
+                    launchAgentFromSelection(.claude)
+                }
+                .disabled(!canLaunchAgentFromSelection)
+            }
+
             #if !TOASTTY_HAS_GHOSTTY_KIT
             CommandMenu("Pane") {
                 Button("Split Right") {
@@ -392,6 +412,33 @@ struct ToasttyApp: App {
 
     private func closeFocusedPanelFromSelection() {
         _ = focusedPanelCommandController.closeFocusedPanel()
+    }
+
+    private var canLaunchAgentFromSelection: Bool {
+        return agentLaunchService.canLaunchAgent()
+    }
+
+    private func launchAgentFromSelection(_ agent: AgentKind) {
+        guard automationSocketServer != nil else {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Run Agent"
+            alert.informativeText = "Toastty could not start its local event socket, so agent status updates are unavailable. Restart the app and try again."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        do {
+            _ = try agentLaunchService.launch(agent: agent)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Run Agent"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     private var supportsConfigurationReload: Bool {

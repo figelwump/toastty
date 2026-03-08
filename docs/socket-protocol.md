@@ -365,6 +365,36 @@ Result:
 - `slotIDs: [UUID]`
 - `slotPanelIDs: [UUID]`
 
+### `automation.launch_agent`
+
+Launches a built-in agent into a resolved terminal panel and records the baseline
+Toastty session before the command is injected.
+
+Request payload:
+
+- `agent: "claude" | "codex"` (required)
+- `panelID?: UUID`
+- `workspaceID?: UUID`
+
+Result:
+
+- `agent: String`
+- `sessionID: String`
+- `windowID: UUID`
+- `workspaceID: UUID`
+- `panelID: UUID`
+- `command: String`
+- `cwd?: String`
+- `repoRoot?: String`
+- `stateVersion: Int`
+
+Validation:
+
+- requires automation mode like other `automation.*` commands.
+- the resolved target must be a terminal panel.
+- if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
+- if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
+
 ### `automation.capture_screenshot`
 
 Request payload:

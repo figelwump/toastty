@@ -274,7 +274,7 @@ public enum ToasttyCLI {
 
             let agentValue = try requireResolvedValue(
                 flag: "--agent",
-                environmentKey: LaunchContextEnvironment.agentKey,
+                environmentKey: ToasttyLaunchContextEnvironment.agentKey,
                 in: parsed,
                 environment: environment
             )
@@ -283,13 +283,13 @@ public enum ToasttyCLI {
             }
             let panelID = try parseRequiredUUID(
                 flag: "--panel",
-                environmentKey: LaunchContextEnvironment.panelIDKey,
+                environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
                 in: parsed,
                 environment: environment
             )
             let sessionID = resolvedValue(
                 for: "--session",
-                environmentKey: LaunchContextEnvironment.sessionIDKey,
+                environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
                 in: parsed,
                 environment: environment
             )?.value ?? UUID().uuidString
@@ -300,13 +300,13 @@ public enum ToasttyCLI {
                 panelID: panelID,
                 cwd: resolvedValue(
                     for: "--cwd",
-                    environmentKey: LaunchContextEnvironment.cwdKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.cwdKey,
                     in: parsed,
                     environment: environment
                 )?.nonEmptyValue,
                 repoRoot: resolvedValue(
                     for: "--repo-root",
-                    environmentKey: LaunchContextEnvironment.repoRootKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.repoRootKey,
                     in: parsed,
                     environment: environment
                 )?.nonEmptyValue
@@ -330,13 +330,13 @@ public enum ToasttyCLI {
             return .sessionStatus(
                 sessionID: try requireValue(
                     "--session",
-                    environmentKey: LaunchContextEnvironment.sessionIDKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
                     in: parsed,
                     environment: environment
                 ),
                 panelID: try parseOptionalUUID(
                     flag: "--panel",
-                    environmentKey: LaunchContextEnvironment.panelIDKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
                     in: parsed,
                     environment: environment
                 ),
@@ -366,26 +366,26 @@ public enum ToasttyCLI {
             return .sessionUpdateFiles(
                 sessionID: try requireValue(
                     "--session",
-                    environmentKey: LaunchContextEnvironment.sessionIDKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
                     in: parsed,
                     environment: environment
                 ),
                 panelID: try parseOptionalUUID(
                     flag: "--panel",
-                    environmentKey: LaunchContextEnvironment.panelIDKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
                     in: parsed,
                     environment: environment
                 ),
                 files: files,
                 cwd: resolvedValue(
                     for: "--cwd",
-                    environmentKey: LaunchContextEnvironment.cwdKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.cwdKey,
                     in: parsed,
                     environment: environment
                 )?.nonEmptyValue,
                 repoRoot: resolvedValue(
                     for: "--repo-root",
-                    environmentKey: LaunchContextEnvironment.repoRootKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.repoRootKey,
                     in: parsed,
                     environment: environment
                 )?.nonEmptyValue
@@ -404,13 +404,13 @@ public enum ToasttyCLI {
             return .sessionStop(
                 sessionID: try requireValue(
                     "--session",
-                    environmentKey: LaunchContextEnvironment.sessionIDKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
                     in: parsed,
                     environment: environment
                 ),
                 panelID: try parseOptionalUUID(
                     flag: "--panel",
-                    environmentKey: LaunchContextEnvironment.panelIDKey,
+                    environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
                     in: parsed,
                     environment: environment
                 ),
@@ -606,14 +606,6 @@ private struct ResolvedArgumentValue {
     var nonEmptyValue: String? {
         value.isEmpty ? nil : value
     }
-}
-
-private enum LaunchContextEnvironment {
-    static let agentKey = "TOASTTY_AGENT"
-    static let sessionIDKey = "TOASTTY_SESSION_ID"
-    static let panelIDKey = "TOASTTY_PANEL_ID"
-    static let cwdKey = "TOASTTY_CWD"
-    static let repoRootKey = "TOASTTY_REPO_ROOT"
 }
 
 private extension String {

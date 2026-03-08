@@ -75,10 +75,8 @@ Security constraint:
 `toastty session ...` remains the canonical protocol surface:
 
 - `start`
+- `status`
 - `update-files`
-- `progress`
-- `needs-input`
-- `error`
 - `stop`
 
 Producer can vary by capability:
@@ -112,7 +110,7 @@ On relaunch, Toastty can restore layout and reattach terminals to mapped tmux se
 2. Toastty resolves provider + target panel strategy (current/new adjacent/etc.)
 3. Toastty allocates `sessionID` and records launch intent
 4. Toastty launches provider directly or through tmux
-5. Toastty emits baseline `session.start`
+5. Toastty emits baseline `session.start` and passes `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, `TOASTTY_CWD`, `TOASTTY_REPO_ROOT`, and `TOASTTY_AGENT` to the launched agent
 
 ### Ask Agent About This File
 
@@ -186,11 +184,11 @@ Baseline app-owned lifecycle events ensure minimum attribution continuity when r
 
 - enable `toastty session` telemetry in normal runtime
 - add launch service with built-in Codex/Claude profiles
-- define done-state: launch from Toastty into a chosen panel with stable `sessionID` and baseline `start/stop`
+- define done-state: launch from Toastty into a chosen panel with stable `sessionID`, baseline `start/stop`, and launch-context env for follow-up telemetry
 
 ### Phase 2
 
-- ship first-class `Run Agent` and context actions (`Ask Agent About This File`, feed continuation)
+- expand first-class agent actions beyond basic Run Agent (`Ask Agent About This File`, feed continuation)
 - ship telemetry health/debug visibility in UI (baseline vs rich)
 
 ### Phase 3
@@ -201,10 +199,10 @@ Baseline app-owned lifecycle events ensure minimum attribution continuity when r
 ### Phase 4
 
 - add user-defined provider profiles
-- add richer structured progress payload support for sidebar/feed summaries
+- add richer structured status payload support for sidebar/feed summaries
 
 ## Open questions
 
 - how much provider profile editing should be exposed in UI vs file-only
 - minimum fields that qualify a session as "rich-summary-ready"
-- whether to standardize structured `progress` payload in v1 or later
+- how much structured status should be standardized beyond `kind` / `summary` / `detail`

@@ -175,21 +175,21 @@ final class TerminalRuntimeRegistry: ObservableObject {
         applyGhosttyGlobalFontChangeIfNeeded(from: previousPoints, to: nextPoints)
     }
 
-    func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
+    func sendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
         guard let controller = controllers[panelID] else {
             return false
         }
-        return controller.automationSendText(
+        return controller.sendText(
             text,
             submit: submit
         )
     }
 
-    func automationReadVisibleText(panelID: UUID) -> String? {
+    func readVisibleText(panelID: UUID) -> String? {
         guard let controller = controllers[panelID] else {
             return nil
         }
-        return controller.automationReadVisibleText()
+        return controller.readVisibleText()
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
@@ -201,7 +201,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             )
             return nil
         }
-        guard let visibleText = controller.automationReadVisibleText() else {
+        guard let visibleText = controller.readVisibleText() else {
             ToasttyLog.warning(
                 "Skipping terminal close confirmation because visible terminal text is unavailable",
                 category: .terminal,
@@ -931,7 +931,7 @@ private extension TerminalRuntimeRegistry {
             return
         }
 
-        guard let visibleText = automationReadVisibleText(panelID: panelID) else {
+        guard let visibleText = readVisibleText(panelID: panelID) else {
             return
         }
         let inferredAgentTitle = Self.inferredAgentTitleFromVisibleTerminalText(visibleText)
@@ -1060,7 +1060,7 @@ private extension TerminalRuntimeRegistry {
             return
         }
 
-        guard let visibleText = automationReadVisibleText(panelID: panelID) else {
+        guard let visibleText = readVisibleText(panelID: panelID) else {
             return
         }
         let visibleLines = Self.sanitizedVisibleTerminalLines(visibleText)
@@ -1655,7 +1655,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
            cwd == nil,
            let normalizedTitle,
            normalizedTitle != terminalState.title,
-           let visibleText = automationReadVisibleText(panelID: panelID),
+           let visibleText = readVisibleText(panelID: panelID),
            let inferredCWD = Self.inferredCWDFromVisibleTerminalText(
                visibleText,
                currentCWD: terminalState.cwd
@@ -1751,7 +1751,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return true
         }
 
-        guard let visibleText = automationReadVisibleText(panelID: panelID),
+        guard let visibleText = readVisibleText(panelID: panelID),
               let inferredCWD = Self.inferredCWDFromVisibleTerminalText(
                   visibleText,
                   currentCWD: terminalState.cwd
@@ -2898,12 +2898,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         return window.makeFirstResponder(hostedView)
     }
 
-    func automationSendText(_ text: String, submit: Bool) -> Bool {
+    func sendText(_ text: String, submit: Bool) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        // Automation input should follow actual surface/host readiness. Process
+        // Programmatic input should follow actual surface/host readiness. Process
         // cwd inference can lag behind fresh split creation and block panels
         // that are already interactive from Ghostty's perspective.
-        guard let ghosttySurface, isReadyForAutomationInput(), focusHostViewIfNeeded() else {
+        guard let ghosttySurface, isReadyForProgrammaticInput(), focusHostViewIfNeeded() else {
             return false
         }
 
@@ -2923,7 +2923,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         #endif
     }
 
-    private func isReadyForAutomationInput(now: Date = Date()) -> Bool {
+    private func isReadyForProgrammaticInput(now: Date = Date()) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard lifecycleState.isReadyForFocus else {
             return false
@@ -2944,7 +2944,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         #endif
     }
 
-    func automationReadVisibleText() -> String? {
+    func readVisibleText() -> String? {
         #if TOASTTY_HAS_GHOSTTY_KIT
         guard let ghosttySurface else {
             return nil

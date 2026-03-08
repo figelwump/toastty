@@ -19,7 +19,8 @@ final class AutomationSocketServer: @unchecked Sendable {
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
-        focusedPanelCommandController: FocusedPanelCommandController
+        focusedPanelCommandController: FocusedPanelCommandController,
+        agentLaunchService: AgentLaunchService
     ) throws {
         self.socketPath = socketPath
         self.commandExecutor = AutomationCommandExecutor(
@@ -27,6 +28,7 @@ final class AutomationSocketServer: @unchecked Sendable {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
+            agentLaunchService: agentLaunchService,
             automationConfig: automationConfig
         )
         try startListening()
@@ -327,6 +329,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let agentLaunchService: AgentLaunchService
     private let automationConfig: AutomationConfig?
     private let startedAt = Date()
 
@@ -340,12 +343,14 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
+        agentLaunchService: AgentLaunchService,
         automationConfig: AutomationConfig?
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.agentLaunchService = agentLaunchService
         self.automationConfig = automationConfig
         self.currentFixtureName = automationConfig?.fixtureName ?? "default"
     }
@@ -376,6 +381,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 ok: false,
                 result: nil,
                 error: socketError.errorBody
+            )
+        } catch let launchError as AgentLaunchError {
+            return AutomationResponseEnvelope(
+                requestID: responseRequestID,
+                ok: false,
+                result: nil,
+                error: AutomationResponseError(
+                    code: "INVALID_PAYLOAD",
+                    message: launchError.localizedDescription
+                )
             )
         } catch {
             return AutomationResponseEnvelope(
@@ -454,7 +469,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             let submit = payload.bool("submit") ?? false
             let allowUnavailable = payload.bool("allowUnavailable") ?? false
             let resolved = try resolveTerminalTarget(payload: payload)
-            if terminalRuntimeRegistry.automationSendText(text, submit: submit, panelID: resolved.panelID) {
+            if terminalRuntimeRegistry.sendText(text, submit: submit, panelID: resolved.panelID) {
                 return [
                     "workspaceID": .string(resolved.workspaceID.uuidString),
                     "panelID": .string(resolved.panelID.uuidString),
@@ -530,7 +545,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "automation.terminal_visible_text":
             try requireAutomationMode(for: command)
             let resolved = try resolveTerminalTarget(payload: payload)
-            guard let text = terminalRuntimeRegistry.automationReadVisibleText(panelID: resolved.panelID) else {
+            guard let text = terminalRuntimeRegistry.readVisibleText(panelID: resolved.panelID) else {
                 throw AutomationSocketError.invalidPayload("terminal visible text unavailable for panelID \(resolved.panelID.uuidString)")
             }
 
@@ -545,6 +560,38 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
 
             return result
+
+        case "automation.launch_agent":
+            try requireAutomationMode(for: command)
+            guard let agentRaw = payload.string("agent"),
+                  let agent = AgentKind(rawValue: agentRaw) else {
+                throw AutomationSocketError.invalidPayload("agent must be one of: claude, codex")
+            }
+
+            let panelID = payload.uuid("panelID")
+            let workspaceID = payload.uuid("workspaceID")
+            let result = try agentLaunchService.launch(
+                agent: agent,
+                workspaceID: workspaceID,
+                panelID: panelID
+            )
+            stateVersion += 1
+            var response: [String: AutomationJSONValue] = [
+                "agent": .string(result.agent.rawValue),
+                "sessionID": .string(result.sessionID),
+                "windowID": .string(result.windowID.uuidString),
+                "workspaceID": .string(result.workspaceID.uuidString),
+                "panelID": .string(result.panelID.uuidString),
+                "command": .string(result.commandLine),
+                "stateVersion": .int(stateVersion),
+            ]
+            if let cwd = result.cwd {
+                response["cwd"] = .string(cwd)
+            }
+            if let repoRoot = result.repoRoot {
+                response["repoRoot"] = .string(repoRoot)
+            }
+            return response
 
         case "automation.terminal_state":
             try requireAutomationMode(for: command)

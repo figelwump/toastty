@@ -140,7 +140,7 @@ toastty session status --session <id> [--panel <panel-id>] --kind working|needs_
 toastty session stop --session <id> [--panel <panel-id>] [--reason "..."]
 ```
 
-These commands are designed for agent-driven automation (for example, via globally installed Claude Code/Codex skills). They emit `session.*` socket events to keep Toastty session metadata in sync without requiring users to launch agents through a wrapper process.
+These commands are designed for agent-driven automation (for example, via globally installed Claude Code/Codex skills). They emit `session.*` socket events to keep Toastty session metadata in sync whether the agent was launched manually or via Toastty's built-in Run Agent flow.
 
 Canonical agent IDs for telemetry are:
 
@@ -159,6 +159,11 @@ For Toastty-owned launch flows, the CLI also accepts launch context from environ
 - `TOASTTY_AGENT`
 
 Explicit CLI flags override the launch-context environment when both are present.
+
+In the built-in Run Agent path, Toastty allocates the `sessionID`, records the
+baseline `session.start`, and launches the agent with this environment already
+set. The agent skill then only needs to emit follow-up telemetry such as
+`session.status`, `session.update-files`, and `session.stop`.
 
 ### output format
 
@@ -386,7 +391,7 @@ An agent posts content (feed item, markdown annotation). The user reads it and w
 
 Toastty consumes session metadata from `session.*` events, but wrappers are optional:
 
-1. Primary path: globally installed Claude Code/Codex skills call `toastty session start/status/update-files/stop` while the agent runs.
+1. Primary path: Toastty-owned Run Agent allocates the session, records `session.start`, and launches the agent with `TOASTTY_*` launch context so skills can emit follow-up `toastty session status/update-files/stop`.
 2. Optional path: wrapper/adapter processes can emit the same `session.*` events directly over the socket.
 3. Fallback path when no telemetry is emitted: feedback routing uses panel/workspace context and terminal injection, then spawns a new agent invocation when needed.
 
@@ -575,8 +580,9 @@ Section 6 below is the recommended near-term execution order (what to do now vs 
 - Build `toastty` CLI binary (`Sources/CLI/`) that wraps socket communication.
 - Implement command groups: `workspace`, `split`, `focus`, `resize`, `equalize`, `panel`, `send`, `read`, `font`, `status`, `notify`, `session`.
 - Panel command surface includes `panel create`, `panel toggle builtin`, `panel focus`, `panel close`, and `panel reopen`.
-- Add `session` command surface that emits `session.*` events (`start`, `update-files`, `progress`, `needs-input`, `error`, `stop`).
+- Add `session` command surface that emits `session.*` events (`start`, `status`, `update-files`, `stop`).
 - Ship global skill snippets/templates for Claude Code and Codex that call `toastty session ...` during agent execution.
+- Add app-owned Run Agent launch that starts the session and hands the agent `TOASTTY_*` launch context.
 - JSON output mode (`--json`) for programmatic use.
 - Socket discovery, error handling, timeout.
 
@@ -617,7 +623,7 @@ Section 6 below is the recommended near-term execution order (what to do now vs 
 
 ### do now
 
-- Deliver phase 1 CLI/socket baseline including the `toastty session` command group.
+- Deliver phase 1 CLI/socket baseline including the `toastty session` command group and Run Agent launch context handoff.
 - Publish globally installable Claude Code/Codex skills that emit session telemetry via `toastty session ...`.
 - Keep feedback routing resilient when telemetry is missing (panel/workspace fallback + terminal injection).
 - Keep wrapper/adaptor integration optional and protocol-compatible.
@@ -626,7 +632,7 @@ Section 6 below is the recommended near-term execution order (what to do now vs 
 
 - Mandatory wrapper-based launch flows for all users.
 - Push-subscription/broadcast feed protocol for external agents; polling is sufficient in v1.
-- Deep session-driven UI polish (rich progress/needs-input surfaces) beyond minimal routing/attribution needs.
+- Deep session-driven UI polish beyond minimal routing/attribution needs.
 - Additional extension-platform surface area that lacks a concrete near-term use case.
 
 ## 7) open questions and future considerations
