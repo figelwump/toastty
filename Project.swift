@@ -78,15 +78,13 @@ let hasGhosttyLegacyXCFrameworkArtifact = ghosttyPathExists(
 let hasGhosttyXCFrameworkArtifact = hasGhosttyVariantLinkSettings || hasGhosttyLegacyXCFrameworkArtifact
 let hasGhosttyXCFramework = hasGhosttyXCFrameworkArtifact && !ghosttyIntegrationDisabled
 
-func applyGhosttyVariantLinkSettings(
+func applyGhosttyVariantModuleSettings(
     configurationName: String,
     sliceRelativePath: String,
-    libraryRelativePath: String,
     settings: inout SettingsDictionary
 ) {
     let headersPath = "$(SRCROOT)/\(sliceRelativePath)/Headers"
     let moduleMapPath = "\(headersPath)/module.modulemap"
-    let libraryPath = "$(SRCROOT)/\(libraryRelativePath)"
 
     settings["HEADER_SEARCH_PATHS[config=\(configurationName)]"] = .array([
         "$(inherited)",
@@ -97,6 +95,21 @@ func applyGhosttyVariantLinkSettings(
         "-Xcc",
         "-fmodule-map-file=\(moduleMapPath)",
     ])
+}
+
+func applyGhosttyVariantLinkSettings(
+    configurationName: String,
+    sliceRelativePath: String,
+    libraryRelativePath: String,
+    settings: inout SettingsDictionary
+) {
+    applyGhosttyVariantModuleSettings(
+        configurationName: configurationName,
+        sliceRelativePath: sliceRelativePath,
+        settings: &settings
+    )
+
+    let libraryPath = "$(SRCROOT)/\(libraryRelativePath)"
     settings["OTHER_LDFLAGS[config=\(configurationName)]"] = .array([
         "$(inherited)",
         libraryPath,
@@ -117,6 +130,7 @@ let developmentTeam = ProcessInfo.processInfo.environment["TUIST_DEVELOPMENT_TEA
 var appTargetSettingsBase: SettingsDictionary = [
     "CODE_SIGNING_ALLOWED": "YES",
 ]
+var appTestTargetSettingsBase: SettingsDictionary = [:]
 if let developmentTeam {
     appTargetSettingsBase["CODE_SIGN_IDENTITY"] = "Apple Development"
     appTargetSettingsBase["CODE_SIGN_STYLE"] = "Automatic"
@@ -124,6 +138,9 @@ if let developmentTeam {
 } else {
     appTargetSettingsBase["CODE_SIGN_IDENTITY"] = "-"
 }
+var appTestDependencies: [TargetDependency] = [
+    .target(name: "ToasttyApp"),
+]
 
 if hasGhosttyXCFramework {
     if
@@ -144,10 +161,25 @@ if hasGhosttyXCFramework {
             libraryRelativePath: ghosttyReleaseSelection.libraryRelativePath,
             settings: &appTargetSettingsBase
         )
+        applyGhosttyVariantModuleSettings(
+            configurationName: "Debug",
+            sliceRelativePath: ghosttyDebugSelection.sliceRelativePath,
+            settings: &appTestTargetSettingsBase
+        )
+        applyGhosttyVariantModuleSettings(
+            configurationName: "Release",
+            sliceRelativePath: ghosttyReleaseSelection.sliceRelativePath,
+            settings: &appTestTargetSettingsBase
+        )
+        // The app test bundle loads inside ToasttyApp, so it only needs module
+        // visibility for explicit-module compilation. The app host already links
+        // the Ghostty static archive for execution.
     } else {
         appDependencies.append(.xcframework(path: .relativeToRoot(ghosttyLegacyXCFrameworkRelativePath)))
+        appTestDependencies.append(.xcframework(path: .relativeToRoot(ghosttyLegacyXCFrameworkRelativePath)))
     }
     appTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
+    appTestTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
     // Ghostty's static archive includes C++ objects and macOS text-input symbols.
     appTargetSettingsBase["OTHER_LDFLAGS"] = .array([
         "$(inherited)",
@@ -158,6 +190,7 @@ if hasGhosttyXCFramework {
 }
 
 let appTargetSettings: Settings = .settings(base: appTargetSettingsBase)
+let appTestTargetSettings: Settings = .settings(base: appTestTargetSettingsBase)
 
 let project = Project(
     name: "toastty",
@@ -244,9 +277,8 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
             sources: ["Tests/App/**"],
-            dependencies: [
-                .target(name: "ToasttyApp"),
-            ]
+            dependencies: appTestDependencies,
+            settings: appTestTargetSettings
         ),
     ],
     schemes: [
