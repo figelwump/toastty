@@ -638,6 +638,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             stateVersion += 1
             return [
                 "eventType": .string(event.eventType),
+                "sessionID": .string(sessionID),
                 "stateVersion": .int(stateVersion),
             ]
 
@@ -1282,21 +1283,7 @@ private enum AutomationIncomingEnvelope: Sendable {
     }
 }
 
-private struct AutomationEnvelopeHeader: Decodable, Sendable {
-    let protocolVersion: String
-    let kind: String
-}
-
-private struct AutomationEventEnvelope: Decodable, Sendable {
-    let protocolVersion: String
-    let kind: String
-    let requestID: String?
-    let eventType: String
-    let sessionID: String?
-    let panelID: String?
-    let timestamp: String?
-    let payload: [String: AutomationJSONValue]
-
+private extension AutomationEventEnvelope {
     func requiredPanelID() throws -> UUID {
         guard let panelID,
               let uuid = UUID(uuidString: panelID) else {
@@ -1304,174 +1291,12 @@ private struct AutomationEventEnvelope: Decodable, Sendable {
         }
         return uuid
     }
-
-    var parsedTimestamp: Date? {
-        guard let timestamp else { return nil }
-        let withFractional = ISO8601DateFormatter()
-        withFractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let parsed = withFractional.date(from: timestamp) {
-            return parsed
-        }
-
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: timestamp)
-    }
 }
 
 private struct AutomationRuntimeStateDump: Encodable, Sendable {
     let appState: AppState
     let sessionRegistry: SessionRegistry
     let notifications: [ToasttyNotification]
-}
-
-private struct AutomationRequestEnvelope: Decodable, Sendable {
-    let protocolVersion: String
-    let kind: String
-    let requestID: String
-    let command: String
-    let payload: [String: AutomationJSONValue]
-
-    private enum CodingKeys: String, CodingKey {
-        case protocolVersion
-        case kind
-        case requestID
-        case command
-        case payload
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        protocolVersion = try container.decode(String.self, forKey: .protocolVersion)
-        kind = try container.decode(String.self, forKey: .kind)
-        requestID = try container.decode(String.self, forKey: .requestID)
-        command = try container.decode(String.self, forKey: .command)
-        payload = try container.decodeIfPresent([String: AutomationJSONValue].self, forKey: .payload) ?? [:]
-    }
-}
-
-private struct AutomationResponseEnvelope: Encodable, Sendable {
-    let protocolVersion: String
-    let kind: String
-    let requestID: String
-    let ok: Bool
-    let result: [String: AutomationJSONValue]?
-    let error: AutomationResponseError?
-
-    init(
-        requestID: String,
-        ok: Bool,
-        result: [String: AutomationJSONValue]?,
-        error: AutomationResponseError?
-    ) {
-        self.protocolVersion = "1.0"
-        self.kind = "response"
-        self.requestID = requestID
-        self.ok = ok
-        self.result = result
-        self.error = error
-    }
-}
-
-private struct AutomationResponseError: Encodable, Sendable {
-    let code: String
-    let message: String
-}
-
-private enum AutomationJSONValue: Sendable, Codable {
-    case string(String)
-    case int(Int)
-    case double(Double)
-    case bool(Bool)
-    case object([String: AutomationJSONValue])
-    case array([AutomationJSONValue])
-    case null
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if container.decodeNil() {
-            self = .null
-        } else if let value = try? container.decode(String.self) {
-            self = .string(value)
-        } else if let value = try? container.decode(Int.self) {
-            self = .int(value)
-        } else if let value = try? container.decode(Double.self) {
-            self = .double(value)
-        } else if let value = try? container.decode(Bool.self) {
-            self = .bool(value)
-        } else if let value = try? container.decode([String: AutomationJSONValue].self) {
-            self = .object(value)
-        } else if let value = try? container.decode([AutomationJSONValue].self) {
-            self = .array(value)
-        } else {
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "unsupported json value")
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case .string(let value):
-            try container.encode(value)
-        case .int(let value):
-            try container.encode(value)
-        case .double(let value):
-            try container.encode(value)
-        case .bool(let value):
-            try container.encode(value)
-        case .object(let value):
-            try container.encode(value)
-        case .array(let value):
-            try container.encode(value)
-        case .null:
-            try container.encodeNil()
-        }
-    }
-}
-
-private extension Dictionary where Key == String, Value == AutomationJSONValue {
-    func string(_ key: String) -> String? {
-        guard case .string(let value)? = self[key] else {
-            return nil
-        }
-        return value
-    }
-
-    func bool(_ key: String) -> Bool? {
-        guard case .bool(let value)? = self[key] else {
-            return nil
-        }
-        return value
-    }
-
-    func int(_ key: String) -> Int? {
-        guard case .int(let value)? = self[key] else {
-            return nil
-        }
-        return value
-    }
-
-    func uuid(_ key: String) -> UUID? {
-        guard let value = string(key) else { return nil }
-        return UUID(uuidString: value)
-    }
-
-    func stringArray(_ key: String) -> [String] {
-        guard case .array(let values)? = self[key] else {
-            return []
-        }
-        return values.compactMap {
-            guard case .string(let value) = $0 else { return nil }
-            return value
-        }
-    }
-
-    func object(_ key: String) -> [String: AutomationJSONValue]? {
-        guard case .object(let value)? = self[key] else {
-            return nil
-        }
-        return value
-    }
 }
 
 private enum AutomationSocketError: Error {

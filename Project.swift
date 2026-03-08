@@ -182,11 +182,35 @@ let project = Project(
         .target(
             name: "CoreState",
             destinations: .macOS,
-            product: .framework,
+            product: .staticFramework,
             bundleId: "com.GiantThings.toastty.core",
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
             sources: ["Sources/Core/**"]
+        ),
+        .target(
+            name: "ToasttyCLIKit",
+            destinations: .macOS,
+            product: .staticFramework,
+            bundleId: "com.GiantThings.toastty.clikit",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Sources/CLIKit/**"],
+            dependencies: [
+                .target(name: "CoreState"),
+            ]
+        ),
+        .target(
+            name: "toastty",
+            destinations: .macOS,
+            product: .commandLineTool,
+            bundleId: "com.GiantThings.toastty.cli",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Sources/CLI/**"],
+            dependencies: [
+                .target(name: "ToasttyCLIKit"),
+            ]
         ),
         .target(
             name: "CoreStateTests",
@@ -198,6 +222,18 @@ let project = Project(
             sources: ["Tests/Core/**"],
             dependencies: [
                 .target(name: "CoreState"),
+            ]
+        ),
+        .target(
+            name: "ToasttyCLITests",
+            destinations: .macOS,
+            product: .unitTests,
+            bundleId: "com.GiantThings.toastty.cli.tests",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Tests/CLI/**"],
+            dependencies: [
+                .target(name: "ToasttyCLIKit"),
             ]
         ),
         .target(

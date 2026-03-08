@@ -1,4 +1,5 @@
 import Darwin
+import CoreState
 import Foundation
 import Testing
 @testable import ToasttyApp
@@ -7,27 +8,9 @@ struct AutomationSocketServerTests {
     @Test
     func removedLegacySessionEventsAreRejected() async throws {
         let socketPath = temporarySocketPath()
-        let server = try await MainActor.run {
-            let store = AppStore(persistTerminalFontPreference: false)
-            let terminalRuntimeRegistry = TerminalRuntimeRegistry()
-            let sessionRuntimeStore = SessionRuntimeStore()
-            let focusedPanelCommandController = FocusedPanelCommandController(
-                store: store,
-                runtimeRegistry: terminalRuntimeRegistry,
-                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
-            )
-
-            return try AutomationSocketServer(
-                socketPath: socketPath,
-                automationConfig: nil,
-                store: store,
-                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                sessionRuntimeStore: sessionRuntimeStore,
-                focusedPanelCommandController: focusedPanelCommandController
-            )
-        }
+        let server = try await makeServer(socketPath: socketPath)
         defer {
-            withExtendedLifetime(server) {}
+            withExtendedLifetime(server.server) {}
         }
 
         try waitForSocket(at: socketPath)
@@ -37,6 +20,34 @@ struct AutomationSocketServerTests {
             #expect(response.ok == false)
             #expect(response.error?.code == "UNKNOWN_EVENT_TYPE")
         }
+    }
+
+    @Test
+    func sessionStartResponseIncludesSessionID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await makeServer(socketPath: socketPath)
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-123"
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("sessionID") == sessionID)
     }
 
     private func temporarySocketPath() -> String {
@@ -53,16 +64,46 @@ struct AutomationSocketServerTests {
         }
     }
 
-    private func sendEvent(type eventType: String, socketPath: String) throws -> SocketResponse {
-        let request = SocketEventRequest(
-            protocolVersion: "1.0",
-            kind: "event",
-            eventType: eventType,
-            payload: [:]
+    private func makeServer(socketPath: String) async throws -> (server: AutomationSocketServer, panelID: UUID) {
+        try await MainActor.run {
+            let store = AppStore(persistTerminalFontPreference: false)
+            let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+            let sessionRuntimeStore = SessionRuntimeStore()
+            let focusedPanelCommandController = FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: terminalRuntimeRegistry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            )
+
+            let workspace = try #require(store.selectedWorkspace)
+            let panelID = try #require(workspace.focusedPanelID)
+            let server = try AutomationSocketServer(
+                socketPath: socketPath,
+                automationConfig: nil,
+                store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                sessionRuntimeStore: sessionRuntimeStore,
+                focusedPanelCommandController: focusedPanelCommandController
+            )
+            return (server, panelID)
+        }
+    }
+
+    private func sendEvent(type eventType: String, socketPath: String) throws -> AutomationResponseEnvelope {
+        try sendEvent(
+            AutomationEventEnvelope(
+                eventType: eventType,
+                requestID: UUID().uuidString,
+                payload: [:]
+            ),
+            socketPath: socketPath
         )
+    }
+
+    private func sendEvent(_ request: AutomationEventEnvelope, socketPath: String) throws -> AutomationResponseEnvelope {
         let payload = try JSONEncoder().encode(request) + Data([0x0A])
         let responseData = try send(payload, to: socketPath)
-        return try JSONDecoder().decode(SocketResponse.self, from: responseData)
+        return try JSONDecoder().decode(AutomationResponseEnvelope.self, from: responseData)
     }
 
     private func send(_ payload: Data, to socketPath: String) throws -> Data {
@@ -122,23 +163,6 @@ struct AutomationSocketServerTests {
 
         throw SocketTestError.missingResponseTerminator
     }
-}
-
-private struct SocketEventRequest: Encodable {
-    let protocolVersion: String
-    let kind: String
-    let eventType: String
-    let payload: [String: String]
-}
-
-private struct SocketResponse: Decodable {
-    let ok: Bool
-    let error: SocketResponseError?
-}
-
-private struct SocketResponseError: Decodable {
-    let code: String
-    let message: String
 }
 
 private enum SocketTestError: Error {

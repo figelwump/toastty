@@ -137,9 +137,6 @@ toastty feed inject <content-id> "feedback text"    # simulate user comment
 toastty session start --agent claude|codex --panel <panel-id> [--session <id>] [--cwd <path>] [--repo-root <path>]
 toastty session update-files --session <id> --panel <panel-id> --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
 toastty session status --session <id> --panel <panel-id> --kind working|needs_approval|ready|error --summary "..." [--detail "..."]
-toastty session progress --session <id> --panel <panel-id> --message "..."
-toastty session needs-input --session <id> --panel <panel-id> --title "..." --body "..."
-toastty session error --session <id> --panel <panel-id> --message "..."
 toastty session stop --session <id> --panel <panel-id> [--reason "..."]
 ```
 
