@@ -61,17 +61,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var selectedSlotFocusRestoreTask: Task<Void, Never>?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
+    private var metadataService: TerminalMetadataService?
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var titleBeforeAgentInferenceByPanelID: [UUID: String] = [:]
     private var suppressedAgentTitleInferencePanelIDs: Set<UUID> = []
-    private var nativeCWDLastSignalAtByPanelID: [UUID: Date] = [:]
-    private var nativeCWDLastProcessFallbackPollAtByPanelID: [UUID: Date] = [:]
     private var panelActivityByPanelID: [UUID: PanelActivityState] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
-    private let processWorkingDirectoryResolver = TerminalProcessWorkingDirectoryResolver()
     #endif
 
     deinit {
@@ -100,6 +98,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             )
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
+        metadataService = TerminalMetadataService(store: store, registry: self)
         actionRouter = TerminalActionRouter(store: store, registry: self)
         #endif
         configureGhosttyActionHandler()
@@ -156,15 +155,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllers[panelID]?.invalidate()
             controllers.removeValue(forKey: panelID)
             #if TOASTTY_HAS_GHOSTTY_KIT
-            processWorkingDirectoryResolver.invalidate(panelID: panelID)
+            metadataService?.invalidate(panelID: panelID)
             titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
             suppressedAgentTitleInferencePanelIDs.remove(panelID)
-            nativeCWDLastSignalAtByPanelID.removeValue(forKey: panelID)
-            nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
             panelActivityByPanelID.removeValue(forKey: panelID)
             #endif
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
+        metadataService?.synchronizeLivePanels(livePanelIDs)
         pendingSplitSourcePanelByNewPanelID = pendingSplitSourcePanelByNewPanelID.filter {
             livePanelIDs.contains($0.key) && livePanelIDs.contains($0.value)
         }
@@ -591,6 +589,27 @@ private extension TerminalRuntimeRegistry {
 }
 #endif
 
+#if TOASTTY_HAS_GHOSTTY_KIT
+extension TerminalRuntimeRegistry {
+    func panelID(forSurfaceHandle surfaceHandle: UInt) -> UUID? {
+        panelIDBySurfaceHandle[surfaceHandle]
+    }
+
+    func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
+        for window in state.windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = state.workspacesByID[workspaceID] else { continue }
+                guard workspace.panels[panelID] != nil else { continue }
+                if workspace.layoutTree.slotContaining(panelID: panelID) != nil {
+                    return workspaceID
+                }
+            }
+        }
+        return nil
+    }
+}
+#endif
+
 private extension TerminalRuntimeRegistry {
     static func normalizedImageFileURLs(from urls: [URL]) -> [URL] {
         var normalized: [URL] = []
@@ -676,55 +695,25 @@ private extension TerminalRuntimeRegistry {
         if panelIDBySurfaceHandle[key] == panelID {
             panelIDBySurfaceHandle.removeValue(forKey: key)
         }
-        processWorkingDirectoryResolver.invalidate(panelID: panelID)
+        metadataService?.invalidate(panelID: panelID)
         titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
         suppressedAgentTitleInferencePanelIDs.remove(panelID)
-        nativeCWDLastSignalAtByPanelID.removeValue(forKey: panelID)
-        nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
-    }
-
-    func panelHasNativeCWDSignal(panelID: UUID) -> Bool {
-        nativeCWDLastSignalAtByPanelID[panelID] != nil
     }
 
     func prefersNativeCWDSignal(panelID: UUID, now: Date = Date()) -> Bool {
-        guard let lastSignalAt = nativeCWDLastSignalAtByPanelID[panelID] else {
-            return false
-        }
-        return now.timeIntervalSince(lastSignalAt) <= Self.nativeCWDSignalFreshnessInterval
+        metadataService?.prefersNativeCWDSignal(panelID: panelID, now: now) ?? false
     }
 
     func shouldRunProcessCWDFallbackPoll(panelID: UUID, now: Date = Date()) -> Bool {
-        guard panelHasNativeCWDSignal(panelID: panelID) else {
-            return true
-        }
-        guard let lastPollAt = nativeCWDLastProcessFallbackPollAtByPanelID[panelID] else {
-            return true
-        }
-        return now.timeIntervalSince(lastPollAt) >= Self.nativeCWDProcessFallbackPollInterval
+        metadataService?.shouldRunProcessCWDFallbackPoll(panelID: panelID, now: now) ?? true
     }
 
     func recordProcessCWDFallbackPoll(panelID: UUID, now: Date = Date()) {
-        nativeCWDLastProcessFallbackPollAtByPanelID[panelID] = now
-    }
-
-    func recordNativeCWDSignal(panelID: UUID, now: Date = Date()) {
-        let isFirstSignal = nativeCWDLastSignalAtByPanelID[panelID] == nil
-        nativeCWDLastSignalAtByPanelID[panelID] = now
-        // Seed fallback polling from the native signal timestamp so we do not
-        // immediately overwrite a fresh callback with a process poll.
-        nativeCWDLastProcessFallbackPollAtByPanelID[panelID] = now
-        if isFirstSignal {
-            ToasttyLog.info(
-                "Detected native Ghostty cwd callback for terminal panel; process cwd polling will be treated as fallback",
-                category: .terminal,
-                metadata: ["panel_id": panelID.uuidString]
-            )
-        }
+        metadataService?.recordProcessCWDFallbackPoll(panelID: panelID, now: now)
     }
 
     func snapshotChildPIDsForSurfaceCreation() -> Set<pid_t> {
-        processWorkingDirectoryResolver.snapshotChildPIDs()
+        metadataService?.snapshotChildPIDsForSurfaceCreation() ?? []
     }
 
     func registerChildPIDAfterSurfaceCreation(
@@ -732,7 +721,7 @@ private extension TerminalRuntimeRegistry {
         previousChildren: Set<pid_t>,
         expectedWorkingDirectory: String
     ) {
-        processWorkingDirectoryResolver.registerNewChild(
+        metadataService?.registerChildPIDAfterSurfaceCreation(
             panelID: panelID,
             previousChildren: previousChildren,
             expectedWorkingDirectory: expectedWorkingDirectory
@@ -743,88 +732,17 @@ private extension TerminalRuntimeRegistry {
         panelIDBySurfaceHandle[UInt(bitPattern: surface)]
     }
 
-    func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
-        for window in state.windows {
-            for workspaceID in window.workspaceIDs {
-                guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                guard workspace.panels[panelID] != nil else { continue }
-                if workspace.layoutTree.slotContaining(panelID: panelID) != nil {
-                    return workspaceID
-                }
-            }
-        }
-        return nil
-    }
-
     func reconcileSurfaceWorkingDirectory(panelID: UUID, workingDirectory: String?, source: String) {
-        guard let normalizedWorkingDirectory = Self.normalizedCWDValue(workingDirectory) else {
-            return
-        }
-        guard let store else {
-            return
-        }
-
-        let state = store.state
-        guard let workspaceID = workspaceID(containing: panelID, state: state),
-              let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
-              case .terminal(let terminalState) = panelState else {
-            return
-        }
-        guard Self.cwdValuesDiffer(normalizedWorkingDirectory, terminalState.cwd) else {
-            return
-        }
-
-        let handled = store.send(
-            .updateTerminalPanelMetadata(
-                panelID: panelID,
-                title: nil,
-                cwd: normalizedWorkingDirectory
-            )
+        metadataService?.reconcileSurfaceWorkingDirectory(
+            panelID: panelID,
+            workingDirectory: workingDirectory,
+            source: source
         )
-        if handled {
-            ToasttyLog.debug(
-                "Synchronized terminal cwd from Ghostty surface state",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "source": source,
-                    "cwd_sample": String(normalizedWorkingDirectory.prefix(120)),
-                ]
-            )
-        } else {
-            ToasttyLog.warning(
-                "Reducer rejected terminal cwd sync from Ghostty surface state",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "source": source,
-                ]
-            )
-        }
-    }
-
-    func resolvedWorkingDirectoryFromProcess(panelID: UUID) -> String? {
-        guard let processWorkingDirectory = processWorkingDirectoryResolver.resolveWorkingDirectory(for: panelID) else {
-            return nil
-        }
-        return Self.normalizedCWDValue(processWorkingDirectory)
     }
 
     @discardableResult
     func refreshWorkingDirectoryFromProcessIfNeeded(panelID: UUID, source: String) -> String? {
-        guard let normalizedWorkingDirectory = resolvedWorkingDirectoryFromProcess(panelID: panelID) else {
-            return nil
-        }
-
-        reconcileSurfaceWorkingDirectory(
-            panelID: panelID,
-            workingDirectory: normalizedWorkingDirectory,
-            source: source
-        )
-        return normalizedWorkingDirectory
+        metadataService?.refreshWorkingDirectoryFromProcessIfNeeded(panelID: panelID, source: source)
     }
 
     func startProcessWorkingDirectoryRefreshLoopIfNeeded() {
@@ -1324,18 +1242,13 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState,
         store: AppStore
     ) -> Bool {
-        let route = resolveDesktopNotificationRoute(
+        _ = store
+        return metadataService?.handleDesktopNotificationAction(
             action: action,
             title: title,
-            state: state
-        )
-        return handleDesktopNotification(
-            title: title,
             body: body,
-            route: route,
-            state: state,
-            store: store
-        )
+            state: state
+        ) ?? false
     }
 
     func handleRuntimeMetadataAction(
@@ -1345,396 +1258,23 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState,
         store: AppStore
     ) -> Bool {
-        switch intent {
-        case .setTerminalTitle(let title):
-            let now = Date()
-            return handleTerminalMetadataUpdate(
-                title: title,
-                cwd: nil,
-                allowLegacyCWDInference: prefersNativeCWDSignal(panelID: panelID, now: now) == false,
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: state,
-                store: store
-            )
-
-        case .setTerminalCWD(let cwd):
-            if Self.normalizedCWDValue(cwd) != nil {
-                recordNativeCWDSignal(panelID: panelID)
-            }
-            return handleTerminalMetadataUpdate(
-                title: nil,
-                cwd: cwd,
-                allowLegacyCWDInference: false,
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: state,
-                store: store
-            )
-
-        case .commandFinished(let exitCode):
-            return handleCommandFinishedMetadataUpdate(
-                exitCode: exitCode,
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: state,
-                store: store
-            )
-
-        default:
-            return false
-        }
-    }
-
-    private struct DesktopNotificationRoute {
-        let workspaceID: UUID?
-        let panelID: UUID?
-        let source: String
-    }
-
-    private func resolveDesktopNotificationRoute(
-        action: GhosttyRuntimeAction,
-        title: String,
-        state: AppState
-    ) -> DesktopNotificationRoute {
-        if let surfaceHandle = action.surfaceHandle {
-            if let panelID = panelIDBySurfaceHandle[surfaceHandle],
-               let workspaceID = workspaceID(containing: panelID, state: state) {
-                return DesktopNotificationRoute(
-                    workspaceID: workspaceID,
-                    panelID: panelID,
-                    source: "surface_handle"
-                )
-            }
-
-            ToasttyLog.warning(
-                "Desktop notification missing panel mapping for Ghostty surface handle",
-                category: .notifications,
-                metadata: ["surface_handle": String(surfaceHandle)]
-            )
-        }
-
-        if let selectedWindowID = state.selectedWindowID,
-           let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) {
-            let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
-            let nonSelectedWorkspaceIDs = selectedWindow.workspaceIDs.filter { $0 != currentSelectedWorkspaceID }
-            if nonSelectedWorkspaceIDs.count == 1,
-               let workspaceID = nonSelectedWorkspaceIDs.first,
-               let workspace = state.workspacesByID[workspaceID],
-               let panelID = resolvedActionPanelID(in: workspace) {
-                return DesktopNotificationRoute(
-                    workspaceID: workspaceID,
-                    panelID: panelID,
-                    source: "single_non_selected_workspace"
-                )
-            }
-        }
-
-        ToasttyLog.warning(
-            "Desktop notification route unresolved",
-            category: .notifications,
-            metadata: [
-                "title": title,
-                "has_surface_handle": action.surfaceHandle == nil ? "false" : "true",
-            ]
-        )
-        return DesktopNotificationRoute(
-            workspaceID: nil,
-            panelID: nil,
-            source: "unresolved"
-        )
-    }
-
-    private func handleDesktopNotification(
-        title: String,
-        body: String,
-        route: DesktopNotificationRoute,
-        state: AppState,
-        store: AppStore
-    ) -> Bool {
-        let workspaceID = route.workspaceID
-        let panelID = route.panelID
-        let notificationContext: DesktopNotificationContext
-        if let workspaceID {
-            notificationContext = desktopNotificationContext(
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: state
-            )
-        } else {
-            notificationContext = DesktopNotificationContext()
-        }
-
-        let appIsActive = NSApplication.shared.isActive
-        let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
-        let panelIsFocused: Bool
-        if let workspaceID,
-           let panelID,
-           currentSelectedWorkspaceID == workspaceID,
-           let workspace = state.workspacesByID[workspaceID] {
-            panelIsFocused = workspace.focusedPanelID == panelID
-                && workspace.layoutTree.slotContaining(panelID: panelID) != nil
-        } else {
-            panelIsFocused = false
-        }
-
-        if appIsActive && panelIsFocused {
-            var metadata: [String: String] = [
-                "title": title,
-                "route_source": route.source,
-            ]
-            if let workspaceID {
-                metadata["workspace_id"] = workspaceID.uuidString
-            }
-            if let panelID {
-                metadata["panel_id"] = panelID.uuidString
-            }
-            ToasttyLog.debug(
-                "Suppressed desktop notification for focused panel",
-                category: .notifications,
-                metadata: metadata
-            )
-            return true
-        }
-
-        if appIsActive,
-           workspaceID == nil,
-           panelID == nil,
-           let selectedWorkspaceID = currentSelectedWorkspaceID,
-           let selectedWindowID = state.selectedWindowID,
-           let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }),
-           selectedWindow.workspaceIDs.count == 1,
-           let workspace = state.workspacesByID[selectedWorkspaceID],
-           let resolvedPanelID = resolvedActionPanelID(in: workspace),
-           workspace.focusedPanelID == resolvedPanelID,
-           workspace.layoutTree.slotContaining(panelID: resolvedPanelID) != nil {
-            ToasttyLog.debug(
-                "Suppressed unresolved desktop notification for focused panel in single-workspace window",
-                category: .notifications,
-                metadata: ["title": title]
-            )
-            return true
-        }
-
-        if let workspaceID {
-            _ = store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: panelID))
-        } else {
-            ToasttyLog.warning(
-                "Skipped unread badge update because desktop notification route is unresolved",
-                category: .notifications,
-                metadata: ["title": title]
-            )
-        }
-
-        Task {
-            await SystemNotificationSender.send(
-                title: title,
-                body: body,
-                workspaceID: workspaceID,
-                panelID: panelID,
-                context: notificationContext
-            )
-        }
-
-        var metadata: [String: String] = [
-            "title": title,
-            "app_active": appIsActive ? "true" : "false",
-            "route_source": route.source,
-        ]
-        if let workspaceID {
-            metadata["workspace_id"] = workspaceID.uuidString
-        }
-        if let panelID {
-            metadata["panel_id"] = panelID.uuidString
-        }
-        ToasttyLog.info(
-            "Delivered desktop notification from Ghostty",
-            category: .notifications,
-            metadata: metadata
-        )
-        return true
-    }
-
-    private func desktopNotificationContext(
-        workspaceID: UUID,
-        panelID: UUID?,
-        state: AppState
-    ) -> DesktopNotificationContext {
-        guard let workspace = state.workspacesByID[workspaceID] else {
-            return DesktopNotificationContext()
-        }
-        return DesktopNotificationContext(
-            workspaceTitle: workspace.title,
-            panelLabel: panelID.flatMap { workspace.panels[$0]?.notificationLabel }
-        )
-    }
-
-    private func handleTerminalMetadataUpdate(
-        title: String?,
-        cwd: String?,
-        allowLegacyCWDInference: Bool,
-        workspaceID: UUID,
-        panelID: UUID,
-        state: AppState,
-        store: AppStore
-    ) -> Bool {
-        guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
-              case .terminal(let terminalState) = panelState else {
-            ToasttyLog.debug(
-                "Skipping terminal metadata update for non-terminal panel",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                ]
-            )
-            return false
-        }
-
-        let normalizedTitle = Self.normalizedMetadataValue(title)
-        var normalizedCWD = Self.normalizedCWDValue(cwd)
-        var cwdSource = "explicit"
-        if allowLegacyCWDInference,
-           normalizedCWD == nil,
-           let normalizedTitle {
-            normalizedCWD = Self.inferredCWDFromTitle(normalizedTitle, currentCWD: terminalState.cwd)
-            if normalizedCWD != nil {
-                cwdSource = "title_inference"
-            }
-        }
-        if allowLegacyCWDInference,
-           normalizedCWD == nil,
-           cwd == nil,
-           let normalizedTitle,
-           normalizedTitle != terminalState.title,
-           let visibleText = automationReadVisibleText(panelID: panelID),
-           let inferredCWD = Self.inferredCWDFromVisibleTerminalText(
-               visibleText,
-               currentCWD: terminalState.cwd
-           ) {
-            normalizedCWD = inferredCWD
-            cwdSource = "visible_text_inference"
-        }
-        if normalizedCWD == nil {
-            cwdSource = "none"
-        }
-
-        var hasChanges = false
-        if let normalizedTitle, normalizedTitle != terminalState.title {
-            hasChanges = true
-        }
-        if let normalizedCWD,
-           Self.cwdValuesDiffer(normalizedCWD, terminalState.cwd) {
-            hasChanges = true
-        }
-
-        guard hasChanges else {
-            if normalizedTitle != nil || normalizedCWD != nil {
-                ToasttyLog.debug(
-                    "Ignoring terminal metadata update because values are unchanged",
-                    category: .terminal,
-                    metadata: [
-                        "workspace_id": workspaceID.uuidString,
-                        "panel_id": panelID.uuidString,
-                        "title_present": normalizedTitle == nil ? "false" : "true",
-                        "cwd_present": normalizedCWD == nil ? "false" : "true",
-                        "cwd_source": cwdSource,
-                    ]
-                )
-            }
-            return true
-        }
-
-        let handled = store.send(
-            .updateTerminalPanelMetadata(
-                panelID: panelID,
-                title: normalizedTitle,
-                cwd: normalizedCWD
-            )
-        )
-        if handled {
-            let titleSample = normalizedTitle.map { String($0.prefix(80)) } ?? "nil"
-            let cwdSample = normalizedCWD.map { String($0.prefix(80)) } ?? "nil"
-            ToasttyLog.debug(
-                "Applied terminal metadata update from Ghostty",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "title_updated": normalizedTitle == nil ? "false" : "true",
-                    "cwd_updated": normalizedCWD == nil ? "false" : "true",
-                    "title_sample": titleSample,
-                    "cwd_sample": cwdSample,
-                    "cwd_source": cwdSource,
-                ]
-            )
-        } else {
-            ToasttyLog.warning(
-                "Reducer rejected terminal metadata update from Ghostty",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "title_updated": normalizedTitle == nil ? "false" : "true",
-                    "cwd_updated": normalizedCWD == nil ? "false" : "true",
-                ]
-            )
-        }
-        return handled
-    }
-
-    private func handleCommandFinishedMetadataUpdate(
-        exitCode: Int?,
-        workspaceID: UUID,
-        panelID: UUID,
-        state: AppState,
-        store: AppStore
-    ) -> Bool {
-        guard prefersNativeCWDSignal(panelID: panelID) == false else {
-            return true
-        }
-        guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
-              case .terminal(let terminalState) = panelState else {
-            return false
-        }
-
-        guard exitCode == nil || exitCode == 0 else {
-            return true
-        }
-
-        guard let visibleText = automationReadVisibleText(panelID: panelID),
-              let inferredCWD = Self.inferredCWDFromVisibleTerminalText(
-                  visibleText,
-                  currentCWD: terminalState.cwd
-              ) else {
-            return true
-        }
-
-        guard Self.cwdValuesDiffer(inferredCWD, terminalState.cwd) else {
-            return true
-        }
-
-        return handleTerminalMetadataUpdate(
-            title: nil,
-            cwd: inferredCWD,
-            allowLegacyCWDInference: true,
+        _ = store
+        return metadataService?.handleRuntimeMetadataAction(
+            intent,
             workspaceID: workspaceID,
             panelID: panelID,
-            state: state,
-            store: store
-        )
+            state: state
+        ) ?? false
     }
 
-    private static func normalizedMetadataValue(_ value: String?) -> String? {
+    static func normalizedMetadataValue(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         return trimmed
     }
 
-    private static func normalizedCWDValue(_ value: String?) -> String? {
+    static func normalizedCWDValue(_ value: String?) -> String? {
         guard let normalized = normalizedMetadataValue(value) else { return nil }
         if normalized.hasPrefix("file://"),
            let url = URL(string: normalized),
@@ -1746,7 +1286,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return normalized
     }
 
-    private static func cwdValuesDiffer(_ lhs: String, _ rhs: String) -> Bool {
+    static func cwdValuesDiffer(_ lhs: String, _ rhs: String) -> Bool {
         if lhs == rhs {
             return false
         }
@@ -1767,7 +1307,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             .path
     }
 
-    private static func inferredCWDFromTitle(_ title: String, currentCWD: String) -> String? {
+    static func inferredCWDFromTitle(_ title: String, currentCWD: String) -> String? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
 
@@ -1784,7 +1324,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return predictedCWD(fromCDCommandTitle: trimmed, currentCWD: currentCWD)
     }
 
-    private static func inferredCWDFromVisibleTerminalText(_ visibleText: String, currentCWD: String) -> String? {
+    static func inferredCWDFromVisibleTerminalText(_ visibleText: String, currentCWD: String) -> String? {
         let lines = sanitizedVisibleTerminalLines(visibleText)
         guard lines.isEmpty == false else { return nil }
 
@@ -2300,10 +1840,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let defaultTerminalTitleAfterAgentInferenceRestore = "Terminal"
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
-    // Consider native cwd callbacks authoritative for a short grace period.
-    private static let nativeCWDSignalFreshnessInterval: TimeInterval = 120
-    // Keep process-based cwd sync as a low-frequency fallback once native callbacks are observed.
-    private static let nativeCWDProcessFallbackPollInterval: TimeInterval = 30
     // Keep command-first summaries short-lived so stale process labels clear quickly.
     private static let activityCommandFreshnessInterval: TimeInterval = 60
     // Compact labels preserve room for status details in the sidebar.

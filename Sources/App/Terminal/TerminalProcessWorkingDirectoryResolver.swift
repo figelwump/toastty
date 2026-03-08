@@ -174,6 +174,19 @@ final class TerminalProcessWorkingDirectoryResolver {
         expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
     }
 
+    func prune(panelIDs: Set<UUID>) {
+        cachedProcessByPanelID = cachedProcessByPanelID.filter { panelID, _ in
+            panelIDs.contains(panelID)
+        }
+        pendingDeferredRegistration = pendingDeferredRegistration.filter { panelIDs.contains($0) }
+        pendingLoginPIDByPanelID = pendingLoginPIDByPanelID.filter { panelID, _ in
+            panelIDs.contains(panelID)
+        }
+        expectedWorkingDirectoryByPanelID = expectedWorkingDirectoryByPanelID.filter { panelID, _ in
+            panelIDs.contains(panelID)
+        }
+    }
+
     // MARK: - Registration Helpers
 
     /// Caches the shell child of a login PID for CWD tracking.

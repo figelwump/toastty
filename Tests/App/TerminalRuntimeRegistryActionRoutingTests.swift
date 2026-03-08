@@ -127,6 +127,28 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             try StateValidator.validate(store.state)
         }
     }
+
+    func testAppTargetCWDMetadataActionNormalizesFileURL() async throws {
+        try await MainActor.run {
+            let state = AppState.bootstrap()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let focusedPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+            let handled = registry.handleGhosttyRuntimeAction(
+                GhosttyRuntimeAction(surfaceHandle: nil, intent: .setTerminalCWD("  file:///tmp/toastty/runtime-router  "))
+            )
+
+            XCTAssertTrue(handled)
+            let workspaceAfter = try XCTUnwrap(store.selectedWorkspace)
+            XCTAssertEqual(workspaceAfter.focusedPanelID, focusedPanelID)
+            guard case .terminal(let terminalState) = workspaceAfter.panels[focusedPanelID] else {
+                XCTFail("expected focused panel to remain terminal")
+                return
+            }
+            XCTAssertEqual(terminalState.cwd, "/tmp/toastty/runtime-router")
+            try StateValidator.validate(store.state)
+        }
+    }
 }
 
 @MainActor
