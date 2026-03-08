@@ -107,6 +107,8 @@ var appDependencies: [TargetDependency] = [
     .target(name: "CoreState"),
 ]
 
+var appTestTargetSettingsBase: SettingsDictionary = [:]
+
 // Apple Development signing is required for UNUserNotificationCenter — macOS won't
 // register unsigned or ad-hoc signed apps in the Notifications preferences pane.
 // The project-level CODE_SIGNING_ALLOWED=NO is intentional for framework/test targets;
@@ -144,6 +146,18 @@ if hasGhosttyXCFramework {
             libraryRelativePath: ghosttyReleaseSelection.libraryRelativePath,
             settings: &appTargetSettingsBase
         )
+        applyGhosttyVariantLinkSettings(
+            configurationName: "Debug",
+            sliceRelativePath: ghosttyDebugSelection.sliceRelativePath,
+            libraryRelativePath: ghosttyDebugSelection.libraryRelativePath,
+            settings: &appTestTargetSettingsBase
+        )
+        applyGhosttyVariantLinkSettings(
+            configurationName: "Release",
+            sliceRelativePath: ghosttyReleaseSelection.sliceRelativePath,
+            libraryRelativePath: ghosttyReleaseSelection.libraryRelativePath,
+            settings: &appTestTargetSettingsBase
+        )
     } else {
         appDependencies.append(.xcframework(path: .relativeToRoot(ghosttyLegacyXCFrameworkRelativePath)))
     }
@@ -155,9 +169,17 @@ if hasGhosttyXCFramework {
         "-framework",
         "Carbon",
     ])
+    appTestTargetSettingsBase["OTHER_LDFLAGS"] = .array([
+        "$(inherited)",
+        "-lc++",
+        "-framework",
+        "Carbon",
+    ])
+    appTestTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
 }
 
 let appTargetSettings: Settings = .settings(base: appTargetSettingsBase)
+let appTestTargetSettings: Settings = .settings(base: appTestTargetSettingsBase)
 
 let project = Project(
     name: "toastty",
@@ -200,6 +222,20 @@ let project = Project(
                 .target(name: "CoreState"),
             ]
         ),
+        .target(
+            name: "ToasttyAppTests",
+            destinations: .macOS,
+            product: .unitTests,
+            bundleId: "com.GiantThings.toastty.app.tests",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Tests/App/**"],
+            dependencies: [
+                .target(name: "ToasttyApp"),
+                .target(name: "CoreState"),
+            ],
+            settings: appTestTargetSettings
+        ),
     ],
     schemes: [
         .scheme(
@@ -207,6 +243,12 @@ let project = Project(
             buildAction: .buildAction(
                 targets: [
                     .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                ]
+            ),
+            testAction: .targets(
+                [
+                    .testableTarget(target: .target("CoreStateTests")),
+                    .testableTarget(target: .target("ToasttyAppTests")),
                 ]
             ),
             runAction: .runAction(

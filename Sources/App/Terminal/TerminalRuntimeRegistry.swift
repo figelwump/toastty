@@ -60,6 +60,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     private var selectedSlotFocusRestoreTask: Task<Void, Never>?
     #if TOASTTY_HAS_GHOSTTY_KIT
+    private var actionRouter: TerminalActionRouter?
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var titleBeforeAgentInferenceByPanelID: [UUID: String] = [:]
@@ -98,6 +99,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
                 nextState: nextState
             )
         }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        actionRouter = TerminalActionRouter(store: store, registry: self)
+        #endif
         configureGhosttyActionHandler()
         startProcessWorkingDirectoryRefreshLoopIfNeeded()
     }
@@ -1276,34 +1280,13 @@ private extension TerminalRuntimeRegistry {
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     func handleGhosttyRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool {
-        guard let store else {
-            ToasttyLog.warning(
-                "Ghostty action dropped because store is unavailable",
-                category: .terminal,
-                metadata: ["intent": action.logIntentName]
-            )
-            return false
-        }
-        let state = store.state
+        actionRouter?.handle(action) ?? false
+    }
 
-        // Desktop notifications are handled separately — they should not steal focus.
-        if case .desktopNotification(let title, let body) = action.intent {
-            let route = resolveDesktopNotificationRoute(
-                action: action,
-                title: title,
-                state: state
-            )
-            return handleDesktopNotification(
-                title: title,
-                body: body,
-                route: route,
-                state: state,
-                store: store
-            )
-        }
-
-        let panelID: UUID
-        let workspaceIDForAction: UUID
+    func resolveActionTarget(
+        for action: GhosttyRuntimeAction,
+        state: AppState
+    ) -> (panelID: UUID, workspaceID: UUID)? {
         if let surfaceHandle = action.surfaceHandle {
             guard let resolvedPanelID = panelIDBySurfaceHandle[surfaceHandle],
                   let workspaceIDForSurface = workspaceID(containing: resolvedPanelID, state: state) else {
@@ -1315,38 +1298,66 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                         "surface_handle": String(surfaceHandle),
                     ]
                 )
-                return false
+                return nil
             }
-            panelID = resolvedPanelID
-            workspaceIDForAction = workspaceIDForSurface
-        } else {
-            guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
-                  let workspace = state.workspacesByID[selectedWorkspaceID],
-                  let resolvedPanelID = resolvedActionPanelID(in: workspace) else {
-                ToasttyLog.debug(
-                    "Ghostty app action could not resolve active panel",
-                    category: .terminal,
-                    metadata: ["intent": action.logIntentName]
-                )
-                return false
-            }
-            panelID = resolvedPanelID
-            workspaceIDForAction = selectedWorkspaceID
+            return (resolvedPanelID, workspaceIDForSurface)
         }
 
-        // Metadata updates should not steal focus.
-        switch action.intent {
+        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
+              let workspace = state.workspacesByID[selectedWorkspaceID],
+              let resolvedPanelID = resolvedActionPanelID(in: workspace) else {
+            ToasttyLog.debug(
+                "Ghostty app action could not resolve active panel",
+                category: .terminal,
+                metadata: ["intent": action.logIntentName]
+            )
+            return nil
+        }
+
+        return (resolvedPanelID, selectedWorkspaceID)
+    }
+
+    func handleDesktopNotificationAction(
+        action: GhosttyRuntimeAction,
+        title: String,
+        body: String,
+        state: AppState,
+        store: AppStore
+    ) -> Bool {
+        let route = resolveDesktopNotificationRoute(
+            action: action,
+            title: title,
+            state: state
+        )
+        return handleDesktopNotification(
+            title: title,
+            body: body,
+            route: route,
+            state: state,
+            store: store
+        )
+    }
+
+    func handleRuntimeMetadataAction(
+        _ intent: GhosttyRuntimeAction.Intent,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState,
+        store: AppStore
+    ) -> Bool {
+        switch intent {
         case .setTerminalTitle(let title):
             let now = Date()
             return handleTerminalMetadataUpdate(
                 title: title,
                 cwd: nil,
                 allowLegacyCWDInference: prefersNativeCWDSignal(panelID: panelID, now: now) == false,
-                workspaceID: workspaceIDForAction,
+                workspaceID: workspaceID,
                 panelID: panelID,
                 state: state,
                 store: store
             )
+
         case .setTerminalCWD(let cwd):
             if Self.normalizedCWDValue(cwd) != nil {
                 recordNativeCWDSignal(panelID: panelID)
@@ -1355,90 +1366,24 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
                 title: nil,
                 cwd: cwd,
                 allowLegacyCWDInference: false,
-                workspaceID: workspaceIDForAction,
+                workspaceID: workspaceID,
                 panelID: panelID,
                 state: state,
                 store: store
             )
+
         case .commandFinished(let exitCode):
             return handleCommandFinishedMetadataUpdate(
                 exitCode: exitCode,
-                workspaceID: workspaceIDForAction,
+                workspaceID: workspaceID,
                 panelID: panelID,
                 state: state,
                 store: store
             )
-        default:
-            break
-        }
 
-        guard store.send(.focusPanel(workspaceID: workspaceIDForAction, panelID: panelID)) else {
-            ToasttyLog.warning(
-                "Ghostty action failed to focus resolved panel",
-                category: .terminal,
-                metadata: [
-                    "intent": action.logIntentName,
-                    "workspace_id": workspaceIDForAction.uuidString,
-                    "panel_id": panelID.uuidString,
-                ]
-            )
+        default:
             return false
         }
-
-        let handled: Bool
-        switch action.intent {
-        case .split(let direction):
-            handled = splitFocusedSlotInDirection(workspaceID: workspaceIDForAction, direction: direction)
-
-        case .focus(let direction):
-            handled = store.send(.focusSlot(workspaceID: workspaceIDForAction, direction: direction))
-
-        case .resizeSplit(let direction, let amount):
-            handled = store.send(
-                .resizeFocusedSlotSplit(
-                    workspaceID: workspaceIDForAction,
-                    direction: direction,
-                    amount: amount
-                )
-            )
-
-        case .equalizeSplits:
-            handled = store.send(.equalizeLayoutSplits(workspaceID: workspaceIDForAction))
-
-        case .toggleFocusedPanelMode:
-            handled = store.send(.toggleFocusedPanelMode(workspaceID: workspaceIDForAction))
-
-        case .setTerminalTitle, .setTerminalCWD, .commandFinished:
-            // Already handled above; unreachable.
-            handled = false
-
-        case .desktopNotification:
-            // Already handled above; unreachable.
-            handled = false
-        }
-
-        if handled {
-            ToasttyLog.debug(
-                "Handled Ghostty runtime action in registry",
-                category: .terminal,
-                metadata: [
-                    "intent": action.logIntentName,
-                    "workspace_id": workspaceIDForAction.uuidString,
-                    "panel_id": panelID.uuidString,
-                ]
-            )
-        } else {
-            ToasttyLog.debug(
-                "Reducer rejected Ghostty runtime action",
-                category: .terminal,
-                metadata: [
-                    "intent": action.logIntentName,
-                    "workspace_id": workspaceIDForAction.uuidString,
-                    "panel_id": panelID.uuidString,
-                ]
-            )
-        }
-        return handled
     }
 
     private struct DesktopNotificationRoute {
