@@ -117,7 +117,7 @@ Validation:
 Required top-level fields:
 
 - `sessionID: String`
-- `panelID: UUID`
+- `panelID?: UUID`
 
 Payload:
 
@@ -132,6 +132,7 @@ Normalization:
 - If normalized file is outside `repoRoot`, mark file as out-of-scope for diff rendering.
 - If later `session.update_files` events send a conflicting `repoRoot`, preserve the first accepted root and emit a warning state (`conflicting repo roots`) in app state.
 - If payload exceeds max frame size, sender must split files across multiple `session.update_files` events.
+- `sessionID` must identify an active session. If `panelID` is also present, it must match that active session's panel.
 
 ### `session.status`
 
@@ -140,7 +141,7 @@ Canonical session status event used for sidebar and other session-oriented UI.
 Required top-level fields:
 
 - `sessionID: String`
-- `panelID: UUID`
+- `panelID?: UUID`
 
 Payload:
 
@@ -152,17 +153,22 @@ Notes:
 
 - Use `kind: "needs_approval"` when the agent is blocked on user approval or input.
 - `session.status` updates session UI only. If the sender also wants a notification dot or system notification, emit `notification.emit` separately.
+- `sessionID` must identify an active session. If `panelID` is also present, it must match that active session's panel.
 
 ### `session.stop`
 
 Required top-level fields:
 
 - `sessionID: String`
-- `panelID: UUID`
+- `panelID?: UUID`
 
 Payload:
 
 - `reason?: String`
+
+Notes:
+
+- `sessionID` must identify an active session. If `panelID` is also present, it must match that active session's panel.
 
 ### `notification.emit`
 

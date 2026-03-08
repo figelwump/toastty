@@ -127,6 +127,16 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return record
     }
 
+    public func activeSession(sessionID: String) -> SessionRecord? {
+        guard let record = sessionsByID[sessionID], record.isActive else {
+            return nil
+        }
+        guard activeSessionIDByPanelID[record.panelID] == sessionID else {
+            return nil
+        }
+        return record
+    }
+
     public func workspaceStatus(for workspaceID: UUID) -> WorkspaceSessionStatus? {
         let candidates = sessionsByID.values.filter { record in
             record.workspaceID == workspaceID && record.status != nil

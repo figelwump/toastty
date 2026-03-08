@@ -50,6 +50,173 @@ struct AutomationSocketServerTests {
         #expect(response.result?.string("sessionID") == sessionID)
     }
 
+    @Test
+    func sessionStatusCanResolveActiveSessionWithoutPanelID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await makeServer(socketPath: socketPath)
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-status-only"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.status",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "kind": .string(SessionStatusKind.working.rawValue),
+                    "summary": .string("editing 3 files"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("eventType") == "session.status")
+    }
+
+    @Test
+    func sessionStatusRejectsMismatchedPanelIDForActiveSession() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await makeServer(socketPath: socketPath)
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-mismatch"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.status",
+                sessionID: sessionID,
+                panelID: UUID().uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "kind": .string(SessionStatusKind.working.rawValue),
+                    "summary": .string("editing 3 files"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == "INVALID_PAYLOAD")
+        #expect(response.error?.message == "panelID does not match active session")
+    }
+
+    @Test
+    func sessionUpdateFilesCanResolveActiveSessionWithoutPanelID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await makeServer(socketPath: socketPath)
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-files-only"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.update_files",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "files": .array([.string("/tmp/a.swift")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("eventType") == "session.update_files")
+        #expect(response.result?.int("queuedFiles") == 1)
+    }
+
+    @Test
+    func sessionStopCanResolveActiveSessionWithoutPanelID() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await makeServer(socketPath: socketPath)
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let sessionID = "sess-stop-only"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.stop",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [:]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        #expect(response.result?.string("eventType") == "session.stop")
+    }
+
     private func temporarySocketPath() -> String {
         "/tmp/toastty-tests-\(UUID().uuidString.prefix(8)).sock"
     }

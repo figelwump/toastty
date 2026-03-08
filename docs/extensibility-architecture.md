@@ -135,9 +135,9 @@ toastty feed inject <content-id> "feedback text"    # simulate user comment
 
 ```bash
 toastty session start --agent claude|codex --panel <panel-id> [--session <id>] [--cwd <path>] [--repo-root <path>]
-toastty session update-files --session <id> --panel <panel-id> --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
-toastty session status --session <id> --panel <panel-id> --kind working|needs_approval|ready|error --summary "..." [--detail "..."]
-toastty session stop --session <id> --panel <panel-id> [--reason "..."]
+toastty session update-files --session <id> [--panel <panel-id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
+toastty session status --session <id> [--panel <panel-id>] --kind working|needs_approval|ready|error --summary "..." [--detail "..."]
+toastty session stop --session <id> [--panel <panel-id>] [--reason "..."]
 ```
 
 These commands are designed for agent-driven automation (for example, via globally installed Claude Code/Codex skills). They emit `session.*` socket events to keep Toastty session metadata in sync without requiring users to launch agents through a wrapper process.
@@ -147,7 +147,18 @@ Canonical agent IDs for telemetry are:
 - `claude` = Claude Code
 - `codex` = Codex CLI
 
-`--session` on `session start` is optional. If omitted, the CLI generates a UUID session ID and returns it in command output (`--json` recommended for skill-driven flows). Follow-up `session` commands must use that returned ID.
+`--session` on `session start` is optional. If omitted, the CLI generates a UUID session ID and returns it in command output (`--json` recommended for skill-driven flows). Follow-up `session` commands must use that returned ID. The app resolves active-session updates primarily by `sessionID`; `--panel` is optional on follow-up commands and is treated as a consistency check when present.
+
+For Toastty-owned launch flows, the CLI also accepts launch context from environment variables so a started agent can emit updates without repeating routing flags:
+
+- `TOASTTY_SESSION_ID`
+- `TOASTTY_PANEL_ID`
+- `TOASTTY_SOCKET_PATH`
+- `TOASTTY_CWD`
+- `TOASTTY_REPO_ROOT`
+- `TOASTTY_AGENT`
+
+Explicit CLI flags override the launch-context environment when both are present.
 
 ### output format
 

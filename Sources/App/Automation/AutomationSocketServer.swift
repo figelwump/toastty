@@ -646,10 +646,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
             }
-            let panelID = try event.requiredPanelID()
-            guard locatePanel(panelID) != nil else {
-                throw AutomationSocketError.invalidPayload("panelID does not exist")
-            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
             guard let kindRaw = event.payload.string("kind"),
                   let kind = SessionStatusKind(rawValue: kindRaw) else {
                 throw AutomationSocketError.invalidPayload(
@@ -675,10 +675,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
             }
-            let panelID = try event.requiredPanelID()
-            guard locatePanel(panelID) != nil else {
-                throw AutomationSocketError.invalidPayload("panelID does not exist")
-            }
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID
+            )
 
             let files = event.payload.stringArray("files")
             guard files.isEmpty == false else {
@@ -706,7 +706,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
             }
-            let _ = try event.requiredPanelID()
+            _ = try resolveActiveSession(
+                sessionID: sessionID,
+                rawPanelID: event.panelID,
+                requireLivePanel: false
+            )
             flushAllCoalescedUpdates()
             sessionRuntimeStore.stopSession(sessionID: sessionID, at: now)
             stateVersion += 1
@@ -1267,6 +1271,31 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             )
         }
     }
+
+    @MainActor
+    private func resolveActiveSession(
+        sessionID: String,
+        rawPanelID: String?,
+        requireLivePanel: Bool = true
+    ) throws -> SessionRecord {
+        guard let record = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            throw AutomationSocketError.invalidPayload("sessionID does not identify an active session")
+        }
+
+        if let panelID = try parsePanelID(rawPanelID) {
+            guard panelID == record.panelID else {
+                throw AutomationSocketError.invalidPayload("panelID does not match active session")
+            }
+        }
+
+        if requireLivePanel {
+            guard locatePanel(record.panelID) != nil else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+        }
+
+        return record
+    }
 }
 
 private enum AutomationIncomingEnvelope: Sendable {
@@ -1291,6 +1320,14 @@ private extension AutomationEventEnvelope {
         }
         return uuid
     }
+}
+
+private func parsePanelID(_ panelID: String?) throws -> UUID? {
+    guard let panelID else { return nil }
+    guard let uuid = UUID(uuidString: panelID) else {
+        throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+    }
+    return uuid
 }
 
 private struct AutomationRuntimeStateDump: Encodable, Sendable {

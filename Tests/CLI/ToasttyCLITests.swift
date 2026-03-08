@@ -64,6 +64,80 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func sessionStatusFallsBackToLaunchContextEnvironment() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "status",
+                "--kind", "working",
+                "--summary", "editing 3 files",
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+                "TOASTTY_PANEL_ID": panelID.uuidString,
+            ]
+        )
+
+        guard case .sessionStatus(let sessionID, let parsedPanelID, let kind, let summary, let detail) = invocation.command else {
+            Issue.record("expected session status command")
+            return
+        }
+
+        #expect(sessionID == "sess-env")
+        #expect(parsedPanelID == panelID)
+        #expect(kind == .working)
+        #expect(summary == "editing 3 files")
+        #expect(detail == nil)
+    }
+
+    @Test
+    func sessionStopCanOmitPanelWhenOnlySessionEnvironmentIsAvailable() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "stop",
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+            ]
+        )
+
+        guard case .sessionStop(let sessionID, let panelID, let reason) = invocation.command else {
+            Issue.record("expected session stop command")
+            return
+        }
+
+        #expect(sessionID == "sess-env")
+        #expect(panelID == nil)
+        #expect(reason == nil)
+    }
+
+    @Test
+    func sessionStatusRejectsInvalidLaunchContextPanelID() {
+        do {
+            _ = try ToasttyCLI.parse(
+                arguments: [
+                    "session", "status",
+                    "--kind", "working",
+                    "--summary", "editing 3 files",
+                ],
+                environment: [
+                    "TOASTTY_SESSION_ID": "sess-env",
+                    "TOASTTY_PANEL_ID": "not-a-uuid",
+                ]
+            )
+            Issue.record("expected parse failure")
+        } catch let error as ToasttyCLIError {
+            guard case .usage(let message) = error else {
+                Issue.record("expected usage error")
+                return
+            }
+            #expect(message.contains("TOASTTY_PANEL_ID must be a UUID"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
     func updateFilesRequiresAtLeastOneFile() {
         let panelID = UUID().uuidString
 

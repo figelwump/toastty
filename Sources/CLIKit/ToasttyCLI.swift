@@ -14,9 +14,9 @@ struct CLIInvocation: Equatable {
 enum CLICommand: Equatable {
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
-    case sessionStatus(sessionID: String, panelID: UUID, kind: SessionStatusKind, summary: String, detail: String?)
-    case sessionUpdateFiles(sessionID: String, panelID: UUID, files: [String], cwd: String?, repoRoot: String?)
-    case sessionStop(sessionID: String, panelID: UUID, reason: String?)
+    case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
+    case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
+    case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
@@ -66,7 +66,7 @@ enum CLICommand: Equatable {
             return AutomationEventEnvelope(
                 eventType: "session.status",
                 sessionID: sessionID,
-                panelID: panelID.uuidString,
+                panelID: panelID?.uuidString,
                 requestID: requestID,
                 payload: payload
             )
@@ -84,7 +84,7 @@ enum CLICommand: Equatable {
             return AutomationEventEnvelope(
                 eventType: "session.update_files",
                 sessionID: sessionID,
-                panelID: panelID.uuidString,
+                panelID: panelID?.uuidString,
                 requestID: requestID,
                 payload: payload
             )
@@ -97,7 +97,7 @@ enum CLICommand: Equatable {
             return AutomationEventEnvelope(
                 eventType: "session.stop",
                 sessionID: sessionID,
-                panelID: panelID.uuidString,
+                panelID: panelID?.uuidString,
                 requestID: requestID,
                 payload: payload
             )
@@ -184,7 +184,7 @@ public enum ToasttyCLI {
         case "session":
             return CLIInvocation(
                 options: options,
-                command: try parseSessionCommand(Array(remainingArguments.dropFirst()))
+                command: try parseSessionCommand(Array(remainingArguments.dropFirst()), environment: environment)
             )
 
         default:
@@ -196,9 +196,9 @@ public enum ToasttyCLI {
     Usage:
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session start --agent claude|codex --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
-      toastty [--json] [--socket-path <path>] session status --session <id> --panel <id> --kind working|needs_approval|ready|error --summary <text> [--detail <text>]
-      toastty [--json] [--socket-path <path>] session update-files --session <id> --panel <id> --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
-      toastty [--json] [--socket-path <path>] session stop --session <id> --panel <id> [--reason <text>]
+      toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind working|needs_approval|ready|error --summary <text> [--detail <text>]
+      toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
+      toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
     private static func parseGlobalOptions(
@@ -252,7 +252,10 @@ public enum ToasttyCLI {
         )
     }
 
-    private static func parseSessionCommand(_ arguments: [String]) throws -> CLICommand {
+    private static func parseSessionCommand(
+        _ arguments: [String],
+        environment: [String: String]
+    ) throws -> CLICommand {
         guard let subcommand = arguments.first else {
             throw ToasttyCLIError.usage("session requires a subcommand\n\n\(usage)")
         }
@@ -269,19 +272,44 @@ public enum ToasttyCLI {
                 throw ToasttyCLIError.usage("session start does not accept positional arguments\n\n\(usage)")
             }
 
-            let agentValue = try requireValue("--agent", in: parsed)
-            guard let agent = AgentKind(rawValue: agentValue) else {
-                throw ToasttyCLIError.usage("agent must be one of: claude, codex")
+            let agentValue = try requireResolvedValue(
+                flag: "--agent",
+                environmentKey: LaunchContextEnvironment.agentKey,
+                in: parsed,
+                environment: environment
+            )
+            guard let agent = AgentKind(rawValue: agentValue.value) else {
+                throw ToasttyCLIError.usage("\(agentValue.source) must be one of: claude, codex")
             }
-            let panelID = try parseRequiredUUID(flag: "--panel", in: parsed)
-            let sessionID = parsed.singleValue("--session") ?? UUID().uuidString
+            let panelID = try parseRequiredUUID(
+                flag: "--panel",
+                environmentKey: LaunchContextEnvironment.panelIDKey,
+                in: parsed,
+                environment: environment
+            )
+            let sessionID = resolvedValue(
+                for: "--session",
+                environmentKey: LaunchContextEnvironment.sessionIDKey,
+                in: parsed,
+                environment: environment
+            )?.value ?? UUID().uuidString
 
             return .sessionStart(
                 sessionID: sessionID,
                 agent: agent,
                 panelID: panelID,
-                cwd: parsed.singleValue("--cwd"),
-                repoRoot: parsed.singleValue("--repo-root")
+                cwd: resolvedValue(
+                    for: "--cwd",
+                    environmentKey: LaunchContextEnvironment.cwdKey,
+                    in: parsed,
+                    environment: environment
+                )?.nonEmptyValue,
+                repoRoot: resolvedValue(
+                    for: "--repo-root",
+                    environmentKey: LaunchContextEnvironment.repoRootKey,
+                    in: parsed,
+                    environment: environment
+                )?.nonEmptyValue
             )
 
         case "status":
@@ -300,8 +328,18 @@ public enum ToasttyCLI {
             }
 
             return .sessionStatus(
-                sessionID: try requireValue("--session", in: parsed),
-                panelID: try parseRequiredUUID(flag: "--panel", in: parsed),
+                sessionID: try requireValue(
+                    "--session",
+                    environmentKey: LaunchContextEnvironment.sessionIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
+                panelID: try parseOptionalUUID(
+                    flag: "--panel",
+                    environmentKey: LaunchContextEnvironment.panelIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
                 kind: kind,
                 summary: try requireValue("--summary", in: parsed),
                 detail: parsed.singleValue("--detail")
@@ -326,11 +364,31 @@ public enum ToasttyCLI {
             }
 
             return .sessionUpdateFiles(
-                sessionID: try requireValue("--session", in: parsed),
-                panelID: try parseRequiredUUID(flag: "--panel", in: parsed),
+                sessionID: try requireValue(
+                    "--session",
+                    environmentKey: LaunchContextEnvironment.sessionIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
+                panelID: try parseOptionalUUID(
+                    flag: "--panel",
+                    environmentKey: LaunchContextEnvironment.panelIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
                 files: files,
-                cwd: parsed.singleValue("--cwd"),
-                repoRoot: parsed.singleValue("--repo-root")
+                cwd: resolvedValue(
+                    for: "--cwd",
+                    environmentKey: LaunchContextEnvironment.cwdKey,
+                    in: parsed,
+                    environment: environment
+                )?.nonEmptyValue,
+                repoRoot: resolvedValue(
+                    for: "--repo-root",
+                    environmentKey: LaunchContextEnvironment.repoRootKey,
+                    in: parsed,
+                    environment: environment
+                )?.nonEmptyValue
             )
 
         case "stop":
@@ -344,8 +402,18 @@ public enum ToasttyCLI {
             }
 
             return .sessionStop(
-                sessionID: try requireValue("--session", in: parsed),
-                panelID: try parseRequiredUUID(flag: "--panel", in: parsed),
+                sessionID: try requireValue(
+                    "--session",
+                    environmentKey: LaunchContextEnvironment.sessionIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
+                panelID: try parseOptionalUUID(
+                    flag: "--panel",
+                    environmentKey: LaunchContextEnvironment.panelIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
                 reason: parsed.singleValue("--reason")
             )
 
@@ -389,10 +457,42 @@ public enum ToasttyCLI {
         return value
     }
 
+    private static func requireValue(
+        _ flag: String,
+        environmentKey: String,
+        in parsed: ParsedCommandArguments,
+        environment: [String: String]
+    ) throws -> String {
+        try requireResolvedValue(
+            flag: flag,
+            environmentKey: environmentKey,
+            in: parsed,
+            environment: environment
+        ).value
+    }
+
     private static func parseRequiredUUID(flag: String, in parsed: ParsedCommandArguments) throws -> UUID {
         let value = try requireValue(flag, in: parsed)
         guard let uuid = UUID(uuidString: value) else {
             throw ToasttyCLIError.usage("\(flag) must be a UUID")
+        }
+        return uuid
+    }
+
+    private static func parseRequiredUUID(
+        flag: String,
+        environmentKey: String,
+        in parsed: ParsedCommandArguments,
+        environment: [String: String]
+    ) throws -> UUID {
+        let resolved = try requireResolvedValue(
+            flag: flag,
+            environmentKey: environmentKey,
+            in: parsed,
+            environment: environment
+        )
+        guard let uuid = UUID(uuidString: resolved.value) else {
+            throw ToasttyCLIError.usage("\(resolved.source) must be a UUID")
         }
         return uuid
     }
@@ -403,6 +503,68 @@ public enum ToasttyCLI {
             throw ToasttyCLIError.usage("\(flag) must be a UUID")
         }
         return uuid
+    }
+
+    private static func parseOptionalUUID(
+        flag: String,
+        environmentKey: String,
+        in parsed: ParsedCommandArguments,
+        environment: [String: String]
+    ) throws -> UUID? {
+        guard let resolved = resolvedValue(
+            for: flag,
+            environmentKey: environmentKey,
+            in: parsed,
+            environment: environment
+        ) else {
+            return nil
+        }
+        guard let value = resolved.nonEmptyValue else {
+            if resolved.source == flag {
+                throw ToasttyCLIError.usage("\(flag) must be a UUID")
+            }
+            return nil
+        }
+        guard let uuid = UUID(uuidString: value) else {
+            throw ToasttyCLIError.usage("\(resolved.source) must be a UUID")
+        }
+        return uuid
+    }
+
+    private static func requireResolvedValue(
+        flag: String,
+        environmentKey: String,
+        in parsed: ParsedCommandArguments,
+        environment: [String: String]
+    ) throws -> ResolvedArgumentValue {
+        guard let resolved = resolvedValue(
+            for: flag,
+            environmentKey: environmentKey,
+            in: parsed,
+            environment: environment
+        ) else {
+            throw ToasttyCLIError.usage("\(flag) is required\n\n\(usage)")
+        }
+        guard let nonEmptyValue = resolved.nonEmptyValue else {
+            throw ToasttyCLIError.usage("\(resolved.source) is required\n\n\(usage)")
+        }
+        return ResolvedArgumentValue(value: nonEmptyValue, source: resolved.source)
+    }
+
+    private static func resolvedValue(
+        for flag: String,
+        environmentKey: String,
+        in parsed: ParsedCommandArguments,
+        environment: [String: String]
+    ) -> ResolvedArgumentValue? {
+        if let explicitValue = parsed.singleValue(flag) {
+            return ResolvedArgumentValue(value: explicitValue, source: flag)
+        }
+
+        guard let environmentValue = environment[environmentKey] else {
+            return nil
+        }
+        return ResolvedArgumentValue(value: environmentValue, source: environmentKey)
     }
 
     private static func jsonString(for response: AutomationResponseEnvelope) throws -> String {
@@ -435,6 +597,23 @@ private struct ParsedCommandArguments {
     func values(_ flag: String) -> [String] {
         optionValues[flag] ?? []
     }
+}
+
+private struct ResolvedArgumentValue {
+    let value: String
+    let source: String
+
+    var nonEmptyValue: String? {
+        value.isEmpty ? nil : value
+    }
+}
+
+private enum LaunchContextEnvironment {
+    static let agentKey = "TOASTTY_AGENT"
+    static let sessionIDKey = "TOASTTY_SESSION_ID"
+    static let panelIDKey = "TOASTTY_PANEL_ID"
+    static let cwdKey = "TOASTTY_CWD"
+    static let repoRootKey = "TOASTTY_REPO_ROOT"
 }
 
 private extension String {
