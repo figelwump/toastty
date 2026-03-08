@@ -22,6 +22,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
     public var panelID: UUID
     public var windowID: UUID
     public var workspaceID: UUID
+    public var status: SessionStatus?
     public var repoRoot: String?
     public var cwd: String?
     public var touchedFiles: [String]
@@ -36,6 +37,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        status: SessionStatus? = nil,
         repoRoot: String? = nil,
         cwd: String? = nil,
         touchedFiles: [String] = [],
@@ -49,6 +51,7 @@ public struct SessionRecord: Codable, Equatable, Sendable {
         self.panelID = panelID
         self.windowID = windowID
         self.workspaceID = workspaceID
+        self.status = status
         self.repoRoot = repoRoot
         self.cwd = cwd
         self.touchedFiles = touchedFiles

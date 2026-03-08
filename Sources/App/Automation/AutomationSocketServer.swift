@@ -5,7 +5,7 @@ import Darwin
 import Foundation
 
 final class AutomationSocketServer: @unchecked Sendable {
-    private let config: AutomationConfig
+    private let socketPath: String
     private let commandExecutor: AutomationCommandExecutor
     private let queue = DispatchQueue(label: "toastty.automation.socket")
 
@@ -14,17 +14,20 @@ final class AutomationSocketServer: @unchecked Sendable {
     private var clients: [Int32: AutomationSocketClient] = [:]
 
     init(
-        config: AutomationConfig,
+        socketPath: String,
+        automationConfig: AutomationConfig?,
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController
     ) throws {
-        self.config = config
+        self.socketPath = socketPath
         self.commandExecutor = AutomationCommandExecutor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
-            config: config
+            automationConfig: automationConfig
         )
         try startListening()
     }
@@ -34,13 +37,13 @@ final class AutomationSocketServer: @unchecked Sendable {
     }
 
     private func startListening() throws {
-        let socketURL = URL(fileURLWithPath: config.socketPath, isDirectory: false)
+        let socketURL = URL(fileURLWithPath: socketPath, isDirectory: false)
         let directoryURL = socketURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         _ = chmod(directoryURL.path, 0o700)
 
         // Remove any stale socket left by prior runs.
-        _ = unlink(config.socketPath)
+        _ = unlink(socketPath)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -50,11 +53,11 @@ final class AutomationSocketServer: @unchecked Sendable {
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
-        let pathBytes = Array(config.socketPath.utf8CString)
+        let pathBytes = Array(socketPath.utf8CString)
         let maxPathLength = MemoryLayout.size(ofValue: address.sun_path)
         guard pathBytes.count <= maxPathLength else {
             close(fd)
-            throw AutomationSocketError.invalidPayload("socket path too long: \(config.socketPath)")
+            throw AutomationSocketError.invalidPayload("socket path too long: \(socketPath)")
         }
         withUnsafeMutableBytes(of: &address.sun_path) { buffer in
             buffer.initializeMemory(as: UInt8.self, repeating: 0)
@@ -75,7 +78,7 @@ final class AutomationSocketServer: @unchecked Sendable {
             throw AutomationSocketError.internalError("bind() failed: \(errno)")
         }
 
-        _ = chmod(config.socketPath, 0o600)
+        _ = chmod(socketPath, 0o600)
 
         guard listen(fd, SOMAXCONN) == 0 else {
             close(fd)
@@ -110,7 +113,7 @@ final class AutomationSocketServer: @unchecked Sendable {
             close(listenFD)
             listenFD = -1
         }
-        _ = unlink(config.socketPath)
+        _ = unlink(socketPath)
     }
 
     private func acceptConnections() {
@@ -322,29 +325,29 @@ private final class AutomationSocketClient: @unchecked Sendable {
 private final class AutomationCommandExecutor: @unchecked Sendable {
     private let store: AppStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
-    private let config: AutomationConfig
+    private let automationConfig: AutomationConfig?
     private let startedAt = Date()
 
     private var stateVersion = 0
     private var currentFixtureName: String
-    private var sessionRegistry = SessionRegistry()
     private var notificationStore = NotificationStore()
     private var sessionUpdateCoalescer = SessionUpdateCoalescer()
-    private var progressBySessionID: [String: String] = [:]
-    private var errorsBySessionID: [String: String] = [:]
 
     init(
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
-        config: AutomationConfig
+        automationConfig: AutomationConfig?
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
-        self.config = config
-        self.currentFixtureName = config.fixtureName ?? "default"
+        self.automationConfig = automationConfig
+        self.currentFixtureName = automationConfig?.fixtureName ?? "default"
     }
 
     @MainActor
@@ -396,31 +399,32 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "automation.ping":
             return [
                 "status": .string("ok"),
-                "automationEnabled": .bool(true),
+                "automationEnabled": .bool(automationConfig != nil),
                 "appUptimeMs": .int(Int(Date().timeIntervalSince(startedAt) * 1000)),
                 "protocolVersion": .string("1.0"),
             ]
 
         case "automation.reset":
+            try requireAutomationMode(for: command)
             store.replaceState(.bootstrap())
             currentFixtureName = "default"
-            sessionRegistry = SessionRegistry()
+            sessionRuntimeStore.reset()
             notificationStore = NotificationStore()
             sessionUpdateCoalescer = SessionUpdateCoalescer()
-            progressBySessionID.removeAll(keepingCapacity: false)
-            errorsBySessionID.removeAll(keepingCapacity: false)
             stateVersion += 1
             return [
                 "stateVersion": .int(stateVersion),
             ]
 
         case "automation.load_fixture":
+            try requireAutomationMode(for: command)
             guard let fixtureName = payload.string("name"), fixtureName.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("name is required")
             }
             let state = try AutomationFixtureLoader.loadRequired(named: fixtureName)
             store.replaceState(state)
             currentFixtureName = fixtureName
+            sessionRuntimeStore.reset()
             stateVersion += 1
             return [
                 "fixture": .string(fixtureName),
@@ -428,6 +432,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             ]
 
         case "automation.perform_action":
+            try requireAutomationMode(for: command)
             guard let actionID = payload.string("action"), actionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("action is required")
             }
@@ -439,6 +444,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             ]
 
         case "automation.terminal_send_text":
+            try requireAutomationMode(for: command)
             guard let text = payload.string("text") else {
                 throw AutomationSocketError.invalidPayload("text is required")
             }
@@ -469,6 +475,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             throw AutomationSocketError.invalidPayload("terminal surface unavailable for panelID \(resolved.panelID.uuidString)")
 
         case "automation.terminal_drop_image_files":
+            try requireAutomationMode(for: command)
             guard payload["files"] != nil else {
                 throw AutomationSocketError.invalidPayload("files is required")
             }
@@ -521,6 +528,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
 
         case "automation.terminal_visible_text":
+            try requireAutomationMode(for: command)
             let resolved = try resolveTerminalTarget(payload: payload)
             guard let text = terminalRuntimeRegistry.automationReadVisibleText(panelID: resolved.panelID) else {
                 throw AutomationSocketError.invalidPayload("terminal visible text unavailable for panelID \(resolved.panelID.uuidString)")
@@ -539,6 +547,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return result
 
         case "automation.terminal_state":
+            try requireAutomationMode(for: command)
             let resolved = try resolveTerminalTarget(payload: payload)
             return try terminalStateSnapshot(
                 workspaceID: resolved.workspaceID,
@@ -546,6 +555,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             )
 
         case "automation.dump_state":
+            try requireAutomationMode(for: command)
             flushCoalescedUpdates(at: Date())
             let includeRuntime = payload.bool("includeRuntime") ?? false
             let stateData = try encodedStateData(includeRuntime: includeRuntime)
@@ -559,14 +569,17 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             ]
 
         case "automation.workspace_snapshot":
+            try requireAutomationMode(for: command)
             let workspaceID = try resolveWorkspaceID(args: payload)
             return try workspaceSnapshot(workspaceID: workspaceID)
 
         case "automation.workspace_render_snapshot":
+            try requireAutomationMode(for: command)
             let workspaceID = try resolveWorkspaceID(args: payload)
             return try workspaceRenderSnapshot(workspaceID: workspaceID)
 
         case "automation.capture_screenshot":
+            try requireAutomationMode(for: command)
             guard let step = payload.string("step"), step.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("step is required")
             }
@@ -584,6 +597,12 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         default:
             throw AutomationSocketError.unknownCommand
+        }
+    }
+
+    private func requireAutomationMode(for command: String) throws {
+        guard automationConfig != nil else {
+            throw AutomationSocketError.invalidPayload("\(command) requires automation mode")
         }
     }
 
@@ -606,7 +625,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("panelID does not exist")
             }
 
-            sessionRegistry.startSession(
+            sessionRuntimeStore.startSession(
                 sessionID: sessionID,
                 agent: agent,
                 panelID: panelID,
@@ -614,6 +633,35 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 workspaceID: location.workspaceID,
                 cwd: event.payload.string("cwd"),
                 repoRoot: event.payload.string("repoRoot"),
+                at: now
+            )
+            stateVersion += 1
+            return [
+                "eventType": .string(event.eventType),
+                "stateVersion": .int(stateVersion),
+            ]
+
+        case "session.status":
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("sessionID is required")
+            }
+            let panelID = try event.requiredPanelID()
+            guard locatePanel(panelID) != nil else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let kindRaw = event.payload.string("kind"),
+                  let kind = SessionStatusKind(rawValue: kindRaw) else {
+                throw AutomationSocketError.invalidPayload(
+                    "kind must be one of: working, needs_approval, ready, error"
+                )
+            }
+            guard let summary = normalizedOptionalText(event.payload.string("summary")) else {
+                throw AutomationSocketError.invalidPayload("summary is required")
+            }
+            let detail = normalizedOptionalText(event.payload.string("detail"))
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(kind: kind, summary: summary, detail: detail),
                 at: now
             )
             stateVersion += 1
@@ -654,7 +702,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             ]
 
         case "session.needs_input":
-            guard event.sessionID?.isEmpty == false else {
+            guard let sessionID = event.sessionID, sessionID.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("sessionID is required")
             }
             let panelID = try event.requiredPanelID()
@@ -684,6 +732,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 workspaceID: location.workspaceID,
                 panelID: panelID
             )
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(
+                    kind: .needsApproval,
+                    summary: SessionStatusKind.needsApproval.defaultSummary,
+                    detail: normalizedOptionalText(body)
+                ),
+                at: now
+            )
             stateVersion += 1
             return [
                 "eventType": .string(event.eventType),
@@ -700,7 +757,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let message = event.payload.string("message"), message.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("message is required")
             }
-            progressBySessionID[sessionID] = message
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(
+                    kind: .working,
+                    summary: normalizedStatusSummary(message, defaultValue: SessionStatusKind.working.defaultSummary),
+                    detail: normalizedOptionalText(event.payload.string("detail"))
+                ),
+                at: now
+            )
             stateVersion += 1
             return [
                 "eventType": .string(event.eventType),
@@ -715,7 +780,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let message = event.payload.string("message"), message.isEmpty == false else {
                 throw AutomationSocketError.invalidPayload("message is required")
             }
-            errorsBySessionID[sessionID] = message
+            sessionRuntimeStore.updateStatus(
+                sessionID: sessionID,
+                status: SessionStatus(
+                    kind: .error,
+                    summary: SessionStatusKind.error.defaultSummary,
+                    detail: normalizedOptionalText(message)
+                ),
+                at: now
+            )
             stateVersion += 1
             return [
                 "eventType": .string(event.eventType),
@@ -728,9 +801,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             }
             let _ = try event.requiredPanelID()
             flushAllCoalescedUpdates()
-            sessionRegistry.stopSession(sessionID: sessionID, at: now)
-            progressBySessionID.removeValue(forKey: sessionID)
-            errorsBySessionID.removeValue(forKey: sessionID)
+            sessionRuntimeStore.stopSession(sessionID: sessionID, at: now)
             stateVersion += 1
             return [
                 "eventType": .string(event.eventType),
@@ -992,10 +1063,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             flushAllCoalescedUpdates()
             let snapshot = AutomationRuntimeStateDump(
                 appState: store.state,
-                sessionRegistry: sessionRegistry,
-                notifications: notificationStore.notifications,
-                progressBySessionID: progressBySessionID,
-                errorsBySessionID: errorsBySessionID
+                sessionRegistry: sessionRuntimeStore.sessionRegistry,
+                notifications: notificationStore.notifications
             )
             return try encoder.encode(snapshot)
         }
@@ -1133,9 +1202,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     private func ensureRunArtifactDirectory() throws -> URL {
-        let rootDirectory = URL(fileURLWithPath: config.artifactsDirectory ?? FileManager.default.temporaryDirectory.path, isDirectory: true)
+        guard let automationConfig else {
+            throw AutomationSocketError.invalidPayload("artifacts require automation mode")
+        }
+
+        let rootDirectory = URL(
+            fileURLWithPath: automationConfig.artifactsDirectory ?? FileManager.default.temporaryDirectory.path,
+            isDirectory: true
+        )
             .appendingPathComponent("ui", isDirectory: true)
-            .appendingPathComponent(sanitizedPathComponent(config.runID), isDirectory: true)
+            .appendingPathComponent(sanitizedPathComponent(automationConfig.runID), isDirectory: true)
         try FileManager.default.createDirectory(at: rootDirectory, withIntermediateDirectories: true)
         return rootDirectory
     }
@@ -1171,6 +1247,16 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             allowed.contains(scalar) ? String(scalar) : "-"
         }.joined()
         return transformed.isEmpty ? "value" : transformed
+    }
+
+    private func normalizedStatusSummary(_ value: String?, defaultValue: String) -> String {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? defaultValue : trimmed
+    }
+
+    private func normalizedOptionalText(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     @MainActor
@@ -1255,7 +1341,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private func flushCoalescedUpdates(at now: Date) {
         let updates = sessionUpdateCoalescer.flushReady(at: now)
         for update in updates {
-            sessionRegistry.updateFiles(
+            sessionRuntimeStore.updateFiles(
                 sessionID: update.sessionID,
                 files: update.files,
                 cwd: update.cwd,
@@ -1270,7 +1356,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         let now = Date()
         let updates = sessionUpdateCoalescer.flushAll()
         for update in updates {
-            sessionRegistry.updateFiles(
+            sessionRuntimeStore.updateFiles(
                 sessionID: update.sessionID,
                 files: update.files,
                 cwd: update.cwd,
@@ -1336,8 +1422,6 @@ private struct AutomationRuntimeStateDump: Encodable, Sendable {
     let appState: AppState
     let sessionRegistry: SessionRegistry
     let notifications: [ToasttyNotification]
-    let progressBySessionID: [String: String]
-    let errorsBySessionID: [String: String]
 }
 
 private struct AutomationRequestEnvelope: Decodable, Sendable {

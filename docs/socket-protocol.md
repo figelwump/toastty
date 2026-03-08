@@ -145,6 +145,25 @@ Payload:
 - `title: String`
 - `body: String`
 
+Semantics:
+
+- Records a workspace attention state and maps to session status kind `needs_approval` for sidebar rendering.
+
+### `session.status`
+
+Canonical session status event used for sidebar and other session-oriented UI.
+
+Required top-level fields:
+
+- `sessionID: String`
+- `panelID: UUID`
+
+Payload:
+
+- `kind: "working" | "needs_approval" | "ready" | "error"`
+- `summary: String`
+- `detail?: String`
+
 ### `session.progress`
 
 Required top-level fields:
@@ -156,6 +175,10 @@ Payload:
 
 - `message: String`
 
+Semantics:
+
+- Legacy convenience event. Maps to `session.status` with `kind: "working"` and `summary = message`.
+
 ### `session.error`
 
 Required top-level fields:
@@ -166,6 +189,10 @@ Required top-level fields:
 Payload:
 
 - `message: String`
+
+Semantics:
+
+- Legacy convenience event. Maps to `session.status` with `kind: "error"` and `detail = message`.
 
 ### `session.stop`
 
@@ -431,7 +458,7 @@ Agents may emit `session.update_files` at high frequency. The app is responsible
 
 - **Recommended coalesce window**: 500ms per session. Merge file lists from events within the window. Keep latest `cwd` and `repoRoot`.
 - **Diff recompute**: trigger once after the coalesce window closes. If new events arrive during computation, cancel and restart after the next window.
-- **Other event types**: `session.progress` and `session.needs_input` are not coalesced (they update lightweight UI elements).
+- **Other event types**: `session.status`, `session.progress`, and `session.needs_input` are not coalesced (they update lightweight UI elements).
 
 This coalescing happens in the app's event processing layer, not in the protocol itself. The protocol delivers events as-is.
 

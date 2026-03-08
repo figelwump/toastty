@@ -49,8 +49,7 @@ public struct AutomationConfig: Equatable, Sendable {
                 .appendingPathComponent("toastty-automation-\(runID)")
                 .path
         let socketPath = argumentValue(after: "--socket-path", in: arguments)
-            ?? environment["TOASTTY_SOCKET_PATH"]
-            ?? defaultSocketPath(environment: environment)
+            ?? resolveSocketPath(environment: environment)
 
         return AutomationConfig(
             runID: runID,
@@ -86,6 +85,10 @@ public struct AutomationConfig: Equatable, Sendable {
 
         let value = arguments[index + 1]
         return value.hasPrefix("--") ? nil : value
+    }
+
+    public static func resolveSocketPath(environment: [String: String]) -> String {
+        environment["TOASTTY_SOCKET_PATH"] ?? defaultSocketPath(environment: environment)
     }
 
     private static func defaultSocketPath(environment: [String: String]) -> String {

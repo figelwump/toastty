@@ -5,6 +5,7 @@ import SwiftUI
 struct SidebarView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
@@ -208,6 +209,7 @@ struct SidebarView: View {
     ) -> some View {
         let paneCount = workspace.layoutTree.allSlotInfos.count
         let subtitle = workspaceSubtitle(workspace: workspace, paneCount: paneCount)
+        let sessionStatus = sessionRuntimeStore.workspaceStatus(for: workspace.id)
 
         return VStack(alignment: .leading, spacing: 2) {
             // Top row: workspace name + spacer + shortcut badge
@@ -228,14 +230,21 @@ struct SidebarView: View {
                 shortcutBadge(shortcutLabel)
             }
 
-            // Subtitle: pane count + context info
-            Text(subtitle)
-                .font(ToastyTheme.fontWorkspaceSubtitle)
-                .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
-                .lineLimit(3)
-                .truncationMode(.tail)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
+            if let sessionStatus {
+                sessionStatusContent(
+                    sessionStatus,
+                    fallbackSubtitle: subtitle,
+                    isSelected: isSelected
+                )
+            } else {
+                Text(subtitle)
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.vertical, 7)
         .padding(.horizontal, 10)
@@ -259,6 +268,53 @@ struct SidebarView: View {
                 }
             }
         )
+    }
+
+    @ViewBuilder
+    private func sessionStatusContent(
+        _ workspaceSessionStatus: WorkspaceSessionStatus,
+        fallbackSubtitle: String,
+        isSelected: Bool
+    ) -> some View {
+        let status = workspaceSessionStatus.status
+
+        VStack(alignment: .leading, spacing: 2) {
+            if status.kind == .working {
+                Text(fallbackSubtitle)
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            HStack(spacing: 6) {
+                Text(workspaceSessionStatus.agent.rawValue)
+                    .font(ToastyTheme.fontWorkspaceSessionAgent)
+                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    .lineLimit(1)
+
+                sessionStatusChip(status)
+
+                Spacer(minLength: 0)
+            }
+
+            if let detail = status.detail {
+                Text(detail)
+                    .font(ToastyTheme.fontWorkspaceSessionDetail)
+                    .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            if let cwd = abbreviatedPathLabel(workspaceSessionStatus.cwd) {
+                Text(cwd)
+                    .font(ToastyTheme.fontWorkspaceSessionPath)
+                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
@@ -388,6 +444,49 @@ struct SidebarView: View {
             return "\(paneLabel) · \(activitySubtext)"
         }
         return paneLabel
+    }
+
+    private func sessionStatusChip(_ status: SessionStatus) -> some View {
+        Text(status.summary)
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(sessionStatusTextColor(for: status.kind))
+            .padding(.horizontal, 4)
+            .background(sessionStatusBackgroundColor(for: status.kind), in: RoundedRectangle(cornerRadius: 2))
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    private func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {
+        switch kind {
+        case .working:
+            return ToastyTheme.sessionWorkingText
+        case .needsApproval:
+            return ToastyTheme.sessionNeedsApprovalText
+        case .ready:
+            return ToastyTheme.sessionReadyText
+        case .error:
+            return ToastyTheme.sessionErrorText
+        }
+    }
+
+    private func sessionStatusBackgroundColor(for kind: SessionStatusKind) -> Color {
+        switch kind {
+        case .working:
+            return ToastyTheme.sessionWorkingBackground
+        case .needsApproval:
+            return ToastyTheme.sessionNeedsApprovalBackground
+        case .ready:
+            return ToastyTheme.sessionReadyBackground
+        case .error:
+            return ToastyTheme.sessionErrorBackground
+        }
+    }
+
+    private func abbreviatedPathLabel(_ path: String?) -> String? {
+        guard let path else { return nil }
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        return (trimmed as NSString).abbreviatingWithTildeInPath
     }
 
     /// Reusable keyboard shortcut badge pill (e.g. "⌘1", "⌘⇧N").

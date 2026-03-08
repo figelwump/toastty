@@ -179,6 +179,7 @@ struct ToasttyApp: App {
     private var reloadConfigurationMenuIconInstaller
     @StateObject private var store: AppStore
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @StateObject private var sessionRuntimeStore: SessionRuntimeStore
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
@@ -200,6 +201,8 @@ struct ToasttyApp: App {
         )
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         terminalRuntimeRegistry.bind(store: store)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry
@@ -222,6 +225,7 @@ struct ToasttyApp: App {
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
+        _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
 
@@ -245,25 +249,24 @@ struct ToasttyApp: App {
             appTerminationObserver = nil
         }
 
-        if let automationConfig = bootstrap.automationConfig {
-            do {
-                automationSocketServer = try AutomationSocketServer(
-                    config: automationConfig,
-                    store: store,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    focusedPanelCommandController: focusedPanelCommandController
-                )
-                automationStartupError = nil
-            } catch {
-                automationSocketServer = nil
-                automationStartupError = "Automation socket startup failed: \(error.localizedDescription)"
-                if let messageData = ("toastty automation error: \(automationStartupError ?? "unknown")\n").data(using: .utf8) {
-                    FileHandle.standardError.write(messageData)
-                }
-            }
-        } else {
-            automationSocketServer = nil
+        let socketPath = bootstrap.automationConfig?.socketPath
+            ?? AutomationConfig.resolveSocketPath(environment: ProcessInfo.processInfo.environment)
+        do {
+            automationSocketServer = try AutomationSocketServer(
+                socketPath: socketPath,
+                automationConfig: bootstrap.automationConfig,
+                store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                sessionRuntimeStore: sessionRuntimeStore,
+                focusedPanelCommandController: focusedPanelCommandController
+            )
             automationStartupError = nil
+        } catch {
+            automationSocketServer = nil
+            automationStartupError = "Automation socket startup failed: \(error.localizedDescription)"
+            if let messageData = ("toastty automation error: \(automationStartupError ?? "unknown")\n").data(using: .utf8) {
+                FileHandle.standardError.write(messageData)
+            }
         }
     }
 
@@ -272,6 +275,7 @@ struct ToasttyApp: App {
             AppRootView(
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                sessionRuntimeStore: sessionRuntimeStore,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 disableAnimations: disableAnimations

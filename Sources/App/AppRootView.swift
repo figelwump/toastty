@@ -4,6 +4,7 @@ import SwiftUI
 struct AppRootView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
     let disableAnimations: Bool
@@ -12,7 +13,11 @@ struct AppRootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SidebarView(store: store, terminalRuntimeRegistry: terminalRuntimeRegistry)
+            SidebarView(
+                store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
                 .frame(width: ToastyTheme.sidebarWidth)
 
             Rectangle()

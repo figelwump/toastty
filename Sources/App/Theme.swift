@@ -13,11 +13,22 @@ enum ToastyTheme {
     static let inactiveText = Color(hex: 0xB8B8B8)
     static let inactiveWorkspaceSubtitleText = Color(hex: 0xB0B0B0)
     static let subtleText = Color(hex: 0x5A5A5A)
+    static let sidebarSessionAgentText = Color(hex: 0x7A7A7A)
+    static let sidebarSessionDetailText = Color(hex: 0x555555)
+    static let sidebarSessionPathText = Color(hex: 0x4E4E4E)
     static let shortcutBadgeText = Color(hex: 0xB8B8B8)
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
     static let badgeBlue = Color(hex: 0x3B82F6)
+    static let sessionWorkingText = Color(hex: 0x8B5E34)
+    static let sessionWorkingBackground = Color(hex: 0x8B5E34, alpha: 0.12)
+    static let sessionNeedsApprovalText = Color(hex: 0xE8A849)
+    static let sessionNeedsApprovalBackground = Color(hex: 0xE8A849, alpha: 0.12)
+    static let sessionReadyText = Color(hex: 0xFDF8EC)
+    static let sessionReadyBackground = Color(hex: 0xFDF8EC, alpha: 0.1)
+    static let sessionErrorText = Color(hex: 0xD4553A)
+    static let sessionErrorBackground = Color(hex: 0xD4553A, alpha: 0.12)
 
     // Empty state
     static let emptyStateToastCrust = Color(hex: 0x4A3425)
@@ -29,7 +40,7 @@ enum ToastyTheme {
     static let emptyStateShortcutBorder = Color(hex: 0x3A3028)
     static let emptyStateShortcutText = Color(hex: 0x8A7B6E)
 
-    static let sidebarWidth: CGFloat = 180
+    static let sidebarWidth: CGFloat = 280
     static let topBarHeight: CGFloat = 36
 
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
@@ -43,6 +54,10 @@ enum ToastyTheme {
     static let fontWorkspaceName = Font.system(size: 12, weight: .semibold, design: .default)
     static let fontWorkspaceNameInactive = Font.system(size: 12, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
+    static let fontWorkspaceSessionAgent = Font.system(size: 10, weight: .medium, design: .monospaced)
+    static let fontWorkspaceSessionChip = Font.system(size: 9, weight: .medium, design: .default)
+    static let fontWorkspaceSessionDetail = Font.system(size: 10, weight: .regular, design: .default)
+    static let fontWorkspaceSessionPath = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontShortcutBadge = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontNewWorkspace = Font.system(size: 11, weight: .regular, design: .default)
 }

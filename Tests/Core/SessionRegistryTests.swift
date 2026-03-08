@@ -178,4 +178,174 @@ struct SessionRegistryTests {
         #expect(after.cwd == before.cwd)
         #expect(after.updatedAt == before.updatedAt)
     }
+
+    @Test
+    func updateStatusStoresStructuredSessionStatus() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 700)
+
+        registry.startSession(
+            sessionID: "status",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        registry.updateStatus(
+            sessionID: "status",
+            status: SessionStatus(
+                kind: .working,
+                summary: "editing 3 files",
+                detail: "Refactoring dashboard to server components"
+            ),
+            at: now.addingTimeInterval(1)
+        )
+
+        let record = try #require(registry.sessionsByID["status"])
+        #expect(record.status == SessionStatus(
+            kind: .working,
+            summary: "editing 3 files",
+            detail: "Refactoring dashboard to server components"
+        ))
+
+        let workspaceStatus = try #require(registry.workspaceStatus(for: workspaceID))
+        #expect(workspaceStatus.status.kind == .working)
+        #expect(workspaceStatus.status.summary == "editing 3 files")
+        #expect(workspaceStatus.status.detail == "Refactoring dashboard to server components")
+        #expect(workspaceStatus.cwd == "/repo")
+        #expect(workspaceStatus.isActive)
+    }
+
+    @Test
+    func workspaceStatusPrefersHigherPriorityActiveState() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 800)
+
+        registry.startSession(
+            sessionID: "working",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "working",
+            status: SessionStatus(kind: .working, summary: "editing", detail: "Updating API handlers"),
+            at: now.addingTimeInterval(1)
+        )
+
+        registry.startSession(
+            sessionID: "error",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+        registry.updateStatus(
+            sessionID: "error",
+            status: SessionStatus(kind: .error, summary: "error", detail: "Deploy failed"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let workspaceStatus = try #require(registry.workspaceStatus(for: workspaceID))
+        #expect(workspaceStatus.sessionID == "error")
+        #expect(workspaceStatus.status.kind == .error)
+    }
+
+    @Test
+    func workspaceStatusFallsBackToMostRecentStoppedSession() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 900)
+
+        registry.startSession(
+            sessionID: "older-error",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "older-error",
+            status: SessionStatus(kind: .error, summary: "error", detail: "Missing env var"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "older-error", at: now.addingTimeInterval(2))
+
+        registry.startSession(
+            sessionID: "latest-ready",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(3)
+        )
+        registry.updateStatus(
+            sessionID: "latest-ready",
+            status: SessionStatus(kind: .ready, summary: "ready", detail: "Added auth middleware"),
+            at: now.addingTimeInterval(4)
+        )
+        registry.stopSession(sessionID: "latest-ready", at: now.addingTimeInterval(5))
+
+        let workspaceStatus = try #require(registry.workspaceStatus(for: workspaceID))
+        #expect(workspaceStatus.sessionID == "latest-ready")
+        #expect(workspaceStatus.status.kind == .ready)
+        #expect(workspaceStatus.status.detail == "Added auth middleware")
+        #expect(workspaceStatus.isActive == false)
+    }
+
+    @Test
+    func workspaceStatusDoesNotReuseStoppedStatusWhileNewActiveSessionHasNoStatusYet() {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1000)
+
+        registry.startSession(
+            sessionID: "completed",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "completed",
+            status: SessionStatus(kind: .ready, summary: "ready", detail: "Added auth middleware"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "completed", at: now.addingTimeInterval(2))
+
+        registry.startSession(
+            sessionID: "new-active",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(3)
+        )
+
+        #expect(registry.workspaceStatus(for: workspaceID) == nil)
+    }
 }

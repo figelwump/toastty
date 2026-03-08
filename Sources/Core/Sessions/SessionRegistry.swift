@@ -74,6 +74,17 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         sessionsByID[sessionID] = record
     }
 
+    public mutating func updateStatus(
+        sessionID: String,
+        status: SessionStatus,
+        at now: Date
+    ) {
+        guard var record = sessionsByID[sessionID], record.isActive else { return }
+        record.status = status
+        record.updatedAt = now
+        sessionsByID[sessionID] = record
+    }
+
     public mutating func updatePanelLocation(
         panelID: UUID,
         windowID: UUID,
@@ -116,6 +127,40 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return record
     }
 
+    public func workspaceStatus(for workspaceID: UUID) -> WorkspaceSessionStatus? {
+        let candidates = sessionsByID.values.filter { record in
+            record.workspaceID == workspaceID && record.status != nil
+        }
+        let activeSessionExists = sessionsByID.values.contains { record in
+            record.workspaceID == workspaceID && record.isActive
+        }
+        let activeCandidates = candidates.filter(\.isActive)
+        if activeSessionExists && activeCandidates.isEmpty {
+            return nil
+        }
+        guard candidates.isEmpty == false else { return nil }
+
+        let selectedRecord: SessionRecord
+        if let bestActiveRecord = activeCandidates.max(by: activeWorkspaceStatusSort) {
+            selectedRecord = bestActiveRecord
+        } else if let latestStoppedRecord = candidates.max(by: stoppedWorkspaceStatusSort) {
+            selectedRecord = latestStoppedRecord
+        } else {
+            return nil
+        }
+
+        guard let status = selectedRecord.status else { return nil }
+        return WorkspaceSessionStatus(
+            sessionID: selectedRecord.sessionID,
+            panelID: selectedRecord.panelID,
+            agent: selectedRecord.agent,
+            status: status,
+            cwd: selectedRecord.cwd,
+            updatedAt: selectedRecord.updatedAt,
+            isActive: selectedRecord.isActive
+        )
+    }
+
     public mutating func pruneStoppedSessions(olderThan cutoff: Date) {
         for (sessionID, record) in sessionsByID where record.stoppedAt.map({ $0 < cutoff }) == true {
             sessionsByID.removeValue(forKey: sessionID)
@@ -127,5 +172,25 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             }
             return record.panelID == panelID
         }
+    }
+
+    private func activeWorkspaceStatusSort(_ lhs: SessionRecord, _ rhs: SessionRecord) -> Bool {
+        guard let lhsStatus = lhs.status, let rhsStatus = rhs.status else {
+            return lhs.updatedAt < rhs.updatedAt
+        }
+        if lhsStatus.kind.activeWorkspacePriority != rhsStatus.kind.activeWorkspacePriority {
+            return lhsStatus.kind.activeWorkspacePriority < rhsStatus.kind.activeWorkspacePriority
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt < rhs.updatedAt
+        }
+        return lhs.startedAt < rhs.startedAt
+    }
+
+    private func stoppedWorkspaceStatusSort(_ lhs: SessionRecord, _ rhs: SessionRecord) -> Bool {
+        if lhs.updatedAt != rhs.updatedAt {
+            return lhs.updatedAt < rhs.updatedAt
+        }
+        return lhs.startedAt < rhs.startedAt
     }
 }
