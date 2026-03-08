@@ -614,7 +614,16 @@ final class GhosttyRuntimeManager {
         if app == nil {
             ToasttyLog.error("Ghostty runtime creation failed", category: .ghostty)
         }
+        if let app {
+            let initialAppFocus = NSApp?.isActive ?? false
+            ghostty_app_set_focus(app, initialAppFocus)
+        }
         scheduleImmediateTick()
+    }
+
+    func setAppFocus(_ focused: Bool) {
+        guard let app else { return }
+        ghostty_app_set_focus(app, focused)
     }
 
     func makeSurface(

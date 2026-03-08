@@ -45,6 +45,9 @@ struct AppRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            terminalRuntimeRegistry.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
         .onChange(of: store.state.globalTerminalFontPoints) { previousPoints, nextPoints in
             terminalRuntimeRegistry.applyGlobalFontChange(from: previousPoints, to: nextPoints)
             fontHUDPoints = nextPoints

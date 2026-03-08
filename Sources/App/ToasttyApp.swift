@@ -35,6 +35,19 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
             guard !self.iconWasApplied else { return }
             self.applyReloadIconIfPresent()
         }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        Task { @MainActor in
+            GhosttyRuntimeManager.shared.setAppFocus(true)
+        }
+        #endif
+    }
+
+    nonisolated func applicationDidResignActive(_ notification: Notification) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        Task { @MainActor in
+            GhosttyRuntimeManager.shared.setAppFocus(false)
+        }
+        #endif
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

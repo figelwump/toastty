@@ -128,6 +128,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return created
     }
 
+    func synchronizeGhosttySurfaceFocusFromApplicationState() {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        for controller in controllers.values {
+            controller.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
+        #endif
+    }
+
     func synchronize(with state: AppState) {
         let livePanelIDs = Set(
             state.workspacesByID.values.flatMap { workspace in
@@ -2892,10 +2900,18 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     @discardableResult
     func focusHostViewIfNeeded() -> Bool {
         guard let window = hostedView.window else { return false }
+        let didFocus: Bool
         if window.firstResponder === hostedView {
-            return true
+            didFocus = true
+        } else {
+            didFocus = window.makeFirstResponder(hostedView)
         }
-        return window.makeFirstResponder(hostedView)
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if didFocus {
+            terminalHostView.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
+        #endif
+        return didFocus
     }
 
     func automationSendText(_ text: String, submit: Bool) -> Bool {
@@ -3534,6 +3550,10 @@ extension TerminalSurfaceController {
         ghosttyManager.requestImmediateTick()
         ghostty_surface_refresh(surface)
     }
+
+    func synchronizeGhosttySurfaceFocusFromApplicationState() {
+        terminalHostView.synchronizeGhosttySurfaceFocusFromApplicationState()
+    }
     #endif
 }
 
@@ -3681,6 +3701,14 @@ final class TerminalHostView: NSView {
         observedWindow = nil
     }
 
+    func synchronizeGhosttySurfaceFocusFromApplicationState() {
+        let focused = isEffectivelyVisible &&
+            NSApp.isActive &&
+            window?.isKeyWindow == true &&
+            window?.firstResponder === self
+        syncSurfaceFocus(focused)
+    }
+
     private func resolvedSurfaceVisibility() -> Bool {
         guard let window else {
             return false
@@ -3743,7 +3771,9 @@ final class TerminalHostView: NSView {
         lastKnownSurfaceVisibility = visible
         ghostty_surface_set_occlusion(ghosttySurface, visible)
         if visible {
-            let shouldRestoreFocus = window?.isKeyWindow == true && window?.firstResponder === self
+            let shouldRestoreFocus = NSApp.isActive &&
+                window?.isKeyWindow == true &&
+                window?.firstResponder === self
             syncSurfaceFocus(shouldRestoreFocus)
             GhosttyRuntimeManager.shared.requestImmediateTick()
             ghostty_surface_refresh(ghosttySurface)
@@ -3757,7 +3787,10 @@ final class TerminalHostView: NSView {
             metadata: [
                 "visible": visible ? "true" : "false",
                 "reason": reason,
-                "restored_focus": visible && window?.isKeyWindow == true && window?.firstResponder === self ? "true" : "false",
+                "restored_focus": visible &&
+                    NSApp.isActive &&
+                    window?.isKeyWindow == true &&
+                    window?.firstResponder === self ? "true" : "false",
                 "has_window": window == nil ? "false" : "true",
                 "is_hidden": isHidden ? "true" : "false",
                 "has_hidden_ancestor": hasHiddenAncestor ? "true" : "false",
