@@ -176,6 +176,7 @@ let project = Project(
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,
             sources: ["Sources/App/**"],
+            resources: ["Sources/App/Resources/**"],
             dependencies: appDependencies,
             settings: appTargetSettings
         ),

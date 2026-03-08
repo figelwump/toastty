@@ -1,0 +1,48 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Toastty App Icon — Toaster Pop</title>
+  <defs>
+    <linearGradient id="bg" x1="200" y1="0" x2="824" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F5D98E"/>
+      <stop offset="1" stop-color="#E8A849"/>
+    </linearGradient>
+    <linearGradient id="toastCrust" x1="0" y1="200" x2="0" y2="580" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D49545"/>
+      <stop offset="1" stop-color="#C8873E"/>
+    </linearGradient>
+    <linearGradient id="toastInner" x1="0" y1="220" x2="0" y2="560" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F5D98E"/>
+      <stop offset="1" stop-color="#E8A849"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background fill (macOS applies squircle mask) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Toaster body -->
+  <rect x="102" y="460" width="820" height="380" rx="88" fill="#3D2215"/>
+
+  <!-- Toaster front panel detail -->
+  <rect x="162" y="510" width="680" height="56" rx="28" fill="#8B5E34" opacity="0.35"/>
+
+  <!-- Toaster lever -->
+  <rect x="862" y="590" width="46" height="140" rx="23" fill="#8B5E34"/>
+
+  <!-- Toast slice LEFT (crust) -->
+  <rect x="198" y="180" width="210" height="340" rx="40" fill="url(#toastCrust)"/>
+  <!-- Toast slice LEFT (inner bread) -->
+  <rect x="226" y="210" width="154" height="280" rx="26" fill="url(#toastInner)"/>
+
+  <!-- Toast slice RIGHT (crust) -->
+  <rect x="576" y="180" width="210" height="340" rx="40" fill="url(#toastCrust)"/>
+  <!-- Toast slice RIGHT (inner bread) -->
+  <rect x="604" y="210" width="154" height="280" rx="26" fill="url(#toastInner)"/>
+
+  <!-- Steam wisp LEFT -->
+  <path d="M303 175 Q293 120 308 70" stroke="#FDF6EC" stroke-width="18" fill="none" opacity="0.6" stroke-linecap="round"/>
+
+  <!-- Steam wisp RIGHT -->
+  <path d="M681 175 Q671 120 686 70" stroke="#FDF6EC" stroke-width="18" fill="none" opacity="0.6" stroke-linecap="round"/>
+
+  <!-- Toaster base highlight -->
+  <rect x="140" y="812" width="740" height="16" rx="8" fill="#8B5E34" opacity="0.2"/>
+</svg>
