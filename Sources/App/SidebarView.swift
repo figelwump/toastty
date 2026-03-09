@@ -306,16 +306,12 @@ struct SidebarView: View {
         renameDraftTitle = ""
     }
 
-    private func scheduleWorkspaceSlotFocusRestore(attempt: Int = 0) {
-        let delay = attempt == 0 ? 0 : 16
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
-            if terminalRuntimeRegistry.focusSelectedWorkspaceSlotIfPossible() {
-                return
-            }
-
-            guard attempt < 12 else { return }
-            scheduleWorkspaceSlotFocusRestore(attempt: attempt + 1)
-        }
+    private func scheduleWorkspaceSlotFocusRestore() {
+        // Renaming intentionally restores focus back to the terminal even if the
+        // field editor is still unwinding from the just-finished text edit.
+        terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore(
+            avoidStealingKeyboardFocus: false
+        )
     }
 
     private func scheduleRenameSelection(workspaceID: UUID, attempt: Int = 0) {

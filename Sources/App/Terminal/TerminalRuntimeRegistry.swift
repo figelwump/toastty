@@ -55,9 +55,9 @@ struct TerminalPanelRenderAttachmentSnapshot {
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
     private let controllerStore = TerminalControllerStore()
+    private let focusCoordinator = TerminalFocusCoordinator()
     private weak var store: AppStore?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
-    private var selectedSlotFocusRestoreTask: Task<Void, Never>?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -67,7 +67,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
     #endif
 
     deinit {
-        selectedSlotFocusRestoreTask?.cancel()
         #if TOASTTY_HAS_GHOSTTY_KIT
         let storeActionCoordinator = self.storeActionCoordinator
         Task { @MainActor in
@@ -238,49 +237,28 @@ final class TerminalRuntimeRegistry: ObservableObject {
     /// focused terminal slot or no attached host view.
     @discardableResult
     func focusSelectedWorkspaceSlotIfPossible() -> Bool {
-        guard let workspace = store?.selectedWorkspace,
-              let panelID = workspace.focusedPanelID else {
-            return false
+        focusCoordinator.focusSelectedWorkspaceSlotIfPossible { [weak self] in
+            guard let self,
+                  let panelID = self.store?.selectedWorkspace?.focusedPanelID,
+                  let controller = self.controllerStore.existingController(for: panelID) else {
+                return nil
+            }
+            return TerminalFocusCoordinator.FocusTarget(
+                isReadyForFocus: controller.lifecycleState.isReadyForFocus,
+                focusHostViewIfNeeded: { controller.focusHostViewIfNeeded() }
+            )
         }
-        guard let controller = controllerStore.existingController(for: panelID) else {
-            return false
-        }
-        guard controller.lifecycleState.isReadyForFocus else {
-            return false
-        }
-        return controller.focusHostViewIfNeeded()
     }
 
     /// Retries first-responder restoration for the selected workspace's focused
     /// slot. This covers launch/layout races where the host view exists in state
     /// but is not yet attached when focus should be applied.
-    func scheduleSelectedWorkspaceSlotFocusRestore() {
-        selectedSlotFocusRestoreTask?.cancel()
-        selectedSlotFocusRestoreTask = Task { @MainActor [weak self] in
-            let maxAttempts = 12
-            let retryDelayNanoseconds: UInt64 = 16_000_000
-            for attempt in 0..<maxAttempts {
-                guard Task.isCancelled == false else { return }
-                guard let self else { return }
-                if NSApp.isActive, self.shouldAvoidStealingKeyboardFocus() {
-                    return
-                }
-                if NSApp.isActive, self.focusSelectedWorkspaceSlotIfPossible() {
-                    return
-                }
-                guard attempt < maxAttempts - 1 else { return }
-                try? await Task.sleep(nanoseconds: retryDelayNanoseconds)
-                guard Task.isCancelled == false else { return }
-            }
+    func scheduleSelectedWorkspaceSlotFocusRestore(avoidStealingKeyboardFocus: Bool = true) {
+        focusCoordinator.scheduleSelectedWorkspaceSlotFocusRestore(
+            avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
+        ) { [weak self] in
+            self?.focusSelectedWorkspaceSlotIfPossible() ?? false
         }
-    }
-
-    private func shouldAvoidStealingKeyboardFocus() -> Bool {
-        guard let keyWindow = NSApp.keyWindow,
-              let textView = keyWindow.firstResponder as? NSTextView else {
-            return false
-        }
-        return textView.isFieldEditor
     }
 
     func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
