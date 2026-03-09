@@ -131,7 +131,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return existing
         }
 
-        let created = TerminalSurfaceController(panelID: panelID, registry: self)
+        let created = TerminalSurfaceController(panelID: panelID, delegate: self)
         controllers[panelID] = created
         return created
     }
@@ -442,12 +442,6 @@ private extension TerminalRuntimeRegistry {
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 private extension TerminalRuntimeRegistry {
-    enum SplitSourceSurfaceState {
-        case none
-        case pending
-        case ready(sourcePanelID: UUID, surface: ghostty_surface_t)
-    }
-
     func handleAppliedStoreAction(
         _ action: AppAction,
         previousState: AppState,
@@ -534,7 +528,7 @@ private extension TerminalRuntimeRegistry {
         scheduleSelectedWorkspaceSlotFocusRestore()
     }
 
-    func splitSourceSurfaceState(for newPanelID: UUID) -> SplitSourceSurfaceState {
+    func splitSourceSurfaceState(for newPanelID: UUID) -> TerminalSplitSourceSurfaceState {
         guard let sourcePanelID = pendingSplitSourcePanelByNewPanelID[newPanelID] else {
             return .none
         }
@@ -607,6 +601,54 @@ extension TerminalRuntimeRegistry {
     }
 }
 #endif
+
+extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
+        splitSourceSurfaceState(for: panelID)
+    }
+
+    func consumeSplitSource(forNewPanelID panelID: UUID) {
+        consumeSplitSource(for: panelID)
+    }
+
+    func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {
+        register(surface: surface, for: panelID)
+    }
+
+    func unregisterSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {
+        unregister(surface: surface, for: panelID)
+    }
+
+    func surfaceCreationChildPIDSnapshot() -> Set<pid_t> {
+        snapshotChildPIDsForSurfaceCreation()
+    }
+
+    func registerSurfaceChildPIDAfterCreation(
+        panelID: UUID,
+        previousChildren: Set<pid_t>,
+        expectedWorkingDirectory: String
+    ) {
+        registerChildPIDAfterSurfaceCreation(
+            panelID: panelID,
+            previousChildren: previousChildren,
+            expectedWorkingDirectory: expectedWorkingDirectory
+        )
+    }
+
+    func reconcileSurfaceWorkingDirectoryFromSurface(
+        panelID: UUID,
+        workingDirectory: String?,
+        source: String
+    ) {
+        reconcileSurfaceWorkingDirectory(
+            panelID: panelID,
+            workingDirectory: workingDirectory,
+            source: source
+        )
+    }
+    #endif
+}
 
 private extension TerminalRuntimeRegistry {
     static func normalizedImageFileURLs(from urls: [URL]) -> [URL] {
@@ -1221,7 +1263,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 @MainActor
 final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private let panelID: UUID
-    private unowned let registry: TerminalRuntimeRegistry
+    private weak var delegate: (any TerminalSurfaceControllerDelegate)?
     private let hostedView: NSView
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -1301,20 +1343,20 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
 
     private let fallbackView = TerminalFallbackView()
 
-    init(panelID: UUID, registry: TerminalRuntimeRegistry) {
+    init(panelID: UUID, delegate: any TerminalSurfaceControllerDelegate) {
         self.panelID = panelID
-        self.registry = registry
+        self.delegate = delegate
         #if TOASTTY_HAS_GHOSTTY_KIT
         let hostView = TerminalHostView()
         terminalHostView = hostView
         hostedView = hostView
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
-            return self.registry.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
+            return self.delegate?.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
         }
         terminalHostView.performImageFileDrop = { [weak self] drop in
             guard let self else { return false }
-            return self.registry.handlePreparedImageFileDrop(drop)
+            return self.delegate?.handlePreparedImageFileDrop(drop) ?? false
         }
         #else
         hostedView = fallbackView
@@ -1694,7 +1736,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         terminalHostView.setGhosttySurface(nil)
         if let ghosttySurface {
             ghosttyManager.unregisterClipboardSurface(forHostView: terminalHostView, surface: ghosttySurface)
-            registry.unregister(surface: ghosttySurface, for: panelID)
+            delegate?.unregisterSurfaceHandle(ghosttySurface, for: panelID)
             ghostty_surface_free(ghosttySurface)
             self.ghosttySurface = nil
         }
@@ -2002,6 +2044,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private func ensureGhosttySurface(terminalState: TerminalPanelState, fontPoints: Double) {
         guard ghosttySurface == nil else { return }
+        guard let delegate else { return }
 
         let hostView = terminalHostView
 
@@ -2028,7 +2071,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         }
 
         let inheritedSourceSurface: ghostty_surface_t?
-        switch registry.splitSourceSurfaceState(for: panelID) {
+        switch delegate.splitSourceSurfaceState(forNewPanelID: panelID) {
         case .none:
             inheritedSourceSurface = nil
         case .pending:
@@ -2058,7 +2101,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
 
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.
-        let previousChildPIDs = registry.snapshotChildPIDsForSurfaceCreation()
+        let previousChildPIDs = delegate.surfaceCreationChildPIDSnapshot()
 
         diagnostics.surfaceAttemptCount += 1
         guard let createdSurface = ghosttyManager.makeSurface(
@@ -2085,7 +2128,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let surface = createdSurface.surface
         diagnostics.surfaceSuccessCount += 1
         if inheritedSourceSurface != nil {
-            registry.consumeSplitSource(for: panelID)
+            delegate.consumeSplitSource(forNewPanelID: panelID)
         }
         lastSurfaceDeferralReason = nil
         lastViewportDeferralReason = nil
@@ -2098,17 +2141,17 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastRenderMetrics = nil
         lastDisplayID = nil
         ghosttySurface = surface
-        registry.register(surface: surface, for: panelID)
+        delegate.registerSurfaceHandle(surface, for: panelID)
         synchronizeGhosttySurfaceFont(to: fontPoints, on: surface)
 
         // Register the new child process (login → shell) for CWD tracking.
-        registry.registerChildPIDAfterSurfaceCreation(
+        delegate.registerSurfaceChildPIDAfterCreation(
             panelID: panelID,
             previousChildren: previousChildPIDs,
             expectedWorkingDirectory: requestedWorkingDirectory
         )
 
-        registry.reconcileSurfaceWorkingDirectory(
+        delegate.reconcileSurfaceWorkingDirectoryFromSurface(
             panelID: panelID,
             workingDirectory: Self.currentWorkingDirectory(for: surface) ?? createdSurface.workingDirectory,
             source: "surface_create"
