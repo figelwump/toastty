@@ -54,7 +54,7 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
-    private var controllers: [UUID: TerminalSurfaceController] = [:]
+    private let controllerStore = TerminalControllerStore()
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
@@ -63,7 +63,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
     private var activityInferenceService: TerminalActivityInferenceService?
-    private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
     private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
@@ -127,18 +126,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func controller(for panelID: UUID) -> TerminalSurfaceController {
-        if let existing = controllers[panelID] {
-            return existing
-        }
-
-        let created = TerminalSurfaceController(panelID: panelID, delegate: self)
-        controllers[panelID] = created
-        return created
+        controllerStore.controller(for: panelID, delegate: self)
     }
 
     func synchronizeGhosttySurfaceFocusFromApplicationState() {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        for controller in controllers.values {
+        controllerStore.forEachController { controller in
             controller.synchronizeGhosttySurfaceFocusFromApplicationState()
         }
         #endif
@@ -156,14 +149,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
             }
         )
 
-        for panelID in controllers.keys where !livePanelIDs.contains(panelID) {
-            controllers[panelID]?.invalidate()
-            controllers.removeValue(forKey: panelID)
-            #if TOASTTY_HAS_GHOSTTY_KIT
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let removedPanelIDs = controllerStore.invalidateControllers(excluding: livePanelIDs)
+        for panelID in removedPanelIDs {
             metadataService?.invalidate(panelID: panelID)
             activityInferenceService?.invalidate(panelID: panelID)
-            #endif
         }
+        #else
+        _ = controllerStore.invalidateControllers(excluding: livePanelIDs)
+        #endif
         #if TOASTTY_HAS_GHOSTTY_KIT
         metadataService?.synchronizeLivePanels(livePanelIDs)
         activityInferenceService?.synchronizeLivePanels(
@@ -184,7 +178,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
-        guard let controller = controllers[panelID] else {
+        guard let controller = controllerStore.existingController(for: panelID) else {
             return false
         }
         return controller.automationSendText(
@@ -194,14 +188,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func automationReadVisibleText(panelID: UUID) -> String? {
-        guard let controller = controllers[panelID] else {
+        guard let controller = controllerStore.existingController(for: panelID) else {
             return nil
         }
         return controller.automationReadVisibleText()
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
-        guard let controller = controllers[panelID] else {
+        guard let controller = controllerStore.existingController(for: panelID) else {
             ToasttyLog.warning(
                 "Skipping terminal close confirmation because the surface controller is unavailable",
                 category: .terminal,
@@ -221,14 +215,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func automationRenderSnapshot(panelID: UUID) -> TerminalPanelRenderAttachmentSnapshot {
-        guard let controller = controllers[panelID] else {
+        guard let controller = controllerStore.existingController(for: panelID) else {
             return .missingController(panelID: panelID)
         }
         return controller.renderAttachmentSnapshot()
     }
 
     func automationDropImageFiles(_ filePaths: [String], panelID: UUID) -> AutomationImageFileDropResult {
-        guard let controller = controllers[panelID] else {
+        guard let controller = controllerStore.existingController(for: panelID) else {
             return .unavailableSurface
         }
 
@@ -253,7 +247,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
               let panelID = workspace.focusedPanelID else {
             return false
         }
-        guard let controller = controllers[panelID] else {
+        guard let controller = controllerStore.existingController(for: panelID) else {
             return false
         }
         guard controller.lifecycleState.isReadyForFocus else {
@@ -307,7 +301,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         guard isValidDropTargetPanel(targetPanelID, state: state) else {
             return nil
         }
-        guard let targetController = controllers[targetPanelID] else {
+        guard let targetController = controllerStore.existingController(for: targetPanelID) else {
             return nil
         }
         guard targetController.canAcceptImageFileDrop() else {
@@ -336,7 +330,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             )
             return false
         }
-        guard let targetController = controllers[drop.targetPanelID] else {
+        guard let targetController = controllerStore.existingController(for: drop.targetPanelID) else {
             ToasttyLog.warning(
                 "Rejected image file drop because drop-target controller is unavailable",
                 category: .input,
@@ -481,7 +475,7 @@ private extension TerminalRuntimeRegistry {
 
     func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
         guard previousPoints != nextPoints else { return }
-        for controller in controllers.values {
+        controllerStore.forEachController { controller in
             controller.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
         }
     }
@@ -532,7 +526,7 @@ private extension TerminalRuntimeRegistry {
         guard let sourcePanelID = pendingSplitSourcePanelByNewPanelID[newPanelID] else {
             return .none
         }
-        guard let sourceSurface = controllers[sourcePanelID]?.currentGhosttySurface() else {
+        guard let sourceSurface = controllerStore.currentGhosttySurface(for: sourcePanelID) else {
             return .pending
         }
         return .ready(sourcePanelID: sourcePanelID, surface: sourceSurface)
@@ -584,7 +578,7 @@ private extension TerminalRuntimeRegistry {
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry {
     func panelID(forSurfaceHandle surfaceHandle: UInt) -> UUID? {
-        panelIDBySurfaceHandle[surfaceHandle]
+        controllerStore.panelID(forSurfaceHandle: surfaceHandle)
     }
 
     func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
@@ -727,14 +721,11 @@ private extension TerminalRuntimeRegistry {
     }
 
     func register(surface: ghostty_surface_t, for panelID: UUID) {
-        panelIDBySurfaceHandle[UInt(bitPattern: surface)] = panelID
+        controllerStore.register(surface: surface, for: panelID)
     }
 
     func unregister(surface: ghostty_surface_t, for panelID: UUID) {
-        let key = UInt(bitPattern: surface)
-        if panelIDBySurfaceHandle[key] == panelID {
-            panelIDBySurfaceHandle.removeValue(forKey: key)
-        }
+        controllerStore.unregister(surface: surface, for: panelID)
         metadataService?.invalidate(panelID: panelID)
         activityInferenceService?.invalidate(panelID: panelID)
         syncWorkspaceActivitySubtextFromService()
@@ -766,10 +757,6 @@ private extension TerminalRuntimeRegistry {
             previousChildren: previousChildren,
             expectedWorkingDirectory: expectedWorkingDirectory
         )
-    }
-
-    func panelID(for surface: ghostty_surface_t) -> UUID? {
-        panelIDBySurfaceHandle[UInt(bitPattern: surface)]
     }
 
     func reconcileSurfaceWorkingDirectory(panelID: UUID, workingDirectory: String?, source: String) {
@@ -842,7 +829,7 @@ private extension TerminalRuntimeRegistry {
 
         var workspaceByPanelID: [UUID: UUID] = [:]
         for panelID in visibleTerminalPanelIDs(in: workspace) {
-            guard controllers[panelID] != nil else { continue }
+            guard controllerStore.containsController(for: panelID) else { continue }
             workspaceByPanelID[panelID] = selectedWorkspaceID
         }
         return workspaceByPanelID
@@ -854,7 +841,7 @@ private extension TerminalRuntimeRegistry {
         for workspace in state.workspacesByID.values where workspace.id != selectedWorkspaceID {
             for (panelID, panelState) in workspace.panels {
                 guard case .terminal = panelState else { continue }
-                guard controllers[panelID] != nil else { continue }
+                guard controllerStore.containsController(for: panelID) else { continue }
                 workspaceByPanelID[panelID] = workspace.id
             }
         }
@@ -931,7 +918,7 @@ private extension TerminalRuntimeRegistry {
 
     func pulseSurfaces(panelIDs: Set<UUID>) {
         for panelID in panelIDs {
-            controllers[panelID]?.pulseVisibilityRefresh()
+            controllerStore.existingController(for: panelID)?.pulseVisibilityRefresh()
         }
     }
 
@@ -955,7 +942,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState
     ) -> (panelID: UUID, workspaceID: UUID)? {
         if let surfaceHandle = action.surfaceHandle {
-            guard let resolvedPanelID = panelIDBySurfaceHandle[surfaceHandle],
+            guard let resolvedPanelID = controllerStore.panelID(forSurfaceHandle: surfaceHandle),
                   let workspaceIDForSurface = workspaceID(containing: resolvedPanelID, state: state) else {
                 ToasttyLog.debug(
                     "Ghostty surface action could not resolve panel/workspace",
