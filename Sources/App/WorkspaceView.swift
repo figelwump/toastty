@@ -154,7 +154,8 @@ struct WorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
         }
-        .id(renderedLayout.identity)
+        // Keep the workspace subtree mounted across focused-layout toggles so
+        // terminal hosts preserve their runtime state instead of remounting.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
