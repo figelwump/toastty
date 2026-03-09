@@ -6,6 +6,11 @@ import UniformTypeIdentifiers
 import GhosttyKit
 #endif
 
+@MainActor
+protocol TerminalSessionLifecycleTracking: AnyObject {
+    func stopSessionForPanelIfOlderThan(panelID: UUID, minimumRuntime: TimeInterval, at now: Date) -> Bool
+}
+
 struct PreparedImageFileDrop {
     let targetPanelID: UUID
     let imageFileURLs: [URL]
@@ -56,6 +61,7 @@ struct TerminalPanelRenderAttachmentSnapshot {
 final class TerminalRuntimeRegistry: ObservableObject {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
     private weak var store: AppStore?
+    private weak var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     private var storeActionObserverToken: UUID?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     private var selectedSlotFocusRestoreTask: Task<Void, Never>?
@@ -100,6 +106,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
         configureGhosttyActionHandler()
         startProcessWorkingDirectoryRefreshLoopIfNeeded()
+    }
+
+    func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
+        self.sessionLifecycleTracker = sessionLifecycleTracker
     }
 
     @discardableResult
@@ -1075,6 +1085,11 @@ private extension TerminalRuntimeRegistry {
             // while also tolerating transient inference misses mid-run.
             if Self.visibleTextShowsInteractiveShellPrompt(visibleText) {
                 panelActivityByPanelID.removeValue(forKey: panelID)
+                _ = sessionLifecycleTracker?.stopSessionForPanelIfOlderThan(
+                    panelID: panelID,
+                    minimumRuntime: Self.sessionAutoStopShellPromptGraceInterval,
+                    at: now
+                )
             }
             return
         }
@@ -2383,6 +2398,9 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let agentTitleDetectionLineWindow = 16
     private static let loosePromptMarkerScanTokenLimit = 5
     private static let agentLaunchCommandTokens: Set<String> = ["cdx", "codex", "cc", "claude"]
+    // Give a just-injected launch command time to replace the shell prompt
+    // before we treat a visible prompt as proof that the agent already exited.
+    private static let sessionAutoStopShellPromptGraceInterval: TimeInterval = 2
     private static let promptMarkerTokens: Set<String> = ["%", "#", "$", ">"]
     private static let promptPathWrapperCharacters = CharacterSet(charactersIn: "\"'`()[]{}<>")
     private static let promptPathTrailingPunctuationCharacters = CharacterSet(charactersIn: ",;")

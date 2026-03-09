@@ -50,11 +50,10 @@ At launch time, Toastty resolves:
 
 Because Toastty owns launch, it can guarantee panel placement and consistent session identity before process start.
 
-In the current implementation, Toastty does not exec the provider directly. It
-injects a hidden `toastty _internal-agent-launch` helper command into the
-terminal. That helper is responsible for starting the real agent process,
-exporting Toastty launch context, and emitting `session.start` / `session.stop`
-around the child lifecycle.
+In the current implementation, Toastty launches the provider directly in the
+target shell and uses command-scoped `TOASTTY_*` environment assignments to hand
+the agent its Toastty session context without mutating the entire shell
+environment.
 
 ### 2) Provider model (extensibility)
 
@@ -115,10 +114,10 @@ On relaunch, Toastty can restore layout and reattach terminals to mapped tmux se
 1. user triggers `Run Agent`
 2. Toastty resolves provider + target panel strategy (current/new adjacent/etc.)
 3. Toastty allocates `sessionID` and records launch intent
-4. Toastty injects `toastty _internal-agent-launch ... -- <provider argv>` into the target terminal
-5. the helper launches the provider directly or through tmux
-6. after child launch succeeds, the helper emits baseline `session.start` and passes `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, `TOASTTY_CWD`, `TOASTTY_REPO_ROOT`, `TOASTTY_AGENT`, and `TOASTTY_CLI_PATH` to the launched agent
-7. when the child exits, the helper emits `session.stop`
+4. Toastty records baseline `session.start`
+5. Toastty injects the provider argv directly into the target terminal with `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, `TOASTTY_CWD`, `TOASTTY_REPO_ROOT`, `TOASTTY_AGENT`, and `TOASTTY_CLI_PATH`
+6. if the agent emits richer telemetry, Toastty applies it to the active session
+7. if the agent does not emit `session.stop`, Toastty stops the session when the panel clearly returns to an interactive shell prompt or the panel closes
 
 ### Ask Agent About This File
 
@@ -192,7 +191,7 @@ Baseline Toastty-owned lifecycle events ensure minimum attribution continuity wh
 
 - enable `toastty session` telemetry in normal runtime
 - add launch service with built-in Codex/Claude profiles
-- define done-state: launch from Toastty into a chosen panel with stable `sessionID`, helper-owned `start/stop`, and launch-context env for follow-up telemetry
+- define done-state: launch from Toastty into a chosen panel with stable `sessionID`, app-owned `start`, prompt/panel-close fallback stop, and launch-context env for follow-up telemetry
 
 ### Phase 2
 

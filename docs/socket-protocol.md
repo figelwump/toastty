@@ -367,10 +367,11 @@ Result:
 
 ### `automation.launch_agent`
 
-Launches a built-in agent into a resolved terminal panel by injecting the hidden
-`toastty _internal-agent-launch` helper. The helper launches the real child
-process, emits `session.start` after successful child launch, and emits
-`session.stop` when that child exits.
+Launches a built-in agent into a resolved terminal panel. Toastty records the
+baseline `session.start` before injecting the provider command and passes
+`TOASTTY_*` launch context with the command. If the agent does not emit
+`session.stop`, Toastty falls back to stopping the session when the panel
+returns to an interactive shell prompt or the panel closes.
 
 Request payload:
 

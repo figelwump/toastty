@@ -78,6 +78,12 @@ final class SessionRuntimeStore: ObservableObject {
         publish(nextRegistry)
     }
 
+    func stopSessionForPanel(panelID: UUID, at now: Date) {
+        var nextRegistry = sessionRegistry
+        nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
+        publish(nextRegistry)
+    }
+
     func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
         sessionRegistry.workspaceStatuses(for: workspaceID)
     }
@@ -121,5 +127,21 @@ final class SessionRuntimeStore: ObservableObject {
             }
         }
         return nil
+    }
+}
+
+extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
+    func stopSessionForPanelIfOlderThan(
+        panelID: UUID,
+        minimumRuntime: TimeInterval,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              now.timeIntervalSince(record.startedAt) >= minimumRuntime else {
+            return false
+        }
+
+        stopSessionForPanel(panelID: panelID, at: now)
+        return true
     }
 }

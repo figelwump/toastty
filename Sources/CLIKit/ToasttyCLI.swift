@@ -135,22 +135,11 @@ enum ToasttyCLIError: Error, LocalizedError, Equatable {
 }
 
 public enum ToasttyCLI {
-    static let transientMissingSessionRetryIntervals: [TimeInterval] = [0.05, 0.1, 0.2]
-
     public static func run(arguments: [String], environment: [String: String]) -> Int32 {
-        if arguments.first == InternalAgentLaunch.command {
-            return InternalAgentLaunch.run(
-                arguments: Array(arguments.dropFirst()),
-                environment: environment
-            )
-        }
-
         do {
             let invocation = try parse(arguments: arguments, environment: environment)
             let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
-            let response = try sendEventWithRetries(command: invocation.command) { envelope in
-                try client.send(envelope)
-            }
+            let response = try client.send(invocation.command.makeEventEnvelope())
 
             if invocation.options.jsonOutput {
                 try writeStdout(jsonString(for: response))
@@ -173,27 +162,6 @@ public enum ToasttyCLI {
             fputs((error.localizedDescription + "\n").applyingNewline(), stderr)
             return 1
         }
-    }
-
-    static func sendEventWithRetries(
-        command: CLICommand,
-        send: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope,
-        sleep: (TimeInterval) -> Void = Thread.sleep
-    ) throws -> AutomationResponseEnvelope {
-        var response = try send(command.makeEventEnvelope())
-        guard shouldRetryForTransientMissingSession(command: command, response: response) else {
-            return response
-        }
-
-        for interval in transientMissingSessionRetryIntervals {
-            sleep(interval)
-            response = try send(command.makeEventEnvelope())
-            guard shouldRetryForTransientMissingSession(command: command, response: response) else {
-                return response
-            }
-        }
-
-        return response
     }
 
     static func parse(arguments: [String], environment: [String: String]) throws -> CLIInvocation {
@@ -262,27 +230,6 @@ public enum ToasttyCLI {
         }
 
         return (CLIOptions(jsonOutput: jsonOutput, socketPath: socketPath), remaining)
-    }
-
-    private static func shouldRetryForTransientMissingSession(
-        command: CLICommand,
-        response: AutomationResponseEnvelope
-    ) -> Bool {
-        guard response.ok == false,
-              let error = response.error,
-              error.code == "INVALID_PAYLOAD",
-              error.message == "sessionID does not identify an active session" else {
-            return false
-        }
-
-        switch command {
-        case .sessionStatus, .sessionUpdateFiles, .sessionStop:
-            // The hidden launcher emits session.start just after the child
-            // process starts. Fast first-frame telemetry can briefly race that.
-            return true
-        case .notify, .sessionStart:
-            return false
-        }
     }
 
     private static func parseNotifyCommand(_ arguments: [String]) throws -> CLICommand {

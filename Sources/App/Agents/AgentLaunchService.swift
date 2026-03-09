@@ -30,7 +30,7 @@ enum AgentLaunchError: LocalizedError, Equatable {
     case panelOutsideWorkspace
     case panelIsNotTerminal
     case panelBusy(runningCommand: String?)
-    case launcherUnavailable(path: String?)
+    case cliUnavailable(path: String?)
     case terminalUnavailable(panelID: UUID)
 
     var errorDescription: String? {
@@ -54,11 +54,11 @@ enum AgentLaunchError: LocalizedError, Equatable {
                 return "The target terminal is still busy: \(runningCommand)"
             }
             return "The target terminal is not at an interactive prompt."
-        case .launcherUnavailable(let path):
+        case .cliUnavailable(let path):
             if let path {
-                return "Toastty could not find its helper CLI at \(path). Build the toastty target alongside the app and try again."
+                return "Toastty could not find its CLI at \(path). Build the toastty target alongside the app and try again."
             }
-            return "Toastty could not resolve its helper CLI path."
+            return "Toastty could not resolve its CLI path."
         case .terminalUnavailable(let panelID):
             return "The target terminal is unavailable for panel \(panelID.uuidString)."
         }
@@ -69,21 +69,27 @@ enum AgentLaunchError: LocalizedError, Equatable {
 final class AgentLaunchService {
     private weak var store: AppStore?
     private weak var terminalCommandRouter: (any TerminalCommandRouting)?
+    private weak var sessionRuntimeStore: SessionRuntimeStore?
     private let socketPath: String
     private let fileManager: FileManager
+    private let nowProvider: @Sendable () -> Date
     private let cliExecutablePathProvider: @Sendable () -> String?
 
     init(
         store: AppStore,
         terminalCommandRouter: any TerminalCommandRouting,
+        sessionRuntimeStore: SessionRuntimeStore,
         socketPath: String,
         fileManager: FileManager = .default,
+        nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath
     ) {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
+        self.sessionRuntimeStore = sessionRuntimeStore
         self.socketPath = socketPath
         self.fileManager = fileManager
+        self.nowProvider = nowProvider
         self.cliExecutablePathProvider = cliExecutablePathProvider
     }
 
@@ -96,7 +102,7 @@ final class AgentLaunchService {
         workspaceID: UUID? = nil,
         panelID: UUID? = nil
     ) throws -> AgentLaunchResult {
-        guard let terminalCommandRouter else {
+        guard let terminalCommandRouter, let sessionRuntimeStore else {
             throw AgentLaunchError.serviceUnavailable
         }
 
@@ -108,17 +114,31 @@ final class AgentLaunchService {
         let repoRoot = Self.inferRepoRoot(from: target.cwd, fileManager: fileManager)
         let cliExecutablePath = try resolveCLIExecutablePath()
         let commandLine = ShellCommandRenderer.render(
-            argv: launcherCommandArguments(
-                cliExecutablePath: cliExecutablePath,
+            argv: launchProfile.argv,
+            environment: launchEnvironment(
                 agent: agent,
                 sessionID: sessionID,
-                target: target,
+                panelID: target.panelID,
+                cwd: target.cwd,
                 repoRoot: repoRoot,
-                launchProfile: launchProfile
+                cliExecutablePath: cliExecutablePath
             )
+        )
+        let now = nowProvider()
+
+        sessionRuntimeStore.startSession(
+            sessionID: sessionID,
+            agent: agent,
+            panelID: target.panelID,
+            windowID: target.windowID,
+            workspaceID: target.workspaceID,
+            cwd: target.cwd,
+            repoRoot: repoRoot,
+            at: now
         )
 
         guard terminalCommandRouter.sendText(commandLine, submit: true, panelID: target.panelID) else {
+            sessionRuntimeStore.stopSession(sessionID: sessionID, at: now)
             throw AgentLaunchError.terminalUnavailable(panelID: target.panelID)
         }
 
@@ -221,41 +241,36 @@ final class AgentLaunchService {
         }
     }
 
-    private func launcherCommandArguments(
-        cliExecutablePath: String,
+    private func launchEnvironment(
         agent: AgentKind,
         sessionID: String,
-        target: LaunchTarget,
+        panelID: UUID,
+        cwd: String?,
         repoRoot: String?,
-        launchProfile: AgentLaunchProfile
-    ) -> [String] {
-        var arguments = [
-            cliExecutablePath,
-            ToasttyInternalCommand.agentLaunch,
-            "--session", sessionID,
-            "--agent", agent.rawValue,
-            "--panel", target.panelID.uuidString,
-            "--window", target.windowID.uuidString,
-            "--workspace", target.workspaceID.uuidString,
-            "--socket-path", socketPath,
+        cliExecutablePath: String
+    ) -> [String: String] {
+        var environment: [String: String] = [
+            ToasttyLaunchContextEnvironment.agentKey: agent.rawValue,
+            ToasttyLaunchContextEnvironment.sessionIDKey: sessionID,
+            ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
+            ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
+            ToasttyLaunchContextEnvironment.cliPathKey: cliExecutablePath,
         ]
-        if let cwd = target.cwd {
-            arguments.append(contentsOf: ["--cwd", cwd])
+        if let cwd {
+            environment[ToasttyLaunchContextEnvironment.cwdKey] = cwd
         }
         if let repoRoot {
-            arguments.append(contentsOf: ["--repo-root", repoRoot])
+            environment[ToasttyLaunchContextEnvironment.repoRootKey] = repoRoot
         }
-        arguments.append("--")
-        arguments.append(contentsOf: launchProfile.argv)
-        return arguments
+        return environment
     }
 
     private func resolveCLIExecutablePath() throws -> String {
         guard let candidatePath = normalizedNonEmpty(cliExecutablePathProvider()) else {
-            throw AgentLaunchError.launcherUnavailable(path: nil)
+            throw AgentLaunchError.cliUnavailable(path: nil)
         }
         guard fileManager.isExecutableFile(atPath: candidatePath) else {
-            throw AgentLaunchError.launcherUnavailable(path: candidatePath)
+            throw AgentLaunchError.cliUnavailable(path: candidatePath)
         }
         return candidatePath
     }
@@ -331,8 +346,12 @@ private enum ShellCommandRenderer {
     // Launch profiles stay argv-based internally. We only render a single shell
     // command line at the terminal-injection boundary because the target shell
     // is already running inside the panel.
-    static func render(argv: [String]) -> String {
-        argv.map(quote).joined(separator: " ")
+    static func render(argv: [String], environment: [String: String]) -> String {
+        let assignments = environment
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\(quote($0.value))" }
+        let command = argv.map(quote)
+        return (assignments + command).joined(separator: " ")
     }
 
     private static func quote(_ value: String) -> String {

@@ -204,6 +204,7 @@ struct ToasttyApp: App {
         terminalRuntimeRegistry.bind(store: store)
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
+        terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry
@@ -255,6 +256,7 @@ struct ToasttyApp: App {
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
             socketPath: socketPath
         )
         do {
