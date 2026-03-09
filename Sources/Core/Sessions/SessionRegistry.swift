@@ -137,38 +137,30 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return record
     }
 
-    public func workspaceStatus(for workspaceID: UUID) -> WorkspaceSessionStatus? {
+    public func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
         let candidates = sessionsByID.values.filter { record in
             record.workspaceID == workspaceID && record.status != nil
         }
+        let activeCandidates = candidates.filter(\.isActive)
+
+        if activeCandidates.isEmpty == false {
+            return activeCandidates
+                .sorted(by: activeWorkspaceStatusSort)
+                .compactMap(Self.workspaceSessionStatus(from:))
+        }
+
         let activeSessionExists = sessionsByID.values.contains { record in
             record.workspaceID == workspaceID && record.isActive
         }
-        let activeCandidates = candidates.filter(\.isActive)
-        if activeSessionExists && activeCandidates.isEmpty {
-            return nil
-        }
-        guard candidates.isEmpty == false else { return nil }
-
-        let selectedRecord: SessionRecord
-        if let bestActiveRecord = activeCandidates.max(by: activeWorkspaceStatusSort) {
-            selectedRecord = bestActiveRecord
-        } else if let latestStoppedRecord = candidates.max(by: stoppedWorkspaceStatusSort) {
-            selectedRecord = latestStoppedRecord
-        } else {
-            return nil
+        if activeSessionExists {
+            return []
         }
 
-        guard let status = selectedRecord.status else { return nil }
-        return WorkspaceSessionStatus(
-            sessionID: selectedRecord.sessionID,
-            panelID: selectedRecord.panelID,
-            agent: selectedRecord.agent,
-            status: status,
-            cwd: selectedRecord.cwd,
-            updatedAt: selectedRecord.updatedAt,
-            isActive: selectedRecord.isActive
-        )
+        guard let latestStoppedRecord = candidates.sorted(by: stoppedWorkspaceStatusSort).first,
+              let status = Self.workspaceSessionStatus(from: latestStoppedRecord) else {
+            return []
+        }
+        return [status]
     }
 
     public mutating func pruneStoppedSessions(olderThan cutoff: Date) {
@@ -184,23 +176,42 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         }
     }
 
+    private static func workspaceSessionStatus(from record: SessionRecord) -> WorkspaceSessionStatus? {
+        guard let status = record.status else { return nil }
+        return WorkspaceSessionStatus(
+            sessionID: record.sessionID,
+            panelID: record.panelID,
+            agent: record.agent,
+            status: status,
+            cwd: record.cwd,
+            updatedAt: record.updatedAt,
+            isActive: record.isActive
+        )
+    }
+
     private func activeWorkspaceStatusSort(_ lhs: SessionRecord, _ rhs: SessionRecord) -> Bool {
-        guard let lhsStatus = lhs.status, let rhsStatus = rhs.status else {
-            return lhs.updatedAt < rhs.updatedAt
-        }
+        let lhsStatus = Self.requiredWorkspaceStatus(from: lhs)
+        let rhsStatus = Self.requiredWorkspaceStatus(from: rhs)
         if lhsStatus.kind.activeWorkspacePriority != rhsStatus.kind.activeWorkspacePriority {
-            return lhsStatus.kind.activeWorkspacePriority < rhsStatus.kind.activeWorkspacePriority
+            return lhsStatus.kind.activeWorkspacePriority > rhsStatus.kind.activeWorkspacePriority
         }
         if lhs.updatedAt != rhs.updatedAt {
-            return lhs.updatedAt < rhs.updatedAt
+            return lhs.updatedAt > rhs.updatedAt
         }
-        return lhs.startedAt < rhs.startedAt
+        return lhs.startedAt > rhs.startedAt
     }
 
     private func stoppedWorkspaceStatusSort(_ lhs: SessionRecord, _ rhs: SessionRecord) -> Bool {
         if lhs.updatedAt != rhs.updatedAt {
-            return lhs.updatedAt < rhs.updatedAt
+            return lhs.updatedAt > rhs.updatedAt
         }
-        return lhs.startedAt < rhs.startedAt
+        return lhs.startedAt > rhs.startedAt
+    }
+
+    private static func requiredWorkspaceStatus(from record: SessionRecord) -> SessionStatus {
+        guard let status = record.status else {
+            preconditionFailure("workspace status sort requires a record with status")
+        }
+        return status
     }
 }

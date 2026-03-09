@@ -78,8 +78,8 @@ final class SessionRuntimeStore: ObservableObject {
         publish(nextRegistry)
     }
 
-    func workspaceStatus(for workspaceID: UUID) -> WorkspaceSessionStatus? {
-        sessionRegistry.workspaceStatus(for: workspaceID)
+    func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
+        sessionRegistry.workspaceStatuses(for: workspaceID)
     }
 
     private func synchronize(with state: AppState, now: Date = Date()) {

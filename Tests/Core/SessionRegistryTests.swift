@@ -214,7 +214,9 @@ struct SessionRegistryTests {
             detail: "Refactoring dashboard to server components"
         ))
 
-        let workspaceStatus = try #require(registry.workspaceStatus(for: workspaceID))
+        let workspaceStatuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(workspaceStatuses.count == 1)
+        let workspaceStatus = try #require(workspaceStatuses.first)
         #expect(workspaceStatus.status.kind == .working)
         #expect(workspaceStatus.status.summary == "editing 3 files")
         #expect(workspaceStatus.status.detail == "Refactoring dashboard to server components")
@@ -223,7 +225,7 @@ struct SessionRegistryTests {
     }
 
     @Test
-    func workspaceStatusPrefersHigherPriorityActiveState() throws {
+    func workspaceStatusesIncludeAllActiveSessionsSortedByPriorityAndRecency() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()
         let now = Date(timeIntervalSince1970: 800)
@@ -260,13 +262,29 @@ struct SessionRegistryTests {
             at: now.addingTimeInterval(3)
         )
 
-        let workspaceStatus = try #require(registry.workspaceStatus(for: workspaceID))
-        #expect(workspaceStatus.sessionID == "error")
-        #expect(workspaceStatus.status.kind == .error)
+        registry.startSession(
+            sessionID: "latest-working",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(4)
+        )
+        registry.updateStatus(
+            sessionID: "latest-working",
+            status: SessionStatus(kind: .working, summary: "exploring", detail: "Reading the current reducers"),
+            at: now.addingTimeInterval(5)
+        )
+
+        let workspaceStatuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(workspaceStatuses.map(\.sessionID) == ["error", "latest-working", "working"])
+        #expect(workspaceStatuses.map(\.status.kind) == [.error, .working, .working])
     }
 
     @Test
-    func workspaceStatusFallsBackToMostRecentStoppedSession() throws {
+    func workspaceStatusesFallBackToMostRecentStoppedSession() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()
         let now = Date(timeIntervalSince1970: 900)
@@ -305,7 +323,7 @@ struct SessionRegistryTests {
         )
         registry.stopSession(sessionID: "latest-ready", at: now.addingTimeInterval(5))
 
-        let workspaceStatus = try #require(registry.workspaceStatus(for: workspaceID))
+        let workspaceStatus = try #require(registry.workspaceStatuses(for: workspaceID).first)
         #expect(workspaceStatus.sessionID == "latest-ready")
         #expect(workspaceStatus.status.kind == .ready)
         #expect(workspaceStatus.status.detail == "Added auth middleware")
@@ -313,7 +331,7 @@ struct SessionRegistryTests {
     }
 
     @Test
-    func workspaceStatusDoesNotReuseStoppedStatusWhileNewActiveSessionHasNoStatusYet() {
+    func workspaceStatusesDoNotReuseStoppedStatusWhileNewActiveSessionHasNoStatusYet() {
         var registry = SessionRegistry()
         let workspaceID = UUID()
         let now = Date(timeIntervalSince1970: 1000)
@@ -346,6 +364,43 @@ struct SessionRegistryTests {
             at: now.addingTimeInterval(3)
         )
 
-        #expect(registry.workspaceStatus(for: workspaceID) == nil)
+        #expect(registry.workspaceStatuses(for: workspaceID).isEmpty)
+    }
+
+    @Test
+    func workspaceStatusesIgnoreStatuslessActiveSessionsWhenOtherActiveStatusesExist() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1100)
+
+        registry.startSession(
+            sessionID: "working",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "working",
+            status: SessionStatus(kind: .working, summary: "editing", detail: "Updating reducers"),
+            at: now.addingTimeInterval(1)
+        )
+
+        registry.startSession(
+            sessionID: "no-status",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(2)
+        )
+
+        let workspaceStatuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(workspaceStatuses.map(\.sessionID) == ["working"])
     }
 }

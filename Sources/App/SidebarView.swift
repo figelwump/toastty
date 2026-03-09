@@ -209,7 +209,7 @@ struct SidebarView: View {
     ) -> some View {
         let paneCount = workspace.layoutTree.allSlotInfos.count
         let subtitle = workspaceSubtitle(workspace: workspace, paneCount: paneCount)
-        let sessionStatus = sessionRuntimeStore.workspaceStatus(for: workspace.id)
+        let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
         return VStack(alignment: .leading, spacing: 2) {
             // Top row: workspace name + spacer + shortcut badge
@@ -230,9 +230,9 @@ struct SidebarView: View {
                 shortcutBadge(shortcutLabel)
             }
 
-            if let sessionStatus {
-                sessionStatusContent(
-                    sessionStatus,
+            if !sessionStatuses.isEmpty {
+                sessionStatusesContent(
+                    sessionStatuses,
                     fallbackSubtitle: subtitle,
                     isSelected: isSelected
                 )
@@ -271,15 +271,15 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func sessionStatusContent(
-        _ workspaceSessionStatus: WorkspaceSessionStatus,
+    private func sessionStatusesContent(
+        _ workspaceSessionStatuses: [WorkspaceSessionStatus],
         fallbackSubtitle: String,
         isSelected: Bool
     ) -> some View {
-        let status = workspaceSessionStatus.status
+        let showsWorkingStatus = workspaceSessionStatuses.contains { $0.status.kind == .working }
 
-        VStack(alignment: .leading, spacing: 2) {
-            if status.kind == .working {
+        VStack(alignment: .leading, spacing: 4) {
+            if showsWorkingStatus {
                 Text(fallbackSubtitle)
                     .font(ToastyTheme.fontWorkspaceSubtitle)
                     .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
@@ -287,6 +287,20 @@ struct SidebarView: View {
                     .truncationMode(.tail)
             }
 
+            ForEach(workspaceSessionStatuses, id: \.sessionID) { workspaceSessionStatus in
+                sessionStatusContent(workspaceSessionStatus)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func sessionStatusContent(
+        _ workspaceSessionStatus: WorkspaceSessionStatus
+    ) -> some View {
+        let status = workspaceSessionStatus.status
+
+        VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 Text(workspaceSessionStatus.agent.rawValue)
                     .font(ToastyTheme.fontWorkspaceSessionAgent)
@@ -314,7 +328,6 @@ struct SidebarView: View {
                     .truncationMode(.middle)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
