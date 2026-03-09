@@ -5,6 +5,7 @@ import SwiftUI
 struct WorkspaceView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -111,6 +112,14 @@ struct WorkspaceView: View {
         let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
             limit: TerminalShortcutConfig.maxShortcutCount
         )
+        let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus] = Dictionary(
+            uniqueKeysWithValues: workspace.panels.keys.compactMap { panelID in
+                guard let status = sessionRuntimeStore.panelStatus(for: panelID) else {
+                    return nil
+                }
+                return (panelID, status)
+            }
+        )
         let renderedLayoutNode = focusedRenderNode(in: workspace)
         let renderIdentity = workspaceRenderIdentity(for: workspace)
         GeometryReader { geometry in
@@ -134,7 +143,8 @@ struct WorkspaceView: View {
                         globalFontPoints: store.state.globalTerminalFontPoints,
                         appIsActive: appIsActive,
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
-                        terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID
+                        terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
+                        panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
                     )
                 }
 
@@ -335,6 +345,7 @@ private struct SlotPlacementView: View {
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
+    let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
 
     var body: some View {
         Group {
@@ -346,6 +357,7 @@ private struct SlotPlacementView: View {
                     isWorkspaceSelected: isWorkspaceSelected,
                     focusedPanelID: workspace.focusedPanelID,
                     hasUnreadNotification: workspace.unreadPanelIDs.contains(placement.panelID),
+                    panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
                     globalFontPoints: globalFontPoints,
                     appIsActive: appIsActive,
@@ -379,6 +391,7 @@ private struct PanelCardView: View {
     let isWorkspaceSelected: Bool
     let focusedPanelID: UUID?
     let hasUnreadNotification: Bool
+    let panelSessionStatus: WorkspaceSessionStatus?
     let shortcutNumber: Int?
     let globalFontPoints: Double
     let appIsActive: Bool
@@ -397,10 +410,7 @@ private struct PanelCardView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 if hasUnreadNotification {
-                    Circle()
-                        .fill(ToastyTheme.badgeBlue)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
+                    unreadIndicatorDot
                 }
 
                 Text(panelLabel)
@@ -512,6 +522,18 @@ private struct PanelCardView: View {
             return ToastyTheme.accent
         }
         return appIsActive ? ToastyTheme.accent : ToastyTheme.accent.opacity(0.5)
+    }
+
+    private var unreadIndicatorColor: Color {
+        guard let panelSessionStatus else { return ToastyTheme.badgeBlue }
+        return ToastyTheme.sessionStatusIndicatorColor(for: panelSessionStatus.status.kind)
+    }
+
+    private var unreadIndicatorDot: some View {
+        Circle()
+            .fill(unreadIndicatorColor)
+            .frame(width: 7, height: 7)
+            .shadow(color: unreadIndicatorColor.opacity(0.45), radius: 3, x: 0, y: 0)
     }
 
     @ViewBuilder

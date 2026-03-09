@@ -24,7 +24,11 @@ struct AppRootView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(width: 1)
 
-            WorkspaceView(store: store, terminalRuntimeRegistry: terminalRuntimeRegistry)
+            WorkspaceView(
+                store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ToastyTheme.chromeBackground)

@@ -1,3 +1,4 @@
+import CoreState
 import SwiftUI
 
 enum ToastyTheme {
@@ -17,6 +18,8 @@ enum ToastyTheme {
     static let sidebarSessionDetailText = Color(hex: 0x555555)
     static let sidebarSessionPathText = Color(hex: 0x4E4E4E)
     static let shortcutBadgeText = Color(hex: 0xB8B8B8)
+    static let sidebarSessionHoverBackground = Color(hex: 0x161616)
+    static let sidebarSessionHoverBorder = Color(hex: 0x2F2F2F)
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
@@ -60,6 +63,36 @@ enum ToastyTheme {
     static let fontWorkspaceSessionPath = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontShortcutBadge = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontNewWorkspace = Font.system(size: 11, weight: .regular, design: .default)
+
+    static func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {
+        switch kind {
+        case .working:
+            return sessionWorkingText
+        case .needsApproval:
+            return sessionNeedsApprovalText
+        case .ready:
+            return sessionReadyText
+        case .error:
+            return sessionErrorText
+        }
+    }
+
+    static func sessionStatusBackgroundColor(for kind: SessionStatusKind) -> Color {
+        switch kind {
+        case .working:
+            return sessionWorkingBackground
+        case .needsApproval:
+            return sessionNeedsApprovalBackground
+        case .ready:
+            return sessionReadyBackground
+        case .error:
+            return sessionErrorBackground
+        }
+    }
+
+    static func sessionStatusIndicatorColor(for kind: SessionStatusKind) -> Color {
+        sessionStatusTextColor(for: kind)
+    }
 }
 
 extension Color {

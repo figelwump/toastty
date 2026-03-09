@@ -403,4 +403,118 @@ struct SessionRegistryTests {
         let workspaceStatuses = registry.workspaceStatuses(for: workspaceID)
         #expect(workspaceStatuses.map(\.sessionID) == ["working"])
     }
+
+    @Test
+    func panelStatusReturnsLatestStoppedStatusWhenNoActiveSessionRemains() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1200)
+
+        registry.startSession(
+            sessionID: "stopped",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "stopped",
+            status: SessionStatus(kind: .ready, summary: "ready", detail: "Applied the migration"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "stopped", at: now.addingTimeInterval(2))
+
+        let panelStatus = try #require(registry.panelStatus(for: panelID))
+        #expect(panelStatus.sessionID == "stopped")
+        #expect(panelStatus.status.kind == .ready)
+        #expect(panelStatus.isActive == false)
+    }
+
+    @Test
+    func panelStatusPrefersMostRecentStoppedStatusForPanel() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1250)
+
+        registry.startSession(
+            sessionID: "older",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "older",
+            status: SessionStatus(kind: .needsApproval, summary: "needs approval", detail: "Approve deploy"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "older", at: now.addingTimeInterval(2))
+
+        registry.startSession(
+            sessionID: "latest",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(3)
+        )
+        registry.updateStatus(
+            sessionID: "latest",
+            status: SessionStatus(kind: .error, summary: "error", detail: "Tests failed"),
+            at: now.addingTimeInterval(4)
+        )
+        registry.stopSession(sessionID: "latest", at: now.addingTimeInterval(5))
+
+        let panelStatus = try #require(registry.panelStatus(for: panelID))
+        #expect(panelStatus.sessionID == "latest")
+        #expect(panelStatus.status.kind == .error)
+    }
+
+    @Test
+    func panelStatusDoesNotReuseStoppedStatusWhenActiveSessionHasNoStatusYet() {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1300)
+
+        registry.startSession(
+            sessionID: "stopped",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "stopped",
+            status: SessionStatus(kind: .error, summary: "error", detail: "Tests failed"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "stopped", at: now.addingTimeInterval(2))
+
+        registry.startSession(
+            sessionID: "active",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(3)
+        )
+
+        #expect(registry.panelStatus(for: panelID) == nil)
+    }
 }

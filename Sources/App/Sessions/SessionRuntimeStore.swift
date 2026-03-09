@@ -88,6 +88,10 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry.workspaceStatuses(for: workspaceID)
     }
 
+    func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
+        sessionRegistry.panelStatus(for: panelID)
+    }
+
     private func synchronize(with state: AppState, now: Date = Date()) {
         var nextRegistry = sessionRegistry
 

@@ -137,6 +137,20 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         return record
     }
 
+    public func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
+        if let activeRecord = activeSession(for: panelID) {
+            return Self.workspaceSessionStatus(from: activeRecord)
+        }
+
+        return sessionsByID.values
+            .filter { record in
+                record.panelID == panelID && record.status != nil
+            }
+            .sorted(by: stoppedWorkspaceStatusSort)
+            .compactMap(Self.workspaceSessionStatus(from:))
+            .first
+    }
+
     public func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
         let candidates = sessionsByID.values.filter { record in
             record.workspaceID == workspaceID && record.status != nil

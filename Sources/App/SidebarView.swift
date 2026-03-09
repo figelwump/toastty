@@ -9,6 +9,7 @@ struct SidebarView: View {
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
+    @State private var hoveredPanelID: UUID?
     @FocusState private var focusedRenameWorkspaceID: UUID?
 
     var body: some View {
@@ -153,22 +154,32 @@ struct SidebarView: View {
         shortcutLabel: String,
         isSelected: Bool
     ) -> some View {
-        Button {
-            handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
-        } label: {
-            workspaceRowContent(
-                workspace: workspace,
-                shortcutLabel: shortcutLabel,
-                isSelected: isSelected
-            ) {
-                Text(workspace.title)
-                    .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
-                    .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+        let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+
+        return workspaceRowChrome(isSelected: isSelected) {
+            VStack(alignment: .leading, spacing: 2) {
+                Button {
+                    handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
+                } label: {
+                    workspacePrimaryContent(
+                        shortcutLabel: shortcutLabel,
+                        selectionSubtitle: selectionSubtitle(for: workspace, sessionStatuses: sessionStatuses),
+                        isSelected: isSelected
+                    ) {
+                        Text(workspace.title)
+                            .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
+                            .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                }
+                .buttonStyle(SidebarRowButtonStyle())
+
+                if !sessionStatuses.isEmpty {
+                    sessionStatusesContent(sessionStatuses, workspace: workspace)
+                }
             }
         }
-        .buttonStyle(SidebarRowButtonStyle())
     }
 
     private func workspaceRenameRow(
@@ -177,75 +188,45 @@ struct SidebarView: View {
         shortcutLabel: String,
         isSelected: Bool
     ) -> some View {
-        workspaceRowContent(
-            workspace: workspace,
-            shortcutLabel: shortcutLabel,
-            isSelected: isSelected
-        ) {
-            TextField("Workspace name", text: $renameDraftTitle)
-                .textFieldStyle(.plain)
-                .font(ToastyTheme.fontWorkspaceName)
-                .foregroundStyle(ToastyTheme.primaryText)
-                .focused($focusedRenameWorkspaceID, equals: workspaceID)
-                .accessibilityIdentifier(renameTextFieldAccessibilityID(for: workspaceID))
-                .onSubmit {
-                    commitWorkspaceRename(workspaceID: workspaceID)
+        let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+
+        return workspaceRowChrome(isSelected: isSelected) {
+            VStack(alignment: .leading, spacing: 2) {
+                workspacePrimaryContent(
+                    shortcutLabel: shortcutLabel,
+                    selectionSubtitle: selectionSubtitle(for: workspace, sessionStatuses: sessionStatuses),
+                    isSelected: isSelected
+                ) {
+                    TextField("Workspace name", text: $renameDraftTitle)
+                        .textFieldStyle(.plain)
+                        .font(ToastyTheme.fontWorkspaceName)
+                        .foregroundStyle(ToastyTheme.primaryText)
+                        .focused($focusedRenameWorkspaceID, equals: workspaceID)
+                        .accessibilityIdentifier(renameTextFieldAccessibilityID(for: workspaceID))
+                        .onSubmit {
+                            commitWorkspaceRename(workspaceID: workspaceID)
+                        }
+                        .onExitCommand {
+                            cancelWorkspaceRename()
+                        }
+                        .onAppear {
+                            focusedRenameWorkspaceID = workspaceID
+                            scheduleRenameSelection(workspaceID: workspaceID)
+                        }
                 }
-                .onExitCommand {
-                    cancelWorkspaceRename()
+
+                if !sessionStatuses.isEmpty {
+                    sessionStatusesContent(sessionStatuses, workspace: workspace)
                 }
-                .onAppear {
-                    focusedRenameWorkspaceID = workspaceID
-                    scheduleRenameSelection(workspaceID: workspaceID)
-                }
+            }
         }
     }
 
-    private func workspaceRowContent<Title: View>(
-        workspace: WorkspaceState,
-        shortcutLabel: String,
+    private func workspaceRowChrome<Content: View>(
         isSelected: Bool,
-        @ViewBuilder titleView: () -> Title
+        @ViewBuilder content: () -> Content
     ) -> some View {
-        let paneCount = workspace.layoutTree.allSlotInfos.count
-        let subtitle = workspaceSubtitle(workspace: workspace, paneCount: paneCount)
-        let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
-
-        return VStack(alignment: .leading, spacing: 2) {
-            // Top row: workspace name + spacer + shortcut badge
-            HStack(spacing: 6) {
-                titleView()
-
-                // Blue activity dot (when workspace has unread notifications)
-                if workspace.unreadNotificationCount > 0 {
-                    Circle()
-                        .fill(ToastyTheme.badgeBlue)
-                        .frame(width: 7, height: 7)
-                        .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
-                }
-
-                Spacer(minLength: 0)
-
-                // Keyboard shortcut badge pill
-                shortcutBadge(shortcutLabel)
-            }
-
-            if !sessionStatuses.isEmpty {
-                sessionStatusesContent(
-                    sessionStatuses,
-                    fallbackSubtitle: subtitle,
-                    isSelected: isSelected
-                )
-            } else {
-                Text(subtitle)
-                    .font(ToastyTheme.fontWorkspaceSubtitle)
-                    .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
-                    .lineLimit(3)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
+        content()
         .padding(.vertical, 7)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -256,6 +237,35 @@ struct SidebarView: View {
                 .fill(isSelected ? ToastyTheme.accent : Color.clear)
                 .frame(width: 2)
         }
+        .contentShape(Rectangle())
+    }
+
+    private func workspacePrimaryContent<Title: View>(
+        shortcutLabel: String,
+        selectionSubtitle: String?,
+        isSelected: Bool,
+        @ViewBuilder titleView: () -> Title
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                titleView()
+
+                Spacer(minLength: 0)
+
+                shortcutBadge(shortcutLabel)
+            }
+
+            if let selectionSubtitle {
+                Text(selectionSubtitle)
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
+                    .lineLimit(3)
+                    .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
 
@@ -273,35 +283,89 @@ struct SidebarView: View {
     @ViewBuilder
     private func sessionStatusesContent(
         _ workspaceSessionStatuses: [WorkspaceSessionStatus],
-        fallbackSubtitle: String,
-        isSelected: Bool
+        workspace: WorkspaceState
     ) -> some View {
-        let showsWorkingStatus = workspaceSessionStatuses.contains { $0.status.kind == .working }
-
         VStack(alignment: .leading, spacing: 4) {
-            if showsWorkingStatus {
-                Text(fallbackSubtitle)
-                    .font(ToastyTheme.fontWorkspaceSubtitle)
-                    .foregroundStyle(isSelected ? ToastyTheme.inactiveText : ToastyTheme.inactiveWorkspaceSubtitleText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
             ForEach(workspaceSessionStatuses, id: \.sessionID) { workspaceSessionStatus in
-                sessionStatusContent(workspaceSessionStatus)
+                sessionStatusContent(
+                    workspaceSessionStatus,
+                    workspace: workspace,
+                    isHovered: hoveredPanelID == workspaceSessionStatus.panelID
+                )
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func selectionSubtitle(
+        for workspace: WorkspaceState,
+        sessionStatuses: [WorkspaceSessionStatus]
+    ) -> String? {
+        guard sessionStatuses.isEmpty || sessionStatuses.contains(where: { $0.status.kind == .working }) else {
+            return nil
+        }
+        let paneCount = workspace.layoutTree.allSlotInfos.count
+        return workspaceSubtitle(workspace: workspace, paneCount: paneCount)
+    }
+
     @ViewBuilder
     private func sessionStatusContent(
-        _ workspaceSessionStatus: WorkspaceSessionStatus
+        _ workspaceSessionStatus: WorkspaceSessionStatus,
+        workspace: WorkspaceState,
+        isHovered: Bool
     ) -> some View {
         let status = workspaceSessionStatus.status
+        let showsUnreadIndicator = workspace.unreadPanelIDs.contains(workspaceSessionStatus.panelID)
+        let canFocusPanel = workspace.panels[workspaceSessionStatus.panelID] != nil
 
+        Group {
+            if canFocusPanel {
+                Button {
+                    focusSessionPanel(
+                        workspaceID: workspace.id,
+                        panelID: workspaceSessionStatus.panelID
+                    )
+                } label: {
+                    sessionStatusLabel(
+                        workspaceSessionStatus,
+                        status: status,
+                        showsUnreadIndicator: showsUnreadIndicator,
+                        isHovered: isHovered
+                    )
+                }
+                .buttonStyle(.plain)
+                .onHover { isHovering in
+                    if isHovering {
+                        hoveredPanelID = workspaceSessionStatus.panelID
+                    } else if hoveredPanelID == workspaceSessionStatus.panelID {
+                        hoveredPanelID = nil
+                    }
+                }
+                .accessibilityIdentifier("sidebar.workspace.session.\(workspaceSessionStatus.sessionID)")
+            } else {
+                sessionStatusLabel(
+                    workspaceSessionStatus,
+                    status: status,
+                    showsUnreadIndicator: showsUnreadIndicator,
+                    isHovered: false
+                )
+            }
+        }
+    }
+
+    private func sessionStatusLabel(
+        _ workspaceSessionStatus: WorkspaceSessionStatus,
+        status: SessionStatus,
+        showsUnreadIndicator: Bool,
+        isHovered: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
+                sessionStatusIndicator(
+                    for: workspaceSessionStatus.status.kind,
+                    isVisible: showsUnreadIndicator
+                )
+
                 Text(workspaceSessionStatus.agent.rawValue)
                     .font(ToastyTheme.fontWorkspaceSessionAgent)
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
@@ -328,6 +392,18 @@ struct SidebarView: View {
                     .truncationMode(.middle)
             }
         }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear, lineWidth: 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 4))
     }
 
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
@@ -341,6 +417,18 @@ struct SidebarView: View {
         guard let windowID = store.selectedWindow?.id else { return }
         cancelWorkspaceRename()
         store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
+    }
+
+    private func focusSessionPanel(workspaceID: UUID, panelID: UUID) {
+        guard let windowID = store.selectedWindow?.id else { return }
+        cancelWorkspaceRename()
+
+        if store.selectedWorkspace?.id != workspaceID {
+            _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
+        }
+
+        _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+        terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
     }
 
     private func beginWorkspaceRename(_ workspace: WorkspaceState) {
@@ -462,37 +550,24 @@ struct SidebarView: View {
     private func sessionStatusChip(_ status: SessionStatus) -> some View {
         Text(status.summary)
             .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(sessionStatusTextColor(for: status.kind))
+            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: status.kind))
             .padding(.horizontal, 4)
-            .background(sessionStatusBackgroundColor(for: status.kind), in: RoundedRectangle(cornerRadius: 2))
+            .background(
+                ToastyTheme.sessionStatusBackgroundColor(for: status.kind),
+                in: RoundedRectangle(cornerRadius: 2)
+            )
             .lineLimit(1)
             .truncationMode(.tail)
     }
 
-    private func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {
-        switch kind {
-        case .working:
-            return ToastyTheme.sessionWorkingText
-        case .needsApproval:
-            return ToastyTheme.sessionNeedsApprovalText
-        case .ready:
-            return ToastyTheme.sessionReadyText
-        case .error:
-            return ToastyTheme.sessionErrorText
-        }
-    }
+    private func sessionStatusIndicator(for kind: SessionStatusKind, isVisible: Bool) -> some View {
+        let indicatorColor = ToastyTheme.sessionStatusIndicatorColor(for: kind)
 
-    private func sessionStatusBackgroundColor(for kind: SessionStatusKind) -> Color {
-        switch kind {
-        case .working:
-            return ToastyTheme.sessionWorkingBackground
-        case .needsApproval:
-            return ToastyTheme.sessionNeedsApprovalBackground
-        case .ready:
-            return ToastyTheme.sessionReadyBackground
-        case .error:
-            return ToastyTheme.sessionErrorBackground
-        }
+        return Circle()
+            .fill(indicatorColor)
+            .frame(width: 7, height: 7)
+            .shadow(color: indicatorColor.opacity(0.45), radius: 3, x: 0, y: 0)
+            .opacity(isVisible ? 1 : 0)
     }
 
     private func abbreviatedPathLabel(_ path: String?) -> String? {
