@@ -311,7 +311,6 @@ private enum ShellCommandRenderer {
         panelID: UUID
     ) -> String {
         let command = [
-            "exec",
             quote(cliExecutablePath),
             "agent",
             "run",

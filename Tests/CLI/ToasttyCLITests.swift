@@ -104,6 +104,33 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func agentRunReportsMissingExecutablesAsPathLookupErrors() {
+        do {
+            try AgentRunCommandRunner.exec(
+                PreparedAgentProcess(
+                    argv: ["cdx", "--help"],
+                    environment: [
+                        "PATH": FileManager.default.temporaryDirectory
+                            .appendingPathComponent("toastty-empty-path-\(UUID().uuidString)", isDirectory: true)
+                            .path,
+                        "TOASTTY_CWD": FileManager.default.currentDirectoryPath,
+                    ]
+                )
+            )
+            Issue.record("expected runtime failure")
+        } catch let error as ToasttyCLIError {
+            guard case .runtime(let message) = error else {
+                Issue.record("expected runtime error")
+                return
+            }
+            #expect(message.contains("Configured argv[0] 'cdx' was not found on PATH"))
+            #expect(message.contains("aliases and functions are not supported"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
     func sessionStartGeneratesSessionIDWhenOmitted() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(

@@ -45,6 +45,7 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("agent run codex"))
         #expect(injectedCommand.contains("--panel \(panelID.uuidString)"))
         #expect(injectedCommand.contains("--session \(result.sessionID)"))
+        #expect(injectedCommand.hasPrefix("exec ") == false)
         #expect(injectedCommand.hasSuffix("\n"))
     }
 

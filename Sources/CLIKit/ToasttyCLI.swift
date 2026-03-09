@@ -726,6 +726,17 @@ enum AgentRunCommandRunner {
         guard let executable = preparedProcess.argv.first, executable.isEmpty == false else {
             throw ToasttyCLIError.runtime("Configured argv is empty")
         }
+        let currentDirectoryPath = preparedProcess.environment[ToasttyLaunchContextEnvironment.cwdKey]
+            ?? FileManager.default.currentDirectoryPath
+        guard let resolvedExecutable = resolveExecutablePath(
+            executable: executable,
+            environment: preparedProcess.environment,
+            currentDirectoryPath: currentDirectoryPath
+        ) else {
+            throw ToasttyCLIError.runtime(
+                "Configured argv[0] '\(executable)' was not found on PATH. Toastty runs configured argv directly, so shell aliases and functions are not supported."
+            )
+        }
 
         for (key, value) in preparedProcess.environment {
             setenv(key, value, 1)
@@ -742,8 +753,44 @@ enum AgentRunCommandRunner {
             execvp(executable, UnsafeMutablePointer(mutating: buffer.baseAddress))
         }
 
+        if errno == ENOENT {
+            throw ToasttyCLIError.runtime(
+                "Failed to launch \(resolvedExecutable): No such file or directory. If this is a script, check that its interpreter exists."
+            )
+        }
         let failureReason = String(cString: strerror(errno))
         throw ToasttyCLIError.runtime("Failed to launch \(executable): \(failureReason)")
+    }
+
+    static func resolveExecutablePath(
+        executable: String,
+        environment: [String: String],
+        currentDirectoryPath: String
+    ) -> String? {
+        if executable.contains("/") {
+            let candidatePath: String
+            if executable.hasPrefix("/") {
+                candidatePath = executable
+            } else {
+                candidatePath = URL(filePath: currentDirectoryPath, directoryHint: .isDirectory)
+                    .appending(path: executable, directoryHint: .notDirectory)
+                    .path
+            }
+            return FileManager.default.isExecutableFile(atPath: candidatePath) ? candidatePath : nil
+        }
+
+        let path = environment["PATH"] ?? ""
+        for entry in path.split(separator: ":", omittingEmptySubsequences: false) {
+            let basePath = entry.isEmpty ? currentDirectoryPath : String(entry)
+            let candidatePath = URL(filePath: basePath, directoryHint: .isDirectory)
+                .appending(path: executable, directoryHint: .notDirectory)
+                .path
+            if FileManager.default.isExecutableFile(atPath: candidatePath) {
+                return candidatePath
+            }
+        }
+
+        return nil
     }
 }
 
