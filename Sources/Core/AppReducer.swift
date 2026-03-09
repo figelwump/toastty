@@ -94,7 +94,7 @@ public struct AppReducer {
                 )
             }
 
-            guard let insertionSlotID = resolveInsertionSlotID(in: targetWorkspace, preferredSlotID: targetSlotID) else {
+            guard let insertionSlotID = targetWorkspace.insertionSlotID(preferred: targetSlotID) else {
                 return false
             }
 
@@ -106,7 +106,7 @@ public struct AppReducer {
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.layoutTree = updatedSourceTree
-                sourceWorkspace.focusedPanelID = sourceWorkspace.resolvedFocusedPanel?.panelID
+                _ = sourceWorkspace.synchronizeFocusedPanelToLayout()
                 updatedSourceWorkspace = sourceWorkspace
             } else {
                 updatedSourceWorkspace = nil
@@ -149,7 +149,7 @@ public struct AppReducer {
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.layoutTree = updatedSourceTree
-                sourceWorkspace.focusedPanelID = sourceWorkspace.resolvedFocusedPanel?.panelID
+                _ = sourceWorkspace.synchronizeFocusedPanelToLayout()
                 state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
             } else {
                 removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
@@ -185,7 +185,7 @@ public struct AppReducer {
             guard let panelState = workspace.panels[panelID] else { return false }
             let wasFocusedPanel = workspace.focusedPanelID == panelID
             let previousSlotIDBeforeRemoval = wasFocusedPanel
-                ? workspace.splitTree.focusTarget(from: sourceLocation.slotID, direction: .previous)
+                ? workspace.focusTargetSlotID(from: sourceLocation.slotID, direction: .previous)
                 : nil
 
             workspace.recentlyClosedPanels.append(
@@ -208,8 +208,7 @@ public struct AppReducer {
 
             if let updatedTree = removal.node {
                 workspace.layoutTree = updatedTree
-                workspace.focusedPanelID = resolveFocusedPanelAfterClose(
-                    in: workspace,
+                workspace.focusedPanelID = workspace.focusedPanelIDAfterClosing(
                     closedPanelID: panelID,
                     closedPanelWasFocused: wasFocusedPanel,
                     previousSlotIDBeforeRemoval: previousSlotIDBeforeRemoval
@@ -233,10 +232,7 @@ public struct AppReducer {
                 return true
             }
 
-            guard let targetSlotID = resolveReopenSlotID(
-                in: workspace,
-                preferredSlotID: closedRecord.sourceSlotID
-            ) else {
+            guard let targetSlotID = workspace.reopenSlotID(preferred: closedRecord.sourceSlotID) else {
                 return false
             }
 
@@ -279,7 +275,7 @@ public struct AppReducer {
                 if let updatedTree = removal.node {
                     workspace.layoutTree = updatedTree
                     if workspace.focusedPanelID == existingPanelID {
-                        workspace.focusedPanelID = workspace.resolvedFocusedPanel?.panelID
+                        _ = workspace.synchronizeFocusedPanelToLayout()
                     }
                     state.workspacesByID[workspaceID] = workspace
                 } else if let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) {
@@ -308,7 +304,7 @@ public struct AppReducer {
                     second: auxLeaf
                 )
             } else {
-                guard let auxColumnSlotID = resolveAuxColumnSlotID(in: workspace, auxPanelIDs: existingAuxPanelIDs) else {
+                guard let auxColumnSlotID = workspace.auxiliaryColumnSlotID(for: existingAuxPanelIDs) else {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
@@ -341,11 +337,9 @@ public struct AppReducer {
 
         case .toggleFocusedPanelMode(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let focusResolution = workspace.resolvedFocusedPanel else {
+            guard workspace.synchronizeFocusedPanelToLayout() != nil else {
                 return false
             }
-
-            workspace.focusedPanelID = focusResolution.panelID
             workspace.focusedPanelModeActive.toggle()
             state.workspacesByID[workspaceID] = workspace
             return true
@@ -493,10 +487,9 @@ public struct AppReducer {
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
         guard workspace.focusedPanelModeActive == false else { return false }
-        guard let focusResolution = workspace.resolvedFocusedPanel else {
+        guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             return false
         }
-        workspace.focusedPanelID = focusResolution.panelID
 
         let inheritedCWD: String
         if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
@@ -516,7 +509,7 @@ public struct AppReducer {
             )
         )
 
-        guard let updatedSplitTree = workspace.splitTree.splitting(
+        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).splitting(
             slotID: focusResolution.slot.slotID,
             direction: direction,
             newPanelID: newPanelID,
@@ -525,7 +518,7 @@ public struct AppReducer {
             return false
         }
 
-        workspace.layoutTree = updatedSplitTree.root
+        workspace.apply(splitTree: updatedSplitTree)
         workspace.focusedPanelID = newPanelID
         state.workspacesByID[workspaceID] = workspace
         return true
@@ -540,23 +533,17 @@ public struct AppReducer {
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
         guard workspace.focusedPanelModeActive == false else { return false }
-        guard let focusResolution = workspace.resolvedFocusedPanel else {
+        guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             return false
         }
 
-        guard let targetSlotID = workspace.splitTree.focusTarget(
-            from: focusResolution.slot.slotID,
-            direction: direction
-        ) else {
+        guard let targetSlotID = workspace.focusTargetSlotID(from: focusResolution.slot.slotID, direction: direction) else {
             return false
         }
         guard targetSlotID != focusResolution.slot.slotID else {
             return false
         }
-        guard let targetPanelID = workspace.splitTree.panelID(
-            for: targetSlotID,
-            livePanelIDs: workspace.livePanelIDs
-        ) else {
+        guard let targetPanelID = workspace.panelID(forSlotID: targetSlotID) else {
             return false
         }
         guard targetPanelID != workspace.focusedPanelID else {
@@ -599,7 +586,7 @@ public struct AppReducer {
             )
             return false
         }
-        guard let focusResolution = workspace.resolvedFocusedPanel else {
+        guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             ToasttyLog.debug(
                 "Resize split rejected: no focused panel",
                 category: .reducer,
@@ -607,9 +594,8 @@ public struct AppReducer {
             )
             return false
         }
-        workspace.focusedPanelID = focusResolution.panelID
 
-        guard let updatedSplitTree = workspace.splitTree.resized(
+        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).resized(
             focusedSlotID: focusResolution.slot.slotID,
             direction: direction,
             amount: amount
@@ -626,7 +612,7 @@ public struct AppReducer {
             return false
         }
 
-        workspace.layoutTree = updatedSplitTree.root
+        workspace.apply(splitTree: updatedSplitTree)
         state.workspacesByID[workspaceID] = workspace
         ToasttyLog.debug(
             "Resize split applied",
@@ -658,7 +644,7 @@ public struct AppReducer {
             return false
         }
 
-        guard let updatedSplitTree = workspace.splitTree.equalized() else {
+        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).equalized() else {
             ToasttyLog.debug(
                 "Equalize splits rejected: tree already equalized",
                 category: .reducer,
@@ -667,7 +653,7 @@ public struct AppReducer {
             return false
         }
 
-        workspace.layoutTree = updatedSplitTree.root
+        workspace.apply(splitTree: updatedSplitTree)
         state.workspacesByID[workspaceID] = workspace
         ToasttyLog.debug(
             "Equalized layout splits",
@@ -675,34 +661,6 @@ public struct AppReducer {
             metadata: ["workspace_id": workspaceID.uuidString]
         )
         return true
-    }
-
-    private static func resolveFocusedPanelAfterClose(
-        in workspace: WorkspaceState,
-        closedPanelID: UUID,
-        closedPanelWasFocused: Bool,
-        previousSlotIDBeforeRemoval: UUID?
-    ) -> UUID? {
-        guard closedPanelWasFocused else {
-            return workspace.resolvedFocusedPanel?.panelID
-        }
-
-        if let focusedPanelID = workspace.focusedPanelID,
-           focusedPanelID != closedPanelID,
-           workspace.panels[focusedPanelID] != nil,
-           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil {
-            return focusedPanelID
-        }
-
-        if let previousSlotIDBeforeRemoval,
-           let selectedPreviousPanelID = workspace.splitTree.panelID(
-               for: previousSlotIDBeforeRemoval,
-               livePanelIDs: workspace.livePanelIDs
-           ) {
-            return selectedPreviousPanelID
-        }
-
-        return workspace.resolvedFocusedPanel?.panelID
     }
 
     private static func locatePanel(_ panelID: UUID, in state: AppState) -> PanelLocation? {
@@ -738,46 +696,12 @@ public struct AppReducer {
         state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id
     }
 
-    private static func resolveInsertionSlotID(in workspace: WorkspaceState, preferredSlotID: UUID?) -> UUID? {
-        if let preferredSlotID {
-            guard workspace.layoutTree.allSlotInfos.contains(where: { $0.slotID == preferredSlotID }) else {
-                return nil
-            }
-            return preferredSlotID
-        }
-
-        if let focusedPanelID = workspace.focusedPanelID,
-           let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID) {
-            return focusedSlot.slotID
-        }
-
-        return workspace.layoutTree.allSlotInfos.first?.slotID
-    }
-
-    private static func resolveReopenSlotID(in workspace: WorkspaceState, preferredSlotID: UUID) -> UUID? {
-        if workspace.layoutTree.allSlotInfos.contains(where: { $0.slotID == preferredSlotID }) {
-            return preferredSlotID
-        }
-        if let focusedPanelID = workspace.focusedPanelID,
-           let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID) {
-            return focusedSlot.slotID
-        }
-        return workspace.layoutTree.allSlotInfos.first?.slotID
-    }
-
     private static func auxPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
         Set(
             workspace.panels.compactMap { panelID, panelState in
                 auxiliaryPanelKinds.contains(panelState.kind) ? panelID : nil
             }
         )
-    }
-
-    private static func resolveAuxColumnSlotID(in workspace: WorkspaceState, auxPanelIDs: Set<UUID>) -> UUID? {
-        guard auxPanelIDs.isEmpty == false else { return nil }
-        return workspace.layoutTree.allSlotInfos.last(where: { slot in
-            auxPanelIDs.contains(slot.panelID)
-        })?.slotID
     }
 
     private static func splitLeaf(

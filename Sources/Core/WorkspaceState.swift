@@ -25,25 +25,6 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var unreadNotificationCount: Int {
         unreadPanelIDs.count + unreadWorkspaceNotificationCount
     }
-    public var livePanelIDs: Set<UUID> {
-        Set(panels.keys)
-    }
-    public var splitTree: WorkspaceSplitTree {
-        WorkspaceSplitTree(root: layoutTree)
-    }
-    public var resolvedFocusedPanel: WorkspaceSplitTree.FocusedPanelResolution? {
-        splitTree.resolveFocusedPanel(
-            preferredFocusedPanelID: focusedPanelID,
-            livePanelIDs: livePanelIDs
-        )
-    }
-    public var renderedLayout: WorkspaceRenderedLayout {
-        splitTree.renderedLayout(
-            workspaceID: id,
-            focusedPanelModeActive: focusedPanelModeActive,
-            focusedPanelID: focusedPanelID
-        )
-    }
     public var recentlyClosedPanels: [ClosedPanelRecord]
 
     public init(
