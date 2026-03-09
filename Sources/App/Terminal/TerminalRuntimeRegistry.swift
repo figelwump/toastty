@@ -56,7 +56,8 @@ struct TerminalPanelRenderAttachmentSnapshot {
 final class TerminalRuntimeRegistry: ObservableObject {
     private let focusCoordinator = TerminalFocusCoordinator()
     private weak var store: AppStore?
-    private var workspaceRuntimesByID: [UUID: TerminalWorkspaceRuntime] = [:]
+    private var windowRuntimesByID: [UUID: TerminalWindowRuntime] = [:]
+    private var windowIDByWorkspaceID: [UUID: UUID] = [:]
     private var terminalWorkspaceIDByPanelID: [UUID: UUID] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -145,6 +146,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func controller(for panelID: UUID, workspaceID: UUID) -> TerminalSurfaceController {
+        if let existingRuntime = existingRuntime(containing: panelID),
+           let existingController = existingRuntime.existingController(for: panelID),
+           existingRuntime.workspaceID == workspaceID {
+            return existingController
+        }
+
         terminalWorkspaceIDByPanelID[panelID] = workspaceID
         let workspaceRuntime = runtime(for: workspaceID)
         if let existingController = workspaceRuntime.existingController(for: panelID) {
@@ -157,14 +164,16 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func synchronizeGhosttySurfaceFocusFromApplicationState() {
-        for runtime in workspaceRuntimesByID.values {
+        for runtime in windowRuntimesByID.values {
             runtime.synchronizeGhosttySurfaceFocusFromApplicationState()
         }
     }
 
     func synchronize(with state: AppState) {
+        let previousWindowIDByWorkspaceID = windowIDByWorkspaceID
         let previousTerminalWorkspaceIDByPanelID = terminalWorkspaceIDByPanelID
         let livePanelIDsByWorkspaceID = liveTerminalPanelIDsByWorkspaceID(in: state)
+        windowIDByWorkspaceID = windowIDsByWorkspaceID(in: state)
         terminalWorkspaceIDByPanelID = livePanelIDsByWorkspaceID.reduce(into: [:]) { result, entry in
             let (workspaceID, panelIDs) = entry
             for panelID in panelIDs {
@@ -175,19 +184,26 @@ final class TerminalRuntimeRegistry: ObservableObject {
             previousPanelWorkspaceIDs: previousTerminalWorkspaceIDByPanelID,
             nextPanelWorkspaceIDs: terminalWorkspaceIDByPanelID
         )
+        let livePanelIDsByWindowAndWorkspaceID = panelIDsByWindowAndWorkspace(
+            panelIDsByWorkspaceID: livePanelIDsByWorkspaceID,
+            windowIDsByWorkspaceID: windowIDByWorkspaceID
+        )
+        let retainedPanelIDsByWindowAndWorkspaceID = panelIDsByWindowAndWorkspace(
+            panelIDsByWorkspaceID: migratedPanelIDsBySourceWorkspaceID,
+            windowIDsByWorkspaceID: previousWindowIDByWorkspaceID
+        )
 
         var removedPanelIDs: Set<UUID> = []
-        let liveWorkspaceIDs = Set(state.workspacesByID.keys)
-        for workspaceID in Array(workspaceRuntimesByID.keys) {
-            guard let runtime = workspaceRuntimesByID[workspaceID] else { continue }
-            let migratedPanelIDs = migratedPanelIDsBySourceWorkspaceID[workspaceID] ?? []
-            var livePanelIDs = livePanelIDsByWorkspaceID[workspaceID] ?? []
-            // Keep moved panels alive in their previous runtime until the
-            // destination host view asks for the controller and re-homes it.
-            livePanelIDs.formUnion(migratedPanelIDs)
-            removedPanelIDs.formUnion(runtime.synchronizeLivePanels(livePanelIDs))
-            if liveWorkspaceIDs.contains(workspaceID) == false && migratedPanelIDs.isEmpty {
-                workspaceRuntimesByID.removeValue(forKey: workspaceID)
+        for windowID in Array(windowRuntimesByID.keys) {
+            guard let runtime = windowRuntimesByID[windowID] else { continue }
+            removedPanelIDs.formUnion(
+                runtime.synchronize(
+                    livePanelIDsByWorkspaceID: livePanelIDsByWindowAndWorkspaceID[windowID] ?? [:],
+                    retainedPanelIDsByWorkspaceID: retainedPanelIDsByWindowAndWorkspaceID[windowID] ?? [:]
+                )
+            )
+            if runtime.isEmpty {
+                windowRuntimesByID.removeValue(forKey: windowID)
             }
         }
 
@@ -414,26 +430,34 @@ private extension TerminalRuntimeRegistry {
     }
 
     func runtime(for workspaceID: UUID) -> TerminalWorkspaceRuntime {
-        if let existing = workspaceRuntimesByID[workspaceID] {
+        let windowRuntime = windowRuntime(for: workspaceID)
+        if let existing = windowRuntime.existingRuntime(for: workspaceID) {
             return existing
         }
-
-        let created = TerminalWorkspaceRuntime(workspaceID: workspaceID)
-        workspaceRuntimesByID[workspaceID] = created
-        return created
+        return windowRuntime.runtime(for: workspaceID)
     }
 
     func existingRuntime(containing panelID: UUID) -> TerminalWorkspaceRuntime? {
         if let workspaceID = terminalWorkspaceIDByPanelID[panelID],
-           let runtime = workspaceRuntimesByID[workspaceID] {
+           let runtime = existingRuntime(for: workspaceID) {
             return runtime
         }
 
-        for (workspaceID, runtime) in workspaceRuntimesByID where runtime.containsController(for: panelID) {
-            terminalWorkspaceIDByPanelID[panelID] = workspaceID
+        for (windowID, windowRuntime) in windowRuntimesByID {
+            guard let runtime = windowRuntime.existingRuntime(containing: panelID) else { continue }
+            terminalWorkspaceIDByPanelID[panelID] = runtime.workspaceID
+            windowIDByWorkspaceID[runtime.workspaceID] = windowID
             return runtime
         }
 
+        return nil
+    }
+
+    func existingRuntime(for workspaceID: UUID) -> TerminalWorkspaceRuntime? {
+        if let windowID = windowIDByWorkspaceID[workspaceID],
+           let windowRuntime = windowRuntimesByID[windowID] {
+            return windowRuntime.existingRuntime(for: workspaceID)
+        }
         return nil
     }
 
@@ -458,6 +482,25 @@ private extension TerminalRuntimeRegistry {
         }
     }
 
+    func windowIDsByWorkspaceID(in state: AppState) -> [UUID: UUID] {
+        state.windows.reduce(into: [:]) { result, window in
+            for workspaceID in window.workspaceIDs where state.workspacesByID[workspaceID] != nil {
+                result[workspaceID] = window.id
+            }
+        }
+    }
+
+    func panelIDsByWindowAndWorkspace(
+        panelIDsByWorkspaceID: [UUID: Set<UUID>],
+        windowIDsByWorkspaceID: [UUID: UUID]
+    ) -> [UUID: [UUID: Set<UUID>]] {
+        panelIDsByWorkspaceID.reduce(into: [:]) { result, entry in
+            let (workspaceID, panelIDs) = entry
+            guard let windowID = windowIDsByWorkspaceID[workspaceID] else { return }
+            result[windowID, default: [:]][workspaceID] = panelIDs
+        }
+    }
+
     func migratedPanelIDsBySourceWorkspace(
         previousPanelWorkspaceIDs: [UUID: UUID],
         nextPanelWorkspaceIDs: [UUID: UUID]
@@ -473,18 +516,43 @@ private extension TerminalRuntimeRegistry {
     }
 
     func migrateController(for panelID: UUID, to workspaceID: UUID) -> TerminalSurfaceController? {
-        guard let targetRuntime = workspaceRuntimesByID[workspaceID] else {
-            return nil
-        }
+        let targetRuntime = runtime(for: workspaceID)
 
-        for (sourceWorkspaceID, sourceRuntime) in workspaceRuntimesByID where sourceWorkspaceID != workspaceID {
-            guard let transferredController = sourceRuntime.takeController(for: panelID) else {
+        for windowRuntime in windowRuntimesByID.values {
+            guard let transferredController = windowRuntime.takeController(for: panelID) else {
                 continue
             }
             return targetRuntime.adoptController(transferredController, for: panelID)
         }
 
         return nil
+    }
+
+    func windowRuntime(for workspaceID: UUID) -> TerminalWindowRuntime {
+        let resolvedWindowID: UUID
+        if let cachedWindowID = windowIDByWorkspaceID[workspaceID] {
+            resolvedWindowID = cachedWindowID
+        } else if let store,
+                  let stateWindowID = windowID(forWorkspaceID: workspaceID, state: store.state) {
+            resolvedWindowID = stateWindowID
+        } else {
+            preconditionFailure(
+                "TerminalRuntimeRegistry could not resolve a window runtime for workspace \(workspaceID)."
+            )
+        }
+
+        windowIDByWorkspaceID[workspaceID] = resolvedWindowID
+        if let existing = windowRuntimesByID[resolvedWindowID] {
+            return existing
+        }
+
+        let created = TerminalWindowRuntime(windowID: resolvedWindowID)
+        windowRuntimesByID[resolvedWindowID] = created
+        return created
+    }
+
+    func windowID(forWorkspaceID workspaceID: UUID, state: AppState) -> UUID? {
+        state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id
     }
 }
 
@@ -495,7 +563,7 @@ private extension TerminalRuntimeRegistry {
     }
 
     func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
-        for runtime in workspaceRuntimesByID.values {
+        for runtime in windowRuntimesByID.values {
             runtime.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
         }
     }
@@ -519,7 +587,7 @@ private extension TerminalRuntimeRegistry {
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry {
     func panelID(forSurfaceHandle surfaceHandle: UInt) -> UUID? {
-        for runtime in workspaceRuntimesByID.values {
+        for runtime in windowRuntimesByID.values {
             if let panelID = runtime.panelID(forSurfaceHandle: surfaceHandle) {
                 return panelID
             }
