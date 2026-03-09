@@ -255,7 +255,6 @@ struct ToasttyApp: App {
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
-            sessionRuntimeStore: sessionRuntimeStore,
             socketPath: socketPath
         )
         do {

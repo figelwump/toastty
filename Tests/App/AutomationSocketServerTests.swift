@@ -270,15 +270,16 @@ struct AutomationSocketServerTests {
         let didInjectCodex = await MainActor.run {
             terminalRouter.sentTextByPanelID[server.panelID]?.contains("codex") == true
         }
-        let activeAgent = await MainActor.run {
-            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.agent
-        }
         #expect(response.result?.string("agent") == AgentKind.codex.rawValue)
         #expect(response.result?.string("panelID") == server.panelID.uuidString)
         #expect(response.result?.string("workspaceID") == server.workspaceID.uuidString)
-        #expect(response.result?.string("command")?.contains("TOASTTY_SESSION_ID=\(sessionID)") == true)
+        #expect(response.result?.string("command")?.contains(ToasttyInternalCommand.agentLaunch) == true)
+        #expect(response.result?.string("command")?.contains("--session \(sessionID)") == true)
         #expect(didInjectCodex)
-        #expect(activeAgent == .codex)
+        let activeAgent = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.agent
+        }
+        #expect(activeAgent == nil)
     }
 
     private func temporarySocketPath() -> String {
@@ -321,8 +322,8 @@ struct AutomationSocketServerTests {
         let agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalCommandRouter ?? terminalRuntimeRegistry,
-            sessionRuntimeStore: sessionRuntimeStore,
-            socketPath: socketPath
+            socketPath: socketPath,
+            cliExecutablePathProvider: { "/bin/sh" }
         )
         let server = try AutomationSocketServer(
             socketPath: socketPath,

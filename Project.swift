@@ -287,6 +287,7 @@ let project = Project(
             buildAction: .buildAction(
                 targets: [
                     .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                    .project(path: .relativeToRoot("."), target: "toastty"),
                 ]
             ),
             runAction: .runAction(
@@ -303,6 +304,7 @@ let project = Project(
             buildAction: .buildAction(
                 targets: [
                     .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                    .project(path: .relativeToRoot("."), target: "toastty"),
                 ]
             ),
             runAction: .runAction(

@@ -50,6 +50,12 @@ At launch time, Toastty resolves:
 
 Because Toastty owns launch, it can guarantee panel placement and consistent session identity before process start.
 
+In the current implementation, Toastty does not exec the provider directly. It
+injects a hidden `toastty _internal-agent-launch` helper command into the
+terminal. That helper is responsible for starting the real agent process,
+exporting Toastty launch context, and emitting `session.start` / `session.stop`
+around the child lifecycle.
+
 ### 2) Provider model (extensibility)
 
 Behavior is profile-driven instead of hardcoded.
@@ -81,7 +87,7 @@ Security constraint:
 
 Producer can vary by capability:
 
-- app-owned runtime events (always-available baseline)
+- Toastty-owned launcher/runtime events (always-available baseline)
 - agent skill/hook events (richer data when available)
 - optional adapter/wrapper events (protocol-compatible path)
 
@@ -109,8 +115,10 @@ On relaunch, Toastty can restore layout and reattach terminals to mapped tmux se
 1. user triggers `Run Agent`
 2. Toastty resolves provider + target panel strategy (current/new adjacent/etc.)
 3. Toastty allocates `sessionID` and records launch intent
-4. Toastty launches provider directly or through tmux
-5. Toastty emits baseline `session.start` and passes `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, `TOASTTY_CWD`, `TOASTTY_REPO_ROOT`, and `TOASTTY_AGENT` to the launched agent
+4. Toastty injects `toastty _internal-agent-launch ... -- <provider argv>` into the target terminal
+5. the helper launches the provider directly or through tmux
+6. after child launch succeeds, the helper emits baseline `session.start` and passes `TOASTTY_SESSION_ID`, `TOASTTY_PANEL_ID`, `TOASTTY_SOCKET_PATH`, `TOASTTY_CWD`, `TOASTTY_REPO_ROOT`, `TOASTTY_AGENT`, and `TOASTTY_CLI_PATH` to the launched agent
+7. when the child exits, the helper emits `session.stop`
 
 ### Ask Agent About This File
 
@@ -162,7 +170,7 @@ The UI/runtime model must tolerate:
 - duplicated events
 - out-of-order arrival
 
-Baseline app-owned lifecycle events ensure minimum attribution continuity when rich telemetry is absent.
+Baseline Toastty-owned lifecycle events ensure minimum attribution continuity when rich telemetry is absent.
 
 ### tmux failure behavior
 
@@ -184,7 +192,7 @@ Baseline app-owned lifecycle events ensure minimum attribution continuity when r
 
 - enable `toastty session` telemetry in normal runtime
 - add launch service with built-in Codex/Claude profiles
-- define done-state: launch from Toastty into a chosen panel with stable `sessionID`, baseline `start/stop`, and launch-context env for follow-up telemetry
+- define done-state: launch from Toastty into a chosen panel with stable `sessionID`, helper-owned `start/stop`, and launch-context env for follow-up telemetry
 
 ### Phase 2
 

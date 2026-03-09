@@ -367,8 +367,10 @@ Result:
 
 ### `automation.launch_agent`
 
-Launches a built-in agent into a resolved terminal panel and records the baseline
-Toastty session before the command is injected.
+Launches a built-in agent into a resolved terminal panel by injecting the hidden
+`toastty _internal-agent-launch` helper. The helper launches the real child
+process, emits `session.start` after successful child launch, and emits
+`session.stop` when that child exits.
 
 Request payload:
 

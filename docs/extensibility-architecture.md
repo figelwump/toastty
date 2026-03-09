@@ -157,13 +157,18 @@ For Toastty-owned launch flows, the CLI also accepts launch context from environ
 - `TOASTTY_CWD`
 - `TOASTTY_REPO_ROOT`
 - `TOASTTY_AGENT`
+- `TOASTTY_CLI_PATH`
 
 Explicit CLI flags override the launch-context environment when both are present.
 
-In the built-in Run Agent path, Toastty allocates the `sessionID`, records the
-baseline `session.start`, and launches the agent with this environment already
-set. The agent skill then only needs to emit follow-up telemetry such as
-`session.status`, `session.update-files`, and `session.stop`.
+In the built-in Run Agent path, Toastty allocates the `sessionID` and injects a
+hidden `toastty _internal-agent-launch ... -- <provider command>` helper into
+the terminal. That helper launches the real agent process, emits
+`session.start` only after the child has successfully started, sets the
+`TOASTTY_*` launch context (including `TOASTTY_CLI_PATH`), waits for child
+exit, and then emits `session.stop`. The agent skill then only needs to emit
+follow-up telemetry such as `session.status` and `session.update-files`; manual
+`session.stop` is optional in the built-in Run Agent path.
 
 ### output format
 
@@ -391,7 +396,7 @@ An agent posts content (feed item, markdown annotation). The user reads it and w
 
 Toastty consumes session metadata from `session.*` events, but wrappers are optional:
 
-1. Primary path: Toastty-owned Run Agent allocates the session, records `session.start`, and launches the agent with `TOASTTY_*` launch context so skills can emit follow-up `toastty session status/update-files/stop`.
+1. Primary path: Toastty-owned Run Agent allocates the session, launches the hidden `toastty` helper, and lets that helper emit `session.start`/`session.stop` around the actual child process while passing `TOASTTY_*` launch context so skills can emit follow-up `toastty session status/update-files/stop`.
 2. Optional path: wrapper/adapter processes can emit the same `session.*` events directly over the socket.
 3. Fallback path when no telemetry is emitted: feedback routing uses panel/workspace context and terminal injection, then spawns a new agent invocation when needed.
 
@@ -582,7 +587,7 @@ Section 6 below is the recommended near-term execution order (what to do now vs 
 - Panel command surface includes `panel create`, `panel toggle builtin`, `panel focus`, `panel close`, and `panel reopen`.
 - Add `session` command surface that emits `session.*` events (`start`, `status`, `update-files`, `stop`).
 - Ship global skill snippets/templates for Claude Code and Codex that call `toastty session ...` during agent execution.
-- Add app-owned Run Agent launch that starts the session and hands the agent `TOASTTY_*` launch context.
+- Add app-owned Run Agent launch that uses a Toastty-owned helper to start/stop the session around the actual child process and hand the agent `TOASTTY_*` launch context.
 - JSON output mode (`--json`) for programmatic use.
 - Socket discovery, error handling, timeout.
 
