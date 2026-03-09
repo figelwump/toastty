@@ -126,9 +126,14 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
     let publishedSubtext = PublishedSubtextStore()
     let service = TerminalWorkspaceMaintenanceService(
         store: store,
-        controllerStore: controllerStore,
         metadataService: metadataService,
-        activityInferenceService: activityInferenceService
+        activityInferenceService: activityInferenceService,
+        containsController: { panelID in
+            controllerStore.containsController(for: panelID)
+        },
+        controllerForPanelID: { panelID in
+            controllerStore.existingController(for: panelID)
+        }
     ) { nextSubtextByWorkspaceID in
         publishedSubtext.subtextByWorkspaceID = nextSubtextByWorkspaceID
     }

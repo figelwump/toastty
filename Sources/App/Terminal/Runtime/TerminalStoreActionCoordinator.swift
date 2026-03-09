@@ -6,17 +6,17 @@ import Foundation
 final class TerminalStoreActionCoordinator {
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
-    private let controllerStore: TerminalControllerStore
     private let metadataService: TerminalMetadataService
+    private let registerPendingSplitSourceIfNeeded: (UUID, AppState, AppState) -> Void
     private let requestSelectedWorkspaceSlotFocusRestore: () -> Void
 
     init(
-        controllerStore: TerminalControllerStore,
         metadataService: TerminalMetadataService,
+        registerPendingSplitSourceIfNeeded: @escaping (UUID, AppState, AppState) -> Void,
         requestSelectedWorkspaceSlotFocusRestore: @escaping () -> Void
     ) {
-        self.controllerStore = controllerStore
         self.metadataService = metadataService
+        self.registerPendingSplitSourceIfNeeded = registerPendingSplitSourceIfNeeded
         self.requestSelectedWorkspaceSlotFocusRestore = requestSelectedWorkspaceSlotFocusRestore
     }
 
@@ -61,17 +61,9 @@ final class TerminalStoreActionCoordinator {
     ) {
         switch action {
         case .splitFocusedSlot(workspaceID: let workspaceID, orientation: _):
-            controllerStore.registerPendingSplitSourceIfNeeded(
-                workspaceID: workspaceID,
-                previousState: previousState,
-                nextState: nextState
-            )
+            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
         case .splitFocusedSlotInDirection(workspaceID: let workspaceID, direction: _):
-            controllerStore.registerPendingSplitSourceIfNeeded(
-                workspaceID: workspaceID,
-                previousState: previousState,
-                nextState: nextState
-            )
+            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
         case .toggleFocusedPanelMode(workspaceID: let workspaceID):
             scheduleFocusedPanelFocusRestoreIfNeeded(
                 workspaceID: workspaceID,

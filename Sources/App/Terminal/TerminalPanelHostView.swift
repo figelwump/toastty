@@ -3,6 +3,7 @@ import CoreState
 import SwiftUI
 
 struct TerminalPanelHostView: NSViewRepresentable {
+    let workspaceID: UUID
     let panelID: UUID
     let terminalState: TerminalPanelState
     let focused: Bool
@@ -28,7 +29,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
 
     func updateNSView(_ containerView: TerminalPanelContainerView, context: Context) {
         let coordinator = context.coordinator
-        let controller = runtimeRegistry.controller(for: panelID)
+        let controller = runtimeRegistry.controller(for: panelID, workspaceID: workspaceID)
         let attachment = coordinator.containerCoordinator.attachment(
             for: containerView,
             controller: controller

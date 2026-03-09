@@ -6,6 +6,13 @@ import GhosttyKit
 
 @MainActor
 final class TerminalControllerStore {
+    struct TransferredController {
+        let controller: TerminalSurfaceController
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let surfaceHandle: UInt?
+        #endif
+    }
+
     private var controllers: [UUID: TerminalSurfaceController] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
@@ -31,6 +38,31 @@ final class TerminalControllerStore {
 
     func containsController(for panelID: UUID) -> Bool {
         controllers[panelID] != nil
+    }
+
+    func takeController(for panelID: UUID) -> TransferredController? {
+        guard let controller = controllers.removeValue(forKey: panelID) else {
+            return nil
+        }
+
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let surfaceHandle = controller.currentGhosttySurface().map { UInt(bitPattern: $0) }
+        if let surfaceHandle {
+            panelIDBySurfaceHandle.removeValue(forKey: surfaceHandle)
+        }
+        return TransferredController(controller: controller, surfaceHandle: surfaceHandle)
+        #else
+        return TransferredController(controller: controller)
+        #endif
+    }
+
+    func adoptController(_ transferredController: TransferredController, for panelID: UUID) {
+        controllers[panelID] = transferredController.controller
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if let surfaceHandle = transferredController.surfaceHandle {
+            panelIDBySurfaceHandle[surfaceHandle] = panelID
+        }
+        #endif
     }
 
     func forEachController(_ body: (TerminalSurfaceController) -> Void) {

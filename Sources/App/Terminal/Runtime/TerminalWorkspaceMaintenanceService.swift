@@ -5,9 +5,10 @@ import Foundation
 @MainActor
 final class TerminalWorkspaceMaintenanceService {
     private weak var store: AppStore?
-    private let controllerStore: TerminalControllerStore
     private let metadataService: TerminalMetadataService
     private let activityInferenceService: TerminalActivityInferenceService
+    private let containsController: (UUID) -> Bool
+    private let controllerForPanelID: (UUID) -> TerminalSurfaceController?
     private let updateWorkspaceActivitySubtext: ([UUID: String]) -> Void
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
@@ -15,15 +16,17 @@ final class TerminalWorkspaceMaintenanceService {
 
     init(
         store: AppStore,
-        controllerStore: TerminalControllerStore,
         metadataService: TerminalMetadataService,
         activityInferenceService: TerminalActivityInferenceService,
+        containsController: @escaping (UUID) -> Bool,
+        controllerForPanelID: @escaping (UUID) -> TerminalSurfaceController?,
         updateWorkspaceActivitySubtext: @escaping ([UUID: String]) -> Void
     ) {
         self.store = store
-        self.controllerStore = controllerStore
         self.metadataService = metadataService
         self.activityInferenceService = activityInferenceService
+        self.containsController = containsController
+        self.controllerForPanelID = controllerForPanelID
         self.updateWorkspaceActivitySubtext = updateWorkspaceActivitySubtext
     }
 
@@ -130,7 +133,7 @@ final class TerminalWorkspaceMaintenanceService {
 
         var workspaceByPanelID: [UUID: UUID] = [:]
         for panelID in visibleTerminalPanelIDs(in: workspace) {
-            guard controllerStore.containsController(for: panelID) else { continue }
+            guard containsController(panelID) else { continue }
             workspaceByPanelID[panelID] = selectedWorkspaceID
         }
         return workspaceByPanelID
@@ -142,7 +145,7 @@ final class TerminalWorkspaceMaintenanceService {
         for workspace in state.workspacesByID.values where workspace.id != selectedWorkspaceID {
             for (panelID, panelState) in workspace.panels {
                 guard case .terminal = panelState else { continue }
-                guard controllerStore.containsController(for: panelID) else { continue }
+                guard containsController(panelID) else { continue }
                 workspaceByPanelID[panelID] = workspace.id
             }
         }
@@ -202,7 +205,7 @@ final class TerminalWorkspaceMaintenanceService {
         let panelIDs = visibleTerminalPanelIDs(in: workspace)
         guard panelIDs.isEmpty == false else { return }
         for panelID in panelIDs {
-            controllerStore.existingController(for: panelID)?.pulseVisibilityRefresh()
+            controllerForPanelID(panelID)?.pulseVisibilityRefresh()
         }
     }
 

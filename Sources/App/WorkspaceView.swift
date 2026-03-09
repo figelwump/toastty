@@ -399,6 +399,7 @@ private struct PanelCardView: View {
             switch panelState {
             case .terminal(let terminalState):
                 TerminalPanelHostView(
+                    workspaceID: workspaceID,
                     panelID: panelID,
                     terminalState: terminalState,
                     focused: isFocused,

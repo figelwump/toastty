@@ -75,8 +75,14 @@ private func makeStoreActionFixture(
     let metadataService = TerminalMetadataService(store: store, registry: registry)
     let controllerStore = TerminalControllerStore()
     let coordinator = TerminalStoreActionCoordinator(
-        controllerStore: controllerStore,
         metadataService: metadataService,
+        registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState in
+            controllerStore.registerPendingSplitSourceIfNeeded(
+                workspaceID: workspaceID,
+                previousState: previousState,
+                nextState: nextState
+            )
+        },
         requestSelectedWorkspaceSlotFocusRestore: requestSelectedWorkspaceSlotFocusRestore
     )
     coordinator.bind(store: store)

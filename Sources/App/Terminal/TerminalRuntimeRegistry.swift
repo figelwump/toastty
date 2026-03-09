@@ -54,9 +54,10 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
-    private let controllerStore = TerminalControllerStore()
     private let focusCoordinator = TerminalFocusCoordinator()
     private weak var store: AppStore?
+    private var workspaceRuntimesByID: [UUID: TerminalWorkspaceRuntime] = [:]
+    private var terminalWorkspaceIDByPanelID: [UUID: UUID] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
@@ -94,8 +95,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
         self.activityInferenceService = activityInferenceService
         actionRouter = TerminalActionRouter(store: store, registry: self)
         let storeActionCoordinator = TerminalStoreActionCoordinator(
-            controllerStore: controllerStore,
             metadataService: metadataService,
+            registerPendingSplitSourceIfNeeded: { [weak self] workspaceID, previousState, nextState in
+                self?.runtime(for: workspaceID).registerPendingSplitSourceIfNeeded(
+                    previousState: previousState,
+                    nextState: nextState
+                )
+            },
             requestSelectedWorkspaceSlotFocusRestore: { [weak self] in
                 self?.scheduleSelectedWorkspaceSlotFocusRestore()
             }
@@ -104,9 +110,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         self.storeActionCoordinator = storeActionCoordinator
         workspaceMaintenanceService = TerminalWorkspaceMaintenanceService(
             store: store,
-            controllerStore: controllerStore,
             metadataService: metadataService,
             activityInferenceService: activityInferenceService,
+            containsController: { [weak self] panelID in
+                self?.containsController(for: panelID) ?? false
+            },
+            controllerForPanelID: { [weak self] panelID in
+                self?.existingController(for: panelID)
+            },
             updateWorkspaceActivitySubtext: { [weak self] nextSubtextByWorkspaceID in
                 self?.setWorkspaceActivitySubtext(nextSubtextByWorkspaceID)
             }
@@ -133,37 +144,59 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
-    func controller(for panelID: UUID) -> TerminalSurfaceController {
-        controllerStore.controller(for: panelID, delegate: self)
+    func controller(for panelID: UUID, workspaceID: UUID) -> TerminalSurfaceController {
+        terminalWorkspaceIDByPanelID[panelID] = workspaceID
+        let workspaceRuntime = runtime(for: workspaceID)
+        if let existingController = workspaceRuntime.existingController(for: panelID) {
+            return existingController
+        }
+        if let migratedController = migrateController(for: panelID, to: workspaceID) {
+            return migratedController
+        }
+        return workspaceRuntime.controller(for: panelID, delegate: self)
     }
 
     func synchronizeGhosttySurfaceFocusFromApplicationState() {
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        controllerStore.synchronizeGhosttySurfaceFocusFromApplicationState()
-        #endif
+        for runtime in workspaceRuntimesByID.values {
+            runtime.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
     }
 
     func synchronize(with state: AppState) {
-        let livePanelIDs = Set(
-            state.workspacesByID.values.flatMap { workspace in
-                workspace.panels.compactMap { panelID, panelState in
-                    if case .terminal = panelState {
-                        return panelID
-                    }
-                    return nil
-                }
+        let previousTerminalWorkspaceIDByPanelID = terminalWorkspaceIDByPanelID
+        let livePanelIDsByWorkspaceID = liveTerminalPanelIDsByWorkspaceID(in: state)
+        terminalWorkspaceIDByPanelID = livePanelIDsByWorkspaceID.reduce(into: [:]) { result, entry in
+            let (workspaceID, panelIDs) = entry
+            for panelID in panelIDs {
+                result[panelID] = workspaceID
             }
+        }
+        let migratedPanelIDsBySourceWorkspaceID = migratedPanelIDsBySourceWorkspace(
+            previousPanelWorkspaceIDs: previousTerminalWorkspaceIDByPanelID,
+            nextPanelWorkspaceIDs: terminalWorkspaceIDByPanelID
         )
 
+        var removedPanelIDs: Set<UUID> = []
+        let liveWorkspaceIDs = Set(state.workspacesByID.keys)
+        for workspaceID in Array(workspaceRuntimesByID.keys) {
+            guard let runtime = workspaceRuntimesByID[workspaceID] else { continue }
+            let migratedPanelIDs = migratedPanelIDsBySourceWorkspaceID[workspaceID] ?? []
+            var livePanelIDs = livePanelIDsByWorkspaceID[workspaceID] ?? []
+            // Keep moved panels alive in their previous runtime until the
+            // destination host view asks for the controller and re-homes it.
+            livePanelIDs.formUnion(migratedPanelIDs)
+            removedPanelIDs.formUnion(runtime.synchronizeLivePanels(livePanelIDs))
+            if liveWorkspaceIDs.contains(workspaceID) == false && migratedPanelIDs.isEmpty {
+                workspaceRuntimesByID.removeValue(forKey: workspaceID)
+            }
+        }
+
         #if TOASTTY_HAS_GHOSTTY_KIT
-        let removedPanelIDs = controllerStore.synchronizeLivePanels(livePanelIDs)
         workspaceMaintenanceService?.synchronize(
             state: state,
-            livePanelIDs: livePanelIDs,
+            livePanelIDs: Set(terminalWorkspaceIDByPanelID.keys),
             removedPanelIDs: removedPanelIDs
         )
-        #else
-        _ = controllerStore.invalidateControllers(excluding: livePanelIDs)
         #endif
     }
 
@@ -172,7 +205,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
-        guard let controller = controllerStore.existingController(for: panelID) else {
+        guard let controller = existingController(for: panelID) else {
             return false
         }
         return controller.automationSendText(
@@ -182,14 +215,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func automationReadVisibleText(panelID: UUID) -> String? {
-        guard let controller = controllerStore.existingController(for: panelID) else {
+        guard let controller = existingController(for: panelID) else {
             return nil
         }
         return controller.automationReadVisibleText()
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
-        guard let controller = controllerStore.existingController(for: panelID) else {
+        guard let controller = existingController(for: panelID) else {
             ToasttyLog.warning(
                 "Skipping terminal close confirmation because the surface controller is unavailable",
                 category: .terminal,
@@ -209,14 +242,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func automationRenderSnapshot(panelID: UUID) -> TerminalPanelRenderAttachmentSnapshot {
-        guard let controller = controllerStore.existingController(for: panelID) else {
+        guard let controller = existingController(for: panelID) else {
             return .missingController(panelID: panelID)
         }
         return controller.renderAttachmentSnapshot()
     }
 
     func automationDropImageFiles(_ filePaths: [String], panelID: UUID) -> AutomationImageFileDropResult {
-        guard let controller = controllerStore.existingController(for: panelID) else {
+        guard let controller = existingController(for: panelID) else {
             return .unavailableSurface
         }
 
@@ -240,7 +273,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         focusCoordinator.focusSelectedWorkspaceSlotIfPossible { [weak self] in
             guard let self,
                   let panelID = self.store?.selectedWorkspace?.focusedPanelID,
-                  let controller = self.controllerStore.existingController(for: panelID) else {
+                  let controller = self.existingController(for: panelID) else {
                 return nil
             }
             return TerminalFocusCoordinator.FocusTarget(
@@ -274,7 +307,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         guard isValidDropTargetPanel(targetPanelID, state: state) else {
             return nil
         }
-        guard let targetController = controllerStore.existingController(for: targetPanelID) else {
+        guard let targetController = existingController(for: targetPanelID) else {
             return nil
         }
         guard targetController.canAcceptImageFileDrop() else {
@@ -303,7 +336,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             )
             return false
         }
-        guard let targetController = controllerStore.existingController(for: drop.targetPanelID) else {
+        guard let targetController = existingController(for: drop.targetPanelID) else {
             ToasttyLog.warning(
                 "Rejected image file drop because drop-target controller is unavailable",
                 category: .input,
@@ -379,6 +412,80 @@ private extension TerminalRuntimeRegistry {
         return store.send(action)
         #endif
     }
+
+    func runtime(for workspaceID: UUID) -> TerminalWorkspaceRuntime {
+        if let existing = workspaceRuntimesByID[workspaceID] {
+            return existing
+        }
+
+        let created = TerminalWorkspaceRuntime(workspaceID: workspaceID)
+        workspaceRuntimesByID[workspaceID] = created
+        return created
+    }
+
+    func existingRuntime(containing panelID: UUID) -> TerminalWorkspaceRuntime? {
+        if let workspaceID = terminalWorkspaceIDByPanelID[panelID],
+           let runtime = workspaceRuntimesByID[workspaceID] {
+            return runtime
+        }
+
+        for (workspaceID, runtime) in workspaceRuntimesByID where runtime.containsController(for: panelID) {
+            terminalWorkspaceIDByPanelID[panelID] = workspaceID
+            return runtime
+        }
+
+        return nil
+    }
+
+    func existingController(for panelID: UUID) -> TerminalSurfaceController? {
+        existingRuntime(containing: panelID)?.existingController(for: panelID)
+    }
+
+    func containsController(for panelID: UUID) -> Bool {
+        existingController(for: panelID) != nil
+    }
+
+    func liveTerminalPanelIDsByWorkspaceID(in state: AppState) -> [UUID: Set<UUID>] {
+        state.workspacesByID.reduce(into: [:]) { result, entry in
+            let (workspaceID, workspace) = entry
+            let panelIDs = workspace.panels.reduce(into: Set<UUID>()) { ids, panelEntry in
+                let (panelID, panelState) = panelEntry
+                if case .terminal = panelState {
+                    ids.insert(panelID)
+                }
+            }
+            result[workspaceID] = panelIDs
+        }
+    }
+
+    func migratedPanelIDsBySourceWorkspace(
+        previousPanelWorkspaceIDs: [UUID: UUID],
+        nextPanelWorkspaceIDs: [UUID: UUID]
+    ) -> [UUID: Set<UUID>] {
+        nextPanelWorkspaceIDs.reduce(into: [:]) { result, entry in
+            let (panelID, nextWorkspaceID) = entry
+            guard let previousWorkspaceID = previousPanelWorkspaceIDs[panelID],
+                  previousWorkspaceID != nextWorkspaceID else {
+                return
+            }
+            result[previousWorkspaceID, default: []].insert(panelID)
+        }
+    }
+
+    func migrateController(for panelID: UUID, to workspaceID: UUID) -> TerminalSurfaceController? {
+        guard let targetRuntime = workspaceRuntimesByID[workspaceID] else {
+            return nil
+        }
+
+        for (sourceWorkspaceID, sourceRuntime) in workspaceRuntimesByID where sourceWorkspaceID != workspaceID {
+            guard let transferredController = sourceRuntime.takeController(for: panelID) else {
+                continue
+            }
+            return targetRuntime.adoptController(transferredController, for: panelID)
+        }
+
+        return nil
+    }
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -388,15 +495,17 @@ private extension TerminalRuntimeRegistry {
     }
 
     func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
-        controllerStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+        for runtime in workspaceRuntimesByID.values {
+            runtime.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+        }
     }
 
     func splitSourceSurfaceState(for newPanelID: UUID) -> TerminalSplitSourceSurfaceState {
-        controllerStore.splitSourceSurfaceState(for: newPanelID)
+        existingRuntime(containing: newPanelID)?.splitSourceSurfaceState(for: newPanelID) ?? .none
     }
 
     func consumeSplitSource(for newPanelID: UUID) {
-        controllerStore.consumeSplitSource(for: newPanelID)
+        existingRuntime(containing: newPanelID)?.consumeSplitSource(for: newPanelID)
     }
 }
 #else
@@ -410,7 +519,12 @@ private extension TerminalRuntimeRegistry {
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry {
     func panelID(forSurfaceHandle surfaceHandle: UInt) -> UUID? {
-        controllerStore.panelID(forSurfaceHandle: surfaceHandle)
+        for runtime in workspaceRuntimesByID.values {
+            if let panelID = runtime.panelID(forSurfaceHandle: surfaceHandle) {
+                return panelID
+            }
+        }
+        return nil
     }
 
     func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
@@ -553,11 +667,11 @@ private extension TerminalRuntimeRegistry {
     }
 
     func register(surface: ghostty_surface_t, for panelID: UUID) {
-        controllerStore.register(surface: surface, for: panelID)
+        existingRuntime(containing: panelID)?.register(surface: surface, for: panelID)
     }
 
     func unregister(surface: ghostty_surface_t, for panelID: UUID) {
-        controllerStore.unregister(surface: surface, for: panelID)
+        existingRuntime(containing: panelID)?.unregister(surface: surface, for: panelID)
         workspaceMaintenanceService?.handleSurfaceUnregister(panelID: panelID)
     }
 
@@ -621,7 +735,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState
     ) -> (panelID: UUID, workspaceID: UUID)? {
         if let surfaceHandle = action.surfaceHandle {
-            guard let resolvedPanelID = controllerStore.panelID(forSurfaceHandle: surfaceHandle),
+            guard let resolvedPanelID = panelID(forSurfaceHandle: surfaceHandle),
                   let workspaceIDForSurface = workspaceID(containing: resolvedPanelID, state: state) else {
                 ToasttyLog.debug(
                     "Ghostty surface action could not resolve panel/workspace",
