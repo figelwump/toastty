@@ -309,7 +309,9 @@ struct SidebarView: View {
     private func scheduleWorkspaceSlotFocusRestore() {
         // Renaming intentionally restores focus back to the terminal even if the
         // field editor is still unwinding from the just-finished text edit.
-        terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore(
+        guard let workspaceID = store.selectedWorkspace?.id else { return }
+        terminalRuntimeRegistry.scheduleWorkspaceFocusRestore(
+            workspaceID: workspaceID,
             avoidStealingKeyboardFocus: false
         )
     }

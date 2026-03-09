@@ -34,16 +34,16 @@ struct AppRootView: View {
         .task {
             terminalRuntimeRegistry.synchronize(with: store.state)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
-            terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
+            scheduleSelectedWorkspaceFocusRestore()
         }
         .onChange(of: store.state) { _, nextState in
             terminalRuntimeRegistry.synchronize(with: nextState)
         }
         .onChange(of: selectedSlotFocusSignature) { _, _ in
-            terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
+            scheduleSelectedWorkspaceFocusRestore()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
+            scheduleSelectedWorkspaceFocusRestore()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             terminalRuntimeRegistry.synchronizeGhosttySurfaceFocusFromApplicationState()
@@ -80,6 +80,14 @@ struct AppRootView: View {
             windowID: selectedWindow.id,
             workspaceID: selectedWindow.selectedWorkspaceID,
             focusedPanelID: store.selectedWorkspace?.focusedPanelID
+        )
+    }
+
+    private func scheduleSelectedWorkspaceFocusRestore(avoidStealingKeyboardFocus: Bool = true) {
+        guard let workspaceID = store.selectedWorkspace?.id else { return }
+        terminalRuntimeRegistry.scheduleWorkspaceFocusRestore(
+            workspaceID: workspaceID,
+            avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         )
     }
 }

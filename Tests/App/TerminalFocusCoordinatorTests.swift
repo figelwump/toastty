@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class TerminalFocusCoordinatorTests: XCTestCase {
-    func testFocusSelectedWorkspaceSlotIfPossibleReturnsFalseWhenTargetIsUnavailable() {
+    func testFocusIfPossibleReturnsFalseWhenTargetIsUnavailable() {
         let coordinator = TerminalFocusCoordinator(
             maxAttempts: 1,
             retryDelayNanoseconds: 1,
@@ -11,14 +11,14 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
             shouldAvoidStealingKeyboardFocus: { false }
         )
 
-        let didFocus = coordinator.focusSelectedWorkspaceSlotIfPossible {
+        let didFocus = coordinator.focusIfPossible {
             nil
         }
 
         XCTAssertFalse(didFocus)
     }
 
-    func testFocusSelectedWorkspaceSlotIfPossibleReturnsResolvedFocusResult() {
+    func testFocusIfPossibleReturnsResolvedFocusResult() {
         let coordinator = TerminalFocusCoordinator(
             maxAttempts: 1,
             retryDelayNanoseconds: 1,
@@ -27,7 +27,7 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
         )
         var focusCalls = 0
 
-        let didFocus = coordinator.focusSelectedWorkspaceSlotIfPossible {
+        let didFocus = coordinator.focusIfPossible {
             TerminalFocusCoordinator.FocusTarget(
                 isReadyForFocus: true,
                 focusHostViewIfNeeded: {
@@ -41,7 +41,7 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
         XCTAssertEqual(focusCalls, 1)
     }
 
-    func testScheduleSelectedWorkspaceSlotFocusRestoreStopsWhenAvoidingFieldEditor() async {
+    func testScheduleFocusRestoreStopsWhenAvoidingFieldEditor() async {
         let coordinator = TerminalFocusCoordinator(
             maxAttempts: 2,
             retryDelayNanoseconds: 1_000_000,
@@ -50,7 +50,7 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
         )
         var restoreAttempts = 0
 
-        coordinator.scheduleSelectedWorkspaceSlotFocusRestore {
+        coordinator.scheduleFocusRestore {
             restoreAttempts += 1
             return false
         }
@@ -60,7 +60,7 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
         XCTAssertEqual(restoreAttempts, 0)
     }
 
-    func testScheduleSelectedWorkspaceSlotFocusRestoreRetriesWhenIgnoringFieldEditor() async {
+    func testScheduleFocusRestoreRetriesWhenIgnoringFieldEditor() async {
         let coordinator = TerminalFocusCoordinator(
             maxAttempts: 4,
             retryDelayNanoseconds: 1_000_000,
@@ -70,7 +70,7 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
         let restored = expectation(description: "restored focus")
         var restoreAttempts = 0
 
-        coordinator.scheduleSelectedWorkspaceSlotFocusRestore(avoidStealingKeyboardFocus: false) {
+        coordinator.scheduleFocusRestore(avoidStealingKeyboardFocus: false) {
             restoreAttempts += 1
             let didRestore = restoreAttempts == 3
             if didRestore {
@@ -83,7 +83,7 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
         XCTAssertEqual(restoreAttempts, 3)
     }
 
-    func testScheduleSelectedWorkspaceSlotFocusRestoreCancelsPreviousTask() async {
+    func testScheduleFocusRestoreCancelsPreviousTask() async {
         let coordinator = TerminalFocusCoordinator(
             maxAttempts: 4,
             retryDelayNanoseconds: 50_000_000,
@@ -94,14 +94,14 @@ final class TerminalFocusCoordinatorTests: XCTestCase {
         var firstRestoreAttempts = 0
         var secondRestoreAttempts = 0
 
-        coordinator.scheduleSelectedWorkspaceSlotFocusRestore {
+        coordinator.scheduleFocusRestore {
             firstRestoreAttempts += 1
             return false
         }
 
         try? await Task.sleep(nanoseconds: 5_000_000)
 
-        coordinator.scheduleSelectedWorkspaceSlotFocusRestore {
+        coordinator.scheduleFocusRestore {
             secondRestoreAttempts += 1
             restored.fulfill()
             return true

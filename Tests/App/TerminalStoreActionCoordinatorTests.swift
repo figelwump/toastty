@@ -25,43 +25,70 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
     }
 
     func testBindRequestsFocusRestoreWhenSelectedWorkspaceFocusedModeToggles() throws {
-        var focusRestoreRequests = 0
-        let fixture = try makeStoreActionFixture {
-            focusRestoreRequests += 1
+        var restoredWorkspaceIDs: [UUID] = []
+        let fixture = try makeStoreActionFixture { workspaceID in
+            restoredWorkspaceIDs.append(workspaceID)
         }
 
         XCTAssertTrue(fixture.store.send(.toggleFocusedPanelMode(workspaceID: fixture.workspaceID)))
-        XCTAssertEqual(focusRestoreRequests, 1)
+        XCTAssertEqual(restoredWorkspaceIDs, [fixture.workspaceID])
+    }
+
+    func testBindRequestsWorkspaceFocusRestoreWhenFocusedPanelIDIsNil() throws {
+        let state = try stateWithNilFocusedPanelID()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let metadataService = TerminalMetadataService(store: store, registry: registry)
+        let controllerStore = TerminalControllerStore()
+        var restoredWorkspaceIDs: [UUID] = []
+        let coordinator = TerminalStoreActionCoordinator(
+            metadataService: metadataService,
+            registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState in
+                controllerStore.registerPendingSplitSourceIfNeeded(
+                    workspaceID: workspaceID,
+                    previousState: previousState,
+                    nextState: nextState
+                )
+            },
+            requestWorkspaceFocusRestore: { workspaceID in
+                restoredWorkspaceIDs.append(workspaceID)
+            }
+        )
+        coordinator.bind(store: store)
+
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        XCTAssertTrue(store.send(.toggleFocusedPanelMode(workspaceID: workspaceID)))
+        XCTAssertEqual(restoredWorkspaceIDs, [workspaceID])
     }
 
     func testBindReplacesPreviousObserverRegistration() throws {
-        var focusRestoreRequests = 0
-        let fixture = try makeStoreActionFixture {
-            focusRestoreRequests += 1
+        var restoredWorkspaceIDs: [UUID] = []
+        let fixture = try makeStoreActionFixture { workspaceID in
+            restoredWorkspaceIDs.append(workspaceID)
         }
 
         fixture.coordinator.bind(store: fixture.store)
 
         XCTAssertTrue(fixture.store.send(.toggleFocusedPanelMode(workspaceID: fixture.workspaceID)))
-        XCTAssertEqual(focusRestoreRequests, 1)
+        XCTAssertEqual(restoredWorkspaceIDs, [fixture.workspaceID])
     }
 
     func testUnbindStopsObservingStoreActions() throws {
-        var focusRestoreRequests = 0
-        let fixture = try makeStoreActionFixture {
-            focusRestoreRequests += 1
+        var restoredWorkspaceIDs: [UUID] = []
+        let fixture = try makeStoreActionFixture { workspaceID in
+            restoredWorkspaceIDs.append(workspaceID)
         }
 
         fixture.coordinator.unbind()
 
         XCTAssertTrue(fixture.store.send(.toggleFocusedPanelMode(workspaceID: fixture.workspaceID)))
-        XCTAssertEqual(focusRestoreRequests, 0)
+        XCTAssertTrue(restoredWorkspaceIDs.isEmpty)
     }
 }
 
 @MainActor
 private func makeStoreActionFixture(
-    requestSelectedWorkspaceSlotFocusRestore: @escaping () -> Void = {}
+    requestWorkspaceFocusRestore: @escaping (UUID) -> Void = { _ in }
 ) throws -> (
     store: AppStore,
     coordinator: TerminalStoreActionCoordinator,
@@ -83,12 +110,21 @@ private func makeStoreActionFixture(
                 nextState: nextState
             )
         },
-        requestSelectedWorkspaceSlotFocusRestore: requestSelectedWorkspaceSlotFocusRestore
+        requestWorkspaceFocusRestore: requestWorkspaceFocusRestore
     )
     coordinator.bind(store: store)
 
     let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
     let sourcePanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
     return (store, coordinator, controllerStore, workspaceID, sourcePanelID)
+}
+
+private func stateWithNilFocusedPanelID() throws -> AppState {
+    var state = AppState.bootstrap()
+    let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+    var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+    workspace.focusedPanelID = nil
+    state.workspacesByID[workspaceID] = workspace
+    return state
 }
 #endif

@@ -8,16 +8,16 @@ final class TerminalStoreActionCoordinator {
     private var storeActionObserverToken: UUID?
     private let metadataService: TerminalMetadataService
     private let registerPendingSplitSourceIfNeeded: (UUID, AppState, AppState) -> Void
-    private let requestSelectedWorkspaceSlotFocusRestore: () -> Void
+    private let requestWorkspaceFocusRestore: (UUID) -> Void
 
     init(
         metadataService: TerminalMetadataService,
         registerPendingSplitSourceIfNeeded: @escaping (UUID, AppState, AppState) -> Void,
-        requestSelectedWorkspaceSlotFocusRestore: @escaping () -> Void
+        requestWorkspaceFocusRestore: @escaping (UUID) -> Void
     ) {
         self.metadataService = metadataService
         self.registerPendingSplitSourceIfNeeded = registerPendingSplitSourceIfNeeded
-        self.requestSelectedWorkspaceSlotFocusRestore = requestSelectedWorkspaceSlotFocusRestore
+        self.requestWorkspaceFocusRestore = requestWorkspaceFocusRestore
     }
 
     func bind(store: AppStore) {
@@ -108,7 +108,7 @@ final class TerminalStoreActionCoordinator {
             return
         }
 
-        requestSelectedWorkspaceSlotFocusRestore()
+        requestWorkspaceFocusRestore(workspaceID)
     }
 
     private static func selectedWorkspaceID(state: AppState) -> UUID? {

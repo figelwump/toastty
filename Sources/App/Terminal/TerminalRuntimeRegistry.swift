@@ -102,8 +102,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
                     nextState: nextState
                 )
             },
-            requestSelectedWorkspaceSlotFocusRestore: { [weak self] in
-                self?.scheduleSelectedWorkspaceSlotFocusRestore()
+            requestWorkspaceFocusRestore: { [weak self] workspaceID in
+                self?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
             }
         )
         storeActionCoordinator.bind(store: store)
@@ -233,14 +233,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
         return .unavailableSurface
     }
 
-    /// Attempts to return keyboard focus to the currently selected workspace's
-    /// focused terminal slot host view. Returns `false` when there is no active
-    /// focused terminal slot or no attached host view.
+    /// Attempts to return keyboard focus to the target terminal slot host view.
+    /// Returns `false` when the host view is unavailable or not ready.
     @discardableResult
-    func focusSelectedWorkspaceSlotIfPossible() -> Bool {
-        focusCoordinator.focusSelectedWorkspaceSlotIfPossible { [weak self] in
+    func focusPanelIfPossible(panelID: UUID) -> Bool {
+        focusCoordinator.focusIfPossible { [weak self] in
             guard let self,
-                  let panelID = self.store?.selectedWorkspace?.focusedPanelID,
                   let controller = self.runtimeStore.existingController(for: panelID) else {
                 return nil
             }
@@ -251,14 +249,25 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
     }
 
-    /// Retries first-responder restoration for the selected workspace's focused
-    /// slot. This covers launch/layout races where the host view exists in state
-    /// but is not yet attached when focus should be applied.
-    func scheduleSelectedWorkspaceSlotFocusRestore(avoidStealingKeyboardFocus: Bool = true) {
-        focusCoordinator.scheduleSelectedWorkspaceSlotFocusRestore(
+    /// Retries first-responder restoration for a specific panel host view. This
+    /// covers launch/layout races where the host exists in state but is not yet
+    /// attached when focus should be applied.
+    func schedulePanelFocusRestore(panelID: UUID, avoidStealingKeyboardFocus: Bool = true) {
+        scheduleFocusRestore(
+            avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
+        ) {
+            panelID
+        }
+    }
+
+    /// Retries focus restoration for whichever panel is currently focused in a
+    /// specific workspace. The panel is resolved on each retry so transient
+    /// state like delayed focused-panel updates can still recover.
+    func scheduleWorkspaceFocusRestore(workspaceID: UUID, avoidStealingKeyboardFocus: Bool = true) {
+        scheduleFocusRestore(
             avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         ) { [weak self] in
-            self?.focusSelectedWorkspaceSlotIfPossible() ?? false
+            self?.store?.state.workspacesByID[workspaceID]?.focusedPanelID
         }
     }
 
@@ -371,6 +380,21 @@ final class TerminalRuntimeRegistry: ObservableObject {
 }
 
 private extension TerminalRuntimeRegistry {
+    func scheduleFocusRestore(
+        avoidStealingKeyboardFocus: Bool,
+        resolvePanelID: @escaping @MainActor () -> UUID?
+    ) {
+        focusCoordinator.scheduleFocusRestore(
+            avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
+        ) { [weak self] in
+            guard let self,
+                  let panelID = resolvePanelID() else {
+                return false
+            }
+            return self.focusPanelIfPossible(panelID: panelID)
+        }
+    }
+
     @discardableResult
     func sendSplitAction(workspaceID: UUID, action: AppAction) -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT

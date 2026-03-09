@@ -12,7 +12,7 @@ final class TerminalFocusCoordinator {
     private let retryDelayNanoseconds: UInt64
     private let isApplicationActive: () -> Bool
     private let shouldAvoidStealingKeyboardFocus: () -> Bool
-    private var selectedSlotFocusRestoreTask: Task<Void, Never>?
+    private var focusRestoreTask: Task<Void, Never>?
 
     convenience init() {
         self.init(
@@ -42,26 +42,26 @@ final class TerminalFocusCoordinator {
     }
 
     deinit {
-        selectedSlotFocusRestoreTask?.cancel()
+        focusRestoreTask?.cancel()
     }
 
     @discardableResult
-    func focusSelectedWorkspaceSlotIfPossible(
-        resolveSelectedFocusTarget: () -> FocusTarget?
+    func focusIfPossible(
+        resolveFocusTarget: () -> FocusTarget?
     ) -> Bool {
-        guard let focusTarget = resolveSelectedFocusTarget(),
+        guard let focusTarget = resolveFocusTarget(),
               focusTarget.isReadyForFocus else {
             return false
         }
         return focusTarget.focusHostViewIfNeeded()
     }
 
-    func scheduleSelectedWorkspaceSlotFocusRestore(
+    func scheduleFocusRestore(
         avoidStealingKeyboardFocus: Bool = true,
         attemptRestoreFocus: @escaping @MainActor () -> Bool
     ) {
-        selectedSlotFocusRestoreTask?.cancel()
-        selectedSlotFocusRestoreTask = Task { @MainActor [weak self] in
+        focusRestoreTask?.cancel()
+        focusRestoreTask = Task { @MainActor [weak self] in
             guard let self else { return }
 
             for attempt in 0..<self.maxAttempts {

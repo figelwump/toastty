@@ -25,7 +25,7 @@ final class SlotFocusRestoreCoordinator {
                 guard let store, let runtimeRegistry else { return }
                 // Stop retrying if focus moved elsewhere after close.
                 guard store.selectedWorkspace?.focusedPanelID == expectedFocusedPanelID else { return }
-                if runtimeRegistry.focusSelectedWorkspaceSlotIfPossible() {
+                if runtimeRegistry.focusPanelIfPossible(panelID: expectedFocusedPanelID) {
                     return
                 }
                 guard attempt < Self.maxAttempts - 1 else { return }

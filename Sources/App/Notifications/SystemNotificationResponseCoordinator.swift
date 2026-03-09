@@ -24,12 +24,14 @@ final class SystemNotificationResponseCoordinator: NSObject {
 
     private func handleResponse(hint: DesktopNotificationSelectionHint) {
         guard let store else { return }
+        var resolvedPanelID: UUID?
 
         if let route = DesktopNotificationRouteResolver.resolve(hint: hint, state: store.state) {
             _ = store.send(.selectWindow(windowID: route.windowID))
             _ = store.send(.selectWorkspace(windowID: route.windowID, workspaceID: route.workspaceID))
             if let panelID = route.panelID {
                 _ = store.send(.focusPanel(workspaceID: route.workspaceID, panelID: panelID))
+                resolvedPanelID = panelID
             }
             ToasttyLog.info(
                 "Routed notification response to workspace",
@@ -52,7 +54,11 @@ final class SystemNotificationResponseCoordinator: NSObject {
         }
 
         NSApp.activate(ignoringOtherApps: true)
-        terminalRuntimeRegistry?.scheduleSelectedWorkspaceSlotFocusRestore()
+        if let panelID = resolvedPanelID {
+            terminalRuntimeRegistry?.schedulePanelFocusRestore(panelID: panelID)
+        } else if let workspaceID = store.selectedWorkspace?.id {
+            terminalRuntimeRegistry?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
+        }
     }
 }
 
