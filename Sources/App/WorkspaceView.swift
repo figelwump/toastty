@@ -111,10 +111,9 @@ struct WorkspaceView: View {
         let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
             limit: TerminalShortcutConfig.maxShortcutCount
         )
-        let renderedLayoutNode = focusedRenderNode(in: workspace)
-        let renderIdentity = workspaceRenderIdentity(for: workspace)
+        let renderedLayout = workspace.renderedLayout
         GeometryReader { geometry in
-            let projection = renderedLayoutNode.projectLayout(
+            let projection = renderedLayout.projectLayout(
                 in: LayoutFrame(
                     minX: 0,
                     minY: 0,
@@ -155,32 +154,8 @@ struct WorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
         }
-        .id(renderIdentity)
+        .id(renderedLayout.identity)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-    }
-
-    private func focusedRenderNode(in workspace: WorkspaceState) -> LayoutNode {
-        guard workspace.focusedPanelModeActive else {
-            return workspace.layoutTree
-        }
-        guard let focusedPanelID = workspace.focusedPanelID,
-              let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID),
-              let focusedNode = workspace.layoutTree.slotNode(slotID: focusedSlot.slotID) else {
-            assertionFailure("Focused panel mode requires the focused panel to resolve to a live layout slot.")
-            return workspace.layoutTree
-        }
-        // Focused-panel mode intentionally renders the focused slot leaf as the
-        // workspace root, mirroring Ghostty's zoomed split rendering.
-        return focusedNode
-    }
-
-    private func workspaceRenderIdentity(for workspace: WorkspaceState) -> WorkspaceRenderIdentity {
-        guard workspace.focusedPanelModeActive,
-              let focusedPanelID = workspace.focusedPanelID,
-              let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID) else {
-            return WorkspaceRenderIdentity(workspaceID: workspace.id, zoomedSlotID: nil)
-        }
-        return WorkspaceRenderIdentity(workspaceID: workspace.id, zoomedSlotID: focusedSlot.slotID)
     }
 
     @ViewBuilder
@@ -312,11 +287,6 @@ struct WorkspaceView: View {
         }
         .buttonStyle(TopBarFlashButtonStyle(title: title, icon: icon))
     }
-}
-
-private struct WorkspaceRenderIdentity: Hashable {
-    let workspaceID: UUID
-    let zoomedSlotID: UUID?
 }
 
 private struct SelectedWorkspaceUnreadSignature: Equatable {
