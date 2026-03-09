@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 #if TOASTTY_HAS_GHOSTTY_KIT
 import GhosttyKit
@@ -8,6 +9,7 @@ final class TerminalControllerStore {
     private var controllers: [UUID: TerminalSurfaceController] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var panelIDBySurfaceHandle: [UInt: UUID] = [:]
+    private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     #endif
 
     func controller(
@@ -55,12 +57,79 @@ final class TerminalControllerStore {
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
+    @discardableResult
+    func synchronizeLivePanels(_ livePanelIDs: Set<UUID>) -> Set<UUID> {
+        let removedPanelIDs = invalidateControllers(excluding: livePanelIDs)
+        pendingSplitSourcePanelByNewPanelID = pendingSplitSourcePanelByNewPanelID.filter {
+            livePanelIDs.contains($0.key) && livePanelIDs.contains($0.value)
+        }
+        return removedPanelIDs
+    }
+
+    func synchronizeGhosttySurfaceFocusFromApplicationState() {
+        forEachController { controller in
+            controller.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
+    }
+
+    func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
+        guard previousPoints != nextPoints else { return }
+        forEachController { controller in
+            controller.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+        }
+    }
+
     func currentGhosttySurface(for panelID: UUID) -> ghostty_surface_t? {
         controllers[panelID]?.currentGhosttySurface()
     }
 
     func panelID(forSurfaceHandle surfaceHandle: UInt) -> UUID? {
         panelIDBySurfaceHandle[surfaceHandle]
+    }
+
+    func registerPendingSplitSourceIfNeeded(
+        workspaceID: UUID,
+        previousState: AppState,
+        nextState: AppState
+    ) {
+        guard let previousWorkspace = previousState.workspacesByID[workspaceID],
+              let nextWorkspace = nextState.workspacesByID[workspaceID],
+              let sourcePanelID = Self.resolveSplitSourcePanelID(in: previousWorkspace) else {
+            return
+        }
+
+        let createdPanelIDs = Set(nextWorkspace.panels.keys).subtracting(previousWorkspace.panels.keys)
+        guard createdPanelIDs.count == 1,
+              let newPanelID = createdPanelIDs.first,
+              case .terminal = nextWorkspace.panels[newPanelID],
+              case .terminal = nextWorkspace.panels[sourcePanelID] else {
+            return
+        }
+
+        pendingSplitSourcePanelByNewPanelID[newPanelID] = sourcePanelID
+        ToasttyLog.debug(
+            "Registered split source panel for Ghostty surface inheritance",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "source_panel_id": sourcePanelID.uuidString,
+                "new_panel_id": newPanelID.uuidString,
+            ]
+        )
+    }
+
+    func splitSourceSurfaceState(for newPanelID: UUID) -> TerminalSplitSourceSurfaceState {
+        guard let sourcePanelID = pendingSplitSourcePanelByNewPanelID[newPanelID] else {
+            return .none
+        }
+        guard let sourceSurface = currentGhosttySurface(for: sourcePanelID) else {
+            return .pending
+        }
+        return .ready(sourcePanelID: sourcePanelID, surface: sourceSurface)
+    }
+
+    func consumeSplitSource(for newPanelID: UUID) {
+        pendingSplitSourcePanelByNewPanelID.removeValue(forKey: newPanelID)
     }
 
     func register(surface: ghostty_surface_t, for panelID: UUID) {
@@ -72,6 +141,27 @@ final class TerminalControllerStore {
         if panelIDBySurfaceHandle[key] == panelID {
             panelIDBySurfaceHandle.removeValue(forKey: key)
         }
+    }
+
+    private static func resolveSplitSourcePanelID(in workspace: WorkspaceState) -> UUID? {
+        if let focusedPanelID = workspace.focusedPanelID,
+           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil,
+           let focusedPanelState = workspace.panels[focusedPanelID],
+           focusedPanelState.kind == .terminal {
+            return focusedPanelID
+        }
+
+        for leaf in workspace.layoutTree.allSlotInfos {
+            let panelID = leaf.panelID
+            guard workspace.layoutTree.slotContaining(panelID: panelID) != nil,
+                  let panelState = workspace.panels[panelID] else {
+                continue
+            }
+            if panelState.kind == .terminal {
+                return panelID
+            }
+        }
+        return nil
     }
     #endif
 }

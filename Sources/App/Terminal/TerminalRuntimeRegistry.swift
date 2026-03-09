@@ -63,7 +63,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
     private var activityInferenceService: TerminalActivityInferenceService?
-    private var pendingSplitSourcePanelByNewPanelID: [UUID: UUID] = [:]
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
     private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
@@ -131,9 +130,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func synchronizeGhosttySurfaceFocusFromApplicationState() {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        controllerStore.forEachController { controller in
-            controller.synchronizeGhosttySurfaceFocusFromApplicationState()
-        }
+        controllerStore.synchronizeGhosttySurfaceFocusFromApplicationState()
         #endif
     }
 
@@ -150,7 +147,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
 
         #if TOASTTY_HAS_GHOSTTY_KIT
-        let removedPanelIDs = controllerStore.invalidateControllers(excluding: livePanelIDs)
+        let removedPanelIDs = controllerStore.synchronizeLivePanels(livePanelIDs)
         for panelID in removedPanelIDs {
             metadataService?.invalidate(panelID: panelID)
             activityInferenceService?.invalidate(panelID: panelID)
@@ -164,9 +161,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
             livePanelIDs,
             liveWorkspaceIDs: Set(state.workspacesByID.keys)
         )
-        pendingSplitSourcePanelByNewPanelID = pendingSplitSourcePanelByNewPanelID.filter {
-            livePanelIDs.contains($0.key) && livePanelIDs.contains($0.value)
-        }
         syncWorkspaceActivitySubtextFromService()
         #endif
 
@@ -474,36 +468,14 @@ private extension TerminalRuntimeRegistry {
     }
 
     func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
-        guard previousPoints != nextPoints else { return }
-        controllerStore.forEachController { controller in
-            controller.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
-        }
+        controllerStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
     }
 
     func registerPendingSplitSourceIfNeeded(workspaceID: UUID, previousState: AppState, nextState: AppState) {
-        guard let previousWorkspace = previousState.workspacesByID[workspaceID],
-              let nextWorkspace = nextState.workspacesByID[workspaceID],
-              let sourcePanelID = resolveSplitSourcePanelID(in: previousWorkspace) else {
-            return
-        }
-
-        let createdPanelIDs = Set(nextWorkspace.panels.keys).subtracting(previousWorkspace.panels.keys)
-        guard createdPanelIDs.count == 1,
-              let newPanelID = createdPanelIDs.first,
-              case .terminal = nextWorkspace.panels[newPanelID],
-              case .terminal = nextWorkspace.panels[sourcePanelID] else {
-            return
-        }
-
-        pendingSplitSourcePanelByNewPanelID[newPanelID] = sourcePanelID
-        ToasttyLog.debug(
-            "Registered split source panel for Ghostty surface inheritance",
-            category: .terminal,
-            metadata: [
-                "workspace_id": workspaceID.uuidString,
-                "source_panel_id": sourcePanelID.uuidString,
-                "new_panel_id": newPanelID.uuidString,
-            ]
+        controllerStore.registerPendingSplitSourceIfNeeded(
+            workspaceID: workspaceID,
+            previousState: previousState,
+            nextState: nextState
         )
     }
 
@@ -523,38 +495,11 @@ private extension TerminalRuntimeRegistry {
     }
 
     func splitSourceSurfaceState(for newPanelID: UUID) -> TerminalSplitSourceSurfaceState {
-        guard let sourcePanelID = pendingSplitSourcePanelByNewPanelID[newPanelID] else {
-            return .none
-        }
-        guard let sourceSurface = controllerStore.currentGhosttySurface(for: sourcePanelID) else {
-            return .pending
-        }
-        return .ready(sourcePanelID: sourcePanelID, surface: sourceSurface)
+        controllerStore.splitSourceSurfaceState(for: newPanelID)
     }
 
     func consumeSplitSource(for newPanelID: UUID) {
-        pendingSplitSourcePanelByNewPanelID.removeValue(forKey: newPanelID)
-    }
-
-    private func resolveSplitSourcePanelID(in workspace: WorkspaceState) -> UUID? {
-        if let focusedPanelID = workspace.focusedPanelID,
-           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil,
-           let focusedPanelState = workspace.panels[focusedPanelID],
-           focusedPanelState.kind == .terminal {
-            return focusedPanelID
-        }
-
-        for leaf in workspace.layoutTree.allSlotInfos {
-            let panelID = leaf.panelID
-            guard workspace.layoutTree.slotContaining(panelID: panelID) != nil,
-                  let panelState = workspace.panels[panelID] else {
-                continue
-            }
-            if panelState.kind == .terminal {
-                return panelID
-            }
-        }
-        return nil
+        controllerStore.consumeSplitSource(for: newPanelID)
     }
 }
 #else
