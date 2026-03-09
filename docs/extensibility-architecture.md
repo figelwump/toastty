@@ -50,8 +50,13 @@ The CLI is sugar over the socket protocol. Anything the CLI can do, a raw socket
 Same resolution order as the existing protocol:
 
 1. `TOASTTY_SOCKET_PATH` if set
-2. `$TMPDIR/toastty-$UID/events-v1.sock`
-3. `/tmp/toastty-$UID/events-v1.sock`
+2. discovery record at `$TMPDIR/toastty-$UID/current-socket.json`
+3. newest live per-instance socket discovered under `$TMPDIR/toastty-$UID/events-v1-<pid>.sock`
+4. legacy path `$TMPDIR/toastty-$UID/events-v1.sock`
+
+The app itself binds a per-instance socket at `$TMPDIR/toastty-$UID/events-v1-<pid>.sock`. Toastty-launched
+agents get that exact path injected via `TOASTTY_SOCKET_PATH`, while generic CLI discovery first uses the
+latest discovery record and otherwise falls back to scanning live per-instance sockets.
 
 The CLI connects, sends one JSON request, reads one JSON response, and exits. No persistent connections — the one-shot model is sufficient for CLI use.
 

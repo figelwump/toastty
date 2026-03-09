@@ -49,7 +49,7 @@ public struct AutomationConfig: Equatable, Sendable {
                 .appendingPathComponent("toastty-automation-\(runID)")
                 .path
         let socketPath = argumentValue(after: "--socket-path", in: arguments)
-            ?? resolveSocketPath(environment: environment)
+            ?? resolveServerSocketPath(environment: environment)
 
         return AutomationConfig(
             runID: runID,
@@ -88,14 +88,17 @@ public struct AutomationConfig: Equatable, Sendable {
     }
 
     public static func resolveSocketPath(environment: [String: String]) -> String {
-        environment["TOASTTY_SOCKET_PATH"] ?? defaultSocketPath(environment: environment)
+        AutomationSocketLocator.resolveClientSocketPath(environment: environment)
     }
 
-    private static func defaultSocketPath(environment: [String: String]) -> String {
-        let tempDirectory = environment["TMPDIR"] ?? NSTemporaryDirectory()
-        let directoryURL = URL(fileURLWithPath: tempDirectory, isDirectory: true)
-            .appendingPathComponent("toastty-\(getuid())", isDirectory: true)
-        return directoryURL.appendingPathComponent("events-v1.sock", isDirectory: false).path
+    public static func resolveServerSocketPath(
+        environment: [String: String],
+        processID: Int32 = getpid()
+    ) -> String {
+        AutomationSocketLocator.resolveServerSocketPath(
+            environment: environment,
+            processID: processID
+        )
     }
 
     private static func isAutomationSession(arguments: [String], environment: [String: String]) -> Bool {

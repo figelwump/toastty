@@ -252,7 +252,7 @@ struct ToasttyApp: App {
         }
 
         let socketPath = bootstrap.automationConfig?.socketPath
-            ?? AutomationConfig.resolveSocketPath(environment: ProcessInfo.processInfo.environment)
+            ?? AutomationConfig.resolveServerSocketPath(environment: ProcessInfo.processInfo.environment)
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,

@@ -18,8 +18,19 @@ This document defines the local unix-socket protocol used by:
 Default path resolution:
 
 1. `TOASTTY_SOCKET_PATH` if set
-2. `$TMPDIR/toastty-$UID/events-v1.sock`
-3. `/tmp/toastty-$UID/events-v1.sock`
+2. discovery record at `$TMPDIR/toastty-$UID/current-socket.json` (generic CLI / script fallback)
+3. newest live per-instance socket discovered under `$TMPDIR/toastty-$UID/events-v1-<pid>.sock`
+4. legacy path `$TMPDIR/toastty-$UID/events-v1.sock`
+
+Default server bind path:
+
+- `$TMPDIR/toastty-$UID/events-v1-<pid>.sock`
+
+Notes:
+
+- each Toastty app instance binds its own socket path
+- Toastty-launched agents always get the exact instance path through `TOASTTY_SOCKET_PATH`
+- when multiple app instances are open, generic CLI discovery prefers the latest discovery record and otherwise scans for the newest live instance
 
 ## 2) message framing
 

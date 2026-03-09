@@ -6,6 +6,8 @@ import Foundation
 
 final class AutomationSocketServer: @unchecked Sendable {
     private let socketPath: String
+    private let processEnvironment: [String: String]
+    private let publishesDiscoveryRecord: Bool
     private let commandExecutor: AutomationCommandExecutor
     private let queue = DispatchQueue(label: "toastty.automation.socket")
 
@@ -23,6 +25,10 @@ final class AutomationSocketServer: @unchecked Sendable {
         agentLaunchService: AgentLaunchService
     ) throws {
         self.socketPath = socketPath
+        self.processEnvironment = ProcessInfo.processInfo.environment
+        self.publishesDiscoveryRecord = socketPath == AutomationConfig.resolveServerSocketPath(
+            environment: ProcessInfo.processInfo.environment
+        )
         self.commandExecutor = AutomationCommandExecutor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -102,6 +108,14 @@ final class AutomationSocketServer: @unchecked Sendable {
         listenFD = fd
         acceptSource = source
         source.resume()
+
+        if publishesDiscoveryRecord {
+            try? AutomationSocketLocator.writeDiscoveryRecord(
+                socketPath: socketPath,
+                processID: getpid(),
+                environment: processEnvironment
+            )
+        }
     }
 
     private func stopListening() {
@@ -114,6 +128,14 @@ final class AutomationSocketServer: @unchecked Sendable {
         if listenFD >= 0 {
             close(listenFD)
             listenFD = -1
+        }
+
+        if publishesDiscoveryRecord {
+            AutomationSocketLocator.removeDiscoveryRecordIfOwned(
+                socketPath: socketPath,
+                processID: getpid(),
+                environment: processEnvironment
+            )
         }
         _ = unlink(socketPath)
     }
