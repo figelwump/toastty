@@ -8,7 +8,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
     let terminalState: TerminalPanelState
     let focused: Bool
     let globalFontPoints: Double
-    let runtimeRegistry: TerminalRuntimeRegistry
+    let runtimeContext: TerminalWindowRuntimeContext
 
     @MainActor
     final class Coordinator {
@@ -29,7 +29,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
 
     func updateNSView(_ containerView: TerminalPanelContainerView, context: Context) {
         let coordinator = context.coordinator
-        let controller = runtimeRegistry.controller(for: panelID, workspaceID: workspaceID)
+        let controller = runtimeContext.controller(for: panelID, workspaceID: workspaceID)
         let attachment = coordinator.containerCoordinator.attachment(
             for: containerView,
             controller: controller

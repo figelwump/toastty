@@ -12,14 +12,20 @@ struct AppRootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            SidebarView(store: store, terminalRuntimeRegistry: terminalRuntimeRegistry)
+            SidebarView(
+                store: store,
+                terminalRuntimeContext: selectedWindowRuntimeContext
+            )
                 .frame(width: ToastyTheme.sidebarWidth)
 
             Rectangle()
                 .fill(ToastyTheme.hairline)
                 .frame(width: 1)
 
-            WorkspaceView(store: store, terminalRuntimeRegistry: terminalRuntimeRegistry)
+            WorkspaceView(
+                store: store,
+                terminalRuntimeContext: selectedWindowRuntimeContext
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(ToastyTheme.chromeBackground)
@@ -32,12 +38,8 @@ struct AppRootView: View {
             }
         }
         .task {
-            terminalRuntimeRegistry.synchronize(with: store.state)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
             scheduleSelectedWorkspaceFocusRestore()
-        }
-        .onChange(of: store.state) { _, nextState in
-            terminalRuntimeRegistry.synchronize(with: nextState)
         }
         .onChange(of: selectedSlotFocusSignature) { _, _ in
             scheduleSelectedWorkspaceFocusRestore()
@@ -48,8 +50,7 @@ struct AppRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             terminalRuntimeRegistry.synchronizeGhosttySurfaceFocusFromApplicationState()
         }
-        .onChange(of: store.state.globalTerminalFontPoints) { previousPoints, nextPoints in
-            terminalRuntimeRegistry.applyGlobalFontChange(from: previousPoints, to: nextPoints)
+        .onChange(of: store.state.globalTerminalFontPoints) { _, nextPoints in
             fontHUDPoints = nextPoints
             hideFontHUDTask?.cancel()
             hideFontHUDTask = Task { @MainActor in
@@ -83,9 +84,20 @@ struct AppRootView: View {
         )
     }
 
+    private var selectedWindowRuntimeContext: TerminalWindowRuntimeContext? {
+        guard let windowID = store.selectedWindow?.id else { return nil }
+        return TerminalWindowRuntimeContext(
+            windowID: windowID,
+            runtimeRegistry: terminalRuntimeRegistry
+        )
+    }
+
     private func scheduleSelectedWorkspaceFocusRestore(avoidStealingKeyboardFocus: Bool = true) {
-        guard let workspaceID = store.selectedWorkspace?.id else { return }
-        terminalRuntimeRegistry.scheduleWorkspaceFocusRestore(
+        guard let workspaceID = store.selectedWorkspace?.id,
+              let terminalRuntimeContext = selectedWindowRuntimeContext else {
+            return
+        }
+        terminalRuntimeContext.scheduleWorkspaceFocusRestore(
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         )

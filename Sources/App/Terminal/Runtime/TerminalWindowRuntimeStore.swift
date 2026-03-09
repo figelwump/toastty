@@ -13,17 +13,29 @@ final class TerminalWindowRuntimeStore {
     func controller(
         for panelID: UUID,
         workspaceID: UUID,
+        windowID: UUID,
         state: AppState?,
         delegate: any TerminalSurfaceControllerDelegate
     ) -> TerminalSurfaceController {
-        if let existingRuntime = existingRuntime(containing: panelID),
-           let existingController = existingRuntime.existingController(for: panelID),
-           existingRuntime.workspaceID == workspaceID {
-            return existingController
+        if let existingControllerLocation = existingControllerLocation(for: panelID),
+           let existingController = existingControllerLocation.runtime.existingController(for: panelID) {
+            if existingControllerLocation.windowID == windowID,
+               existingControllerLocation.runtime.workspaceID == workspaceID {
+                return existingController
+            }
+
+            if workspaceOwnsPanel(
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: state
+            ) == false {
+                return existingController
+            }
         }
 
         terminalWorkspaceIDByPanelID[panelID] = workspaceID
-        let workspaceRuntime = runtime(for: workspaceID, state: state)
+        windowIDByWorkspaceID[workspaceID] = windowID
+        let workspaceRuntime = runtime(for: workspaceID, windowID: windowID, state: state)
         if let existingController = workspaceRuntime.existingController(for: panelID) {
             return existingController
         }
@@ -34,7 +46,7 @@ final class TerminalWindowRuntimeStore {
     }
 
     func existingController(for panelID: UUID) -> TerminalSurfaceController? {
-        existingRuntime(containing: panelID)?.existingController(for: panelID)
+        existingControllerLocation(for: panelID)?.runtime.existingController(for: panelID)
     }
 
     func containsController(for panelID: UUID) -> Bool {
@@ -101,7 +113,12 @@ final class TerminalWindowRuntimeStore {
         previousState: AppState,
         nextState: AppState
     ) {
-        runtime(for: workspaceID, state: nextState).registerPendingSplitSourceIfNeeded(
+        guard let windowID = windowID(forWorkspaceID: workspaceID, state: nextState) else {
+            preconditionFailure(
+                "TerminalWindowRuntimeStore could not resolve a window runtime for split registration in workspace \(workspaceID)."
+            )
+        }
+        runtime(for: workspaceID, windowID: windowID, state: nextState).registerPendingSplitSourceIfNeeded(
             previousState: previousState,
             nextState: nextState
         )
@@ -133,28 +150,35 @@ final class TerminalWindowRuntimeStore {
     }
     #endif
 
-    private func runtime(for workspaceID: UUID, state: AppState?) -> TerminalWorkspaceRuntime {
-        let windowRuntime = windowRuntime(for: workspaceID, state: state)
+    private func runtime(for workspaceID: UUID, windowID: UUID, state: AppState?) -> TerminalWorkspaceRuntime {
+        let windowRuntime = windowRuntime(for: workspaceID, requestedWindowID: windowID, state: state)
         if let existing = windowRuntime.existingRuntime(for: workspaceID) {
             return existing
         }
         return windowRuntime.runtime(for: workspaceID)
     }
 
-    private func existingRuntime(containing panelID: UUID) -> TerminalWorkspaceRuntime? {
+    private func existingControllerLocation(
+        for panelID: UUID
+    ) -> (windowID: UUID, runtime: TerminalWorkspaceRuntime)? {
         if let workspaceID = terminalWorkspaceIDByPanelID[panelID],
+           let windowID = windowIDByWorkspaceID[workspaceID],
            let runtime = existingRuntime(for: workspaceID) {
-            return runtime
+            return (windowID, runtime)
         }
 
         for (windowID, windowRuntime) in windowRuntimesByID {
             guard let runtime = windowRuntime.existingRuntime(containing: panelID) else { continue }
             terminalWorkspaceIDByPanelID[panelID] = runtime.workspaceID
             windowIDByWorkspaceID[runtime.workspaceID] = windowID
-            return runtime
+            return (windowID, runtime)
         }
 
         return nil
+    }
+
+    private func existingRuntime(containing panelID: UUID) -> TerminalWorkspaceRuntime? {
+        existingControllerLocation(for: panelID)?.runtime
     }
 
     private func existingRuntime(for workspaceID: UUID) -> TerminalWorkspaceRuntime? {
@@ -179,9 +203,15 @@ final class TerminalWindowRuntimeStore {
         return nil
     }
 
-    private func windowRuntime(for workspaceID: UUID, state: AppState?) -> TerminalWindowRuntime {
+    private func windowRuntime(
+        for workspaceID: UUID,
+        requestedWindowID: UUID,
+        state: AppState?
+    ) -> TerminalWindowRuntime {
         let resolvedWindowID: UUID
-        if let cachedWindowID = windowIDByWorkspaceID[workspaceID] {
+        if workspaceOwnsWindowRuntime(workspaceID: workspaceID, windowID: requestedWindowID, state: state) {
+            resolvedWindowID = requestedWindowID
+        } else if let cachedWindowID = windowIDByWorkspaceID[workspaceID] {
             resolvedWindowID = cachedWindowID
         } else if let state,
                   let stateWindowID = windowID(forWorkspaceID: workspaceID, state: state) {
@@ -200,6 +230,23 @@ final class TerminalWindowRuntimeStore {
         let created = TerminalWindowRuntime(windowID: resolvedWindowID)
         windowRuntimesByID[resolvedWindowID] = created
         return created
+    }
+
+    private func workspaceOwnsPanel(workspaceID: UUID, panelID: UUID, state: AppState?) -> Bool {
+        guard let state,
+              let workspace = state.workspacesByID[workspaceID],
+              workspace.panels[panelID] != nil,
+              workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
+            return false
+        }
+        return true
+    }
+
+    private func workspaceOwnsWindowRuntime(workspaceID: UUID, windowID: UUID, state: AppState?) -> Bool {
+        guard let state else { return false }
+        return state.windows.contains { window in
+            window.id == windowID && window.workspaceIDs.contains(workspaceID)
+        }
     }
 
     private func liveTerminalPanelIDsByWorkspaceID(in state: AppState) -> [UUID: Set<UUID>] {

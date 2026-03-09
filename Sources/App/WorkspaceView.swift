@@ -4,7 +4,7 @@ import SwiftUI
 
 struct WorkspaceView: View {
     @ObservedObject var store: AppStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalRuntimeContext: TerminalWindowRuntimeContext?
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -79,7 +79,7 @@ struct WorkspaceView: View {
 
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = store.selectedWorkspace?.id else { return }
-        terminalRuntimeRegistry.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
+        terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
     }
 
     private func workspaceStack(for window: WindowState) -> some View {
@@ -129,7 +129,7 @@ struct WorkspaceView: View {
                         workspace: workspace,
                         isWorkspaceSelected: isSelected,
                         store: store,
-                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        terminalRuntimeContext: terminalRuntimeContext,
                         globalFontPoints: store.state.globalTerminalFontPoints,
                         appIsActive: appIsActive,
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
@@ -301,7 +301,7 @@ private struct SlotPlacementView: View {
     let workspace: WorkspaceState
     let isWorkspaceSelected: Bool
     @ObservedObject var store: AppStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let globalFontPoints: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
@@ -322,7 +322,7 @@ private struct SlotPlacementView: View {
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     store: store,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                    terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
                 Color.clear
@@ -355,7 +355,7 @@ private struct PanelCardView: View {
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalRuntimeContext: TerminalWindowRuntimeContext?
 
     private var isFocused: Bool {
         // Only the selected workspace may present a focused terminal host.
@@ -398,13 +398,14 @@ private struct PanelCardView: View {
 
             switch panelState {
             case .terminal(let terminalState):
+                if let terminalRuntimeContext {
                 TerminalPanelHostView(
                     workspaceID: workspaceID,
                     panelID: panelID,
                     terminalState: terminalState,
                     focused: isFocused,
                     globalFontPoints: globalFontPoints,
-                    runtimeRegistry: terminalRuntimeRegistry
+                    runtimeContext: terminalRuntimeContext
                 )
                 .overlay {
                     if isWorkspaceSelected,
@@ -422,6 +423,9 @@ private struct PanelCardView: View {
                     maxHeight: .infinity,
                     alignment: .topLeading
                 )
+                } else {
+                    Color.clear
+                }
 
             case .diff:
                 auxPanelPlaceholder(title: "Diff Panel")

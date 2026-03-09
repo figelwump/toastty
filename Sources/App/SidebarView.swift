@@ -4,7 +4,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @ObservedObject var store: AppStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalRuntimeContext: TerminalWindowRuntimeContext?
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
@@ -310,7 +310,7 @@ struct SidebarView: View {
         // Renaming intentionally restores focus back to the terminal even if the
         // field editor is still unwinding from the just-finished text edit.
         guard let workspaceID = store.selectedWorkspace?.id else { return }
-        terminalRuntimeRegistry.scheduleWorkspaceFocusRestore(
+        terminalRuntimeContext?.scheduleWorkspaceFocusRestore(
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: false
         )
@@ -381,7 +381,7 @@ struct SidebarView: View {
     /// Build a subtitle string like "3 panes · dev server running" or "1 pane"
     private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
         let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
-        if let activitySubtext = terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id),
+        if let activitySubtext = terminalRuntimeContext?.workspaceActivitySubtext(for: workspace.id),
            activitySubtext.isEmpty == false {
             return "\(paneLabel) · \(activitySubtext)"
         }

@@ -12,11 +12,13 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
         let runtimeStore = TerminalWindowRuntimeStore()
         let delegate = TestTerminalSurfaceControllerDelegate()
 
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
         let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
         _ = runtimeStore.controller(
             for: panelID,
             workspaceID: workspaceID,
+            windowID: windowID,
             state: store.state,
             delegate: delegate
         )
@@ -33,16 +35,17 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
         let runtimeStore = TerminalWindowRuntimeStore()
         let delegate = TestTerminalSurfaceControllerDelegate()
 
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let sourceWorkspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
         let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
         let originalController = runtimeStore.controller(
             for: panelID,
             workspaceID: sourceWorkspaceID,
+            windowID: windowID,
             state: store.state,
             delegate: delegate
         )
 
-        let windowID = try XCTUnwrap(store.state.windows.first?.id)
         XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second Workspace")))
         let targetWorkspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
 
@@ -54,6 +57,7 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
         let migratedController = runtimeStore.controller(
             for: panelID,
             workspaceID: targetWorkspaceID,
+            windowID: windowID,
             state: store.state,
             delegate: delegate
         )
@@ -66,11 +70,13 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
         let runtimeStore = TerminalWindowRuntimeStore()
         let delegate = TestTerminalSurfaceControllerDelegate()
 
+        let sourceWindowID = try XCTUnwrap(store.state.windows.first?.id)
         let sourceWorkspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
         let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
         let originalController = runtimeStore.controller(
             for: panelID,
             workspaceID: sourceWorkspaceID,
+            windowID: sourceWindowID,
             state: store.state,
             delegate: delegate
         )
@@ -81,13 +87,16 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
         let staleController = runtimeStore.controller(
             for: panelID,
             workspaceID: sourceWorkspaceID,
+            windowID: sourceWindowID,
             state: store.state,
             delegate: delegate
         )
+        let detachedWindowID = try XCTUnwrap(store.selectedWindow?.id)
         let detachedWorkspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
         let migratedController = runtimeStore.controller(
             for: panelID,
             workspaceID: detachedWorkspaceID,
+            windowID: detachedWindowID,
             state: store.state,
             delegate: delegate
         )

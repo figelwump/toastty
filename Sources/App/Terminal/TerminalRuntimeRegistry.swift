@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import CoreState
 import Foundation
 import UniformTypeIdentifiers
@@ -57,6 +58,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private let focusCoordinator = TerminalFocusCoordinator()
     private let runtimeStore = TerminalWindowRuntimeStore()
     private weak var store: AppStore?
+    private var stateObservation: AnyCancellable?
+    private var observedGlobalFontPoints: Double?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
@@ -126,6 +129,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         workspaceMaintenanceService?.startProcessWorkingDirectoryRefreshLoopIfNeeded()
         #endif
         configureGhosttyActionHandler()
+        bindStateObservation(to: store)
     }
 
     @discardableResult
@@ -144,10 +148,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
-    func controller(for panelID: UUID, workspaceID: UUID) -> TerminalSurfaceController {
+    func controller(for panelID: UUID, workspaceID: UUID, windowID: UUID) -> TerminalSurfaceController {
         runtimeStore.controller(
             for: panelID,
             workspaceID: workspaceID,
+            windowID: windowID,
             state: store?.state,
             delegate: self
         )
@@ -166,10 +171,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
             removedPanelIDs: removedPanelIDs
         )
         #endif
-    }
-
-    func applyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
-        applyGhosttyGlobalFontChangeIfNeeded(from: previousPoints, to: nextPoints)
     }
 
     func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
@@ -380,6 +381,28 @@ final class TerminalRuntimeRegistry: ObservableObject {
 }
 
 private extension TerminalRuntimeRegistry {
+    func bindStateObservation(to store: AppStore) {
+        stateObservation?.cancel()
+        observedGlobalFontPoints = store.state.globalTerminalFontPoints
+        stateObservation = store.$state.sink { [weak self] state in
+            self?.handleObservedStoreState(state)
+        }
+    }
+
+    func handleObservedStoreState(_ state: AppState) {
+        synchronize(with: state)
+
+        if let previousPoints = observedGlobalFontPoints,
+           abs(previousPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon {
+            applyGhosttyGlobalFontChangeIfNeeded(
+                from: previousPoints,
+                to: state.globalTerminalFontPoints
+            )
+        }
+
+        observedGlobalFontPoints = state.globalTerminalFontPoints
+    }
+
     func scheduleFocusRestore(
         avoidStealingKeyboardFocus: Bool,
         resolvePanelID: @escaping @MainActor () -> UUID?
