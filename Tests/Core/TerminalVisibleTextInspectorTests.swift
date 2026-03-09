@@ -62,6 +62,60 @@ struct TerminalVisibleTextInspectorTests {
     }
 
     @Test
+    func closeAssessmentTreatsEnvPrefixedAgentLaunchAsAgentCommand() {
+        let visibleText = """
+        vishal@toastty ~/repo % TOASTTY_AGENT=codex TOASTTY_SESSION_ID=abc123 codex --model gpt-5
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation)
+        #expect(
+            assessment.runningCommand ==
+                "TOASTTY_AGENT=codex TOASTTY_SESSION_ID=abc123 codex --model gpt-5"
+        )
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "codex")
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(
+            TerminalVisibleTextInspector.inferredRunningCommand(
+                visibleText,
+                includeAgentLaunchCommands: true
+            ) == "TOASTTY_AGENT=codex TOASTTY_SESSION_ID=abc123 codex --model gpt-5"
+        )
+    }
+
+    @Test
+    func closeAssessmentTreatsAssignmentOnlyPromptAsInteractive() {
+        let visibleText = """
+        vishal@toastty ~/repo % FOO=bar BAZ=qux
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation == false)
+        #expect(assessment.runningCommand == nil)
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+    }
+
+    @Test
+    func closeAssessmentTreatsEnvPrefixedNonAgentCommandsAsForegroundCommands() {
+        let visibleText = """
+        vishal@toastty ~/repo % FOO=bar npm run dev
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation)
+        #expect(assessment.runningCommand == "FOO=bar npm run dev")
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "npm")
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == "FOO=bar npm run dev")
+    }
+
+    @Test
     func closeAssessmentUsesLoosePromptParsing() {
         let visibleText = """
         ~/repo % 

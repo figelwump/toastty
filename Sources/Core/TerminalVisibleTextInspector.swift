@@ -109,10 +109,7 @@ public enum TerminalVisibleTextInspector {
             guard normalized.isEmpty == false else {
                 continue
             }
-            let token = normalized
-                .split(whereSeparator: { $0.isWhitespace })
-                .first?
-                .lowercased() ?? ""
+            let token = leadingCommandToken(in: normalized) ?? ""
             guard token.isEmpty == false else {
                 continue
             }
@@ -141,10 +138,7 @@ public enum TerminalVisibleTextInspector {
                 return .interactive
             }
 
-            let token = command
-                .split(whereSeparator: { $0.isWhitespace })
-                .first?
-                .lowercased() ?? ""
+            let token = leadingCommandToken(in: command) ?? ""
             guard token.isEmpty == false else {
                 return .interactive
             }
@@ -294,6 +288,17 @@ public enum TerminalVisibleTextInspector {
 
     private static func collapsedWhitespace(_ line: String) -> String {
         line.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+
+    // Shell-injected launches can prefix the real command with KEY=value pairs.
+    // Skip those assignment tokens so prompt classification still sees `codex`
+    // / `claude` as the command token.
+    private static func leadingCommandToken(in command: String) -> String? {
+        command
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+            .first { token in token.contains("=") == false }?
+            .lowercased()
     }
 
     private static func truncatedCommand(_ command: String) -> String {
