@@ -56,18 +56,24 @@ struct TerminalPanelRenderAttachmentSnapshot {
 final class TerminalRuntimeRegistry: ObservableObject {
     private let controllerStore = TerminalControllerStore()
     private weak var store: AppStore?
-    private var storeActionObserverToken: UUID?
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     private var selectedSlotFocusRestoreTask: Task<Void, Never>?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
     private var activityInferenceService: TerminalActivityInferenceService?
+    private var storeActionCoordinator: TerminalStoreActionCoordinator?
     private var workspaceMaintenanceService: TerminalWorkspaceMaintenanceService?
     #endif
 
     deinit {
         selectedSlotFocusRestoreTask?.cancel()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let storeActionCoordinator = self.storeActionCoordinator
+        Task { @MainActor in
+            storeActionCoordinator?.unbind()
+        }
+        #endif
     }
 
     func bind(store: AppStore) {
@@ -75,19 +81,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
         if let existingStore = previousStore {
             precondition(existingStore === store, "TerminalRuntimeRegistry cannot be rebound to a different AppStore.")
         }
-        if let storeActionObserverToken,
-           let previousStore {
-            previousStore.removeActionAppliedObserver(storeActionObserverToken)
-        }
         self.store = store
-        storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
-            self?.handleAppliedStoreAction(
-                action,
-                previousState: previousState,
-                nextState: nextState
-            )
-        }
         #if TOASTTY_HAS_GHOSTTY_KIT
+        storeActionCoordinator?.unbind()
         let metadataService = TerminalMetadataService(store: store, registry: self)
         let activityInferenceService = TerminalActivityInferenceService(
             store: store,
@@ -98,6 +94,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
         self.metadataService = metadataService
         self.activityInferenceService = activityInferenceService
         actionRouter = TerminalActionRouter(store: store, registry: self)
+        let storeActionCoordinator = TerminalStoreActionCoordinator(
+            controllerStore: controllerStore,
+            metadataService: metadataService,
+            requestSelectedWorkspaceSlotFocusRestore: { [weak self] in
+                self?.scheduleSelectedWorkspaceSlotFocusRestore()
+            }
+        )
+        storeActionCoordinator.bind(store: store)
+        self.storeActionCoordinator = storeActionCoordinator
         workspaceMaintenanceService = TerminalWorkspaceMaintenanceService(
             store: store,
             controllerStore: controllerStore,
@@ -389,101 +394,23 @@ final class TerminalRuntimeRegistry: ObservableObject {
 private extension TerminalRuntimeRegistry {
     @discardableResult
     func sendSplitAction(workspaceID: UUID, action: AppAction) -> Bool {
-        guard let store else { return false }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        refreshSplitSourcePanelCWDBeforeSplit(
-            workspaceID: workspaceID,
-            store: store
-        )
-        #endif
+        return storeActionCoordinator?.sendSplitAction(workspaceID: workspaceID, action: action) ?? false
+        #else
+        guard let store else { return false }
         return store.send(action)
+        #endif
     }
-
-    #if TOASTTY_HAS_GHOSTTY_KIT
-    /// Refreshes the split source panel CWD from its tracked process PID so the
-    /// reducer reads a fresh value when creating the new split panel.
-    func refreshSplitSourcePanelCWDBeforeSplit(workspaceID: UUID, store: AppStore) {
-        let state = store.state
-        guard let workspace = state.workspacesByID[workspaceID],
-              let sourcePanelID = resolvedActionPanelID(in: workspace),
-              let panelState = workspace.panels[sourcePanelID],
-              case .terminal = panelState else {
-            return
-        }
-        let now = Date()
-        guard shouldRunProcessCWDFallbackPoll(panelID: sourcePanelID, now: now) else {
-            return
-        }
-        recordProcessCWDFallbackPoll(panelID: sourcePanelID, now: now)
-
-        refreshWorkingDirectoryFromProcessIfNeeded(
-            panelID: sourcePanelID,
-            source: "pre_split_refresh"
-        )
-    }
-    #endif
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 private extension TerminalRuntimeRegistry {
-    func handleAppliedStoreAction(
-        _ action: AppAction,
-        previousState: AppState,
-        nextState: AppState
-    ) {
-        switch action {
-        case .splitFocusedSlot(workspaceID: let workspaceID, orientation: _):
-            registerPendingSplitSourceIfNeeded(
-                workspaceID: workspaceID,
-                previousState: previousState,
-                nextState: nextState
-            )
-        case .splitFocusedSlotInDirection(workspaceID: let workspaceID, direction: _):
-            registerPendingSplitSourceIfNeeded(
-                workspaceID: workspaceID,
-                previousState: previousState,
-                nextState: nextState
-            )
-        case .toggleFocusedPanelMode(workspaceID: let workspaceID):
-            scheduleFocusedPanelFocusRestoreIfNeeded(
-                workspaceID: workspaceID,
-                previousState: previousState,
-                nextState: nextState
-            )
-        default:
-            break
-        }
-    }
-
     func configureGhosttyActionHandler() {
         GhosttyRuntimeManager.shared.actionHandler = self
     }
 
     func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
         controllerStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
-    }
-
-    func registerPendingSplitSourceIfNeeded(workspaceID: UUID, previousState: AppState, nextState: AppState) {
-        controllerStore.registerPendingSplitSourceIfNeeded(
-            workspaceID: workspaceID,
-            previousState: previousState,
-            nextState: nextState
-        )
-    }
-
-    func scheduleFocusedPanelFocusRestoreIfNeeded(
-        workspaceID: UUID,
-        previousState: AppState,
-        nextState: AppState
-    ) {
-        guard selectedWorkspaceID(state: nextState) == workspaceID,
-              let previousWorkspace = previousState.workspacesByID[workspaceID],
-              let nextWorkspace = nextState.workspacesByID[workspaceID],
-              previousWorkspace.focusedPanelModeActive != nextWorkspace.focusedPanelModeActive else {
-            return
-        }
-
-        scheduleSelectedWorkspaceSlotFocusRestore()
     }
 
     func splitSourceSurfaceState(for newPanelID: UUID) -> TerminalSplitSourceSurfaceState {
@@ -496,12 +423,6 @@ private extension TerminalRuntimeRegistry {
 }
 #else
 private extension TerminalRuntimeRegistry {
-    func handleAppliedStoreAction(
-        _: AppAction,
-        previousState _: AppState,
-        nextState _: AppState
-    ) {}
-
     func configureGhosttyActionHandler() {}
 
     func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
