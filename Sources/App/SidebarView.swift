@@ -361,10 +361,9 @@ struct SidebarView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                sessionStatusIndicator(
-                    for: workspaceSessionStatus.status.kind,
-                    isVisible: showsUnreadIndicator
-                )
+                if showsUnreadIndicator {
+                    sessionStatusIndicator(for: workspaceSessionStatus.status.kind)
+                }
 
                 Text(workspaceSessionStatus.agent.rawValue)
                     .font(ToastyTheme.fontWorkspaceSessionAgent)
@@ -560,14 +559,13 @@ struct SidebarView: View {
             .truncationMode(.tail)
     }
 
-    private func sessionStatusIndicator(for kind: SessionStatusKind, isVisible: Bool) -> some View {
+    private func sessionStatusIndicator(for kind: SessionStatusKind) -> some View {
         let indicatorColor = ToastyTheme.sessionStatusIndicatorColor(for: kind)
 
         return Circle()
             .fill(indicatorColor)
             .frame(width: 7, height: 7)
             .shadow(color: indicatorColor.opacity(0.45), radius: 3, x: 0, y: 0)
-            .opacity(isVisible ? 1 : 0)
     }
 
     private func abbreviatedPathLabel(_ path: String?) -> String? {
