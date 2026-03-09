@@ -58,15 +58,28 @@ final class AppStore: ObservableObject {
         self.state = state
     }
 
+    func window(id windowID: UUID) -> WindowState? {
+        state.windows.first(where: { $0.id == windowID })
+    }
+
+    func selectedWorkspaceID(in windowID: UUID) -> UUID? {
+        guard let window = window(id: windowID) else { return nil }
+        return window.selectedWorkspaceID ?? window.workspaceIDs.first
+    }
+
+    func selectedWorkspace(in windowID: UUID) -> WorkspaceState? {
+        guard let workspaceID = selectedWorkspaceID(in: windowID) else { return nil }
+        return state.workspacesByID[workspaceID]
+    }
+
     var selectedWindow: WindowState? {
         guard let selectedWindowID = state.selectedWindowID else { return nil }
-        return state.windows.first(where: { $0.id == selectedWindowID })
+        return window(id: selectedWindowID)
     }
 
     var selectedWorkspace: WorkspaceState? {
-        guard let window = selectedWindow,
-              let workspaceID = window.selectedWorkspaceID else { return nil }
-        return state.workspacesByID[workspaceID]
+        guard let selectedWindowID = state.selectedWindowID else { return nil }
+        return selectedWorkspace(in: selectedWindowID)
     }
 
     @discardableResult

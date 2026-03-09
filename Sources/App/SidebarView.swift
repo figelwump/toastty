@@ -3,6 +3,7 @@ import CoreState
 import SwiftUI
 
 struct SidebarView: View {
+    let windowID: UUID
     @ObservedObject var store: AppStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     @State private var renamingWorkspaceID: UUID?
@@ -30,14 +31,14 @@ struct SidebarView: View {
             .padding(.bottom, 6)
             .accessibilityIdentifier("sidebar.workspaces.title")
 
-            if let window = store.selectedWindow {
+            if let window = store.window(id: windowID) {
                 ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
                     if let workspace = store.state.workspacesByID[workspaceID] {
                         workspaceRow(
                             workspaceID: workspaceID,
                             workspace: workspace,
                             shortcutLabel: "⌘\(index + 1)",
-                            isSelected: window.selectedWorkspaceID == workspaceID,
+                            isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
                             index: index + 1
                         )
                     }
@@ -52,7 +53,6 @@ struct SidebarView: View {
 
             // New workspace button — full-width, matches workspace item sizing
             Button {
-                guard let windowID = store.selectedWindow?.id else { return }
                 cancelWorkspaceRename()
                 store.send(.createWorkspace(windowID: windowID, title: nil))
             } label: {
@@ -269,7 +269,6 @@ struct SidebarView: View {
             return
         }
 
-        guard let windowID = store.selectedWindow?.id else { return }
         cancelWorkspaceRename()
         store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }
@@ -309,7 +308,7 @@ struct SidebarView: View {
     private func scheduleWorkspaceSlotFocusRestore() {
         // Renaming intentionally restores focus back to the terminal even if the
         // field editor is still unwinding from the just-finished text edit.
-        guard let workspaceID = store.selectedWorkspace?.id else { return }
+        guard let workspaceID = store.selectedWorkspace(in: windowID)?.id else { return }
         terminalRuntimeContext?.scheduleWorkspaceFocusRestore(
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: false

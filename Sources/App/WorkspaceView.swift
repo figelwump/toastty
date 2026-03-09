@@ -3,6 +3,7 @@ import CoreState
 import SwiftUI
 
 struct WorkspaceView: View {
+    let windowID: UUID
     @ObservedObject var store: AppStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -18,7 +19,7 @@ struct WorkspaceView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
 
-            if let window = store.selectedWindow {
+            if let window = store.window(id: windowID) {
                 workspaceStack(for: window)
             } else {
                 EmptyStateView()
@@ -46,7 +47,7 @@ struct WorkspaceView: View {
 
     private var topBar: some View {
         HStack(spacing: 6) {
-            Text(store.selectedWorkspace?.title ?? "")
+            Text(selectedWorkspace?.title ?? "")
                 .font(ToastyTheme.fontTitle)
                 .foregroundStyle(ToastyTheme.primaryText)
                 .accessibilityIdentifier("topbar.workspace.title")
@@ -78,7 +79,7 @@ struct WorkspaceView: View {
     }
 
     private func split(orientation: SplitOrientation) {
-        guard let workspaceID = store.selectedWorkspace?.id else { return }
+        guard let workspaceID = selectedWorkspace?.id else { return }
         terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
     }
 
@@ -92,7 +93,7 @@ struct WorkspaceView: View {
         return ZStack {
             ForEach(window.workspaceIDs, id: \.self) { workspaceID in
                 if let workspace = store.state.workspacesByID[workspaceID] {
-                    let isSelected = window.selectedWorkspaceID == workspaceID
+                    let isSelected = store.selectedWorkspaceID(in: windowID) == workspaceID
                     workspaceContent(for: workspace, isSelected: isSelected)
                         // Keep non-selected workspaces mounted so background terminal
                         // surfaces can continue emitting runtime actions (for example
@@ -161,9 +162,9 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func auxToggle(title: String, systemImage: String, kind: PanelKind, identifier: String) -> some View {
-        let isOn = store.selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
+        let isOn = selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
         topBarButton(title: title, systemImage: systemImage, active: isOn) {
-            guard let workspaceID = store.selectedWorkspace?.id else { return }
+            guard let workspaceID = selectedWorkspace?.id else { return }
             store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: kind))
         }
         .disabled(isFocusedPanelModeActive)
@@ -176,18 +177,18 @@ struct WorkspaceView: View {
         topBarButton(title: isOn ? "Restore Layout" : "Focus Panel", icon: {
             FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.inactiveText)
         }, active: isOn) {
-            guard let workspaceID = store.selectedWorkspace?.id else { return }
+            guard let workspaceID = selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         }
         .accessibilityIdentifier(identifier)
     }
 
     private var isFocusedPanelModeActive: Bool {
-        store.selectedWorkspace?.focusedPanelModeActive ?? false
+        selectedWorkspace?.focusedPanelModeActive ?? false
     }
 
     private var selectedWorkspaceUnreadSignature: SelectedWorkspaceUnreadSignature? {
-        guard let workspace = store.selectedWorkspace else { return nil }
+        guard let workspace = selectedWorkspace else { return nil }
         return SelectedWorkspaceUnreadSignature(
             workspaceID: workspace.id,
             focusedPanelID: workspace.focusedPanelID,
@@ -199,7 +200,7 @@ struct WorkspaceView: View {
         focusedUnreadClearTask?.cancel()
         focusedUnreadClearTask = nil
 
-        guard let workspace = store.selectedWorkspace,
+        guard let workspace = selectedWorkspace,
               let focusedPanelID = workspace.focusedPanelID,
               workspace.unreadPanelIDs.contains(focusedPanelID) else {
             return
@@ -209,7 +210,7 @@ struct WorkspaceView: View {
         focusedUnreadClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.focusedUnreadClearDelayNanoseconds)
             guard Task.isCancelled == false else { return }
-            guard let currentWorkspace = store.selectedWorkspace,
+            guard let currentWorkspace = store.selectedWorkspace(in: windowID),
                   currentWorkspace.id == workspaceID,
                   currentWorkspace.focusedPanelID == focusedPanelID,
                   currentWorkspace.unreadPanelIDs.contains(focusedPanelID) else {
@@ -217,6 +218,10 @@ struct WorkspaceView: View {
             }
             _ = store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: focusedPanelID))
         }
+    }
+
+    private var selectedWorkspace: WorkspaceState? {
+        store.selectedWorkspace(in: windowID)
     }
 
     private func topBarButton(
