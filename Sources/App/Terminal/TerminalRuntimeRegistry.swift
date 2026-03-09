@@ -63,17 +63,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
     private var activityInferenceService: TerminalActivityInferenceService?
-    private var previousSelectedWorkspaceID: UUID?
-    private var visibilityPulseTask: Task<Void, Never>?
-    private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
+    private var workspaceMaintenanceService: TerminalWorkspaceMaintenanceService?
     #endif
 
     deinit {
         selectedSlotFocusRestoreTask?.cancel()
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        visibilityPulseTask?.cancel()
-        processWorkingDirectoryRefreshTask?.cancel()
-        #endif
     }
 
     func bind(store: AppStore) {
@@ -94,18 +88,29 @@ final class TerminalRuntimeRegistry: ObservableObject {
             )
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
-        metadataService = TerminalMetadataService(store: store, registry: self)
-        actionRouter = TerminalActionRouter(store: store, registry: self)
-        activityInferenceService = TerminalActivityInferenceService(
+        let metadataService = TerminalMetadataService(store: store, registry: self)
+        let activityInferenceService = TerminalActivityInferenceService(
             store: store,
             readVisibleText: { [weak self] panelID in
                 self?.automationReadVisibleText(panelID: panelID)
             }
         )
-        syncWorkspaceActivitySubtextFromService()
+        self.metadataService = metadataService
+        self.activityInferenceService = activityInferenceService
+        actionRouter = TerminalActionRouter(store: store, registry: self)
+        workspaceMaintenanceService = TerminalWorkspaceMaintenanceService(
+            store: store,
+            controllerStore: controllerStore,
+            metadataService: metadataService,
+            activityInferenceService: activityInferenceService,
+            updateWorkspaceActivitySubtext: { [weak self] nextSubtextByWorkspaceID in
+                self?.setWorkspaceActivitySubtext(nextSubtextByWorkspaceID)
+            }
+        )
+        workspaceMaintenanceService?.publishWorkspaceActivitySubtext()
+        workspaceMaintenanceService?.startProcessWorkingDirectoryRefreshLoopIfNeeded()
         #endif
         configureGhosttyActionHandler()
-        startProcessWorkingDirectoryRefreshLoopIfNeeded()
     }
 
     @discardableResult
@@ -148,23 +153,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
         #if TOASTTY_HAS_GHOSTTY_KIT
         let removedPanelIDs = controllerStore.synchronizeLivePanels(livePanelIDs)
-        for panelID in removedPanelIDs {
-            metadataService?.invalidate(panelID: panelID)
-            activityInferenceService?.invalidate(panelID: panelID)
-        }
+        workspaceMaintenanceService?.synchronize(
+            state: state,
+            livePanelIDs: livePanelIDs,
+            removedPanelIDs: removedPanelIDs
+        )
         #else
         _ = controllerStore.invalidateControllers(excluding: livePanelIDs)
         #endif
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        metadataService?.synchronizeLivePanels(livePanelIDs)
-        activityInferenceService?.synchronizeLivePanels(
-            livePanelIDs,
-            liveWorkspaceIDs: Set(state.workspacesByID.keys)
-        )
-        syncWorkspaceActivitySubtextFromService()
-        #endif
-
-        handleGhosttyWorkspaceSelectionPulseIfNeeded(state: state)
     }
 
     func applyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
@@ -463,10 +459,6 @@ private extension TerminalRuntimeRegistry {
         GhosttyRuntimeManager.shared.actionHandler = self
     }
 
-    func handleGhosttyWorkspaceSelectionPulseIfNeeded(state: AppState) {
-        pulseVisibleSurfacesIfWorkspaceSwitched(state: state)
-    }
-
     func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
         controllerStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
     }
@@ -512,11 +504,7 @@ private extension TerminalRuntimeRegistry {
 
     func configureGhosttyActionHandler() {}
 
-    func handleGhosttyWorkspaceSelectionPulseIfNeeded(state _: AppState) {}
-
     func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
-
-    func startProcessWorkingDirectoryRefreshLoopIfNeeded() {}
 }
 #endif
 
@@ -671,9 +659,7 @@ private extension TerminalRuntimeRegistry {
 
     func unregister(surface: ghostty_surface_t, for panelID: UUID) {
         controllerStore.unregister(surface: surface, for: panelID)
-        metadataService?.invalidate(panelID: panelID)
-        activityInferenceService?.invalidate(panelID: panelID)
-        syncWorkspaceActivitySubtextFromService()
+        workspaceMaintenanceService?.handleSurfaceUnregister(panelID: panelID)
     }
 
     func prefersNativeCWDSignal(panelID: UUID, now: Date = Date()) -> Bool {
@@ -717,158 +703,7 @@ private extension TerminalRuntimeRegistry {
         metadataService?.refreshWorkingDirectoryFromProcessIfNeeded(panelID: panelID, source: source)
     }
 
-    func startProcessWorkingDirectoryRefreshLoopIfNeeded() {
-        guard processWorkingDirectoryRefreshTask == nil else { return }
-        processWorkingDirectoryRefreshTask = Task { @MainActor [weak self] in
-            while Task.isCancelled == false {
-                guard let self else { return }
-                guard let store else {
-                    try? await Task.sleep(nanoseconds: 1_000_000_000)
-                    continue
-                }
-
-                self.refreshVisibleTerminalWorkingDirectoriesFromProcess(state: store.state)
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-        }
-    }
-
-    func refreshVisibleTerminalWorkingDirectoriesFromProcess(state: AppState) {
-        refreshSelectedWorkspaceTerminalMetadataFromProcess(state: state)
-
-        let selectedPanelWorkspaceIDs = trackedSelectedWorkspaceVisibleTerminalPanelIDs(state: state)
-        let backgroundPanelWorkspaceIDs = trackedBackgroundTerminalPanelIDs(state: state)
-        activityInferenceService?.refreshVisibleTextInference(
-            state: state,
-            selectedPanelWorkspaceIDs: selectedPanelWorkspaceIDs,
-            backgroundPanelWorkspaceIDs: backgroundPanelWorkspaceIDs
-        )
-        syncWorkspaceActivitySubtextFromService()
-    }
-
-    func refreshSelectedWorkspaceTerminalMetadataFromProcess(state: AppState) {
-        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
-              let workspace = state.workspacesByID[selectedWorkspaceID] else {
-            return
-        }
-
-        let panelIDs = visibleTerminalPanelIDs(in: workspace)
-        guard panelIDs.isEmpty == false else { return }
-        let now = Date()
-        for panelID in panelIDs {
-            if shouldRunProcessCWDFallbackPoll(panelID: panelID, now: now) {
-                recordProcessCWDFallbackPoll(panelID: panelID, now: now)
-                _ = refreshWorkingDirectoryFromProcessIfNeeded(
-                    panelID: panelID,
-                    source: "process_poll"
-                )
-            }
-        }
-    }
-
-    func trackedSelectedWorkspaceVisibleTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
-        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
-              let workspace = state.workspacesByID[selectedWorkspaceID] else {
-            return [:]
-        }
-
-        var workspaceByPanelID: [UUID: UUID] = [:]
-        for panelID in visibleTerminalPanelIDs(in: workspace) {
-            guard controllerStore.containsController(for: panelID) else { continue }
-            workspaceByPanelID[panelID] = selectedWorkspaceID
-        }
-        return workspaceByPanelID
-    }
-
-    func trackedBackgroundTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
-        let selectedWorkspaceID = selectedWorkspaceID(state: state)
-        var workspaceByPanelID: [UUID: UUID] = [:]
-        for workspace in state.workspacesByID.values where workspace.id != selectedWorkspaceID {
-            for (panelID, panelState) in workspace.panels {
-                guard case .terminal = panelState else { continue }
-                guard controllerStore.containsController(for: panelID) else { continue }
-                workspaceByPanelID[panelID] = workspace.id
-            }
-        }
-        return workspaceByPanelID
-    }
-
-    func pulseVisibleSurfacesIfWorkspaceSwitched(state: AppState) {
-        let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
-        guard currentSelectedWorkspaceID != previousSelectedWorkspaceID else { return }
-
-        visibilityPulseTask?.cancel()
-        visibilityPulseTask = nil
-
-        guard let currentSelectedWorkspaceID else {
-            previousSelectedWorkspaceID = nil
-            return
-        }
-
-        guard state.workspacesByID[currentSelectedWorkspaceID] != nil else {
-            // Do not consume the transition until workspace data is available.
-            return
-        }
-
-        previousSelectedWorkspaceID = currentSelectedWorkspaceID
-        scheduleVisibilityPulse(for: currentSelectedWorkspaceID)
-    }
-
-    func scheduleVisibilityPulse(for workspaceID: UUID) {
-        ToasttyLog.debug(
-            "Scheduling Ghostty visibility refresh pulse after workspace switch",
-            category: .ghostty,
-            metadata: ["workspace_id": workspaceID.uuidString]
-        )
-
-        visibilityPulseTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            // Defer pulses so SwiftUI/NSViewRepresentable attachment and layout can settle.
-            await Task.yield()
-            guard Task.isCancelled == false else { return }
-            self.pulseVisibleSurfaces(in: workspaceID)
-
-            await Task.yield()
-            guard Task.isCancelled == false else { return }
-            self.pulseVisibleSurfaces(in: workspaceID)
-        }
-    }
-
-    func pulseVisibleSurfaces(in workspaceID: UUID) {
-        guard let store else { return }
-        let currentState = store.state
-        guard selectedWorkspaceID(state: currentState) == workspaceID,
-              let workspace = currentState.workspacesByID[workspaceID] else {
-            return
-        }
-
-        let panelIDs = visibleTerminalPanelIDs(in: workspace)
-        guard panelIDs.isEmpty == false else { return }
-        pulseSurfaces(panelIDs: panelIDs)
-    }
-
-    func visibleTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
-        var panelIDs: Set<UUID> = []
-        for leaf in workspace.layoutTree.allSlotInfos {
-            let selectedPanelID = leaf.panelID
-            guard let panelState = workspace.panels[selectedPanelID],
-                  case .terminal = panelState else {
-                continue
-            }
-            panelIDs.insert(selectedPanelID)
-        }
-        return panelIDs
-    }
-
-    func pulseSurfaces(panelIDs: Set<UUID>) {
-        for panelID in panelIDs {
-            controllerStore.existingController(for: panelID)?.pulseVisibilityRefresh()
-        }
-    }
-
-    func syncWorkspaceActivitySubtextFromService() {
-        let nextSubtextByWorkspaceID = activityInferenceService?.workspaceActivitySubtextByID ?? [:]
+    func setWorkspaceActivitySubtext(_ nextSubtextByWorkspaceID: [UUID: String]) {
         if workspaceActivitySubtextByID != nextSubtextByWorkspaceID {
             workspaceActivitySubtextByID = nextSubtextByWorkspaceID
         }

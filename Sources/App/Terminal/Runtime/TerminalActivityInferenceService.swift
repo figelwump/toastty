@@ -51,16 +51,20 @@ final class TerminalActivityInferenceService {
         panelActivityByPanelID = panelActivityByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
+        refreshWorkspaceActivitySubtext(liveWorkspaceIDs: liveWorkspaceIDs)
+    }
+
+    func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
+        workspaceActivitySubtextByID[workspaceID]
+    }
+
+    func refreshWorkspaceActivitySubtext(liveWorkspaceIDs: Set<UUID>) {
         let now = Date()
         pruneStalePanelActivity(now: now)
         workspaceActivitySubtextByID = nextWorkspaceActivitySubtext(
             liveWorkspaceIDs: liveWorkspaceIDs,
             now: now
         )
-    }
-
-    func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
-        workspaceActivitySubtextByID[workspaceID]
     }
 
     func refreshVisibleTextInference(
@@ -290,13 +294,11 @@ final class TerminalActivityInferenceService {
     }
 
     private func updateWorkspaceActivitySubtext(state: AppState, now: Date) {
-        let nextSubtextByWorkspaceID = nextWorkspaceActivitySubtext(
+        pruneStalePanelActivity(now: now)
+        workspaceActivitySubtextByID = nextWorkspaceActivitySubtext(
             liveWorkspaceIDs: Set(state.workspacesByID.keys),
             now: now
         )
-        if workspaceActivitySubtextByID != nextSubtextByWorkspaceID {
-            workspaceActivitySubtextByID = nextSubtextByWorkspaceID
-        }
     }
 
     private func restoreTitleBeforeAgentInferenceIfNeeded(
