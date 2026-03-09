@@ -178,6 +178,7 @@ struct ToasttyApp: App {
     @NSApplicationDelegateAdaptor(ReloadConfigurationMenuIconInstaller.self)
     private var reloadConfigurationMenuIconInstaller
     @StateObject private var store: AppStore
+    @StateObject private var agentCatalogStore: AgentCatalogStore
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
     private let automationLifecycle: AutomationLifecycle?
@@ -200,6 +201,7 @@ struct ToasttyApp: App {
             state: bootstrap.state,
             persistTerminalFontPreference: persistTerminalFontPreference
         )
+        let agentCatalogStore = AgentCatalogStore()
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         terminalRuntimeRegistry.bind(store: store)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -226,6 +228,7 @@ struct ToasttyApp: App {
         )
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
+        _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
@@ -257,7 +260,7 @@ struct ToasttyApp: App {
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
-            socketPath: socketPath
+            agentCatalogProvider: agentCatalogStore
         )
         do {
             automationSocketServer = try AutomationSocketServer(
@@ -351,15 +354,23 @@ struct ToasttyApp: App {
             }
 
             CommandMenu("Agent") {
-                Button("Run Codex") {
-                    launchAgentFromSelection(.codex)
+                if agentCatalogStore.catalog.profiles.isEmpty {
+                    Button("No Agents Configured") {}
+                        .disabled(true)
+                } else {
+                    ForEach(agentCatalogStore.catalog.profiles) { profile in
+                        Button(profile.displayName) {
+                            launchAgentFromSelection(profile.id)
+                        }
+                        .disabled(!canLaunchAgent(profileID: profile.id))
+                    }
                 }
-                .disabled(!canLaunchAgentFromSelection)
 
-                Button("Run Claude Code") {
-                    launchAgentFromSelection(.claude)
+                Divider()
+
+                Button("Manage Agents…") {
+                    openAgentProfilesConfiguration()
                 }
-                .disabled(!canLaunchAgentFromSelection)
             }
 
             #if !TOASTTY_HAS_GHOSTTY_KIT
@@ -415,23 +426,13 @@ struct ToasttyApp: App {
         _ = focusedPanelCommandController.closeFocusedPanel()
     }
 
-    private var canLaunchAgentFromSelection: Bool {
-        return agentLaunchService.canLaunchAgent()
+    private func canLaunchAgent(profileID: String) -> Bool {
+        agentLaunchService.canLaunchAgent(profileID: profileID)
     }
 
-    private func launchAgentFromSelection(_ agent: AgentKind) {
-        guard automationSocketServer != nil else {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Run Agent"
-            alert.informativeText = "Toastty could not start its local event socket, so agent status updates are unavailable. Restart the app and try again."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
-        }
-
+    private func launchAgentFromSelection(_ profileID: String) {
         do {
-            _ = try agentLaunchService.launch(agent: agent)
+            _ = try agentLaunchService.launch(profileID: profileID)
         } catch {
             let alert = NSAlert()
             alert.messageText = "Unable to Run Agent"
@@ -443,24 +444,56 @@ struct ToasttyApp: App {
     }
 
     private var supportsConfigurationReload: Bool {
-        #if TOASTTY_HAS_GHOSTTY_KIT
         true
-        #else
-        false
-        #endif
     }
 
     @MainActor
     private func reloadConfiguration() {
+        var failureMessages: [String] = []
+
+        switch agentCatalogStore.reload() {
+        case .success:
+            break
+        case .failure(let error):
+            failureMessages.append(error.localizedDescription)
+        }
+
         #if TOASTTY_HAS_GHOSTTY_KIT
         let runtimeManager = GhosttyRuntimeManager.shared
-        guard runtimeManager.reloadConfiguration() else { return }
-        let toasttyConfig = ToasttyConfigStore.load()
-        _ = store.send(.setConfiguredTerminalFont(points: runtimeManager.configuredTerminalFontPoints))
-        if toasttyConfig.terminalFontSizePoints == nil {
-            _ = store.send(.resetGlobalTerminalFont)
+        if runtimeManager.reloadConfiguration() {
+            let toasttyConfig = ToasttyConfigStore.load()
+            _ = store.send(.setConfiguredTerminalFont(points: runtimeManager.configuredTerminalFontPoints))
+            if toasttyConfig.terminalFontSizePoints == nil {
+                _ = store.send(.resetGlobalTerminalFont)
+            }
+        } else {
+            failureMessages.append("Failed to reload embedded Ghostty configuration.")
         }
         #endif
+
+        guard failureMessages.isEmpty == false else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Unable to Reload Configuration"
+        alert.informativeText = failureMessages.joined(separator: "\n")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    @MainActor
+    private func openAgentProfilesConfiguration() {
+        do {
+            try AgentProfilesFile.ensureTemplateExists()
+            NSWorkspace.shared.open(AgentProfilesFile.fileURL())
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Agent Profiles"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     @MainActor

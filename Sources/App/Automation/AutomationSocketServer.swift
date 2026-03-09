@@ -585,21 +585,23 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "automation.launch_agent":
             try requireAutomationMode(for: command)
-            guard let agentRaw = payload.string("agent"),
-                  let agent = AgentKind(rawValue: agentRaw) else {
-                throw AutomationSocketError.invalidPayload("agent must be one of: claude, codex")
+            guard let profileID = normalizedOptionalText(payload.string("profileID"))
+                ?? normalizedOptionalText(payload.string("agent")) else {
+                throw AutomationSocketError.invalidPayload("profileID is required")
             }
 
             let panelID = payload.uuid("panelID")
             let workspaceID = payload.uuid("workspaceID")
             let result = try agentLaunchService.launch(
-                agent: agent,
+                profileID: profileID,
                 workspaceID: workspaceID,
                 panelID: panelID
             )
             stateVersion += 1
             var response: [String: AutomationJSONValue] = [
+                "profileID": .string(result.agent.rawValue),
                 "agent": .string(result.agent.rawValue),
+                "displayName": .string(result.displayName),
                 "sessionID": .string(result.sessionID),
                 "windowID": .string(result.windowID.uuidString),
                 "workspaceID": .string(result.workspaceID.uuidString),
@@ -688,7 +690,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             let panelID = try event.requiredPanelID()
             guard let agentRaw = event.payload.string("agent"),
                   let agent = AgentKind(rawValue: agentRaw) else {
-                throw AutomationSocketError.invalidPayload("agent must be one of: claude, codex")
+                throw AutomationSocketError.invalidPayload("agent must be a lowercase agent ID")
             }
             guard let location = locatePanel(panelID) else {
                 throw AutomationSocketError.invalidPayload("panelID does not exist")

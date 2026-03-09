@@ -6,6 +6,32 @@ import Testing
 @MainActor
 struct SessionRuntimeStoreTests {
     @Test
+    func stopSessionForPanelIfActiveStopsCurrentSession() {
+        let store = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        store.startSession(
+            sessionID: "sess-active",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        let didStop = store.stopSessionForPanelIfActive(
+            panelID: panelID,
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(didStop)
+        #expect(store.sessionRegistry.activeSession(for: panelID) == nil)
+    }
+
+    @Test
     func stopSessionForPanelIfOlderThanStopsEligibleSession() {
         let store = SessionRuntimeStore()
         let panelID = UUID()

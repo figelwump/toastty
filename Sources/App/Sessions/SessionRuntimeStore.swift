@@ -135,6 +135,14 @@ final class SessionRuntimeStore: ObservableObject {
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
+    func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool {
+        guard sessionRegistry.activeSession(for: panelID) != nil else {
+            return false
+        }
+        stopSessionForPanel(panelID: panelID, at: now)
+        return true
+    }
+
     func stopSessionForPanelIfOlderThan(
         panelID: UUID,
         minimumRuntime: TimeInterval,

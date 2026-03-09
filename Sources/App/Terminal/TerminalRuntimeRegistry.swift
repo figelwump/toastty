@@ -8,6 +8,7 @@ import GhosttyKit
 
 @MainActor
 protocol TerminalSessionLifecycleTracking: AnyObject {
+    func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool
     func stopSessionForPanelIfOlderThan(panelID: UUID, minimumRuntime: TimeInterval, at now: Date) -> Bool
 }
 
@@ -1753,6 +1754,9 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         state: AppState,
         store: AppStore
     ) -> Bool {
+        let now = Date()
+        _ = sessionLifecycleTracker?.stopSessionForPanelIfActive(panelID: panelID, at: now)
+
         guard prefersNativeCWDSignal(panelID: panelID) == false else {
             return true
         }

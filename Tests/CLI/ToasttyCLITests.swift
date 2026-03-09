@@ -6,6 +6,104 @@ import Testing
 
 struct ToasttyCLITests {
     @Test
+    func agentRunParsesProfileAndLaunchContext() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "agent", "run", "codex",
+                "--session", "sess-123",
+                "--panel", panelID.uuidString,
+            ],
+            environment: [:]
+        )
+
+        guard case .agentRun(let command) = invocation.command else {
+            Issue.record("expected agent run command")
+            return
+        }
+
+        #expect(command.profileID == "codex")
+        #expect(command.sessionID == "sess-123")
+        #expect(command.panelID == panelID)
+    }
+
+    @Test
+    func agentRunPreparesResolvedProfileWithToasttyContext() throws {
+        let tempHome = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-cli-agent-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHome, withIntermediateDirectories: true)
+
+        let agentsFileURL = AgentProfilesFile.fileURL(homeDirectoryPath: tempHome.path)
+        try FileManager.default.createDirectory(at: agentsFileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try """
+        [codex]
+        displayName = "Codex"
+        argv = ["codex", "--model", "gpt-5-codex"]
+        """.write(to: agentsFileURL, atomically: true, encoding: .utf8)
+
+        let panelID = UUID()
+        let prepared = try AgentRunCommandRunner.prepareProcess(
+            command: AgentRunCommand(profileID: "codex", sessionID: "sess-123", panelID: panelID),
+            socketPath: "/tmp/toastty.sock",
+            environment: ["PATH": "/usr/bin"],
+            homeDirectoryPath: tempHome.path,
+            currentDirectoryPath: "/tmp/project",
+            executablePath: "/Applications/Toastty.app/Contents/MacOS/toastty"
+        )
+
+        #expect(prepared.argv == ["codex", "--model", "gpt-5-codex"])
+        #expect(prepared.environment["TOASTTY_AGENT"] == "codex")
+        #expect(prepared.environment["TOASTTY_SESSION_ID"] == "sess-123")
+        #expect(prepared.environment["TOASTTY_PANEL_ID"] == panelID.uuidString)
+        #expect(prepared.environment["TOASTTY_SOCKET_PATH"] == "/tmp/toastty.sock")
+        #expect(prepared.environment["TOASTTY_CLI_PATH"] == "/Applications/Toastty.app/Contents/MacOS/toastty")
+        #expect(prepared.environment["TOASTTY_CWD"] == "/tmp/project")
+    }
+
+    @Test
+    func agentRunRejectsMissingLaunchContext() {
+        do {
+            _ = try ToasttyCLI.parse(
+                arguments: [
+                    "agent", "run", "codex",
+                ],
+                environment: [:]
+            )
+            Issue.record("expected parse failure")
+        } catch let error as ToasttyCLIError {
+            guard case .usage(let message) = error else {
+                Issue.record("expected usage error")
+                return
+            }
+            #expect(message.contains("--session is required"))
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
+    @Test
+    func agentRunCanResolveLaunchContextFromEnvironment() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "agent", "run", "codex",
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+                "TOASTTY_PANEL_ID": panelID.uuidString,
+            ]
+        )
+
+        guard case .agentRun(let command) = invocation.command else {
+            Issue.record("expected agent run command")
+            return
+        }
+
+        #expect(command.sessionID == "sess-env")
+        #expect(command.panelID == panelID)
+    }
+
+    @Test
     func sessionStartGeneratesSessionIDWhenOmitted() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(
@@ -88,6 +186,27 @@ struct ToasttyCLITests {
         #expect(kind == .working)
         #expect(summary == "editing 3 files")
         #expect(detail == nil)
+    }
+
+    @Test
+    func sessionStartAcceptsCustomAgentIDs() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "start",
+                "--agent", "gemini",
+                "--panel", panelID.uuidString,
+            ],
+            environment: [:]
+        )
+
+        guard case .sessionStart(_, let agent, let parsedPanelID, _, _) = invocation.command else {
+            Issue.record("expected session start command")
+            return
+        }
+
+        #expect(agent.rawValue == "gemini")
+        #expect(parsedPanelID == panelID)
     }
 
     @Test

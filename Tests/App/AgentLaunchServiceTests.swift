@@ -11,6 +11,7 @@ struct AgentLaunchServiceTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
+        let agentCatalogProvider = TestAgentCatalogProvider()
 
         let workspace = try #require(store.selectedWorkspace)
         let panelID = try #require(workspace.focusedPanelID)
@@ -22,15 +23,16 @@ struct AgentLaunchServiceTests {
             store: store,
             terminalCommandRouter: terminalRouter,
             sessionRuntimeStore: sessionRuntimeStore,
-            socketPath: "/tmp/toastty socket.sock",
+            agentCatalogProvider: agentCatalogProvider,
             nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) },
             cliExecutablePathProvider: { "/bin/sh" }
         )
 
-        let result = try service.launch(agent: .codex)
+        let result = try service.launch(profileID: "codex")
         let activeSession = try #require(sessionRuntimeStore.sessionRegistry.activeSession(sessionID: result.sessionID))
 
         #expect(result.agent == .codex)
+        #expect(result.displayName == "Codex")
         #expect(result.panelID == panelID)
         #expect(result.cwd == cwd)
         #expect(result.repoRoot == projectRoot.path)
@@ -39,14 +41,11 @@ struct AgentLaunchServiceTests {
         #expect(activeSession.repoRoot == projectRoot.path)
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
-        #expect(injectedCommand.contains("TOASTTY_AGENT=codex"))
-        #expect(injectedCommand.contains("TOASTTY_PANEL_ID=\(panelID.uuidString)"))
-        #expect(injectedCommand.contains("TOASTTY_SESSION_ID=\(result.sessionID)"))
-        #expect(injectedCommand.contains("TOASTTY_SOCKET_PATH='/tmp/toastty socket.sock'"))
-        #expect(injectedCommand.contains("TOASTTY_CWD=\(cwd)"))
-        #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=\(projectRoot.path)"))
-        #expect(injectedCommand.contains("TOASTTY_CLI_PATH=/bin/sh"))
-        #expect(injectedCommand.hasSuffix("codex\n"))
+        #expect(injectedCommand.contains("/bin/sh"))
+        #expect(injectedCommand.contains("agent run codex"))
+        #expect(injectedCommand.contains("--panel \(panelID.uuidString)"))
+        #expect(injectedCommand.contains("--session \(result.sessionID)"))
+        #expect(injectedCommand.hasSuffix("\n"))
     }
 
     @Test
@@ -56,17 +55,18 @@ struct AgentLaunchServiceTests {
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
         terminalRouter.defaultVisibleText = "vishal ~/toastty % npm run dev"
+        let agentCatalogProvider = TestAgentCatalogProvider()
 
         let service = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRouter,
             sessionRuntimeStore: sessionRuntimeStore,
-            socketPath: "/tmp/toastty.sock",
+            agentCatalogProvider: agentCatalogProvider,
             cliExecutablePathProvider: { "/bin/sh" }
         )
 
         #expect(throws: AgentLaunchError.panelBusy(runningCommand: "npm run dev")) {
-            try service.launch(agent: .claude)
+            try service.launch(profileID: "claude")
         }
     }
 

@@ -12,6 +12,7 @@ extension TerminalRuntimeRegistry: TerminalCommandRouting {}
 
 struct AgentLaunchResult: Equatable {
     let agent: AgentKind
+    let displayName: String
     let sessionID: String
     let windowID: UUID
     let workspaceID: UUID
@@ -23,6 +24,8 @@ struct AgentLaunchResult: Equatable {
 
 enum AgentLaunchError: LocalizedError, Equatable {
     case serviceUnavailable
+    case noProfilesConfigured
+    case profileNotFound(profileID: String)
     case noSelectedWorkspace
     case workspaceDoesNotExist
     case workspaceHasNoTerminalPanel
@@ -37,6 +40,10 @@ enum AgentLaunchError: LocalizedError, Equatable {
         switch self {
         case .serviceUnavailable:
             return "Agent launch is unavailable."
+        case .noProfilesConfigured:
+            return "No agents are configured. Edit ~/.toastty/agents.toml and try again."
+        case .profileNotFound(let profileID):
+            return "Toastty could not find an agent profile named '\(profileID)' in ~/.toastty/agents.toml."
         case .noSelectedWorkspace:
             return "Select a workspace with a terminal panel before launching an agent."
         case .workspaceDoesNotExist:
@@ -70,7 +77,7 @@ final class AgentLaunchService {
     private weak var store: AppStore?
     private weak var terminalCommandRouter: (any TerminalCommandRouting)?
     private weak var sessionRuntimeStore: SessionRuntimeStore?
-    private let socketPath: String
+    private let agentCatalogProvider: any AgentCatalogProviding
     private let fileManager: FileManager
     private let nowProvider: @Sendable () -> Date
     private let cliExecutablePathProvider: @Sendable () -> String?
@@ -79,7 +86,7 @@ final class AgentLaunchService {
         store: AppStore,
         terminalCommandRouter: any TerminalCommandRouting,
         sessionRuntimeStore: SessionRuntimeStore,
-        socketPath: String,
+        agentCatalogProvider: any AgentCatalogProviding,
         fileManager: FileManager = .default,
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath
@@ -87,42 +94,52 @@ final class AgentLaunchService {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
         self.sessionRuntimeStore = sessionRuntimeStore
-        self.socketPath = socketPath
+        self.agentCatalogProvider = agentCatalogProvider
         self.fileManager = fileManager
         self.nowProvider = nowProvider
         self.cliExecutablePathProvider = cliExecutablePathProvider
     }
 
-    func canLaunchAgent(workspaceID: UUID? = nil, panelID: UUID? = nil) -> Bool {
-        (try? resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)) != nil
+    func canLaunchAgent(profileID: String? = nil, workspaceID: UUID? = nil, panelID: UUID? = nil) -> Bool {
+        if let profileID {
+            guard agentCatalogProvider.catalog.profile(id: profileID) != nil else {
+                return false
+            }
+        } else if agentCatalogProvider.catalog.profiles.isEmpty {
+            return false
+        }
+        return (try? resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)) != nil
     }
 
     func launch(
-        agent: AgentKind,
+        profileID: String,
         workspaceID: UUID? = nil,
         panelID: UUID? = nil
     ) throws -> AgentLaunchResult {
         guard let terminalCommandRouter, let sessionRuntimeStore else {
             throw AgentLaunchError.serviceUnavailable
         }
+        guard agentCatalogProvider.catalog.profiles.isEmpty == false else {
+            throw AgentLaunchError.noProfilesConfigured
+        }
+        guard let launchProfile = agentCatalogProvider.catalog.profile(id: profileID) else {
+            throw AgentLaunchError.profileNotFound(profileID: profileID)
+        }
 
         let target = try resolveLaunchTarget(workspaceID: workspaceID, panelID: panelID)
         try ensurePanelAppearsInteractive(panelID: target.panelID, terminalCommandRouter: terminalCommandRouter)
 
         let sessionID = UUID().uuidString
-        let launchProfile = AgentLaunchProfile.builtin(for: agent)
-        let repoRoot = Self.inferRepoRoot(from: target.cwd, fileManager: fileManager)
+        guard let agent = AgentKind(rawValue: launchProfile.id) else {
+            throw AgentLaunchError.profileNotFound(profileID: launchProfile.id)
+        }
+        let repoRoot = RepositoryRootLocator.inferRepoRoot(from: target.cwd, fileManager: fileManager)
         let cliExecutablePath = try resolveCLIExecutablePath()
         let commandLine = ShellCommandRenderer.render(
-            argv: launchProfile.argv,
-            environment: launchEnvironment(
-                agent: agent,
-                sessionID: sessionID,
-                panelID: target.panelID,
-                cwd: target.cwd,
-                repoRoot: repoRoot,
-                cliExecutablePath: cliExecutablePath
-            )
+            cliExecutablePath: cliExecutablePath,
+            profileID: launchProfile.id,
+            sessionID: sessionID,
+            panelID: target.panelID
         )
         let now = nowProvider()
 
@@ -144,6 +161,7 @@ final class AgentLaunchService {
 
         return AgentLaunchResult(
             agent: agent,
+            displayName: launchProfile.displayName,
             sessionID: sessionID,
             windowID: target.windowID,
             workspaceID: target.workspaceID,
@@ -241,30 +259,6 @@ final class AgentLaunchService {
         }
     }
 
-    private func launchEnvironment(
-        agent: AgentKind,
-        sessionID: String,
-        panelID: UUID,
-        cwd: String?,
-        repoRoot: String?,
-        cliExecutablePath: String
-    ) -> [String: String] {
-        var environment: [String: String] = [
-            ToasttyLaunchContextEnvironment.agentKey: agent.rawValue,
-            ToasttyLaunchContextEnvironment.sessionIDKey: sessionID,
-            ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
-            ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
-            ToasttyLaunchContextEnvironment.cliPathKey: cliExecutablePath,
-        ]
-        if let cwd {
-            environment[ToasttyLaunchContextEnvironment.cwdKey] = cwd
-        }
-        if let repoRoot {
-            environment[ToasttyLaunchContextEnvironment.repoRootKey] = repoRoot
-        }
-        return environment
-    }
-
     private func resolveCLIExecutablePath() throws -> String {
         guard let candidatePath = normalizedNonEmpty(cliExecutablePathProvider()) else {
             throw AgentLaunchError.cliUnavailable(path: nil)
@@ -273,26 +267,6 @@ final class AgentLaunchService {
             throw AgentLaunchError.cliUnavailable(path: candidatePath)
         }
         return candidatePath
-    }
-
-    private static func inferRepoRoot(from cwd: String?, fileManager: FileManager) -> String? {
-        guard let cwd = normalizedNonEmpty(cwd) else { return nil }
-
-        var candidateURL = URL(fileURLWithPath: cwd, isDirectory: true)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-        while true {
-            let gitURL = candidateURL.appendingPathComponent(".git", isDirectory: false)
-            if fileManager.fileExists(atPath: gitURL.path) {
-                return candidateURL.path
-            }
-
-            let parentURL = candidateURL.deletingLastPathComponent()
-            if parentURL.path == candidateURL.path {
-                return nil
-            }
-            candidateURL = parentURL
-        }
     }
 
     private static func locatePanel(
@@ -329,29 +303,25 @@ private struct LaunchTarget {
     let cwd: String?
 }
 
-private struct AgentLaunchProfile {
-    let argv: [String]
-
-    static func builtin(for agent: AgentKind) -> Self {
-        switch agent {
-        case .claude:
-            return Self(argv: ["claude"])
-        case .codex:
-            return Self(argv: ["codex"])
-        }
-    }
-}
-
 private enum ShellCommandRenderer {
-    // Launch profiles stay argv-based internally. We only render a single shell
-    // command line at the terminal-injection boundary because the target shell
-    // is already running inside the panel.
-    static func render(argv: [String], environment: [String: String]) -> String {
-        let assignments = environment
-            .sorted { $0.key < $1.key }
-            .map { "\($0.key)=\(quote($0.value))" }
-        let command = argv.map(quote)
-        return (assignments + command).joined(separator: " ")
+    static func render(
+        cliExecutablePath: String,
+        profileID: String,
+        sessionID: String,
+        panelID: UUID
+    ) -> String {
+        let command = [
+            "exec",
+            quote(cliExecutablePath),
+            "agent",
+            "run",
+            quote(profileID),
+            "--session",
+            quote(sessionID),
+            "--panel",
+            quote(panelID.uuidString),
+        ]
+        return command.joined(separator: " ")
     }
 
     private static func quote(_ value: String) -> String {

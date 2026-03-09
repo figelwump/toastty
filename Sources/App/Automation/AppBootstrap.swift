@@ -20,6 +20,7 @@ enum AppBootstrap {
             arguments: processInfo.arguments,
             environment: processInfo.environment
         ) else {
+            ensureAgentProfilesTemplateExists()
             let layoutPersistenceContext = WorkspaceLayoutPersistenceContext.resolve(processInfo: processInfo)
             let state: AppState
             if let restored = layoutPersistenceContext.loadState() {
@@ -100,5 +101,20 @@ enum AppBootstrap {
             // intentionally bypass user layout persistence in this mode.
             layoutPersistenceContext: nil
         )
+    }
+
+    private static func ensureAgentProfilesTemplateExists() {
+        do {
+            try AgentProfilesFile.ensureTemplateExists()
+        } catch {
+            ToasttyLog.warning(
+                "Failed to ensure agent profiles template exists",
+                category: .bootstrap,
+                metadata: [
+                    "path": AgentProfilesFile.fileURL().path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
     }
 }
