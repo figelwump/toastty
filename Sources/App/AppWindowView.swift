@@ -30,6 +30,7 @@ struct AppWindowView: View {
         .onChange(of: slotFocusSignature) { _, _ in
             scheduleWindowFocusRestore()
         }
+        .focusedSceneValue(\.toasttyCommandWindowID, windowID)
     }
 
     private var slotFocusSignature: WindowSlotFocusSignature? {

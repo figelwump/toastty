@@ -1,6 +1,12 @@
 import CoreState
 import Foundation
 
+struct WindowCommandSelection {
+    let windowID: UUID
+    let window: WindowState
+    let workspace: WorkspaceState
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
@@ -70,6 +76,35 @@ final class AppStore: ObservableObject {
     func selectedWorkspace(in windowID: UUID) -> WorkspaceState? {
         guard let workspaceID = selectedWorkspaceID(in: windowID) else { return nil }
         return state.workspacesByID[workspaceID]
+    }
+
+    func commandSelection(preferredWindowID: UUID?) -> WindowCommandSelection? {
+        if let preferredWindowID {
+            // A focused scene/window should be authoritative. If SwiftUI is still
+            // tearing it down, disable the command rather than rerouting it to
+            // whichever window happens to be globally selected next.
+            guard let window = window(id: preferredWindowID),
+                  let workspace = selectedWorkspace(in: preferredWindowID) else {
+                return nil
+            }
+            return WindowCommandSelection(
+                windowID: preferredWindowID,
+                window: window,
+                workspace: workspace
+            )
+        }
+
+        guard let selectedWindowID = state.selectedWindowID,
+              let window = window(id: selectedWindowID),
+              let workspace = selectedWorkspace(in: selectedWindowID) else {
+            return nil
+        }
+
+        return WindowCommandSelection(
+            windowID: selectedWindowID,
+            window: window,
+            workspace: workspace
+        )
     }
 
     var selectedWindow: WindowState? {
