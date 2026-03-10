@@ -106,12 +106,11 @@ final class TerminalWorkspaceMaintenanceService {
     }
 
     private func refreshSelectedWorkspaceTerminalMetadataFromProcess(state: AppState) {
-        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
-              let workspace = state.workspacesByID[selectedWorkspaceID] else {
+        guard let selection = state.selectedWorkspaceSelection() else {
             return
         }
 
-        let panelIDs = visibleTerminalPanelIDs(in: workspace)
+        let panelIDs = visibleTerminalPanelIDs(in: selection.workspace)
         guard panelIDs.isEmpty == false else { return }
         let now = Date()
         for panelID in panelIDs {
@@ -126,21 +125,20 @@ final class TerminalWorkspaceMaintenanceService {
     }
 
     private func trackedSelectedWorkspaceVisibleTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
-        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
-              let workspace = state.workspacesByID[selectedWorkspaceID] else {
+        guard let selection = state.selectedWorkspaceSelection() else {
             return [:]
         }
 
         var workspaceByPanelID: [UUID: UUID] = [:]
-        for panelID in visibleTerminalPanelIDs(in: workspace) {
+        for panelID in visibleTerminalPanelIDs(in: selection.workspace) {
             guard containsController(panelID) else { continue }
-            workspaceByPanelID[panelID] = selectedWorkspaceID
+            workspaceByPanelID[panelID] = selection.workspaceID
         }
         return workspaceByPanelID
     }
 
     private func trackedBackgroundTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
-        let selectedWorkspaceID = selectedWorkspaceID(state: state)
+        let selectedWorkspaceID = state.selectedWorkspaceSelection()?.workspaceID
         var workspaceByPanelID: [UUID: UUID] = [:]
         for workspace in state.workspacesByID.values where workspace.id != selectedWorkspaceID {
             for (panelID, panelState) in workspace.panels {
@@ -153,7 +151,7 @@ final class TerminalWorkspaceMaintenanceService {
     }
 
     private func pulseVisibleSurfacesIfWorkspaceSwitched(state: AppState) {
-        let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
+        let currentSelectedWorkspaceID = state.selectedWorkspaceSelection()?.workspaceID
         guard currentSelectedWorkspaceID != previousSelectedWorkspaceID else { return }
 
         visibilityPulseTask?.cancel()
@@ -197,7 +195,7 @@ final class TerminalWorkspaceMaintenanceService {
     private func pulseVisibleSurfaces(in workspaceID: UUID) {
         guard let store else { return }
         let currentState = store.state
-        guard selectedWorkspaceID(state: currentState) == workspaceID,
+        guard currentState.selectedWorkspaceSelection()?.workspaceID == workspaceID,
               let workspace = currentState.workspacesByID[workspaceID] else {
             return
         }
@@ -220,14 +218,6 @@ final class TerminalWorkspaceMaintenanceService {
             panelIDs.insert(panelID)
         }
         return panelIDs
-    }
-
-    private func selectedWorkspaceID(state: AppState) -> UUID? {
-        guard let selectedWindowID = state.selectedWindowID,
-              let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) else {
-            return nil
-        }
-        return selectedWindow.selectedWorkspaceID ?? selectedWindow.workspaceIDs.first
     }
 }
 #endif

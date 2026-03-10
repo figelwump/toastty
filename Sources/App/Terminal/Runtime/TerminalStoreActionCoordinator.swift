@@ -101,7 +101,7 @@ final class TerminalStoreActionCoordinator {
         previousState: AppState,
         nextState: AppState
     ) {
-        guard Self.selectedWorkspaceID(state: nextState) == workspaceID,
+        guard nextState.selectedWorkspaceSelection()?.workspaceID == workspaceID,
               let previousWorkspace = previousState.workspacesByID[workspaceID],
               let nextWorkspace = nextState.workspacesByID[workspaceID],
               previousWorkspace.focusedPanelModeActive != nextWorkspace.focusedPanelModeActive else {
@@ -109,14 +109,6 @@ final class TerminalStoreActionCoordinator {
         }
 
         requestWorkspaceFocusRestore(workspaceID)
-    }
-
-    private static func selectedWorkspaceID(state: AppState) -> UUID? {
-        guard let selectedWindowID = state.selectedWindowID,
-              let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) else {
-            return nil
-        }
-        return selectedWindow.selectedWorkspaceID ?? selectedWindow.workspaceIDs.first
     }
 
     private static func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {

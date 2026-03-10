@@ -65,17 +65,15 @@ final class AppStore: ObservableObject {
     }
 
     func window(id windowID: UUID) -> WindowState? {
-        state.windows.first(where: { $0.id == windowID })
+        state.window(id: windowID)
     }
 
     func selectedWorkspaceID(in windowID: UUID) -> UUID? {
-        guard let window = window(id: windowID) else { return nil }
-        return window.selectedWorkspaceID ?? window.workspaceIDs.first
+        state.selectedWorkspaceID(in: windowID)
     }
 
     func selectedWorkspace(in windowID: UUID) -> WorkspaceState? {
-        guard let workspaceID = selectedWorkspaceID(in: windowID) else { return nil }
-        return state.workspacesByID[workspaceID]
+        state.workspaceSelection(in: windowID)?.workspace
     }
 
     func commandSelection(preferredWindowID: UUID?) -> WindowCommandSelection? {
@@ -83,38 +81,34 @@ final class AppStore: ObservableObject {
             // A focused scene/window should be authoritative. If SwiftUI is still
             // tearing it down, disable the command rather than rerouting it to
             // whichever window happens to be globally selected next.
-            guard let window = window(id: preferredWindowID),
-                  let workspace = selectedWorkspace(in: preferredWindowID) else {
+            guard let selection = state.workspaceSelection(in: preferredWindowID) else {
                 return nil
             }
             return WindowCommandSelection(
-                windowID: preferredWindowID,
-                window: window,
-                workspace: workspace
+                windowID: selection.windowID,
+                window: selection.window,
+                workspace: selection.workspace
             )
         }
 
-        guard let selectedWindowID = state.selectedWindowID,
-              let window = window(id: selectedWindowID),
-              let workspace = selectedWorkspace(in: selectedWindowID) else {
+        guard let selection = state.selectedWorkspaceSelection() else {
             return nil
         }
 
         return WindowCommandSelection(
-            windowID: selectedWindowID,
-            window: window,
-            workspace: workspace
+            windowID: selection.windowID,
+            window: selection.window,
+            workspace: selection.workspace
         )
     }
 
     var selectedWindow: WindowState? {
         guard let selectedWindowID = state.selectedWindowID else { return nil }
-        return window(id: selectedWindowID)
+        return state.window(id: selectedWindowID)
     }
 
     var selectedWorkspace: WorkspaceState? {
-        guard let selectedWindowID = state.selectedWindowID else { return nil }
-        return selectedWorkspace(in: selectedWindowID)
+        state.selectedWorkspaceSelection()?.workspace
     }
 
     @discardableResult

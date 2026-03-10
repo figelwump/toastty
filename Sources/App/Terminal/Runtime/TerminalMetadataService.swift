@@ -237,10 +237,8 @@ final class TerminalMetadataService {
             )
         }
 
-        if let selectedWindowID = state.selectedWindowID,
-           let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) {
-            let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
-            let nonSelectedWorkspaceIDs = selectedWindow.workspaceIDs.filter { $0 != currentSelectedWorkspaceID }
+        if let selection = state.selectedWorkspaceSelection() {
+            let nonSelectedWorkspaceIDs = selection.window.workspaceIDs.filter { $0 != selection.workspaceID }
             if nonSelectedWorkspaceIDs.count == 1,
                let workspaceID = nonSelectedWorkspaceIDs.first,
                let workspace = state.workspacesByID[workspaceID],
@@ -288,7 +286,8 @@ final class TerminalMetadataService {
         }
 
         let appIsActive = NSApplication.shared.isActive
-        let currentSelectedWorkspaceID = selectedWorkspaceID(state: state)
+        let currentSelection = state.selectedWorkspaceSelection()
+        let currentSelectedWorkspaceID = currentSelection?.workspaceID
         let panelIsFocused: Bool
         if let workspaceID,
            let panelID,
@@ -322,11 +321,9 @@ final class TerminalMetadataService {
         if appIsActive,
            workspaceID == nil,
            panelID == nil,
-           let selectedWorkspaceID = currentSelectedWorkspaceID,
-           let selectedWindowID = state.selectedWindowID,
-           let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }),
-           selectedWindow.workspaceIDs.count == 1,
-           let workspace = state.workspacesByID[selectedWorkspaceID],
+           let selection = currentSelection,
+           selection.window.workspaceIDs.count == 1,
+           let workspace = state.workspacesByID[selection.workspaceID],
            let resolvedPanelID = resolvedActionPanelID(in: workspace),
            workspace.focusedPanelID == resolvedPanelID,
            workspace.layoutTree.slotContaining(panelID: resolvedPanelID) != nil {
@@ -547,14 +544,6 @@ final class TerminalMetadataService {
             panelID: panelID,
             state: state
         )
-    }
-
-    private func selectedWorkspaceID(state: AppState) -> UUID? {
-        guard let selectedWindowID = state.selectedWindowID,
-              let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) else {
-            return nil
-        }
-        return selectedWindow.selectedWorkspaceID ?? selectedWindow.workspaceIDs.first
     }
 
     private func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {

@@ -564,14 +564,6 @@ private extension TerminalRuntimeRegistry {
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 private extension TerminalRuntimeRegistry {
-    func selectedWorkspaceID(state: AppState) -> UUID? {
-        guard let selectedWindowID = state.selectedWindowID,
-              let selectedWindow = state.windows.first(where: { $0.id == selectedWindowID }) else {
-            return nil
-        }
-        return selectedWindow.selectedWorkspaceID ?? selectedWindow.workspaceIDs.first
-    }
-
     func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
            workspace.panels[focusedPanelID] != nil,
@@ -694,9 +686,8 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return (resolvedPanelID, workspaceIDForSurface)
         }
 
-        guard let selectedWorkspaceID = selectedWorkspaceID(state: state),
-              let workspace = state.workspacesByID[selectedWorkspaceID],
-              let resolvedPanelID = resolvedActionPanelID(in: workspace) else {
+        guard let selection = state.selectedWorkspaceSelection(),
+              let resolvedPanelID = resolvedActionPanelID(in: selection.workspace) else {
             ToasttyLog.debug(
                 "Ghostty app action could not resolve active panel",
                 category: .terminal,
@@ -705,7 +696,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return nil
         }
 
-        return (resolvedPanelID, selectedWorkspaceID)
+        return (resolvedPanelID, selection.workspaceID)
     }
 
     func handleDesktopNotificationAction(
@@ -723,7 +714,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             state: state
         ) ?? false
     }
+}
+#endif
 
+#if TOASTTY_HAS_GHOSTTY_KIT
+extension TerminalRuntimeRegistry {
     func handleRuntimeMetadataAction(
         _ intent: GhosttyRuntimeAction.Intent,
         workspaceID: UUID,

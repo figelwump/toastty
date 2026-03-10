@@ -24,11 +24,13 @@ final class SystemNotificationResponseCoordinator: NSObject {
 
     private func handleResponse(hint: DesktopNotificationSelectionHint) {
         guard let store else { return }
+        var resolvedWorkspaceID: UUID?
         var resolvedPanelID: UUID?
 
         if let route = DesktopNotificationRouteResolver.resolve(hint: hint, state: store.state) {
             _ = store.send(.selectWindow(windowID: route.windowID))
             _ = store.send(.selectWorkspace(windowID: route.windowID, workspaceID: route.workspaceID))
+            resolvedWorkspaceID = route.workspaceID
             if let panelID = route.panelID {
                 _ = store.send(.focusPanel(workspaceID: route.workspaceID, panelID: panelID))
                 resolvedPanelID = panelID
@@ -56,7 +58,9 @@ final class SystemNotificationResponseCoordinator: NSObject {
         NSApp.activate(ignoringOtherApps: true)
         if let panelID = resolvedPanelID {
             terminalRuntimeRegistry?.schedulePanelFocusRestore(panelID: panelID)
-        } else if let workspaceID = store.selectedWorkspace?.id {
+        } else if let workspaceID = resolvedWorkspaceID {
+            // Restore focus to the notification's routed workspace rather than
+            // whichever workspace happens to be selected after routing side effects.
             terminalRuntimeRegistry?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
         }
     }
