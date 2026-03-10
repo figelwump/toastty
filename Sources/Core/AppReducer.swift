@@ -502,7 +502,7 @@ public struct AppReducer {
 
         let inheritedCWD: String
         if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
-            inheritedCWD = focusedTerminalState.cwd
+            inheritedCWD = focusedTerminalState.workingDirectorySeed
         } else {
             inheritedCWD = NSHomeDirectory()
         }

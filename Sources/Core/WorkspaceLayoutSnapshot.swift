@@ -40,16 +40,43 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
 
 public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable {
     public var shell: String
-    public var cwd: String
+    public var launchWorkingDirectory: String
 
-    public init(shell: String, cwd: String) {
+    public init(shell: String, launchWorkingDirectory: String) {
         self.shell = shell
-        self.cwd = cwd
+        self.launchWorkingDirectory = launchWorkingDirectory
     }
 
     init(terminalState: TerminalPanelState) {
         shell = terminalState.shell
-        cwd = terminalState.cwd
+        launchWorkingDirectory = terminalState.workingDirectorySeed
+    }
+}
+
+extension WorkspaceLayoutTerminalPanelSnapshot {
+    private enum CodingKeys: String, CodingKey {
+        case shell
+        case launchWorkingDirectory
+        case cwd
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        shell = try container.decode(String.self, forKey: .shell)
+        if let launchWorkingDirectory = try container.decodeIfPresent(String.self, forKey: .launchWorkingDirectory) {
+            self.launchWorkingDirectory = launchWorkingDirectory
+        } else {
+            self.launchWorkingDirectory = try container.decode(String.self, forKey: .cwd)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(shell, forKey: .shell)
+        try container.encode(launchWorkingDirectory, forKey: .launchWorkingDirectory)
+        // Preserve downgrade compatibility while older builds still decode the
+        // legacy terminal snapshot schema from `cwd`.
+        try container.encode(launchWorkingDirectory, forKey: .cwd)
     }
 }
 
@@ -178,7 +205,15 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
                     preconditionFailure("Missing restored terminal title for panel \(panelID)")
                 }
                 partialResult[panelID] = .terminal(
-                    TerminalPanelState(title: title, shell: terminalSnapshot.shell, cwd: terminalSnapshot.cwd)
+                    TerminalPanelState(
+                        title: title,
+                        shell: terminalSnapshot.shell,
+                        // Restored terminal panes should wait for authoritative
+                        // runtime metadata instead of treating persisted cwd as
+                        // the live shell cwd shown in the UI.
+                        cwd: "",
+                        launchWorkingDirectory: terminalSnapshot.launchWorkingDirectory
+                    )
                 )
             case .diff(let diffState):
                 partialResult[panelID] = .diff(diffState)

@@ -156,7 +156,7 @@ private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceContro
     func registerSurfaceChildPIDAfterCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String
+        expectedWorkingDirectory: String?
     ) {
         _ = panelID
         _ = previousChildren

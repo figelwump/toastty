@@ -828,9 +828,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
         }
 
-        // CWD is already up-to-date in terminalState.cwd thanks to the
-        // pre-split refresh in sendSplitAction().
-        let requestedWorkingDirectory = terminalState.cwd
+        // Launch the shell from a separate seed instead of the live cwd field.
+        // Restored panes intentionally start with blank live cwd and wait for
+        // runtime metadata to repopulate it authoritatively.
+        let requestedWorkingDirectory = terminalState.workingDirectorySeed
 
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.
@@ -881,7 +882,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         delegate.registerSurfaceChildPIDAfterCreation(
             panelID: panelID,
             previousChildren: previousChildPIDs,
-            expectedWorkingDirectory: requestedWorkingDirectory
+            expectedWorkingDirectory: terminalState.expectedProcessWorkingDirectory
         )
 
         // The requested cwd is just launch config, not authoritative live shell

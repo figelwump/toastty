@@ -4,7 +4,7 @@ import Testing
 
 struct WorkspaceLayoutSnapshotTests {
     @Test
-    func makeAppStateRestoresLayoutAndTerminalWorkingDirectories() throws {
+    func makeAppStateRestoresLayoutAndTerminalLaunchWorkingDirectories() throws {
         let windowID = UUID()
         let workspaceID = UUID()
         let leftPanelID = UUID()
@@ -75,8 +75,10 @@ struct WorkspaceLayoutSnapshotTests {
 
         #expect(leftTerminalState.title == "Terminal 1")
         #expect(rightTerminalState.title == "Terminal 2")
-        #expect(leftTerminalState.cwd == "/tmp/infra")
-        #expect(rightTerminalState.cwd == "/tmp/ui")
+        #expect(leftTerminalState.cwd.isEmpty)
+        #expect(rightTerminalState.cwd.isEmpty)
+        #expect(leftTerminalState.launchWorkingDirectory == "/tmp/infra")
+        #expect(rightTerminalState.launchWorkingDirectory == "/tmp/ui")
 
         #expect(restoredWorkspace.focusedPanelModeActive == false)
         #expect(restoredWorkspace.unreadPanelIDs.isEmpty)
@@ -161,6 +163,72 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func snapshotPersistsLaunchWorkingDirectoryWhenLiveCWDIsBlank() {
+        let workspace = WorkspaceState.bootstrap(title: "Restore")
+        let panelID = workspace.layoutTree.allSlotInfos[0].panelID
+        guard case .terminal(let terminalState) = workspace.panels[panelID] else {
+            Issue.record("Expected bootstrap panel to be terminal")
+            return
+        }
+
+        var restoredTerminalState = terminalState
+        restoredTerminalState.cwd = ""
+        restoredTerminalState.launchWorkingDirectory = "/tmp/restored"
+
+        var restoredWorkspace = workspace
+        restoredWorkspace.panels[panelID] = .terminal(restoredTerminalState)
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: UUID(),
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: restoredWorkspace],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        guard case .terminal(let terminalSnapshot) = snapshot.workspacesByID[workspace.id]?.panels[panelID] else {
+            Issue.record("Expected terminal snapshot")
+            return
+        }
+
+        #expect(terminalSnapshot.launchWorkingDirectory == "/tmp/restored")
+    }
+
+    @Test
+    func terminalSnapshotDecodesLegacyCWDField() throws {
+        let data = try JSONEncoder().encode(
+            LegacyTerminalSnapshot(shell: "zsh", cwd: "/tmp/legacy")
+        )
+
+        let decoded = try JSONDecoder().decode(WorkspaceLayoutTerminalPanelSnapshot.self, from: data)
+
+        #expect(decoded.shell == "zsh")
+        #expect(decoded.launchWorkingDirectory == "/tmp/legacy")
+    }
+
+    @Test
+    func terminalSnapshotEncodesLegacyCWDFieldForDowngradeCompatibility() throws {
+        let snapshot = WorkspaceLayoutTerminalPanelSnapshot(
+            shell: "zsh",
+            launchWorkingDirectory: "/tmp/compat"
+        )
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: String])
+
+        #expect(json["launchWorkingDirectory"] == "/tmp/compat")
+        #expect(json["cwd"] == "/tmp/compat")
+    }
+
+    @Test
     func makeAppStatePreservesMultipleWindowsAndSelectedWindow() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
@@ -197,4 +265,9 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(restoredState.selectedWindowID == secondWindowID)
         try StateValidator.validate(restoredState)
     }
+}
+
+private struct LegacyTerminalSnapshot: Codable {
+    let shell: String
+    let cwd: String
 }

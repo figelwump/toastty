@@ -178,7 +178,7 @@ final class TerminalMetadataService {
     func registerChildPIDAfterSurfaceCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String
+        expectedWorkingDirectory: String?
     ) {
         processWorkingDirectoryResolver.registerNewChild(
             panelID: panelID,

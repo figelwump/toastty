@@ -46,9 +46,9 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// Login PIDs whose shell children haven't spawned yet. Keyed by panel ID.
     /// Resolved during the next CWD poll cycle.
     private var pendingLoginPIDByPanelID: [UUID: pid_t] = [:]
-    /// Canonical CWD requested at panel surface creation time. Used to avoid
+    /// High-confidence live cwd captured at surface creation time. Used to avoid
     /// assigning a login/shell process to the wrong panel when multiple terminals
-    /// spawn concurrently during app launch/restore.
+    /// spawn concurrently, but intentionally excludes restored launch seeds.
     private var expectedWorkingDirectoryByPanelID: [UUID: String] = [:]
 
     init() {
