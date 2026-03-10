@@ -408,30 +408,6 @@ struct SessionRegistryTests {
     }
 
     @Test
-    func hasActiveSessionTracksStatuslessSessions() {
-        var registry = SessionRegistry()
-        let workspaceID = UUID()
-        let now = Date(timeIntervalSince1970: 1050)
-
-        registry.startSession(
-            sessionID: "active-no-status",
-            agent: .codex,
-            panelID: UUID(),
-            windowID: UUID(),
-            workspaceID: workspaceID,
-            cwd: nil,
-            repoRoot: nil,
-            at: now
-        )
-
-        #expect(registry.hasActiveSession(in: workspaceID))
-
-        registry.stopSession(sessionID: "active-no-status", at: now.addingTimeInterval(1))
-
-        #expect(registry.hasActiveSession(in: workspaceID) == false)
-    }
-
-    @Test
     func workspaceStatusesIgnoreStatuslessActiveSessionsWhenOtherActiveStatusesExist() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()

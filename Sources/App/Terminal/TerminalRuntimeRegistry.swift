@@ -1066,7 +1066,7 @@ private extension TerminalRuntimeRegistry {
     ) {
         guard let workspace = state.workspacesByID[workspaceID],
               let panelState = workspace.panels[panelID],
-              case .terminal(let terminalState) = panelState else {
+              case .terminal = panelState else {
             panelActivityByPanelID.removeValue(forKey: panelID)
             return
         }
@@ -1074,34 +1074,23 @@ private extension TerminalRuntimeRegistry {
         guard let visibleText = readVisibleText(panelID: panelID) else {
             return
         }
-        let visibleLines = Self.sanitizedVisibleTerminalLines(visibleText)
 
-        guard let inferredActivity = TerminalAgentActivityInference.infer(
-            terminalTitle: terminalState.title,
-            visibleText: visibleText,
-            visibleLines: visibleLines
-        ) else {
-            // Clear stale agent activity after the slot returns to an
-            // interactive shell prompt. This avoids lingering sidebar status
-            // while also tolerating transient inference misses mid-run.
-            if Self.visibleTextShowsInteractiveShellPrompt(visibleText) {
-                panelActivityByPanelID.removeValue(forKey: panelID)
-                _ = sessionLifecycleTracker?.stopSessionForPanelIfOlderThan(
-                    panelID: panelID,
-                    minimumRuntime: Self.sessionAutoStopShellPromptGraceInterval,
-                    at: now
-                )
-            }
+        if TerminalVisibleTextInspector.appearsBusy(visibleText) {
+            panelActivityByPanelID[panelID] = PanelActivityState(
+                workspaceID: workspaceID,
+                updatedAt: now
+            )
             return
         }
 
-        panelActivityByPanelID[panelID] = PanelActivityState(
-            workspaceID: workspaceID,
-            agent: inferredActivity.agent == .codex ? .codex : .claudeCode,
-            phase: inferredActivity.phase == .waitingInput ? .waitingInput : .running,
-            runningCommand: inferredActivity.runningCommand,
-            updatedAt: now
-        )
+        panelActivityByPanelID.removeValue(forKey: panelID)
+        if Self.visibleTextShowsInteractiveShellPrompt(visibleText) {
+            _ = sessionLifecycleTracker?.stopSessionForPanelIfOlderThan(
+                panelID: panelID,
+                minimumRuntime: Self.sessionAutoStopShellPromptGraceInterval,
+                at: now
+            )
+        }
     }
 
     func pruneStalePanelActivity(now: Date) {
@@ -1120,7 +1109,7 @@ private extension TerminalRuntimeRegistry {
 
         var nextSubtextByWorkspaceID: [UUID: String] = [:]
         for (workspaceID, activities) in activitiesByWorkspaceID {
-            guard let subtext = Self.workspaceActivitySubtext(from: activities, now: now) else { continue }
+            guard let subtext = Self.workspaceActivitySubtext(from: activities) else { continue }
             nextSubtextByWorkspaceID[workspaceID] = subtext
         }
 
@@ -2212,156 +2201,21 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.hasPrefix("file://")
     }
 
-    private static func inferredAgentKind(terminalTitle: String, visibleText: String) -> AgentKindInference? {
-        let inferredTitleFromTerminalTitle = canonicalInferredAgentTitle(from: terminalTitle)
-        if inferredTitleFromTerminalTitle == "Codex" {
-            return .codex
-        }
-        if inferredTitleFromTerminalTitle == "Claude Code" {
-            return .claudeCode
-        }
-
-        if let inferredTitle = inferredAgentTitleFromVisibleTerminalText(visibleText) {
-            return inferredTitle == "Codex" ? .codex : .claudeCode
-        }
-
-        guard let token = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) else {
-            return nil
-        }
-        return agentKind(forPromptToken: token)
-    }
-
-    private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
-        guard visibleLines.isEmpty == false else { return false }
-        let candidateLines = Array(visibleLines.suffix(agentTitleDetectionLineWindow))
-
-        for line in candidateLines.reversed() {
-            let lowercased = line.lowercased()
-            if lowercased.contains("waiting for input")
-                || lowercased.contains("waiting on user input")
-                || lowercased.contains("needs your input")
-                || lowercased.contains("select an option")
-                || lowercased.contains("enter your choice")
-                || lowercased.contains("press enter to continue")
-                || lowercased.contains("press return to continue")
-                || lowercased.contains("approve command")
-                || lowercased.contains("approval required") {
-                return true
-            }
-
-            if lowercased.contains("y/n") || lowercased.contains("[y]") || lowercased.contains("[n]") {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    private static func workspaceActivitySubtext(from activities: [PanelActivityState], now: Date) -> String? {
+    private static func workspaceActivitySubtext(from activities: [PanelActivityState]) -> String? {
         guard activities.isEmpty == false else { return nil }
-
-        var codexCount = 0
-        var claudeCount = 0
-        var runningCount = 0
-        var waitingInputCount = 0
-        var idleCount = 0
-
-        for activity in activities {
-            switch activity.agent {
-            case .codex:
-                codexCount += 1
-            case .claudeCode:
-                claudeCount += 1
-            }
-
-            switch activity.phase {
-            case .running:
-                runningCount += 1
-            case .waitingInput:
-                waitingInputCount += 1
-            case .idle:
-                idleCount += 1
-            }
+        let busyPaneCount = activities.count
+        if busyPaneCount == 1 {
+            return "1 busy pane"
         }
-
-        let totalAgentCount = codexCount + claudeCount
-        guard totalAgentCount > 0 else { return nil }
-
-        let statusSegments: [String] = {
-            if waitingInputCount > 0 && runningCount > 0 {
-                return [
-                    "\(waitingInputCount) waiting input",
-                    "\(runningCount) running",
-                ]
-            }
-            if waitingInputCount > 0 {
-                return ["\(waitingInputCount) waiting input"]
-            }
-            if runningCount > 0 {
-                return ["\(runningCount) running"]
-            }
-            return ["\(idleCount) idle"]
-        }()
-        let statusText = statusSegments.joined(separator: ", ")
-
-        var agentSegments: [String] = []
-        if claudeCount > 0 {
-            agentSegments.append("\(claudeCount) \(claudeCodeActivityLabel)")
-        }
-        if codexCount > 0 {
-            agentSegments.append("\(codexCount) Codex")
-        }
-
-        if totalAgentCount == 1,
-           let mostRecentActivity = activities.max(by: { $0.updatedAt < $1.updatedAt }),
-           now.timeIntervalSince(mostRecentActivity.updatedAt) <= activityCommandFreshnessInterval,
-           let runningCommand = mostRecentActivity.runningCommand {
-            let singleAgent = agentActivityLabel(for: mostRecentActivity.agent)
-            switch mostRecentActivity.phase {
-            case .running:
-                return "\(runningCommand) · \(singleAgent) running"
-            case .waitingInput:
-                return "\(runningCommand) · \(singleAgent) waiting input"
-            case .idle:
-                // Idle state should fall back to aggregate status formatting.
-                break
-            }
-        }
-
-        return "\(agentSegments.joined(separator: ", ")) · \(statusText)"
-    }
-
-    private static func agentKind(forPromptToken token: String) -> AgentKindInference? {
-        if codexPromptTokens.contains(token) {
-            return .codex
-        }
-        if claudePromptTokens.contains(token) {
-            return .claudeCode
-        }
-        return nil
-    }
-
-    private static func agentActivityLabel(for agent: AgentKindInference) -> String {
-        switch agent {
-        case .codex:
-            return "1 Codex"
-        case .claudeCode:
-            return "1 \(claudeCodeActivityLabel)"
-        }
+        return "\(busyPaneCount) busy panes"
     }
 
     private static let inferredAgentTitleCandidates: [String] = ["Codex", "Claude Code"]
     private static let defaultTerminalTitleAfterAgentInferenceRestore = "Terminal"
-    private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
-    private static let claudePromptTokens: Set<String> = ["claude"]
     // Consider native cwd callbacks authoritative for a short grace period.
     private static let nativeCWDSignalFreshnessInterval: TimeInterval = 120
     // Keep process-based cwd sync as a low-frequency fallback once native callbacks are observed.
     private static let nativeCWDProcessFallbackPollInterval: TimeInterval = 30
-    // Keep command-first summaries short-lived so stale process labels clear quickly.
-    private static let activityCommandFreshnessInterval: TimeInterval = 60
-    // Compact labels preserve room for status details in the sidebar.
-    private static let claudeCodeActivityLabel = "CC"
     // Drop stale activity after a short window to avoid long-lived misleading subtext.
     private static let activityRetentionInterval: TimeInterval = 240
     private struct PromptLineDetails {
@@ -2370,21 +2224,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 
     private struct PanelActivityState {
         var workspaceID: UUID
-        var agent: AgentKindInference
-        var phase: AgentActivityPhase
-        var runningCommand: String?
         var updatedAt: Date
-    }
-
-    private enum AgentKindInference {
-        case codex
-        case claudeCode
-    }
-
-    private enum AgentActivityPhase {
-        case running
-        case waitingInput
-        case idle
     }
 
     private static let agentTitleDetectionLineWindow = 16
@@ -2398,146 +2238,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let promptPathTrailingPunctuationCharacters = CharacterSet(charactersIn: ",;")
 }
 #endif
-
-struct TerminalAgentActivityInference {
-    enum Agent: Equatable {
-        case codex
-        case claudeCode
-    }
-
-    enum Phase: Equatable {
-        case running
-        case waitingInput
-    }
-
-    struct Activity: Equatable {
-        let agent: Agent
-        let phase: Phase
-        let runningCommand: String?
-    }
-
-    static func infer(
-        terminalTitle: String,
-        visibleText: String,
-        visibleLines: [String]
-    ) -> Activity? {
-        guard TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false else {
-            return nil
-        }
-
-        guard let agent = inferredAgentKind(terminalTitle: terminalTitle, visibleText: visibleText) else {
-            return nil
-        }
-
-        let phase: Phase = visibleTextShowsWaitingForInput(visibleLines) ? .waitingInput : .running
-        return Activity(
-            agent: agent,
-            phase: phase,
-            runningCommand: TerminalVisibleTextInspector.inferredRunningCommand(visibleText)
-        )
-    }
-
-    private static func inferredAgentKind(
-        terminalTitle: String,
-        visibleText: String
-    ) -> Agent? {
-        if canonicalInferredAgentTitle(from: terminalTitle) == "Codex" {
-            return .codex
-        }
-        if canonicalInferredAgentTitle(from: terminalTitle) == "Claude Code" {
-            return .claudeCode
-        }
-        if let inferredTitle = inferredAgentTitleFromVisibleTerminalText(visibleText) {
-            return inferredTitle == "Codex" ? .codex : .claudeCode
-        }
-        guard let token = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) else {
-            return nil
-        }
-        if ["codex", "cdx"].contains(token) {
-            return .codex
-        }
-        if token == "claude" {
-            return .claudeCode
-        }
-        return nil
-    }
-
-    private static func inferredAgentTitleFromVisibleTerminalText(_ visibleText: String) -> String? {
-        let lines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
-        guard lines.isEmpty == false else { return nil }
-        let candidateLines = Array(lines.suffix(16))
-
-        for line in candidateLines.reversed() {
-            let lowercasedLine = line.lowercased()
-            if lowercasedLine.contains("openai codex (v") {
-                return "Codex"
-            }
-            if lowercasedLine.contains("claude code v") {
-                return "Claude Code"
-            }
-        }
-        return nil
-    }
-
-    private static func canonicalInferredAgentTitle(from title: String) -> String? {
-        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else {
-            return nil
-        }
-
-        var candidate = trimmed
-        while let first = candidate.first,
-              first.isLetter == false,
-              first.isNumber == false {
-            candidate.removeFirst()
-        }
-        let normalizedLowercased = candidate.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        for inferredTitle in ["Codex", "Claude Code"] {
-            let lowercasedTitle = inferredTitle.lowercased()
-            guard normalizedLowercased.hasPrefix(lowercasedTitle) else {
-                continue
-            }
-            let boundaryIndex = normalizedLowercased.index(
-                normalizedLowercased.startIndex,
-                offsetBy: lowercasedTitle.count
-            )
-            if boundaryIndex == normalizedLowercased.endIndex {
-                return inferredTitle
-            }
-            let boundaryCharacter = normalizedLowercased[boundaryIndex]
-            if boundaryCharacter.isLetter == false && boundaryCharacter.isNumber == false {
-                return inferredTitle
-            }
-        }
-        return nil
-    }
-
-    private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
-        guard visibleLines.isEmpty == false else { return false }
-        let candidateLines = Array(visibleLines.suffix(16))
-
-        for line in candidateLines.reversed() {
-            let lowercased = line.lowercased()
-            if lowercased.contains("waiting for input")
-                || lowercased.contains("waiting on user input")
-                || lowercased.contains("needs your input")
-                || lowercased.contains("select an option")
-                || lowercased.contains("enter your choice")
-                || lowercased.contains("press enter to continue")
-                || lowercased.contains("press return to continue")
-                || lowercased.contains("approve command")
-                || lowercased.contains("approval required") {
-                return true
-            }
-
-            if lowercased.contains("y/n") || lowercased.contains("[y]") || lowercased.contains("[n]") {
-                return true
-            }
-        }
-
-        return false
-    }
-}
 
 @MainActor
 final class TerminalSurfaceController: PanelHostLifecycleControlling {

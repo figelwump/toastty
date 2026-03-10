@@ -162,12 +162,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             .compactMap(Self.workspaceSessionStatus(from:))
     }
 
-    public func hasActiveSession(in workspaceID: UUID) -> Bool {
-        sessionsByID.values.contains { record in
-            record.workspaceID == workspaceID && record.isActive
-        }
-    }
-
     public mutating func pruneStoppedSessions(olderThan cutoff: Date) {
         for (sessionID, record) in sessionsByID where record.stoppedAt.map({ $0 < cutoff }) == true {
             sessionsByID.removeValue(forKey: sessionID)

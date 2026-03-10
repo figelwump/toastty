@@ -9,6 +9,12 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation == false)
         #expect(assessment.runningCommand == nil)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt("\u{0007}\n") == false)
+        #expect(TerminalVisibleTextInspector.appearsBusy("\u{0007}\n") == false)
+    }
+
+    @Test
+    func busyAssessmentTreatsBlankPaneAsIdle() {
+        #expect(TerminalVisibleTextInspector.appearsBusy("") == false)
     }
 
     @Test
@@ -23,6 +29,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.runningCommand == nil)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 
     @Test
@@ -38,6 +45,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "npm")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == "npm run dev")
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 
     @Test
@@ -53,6 +61,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "codex")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
         #expect(
             TerminalVisibleTextInspector.inferredRunningCommand(
                 visibleText,
@@ -77,6 +86,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "codex")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
         #expect(
             TerminalVisibleTextInspector.inferredRunningCommand(
                 visibleText,
@@ -98,6 +108,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 
     @Test
@@ -113,6 +124,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "npm")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == "FOO=bar npm run dev")
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 
     @Test
@@ -125,6 +137,7 @@ struct TerminalVisibleTextInspectorTests {
 
         #expect(assessment.requiresConfirmation == false)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 
     @Test
@@ -138,5 +151,30 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation)
         #expect(assessment.runningCommand == nil)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText))
+    }
+
+    @Test
+    func busyAssessmentTreatsOutputAfterPromptAsBusy() {
+        let visibleText = """
+        vishal@toastty ~/repo % claude
+        Claude Code v2.1.72
+        Thinking...
+        """
+
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText))
+    }
+
+    @Test
+    func busyAssessmentUsesMostRecentPromptNearBottom() {
+        let visibleText = """
+        vishal@toastty ~/repo % ls
+        AGENTS.md
+        Sources
+        vishal@toastty ~/repo %
+        """
+
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 }

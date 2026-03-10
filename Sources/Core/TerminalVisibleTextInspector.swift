@@ -74,6 +74,22 @@ public enum TerminalVisibleTextInspector {
         )
     }
 
+    public static func appearsBusy(_ visibleText: String) -> Bool {
+        let visibleLines = sanitizedLines(visibleText)
+        guard visibleLines.isEmpty == false else {
+            return false
+        }
+
+        guard let promptObservation = recentPromptObservation(from: visibleLines) else {
+            // For the generic sidebar subtitle, any pane with visible non-prompt
+            // content counts as busy. That intentionally includes fullscreen
+            // terminal programs such as editors and pagers.
+            return true
+        }
+
+        return promptObservation.offsetFromBottom > 0
+    }
+
     public static func sanitizedLines(_ visibleText: String) -> [String] {
         let filteredScalars = visibleText.unicodeScalars.filter { scalar in
             switch scalar.value {
@@ -123,6 +139,10 @@ public enum TerminalVisibleTextInspector {
     }
 
     private static func recentPromptContext(from visibleLines: [String]) -> PromptContext? {
+        recentPromptObservation(from: visibleLines)?.context
+    }
+
+    private static func recentPromptObservation(from visibleLines: [String]) -> PromptObservation? {
         guard visibleLines.isEmpty == false else { return nil }
         let candidateLines = Array(visibleLines.suffix(promptScanLineWindow))
 
@@ -135,14 +155,17 @@ public enum TerminalVisibleTextInspector {
             }
 
             guard let command = promptLine.command else {
-                return .interactive
+                return PromptObservation(context: .interactive, offsetFromBottom: offset)
             }
 
             let token = leadingCommandToken(in: command) ?? ""
             guard token.isEmpty == false else {
-                return .interactive
+                return PromptObservation(context: .interactive, offsetFromBottom: offset)
             }
-            return .command(command: command, token: token)
+            return PromptObservation(
+                context: .command(command: command, token: token),
+                offsetFromBottom: offset
+            )
         }
 
         return nil
@@ -312,6 +335,11 @@ public enum TerminalVisibleTextInspector {
     private enum PromptContext {
         case interactive
         case command(command: String, token: String)
+    }
+
+    private struct PromptObservation {
+        let context: PromptContext
+        let offsetFromBottom: Int
     }
 
     private static let commandCharacterLimit = 96
