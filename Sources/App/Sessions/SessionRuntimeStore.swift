@@ -88,6 +88,10 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry.workspaceStatuses(for: workspaceID)
     }
 
+    func hasActiveSession(in workspaceID: UUID) -> Bool {
+        sessionRegistry.hasActiveSession(in: workspaceID)
+    }
+
     func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
         sessionRegistry.panelStatus(for: panelID)
     }

@@ -1076,11 +1076,11 @@ private extension TerminalRuntimeRegistry {
         }
         let visibleLines = Self.sanitizedVisibleTerminalLines(visibleText)
 
-        let inferredAgentKind = Self.inferredAgentKind(
+        guard let inferredActivity = TerminalAgentActivityInference.infer(
             terminalTitle: terminalState.title,
-            visibleText: visibleText
-        )
-        guard let inferredAgentKind else {
+            visibleText: visibleText,
+            visibleLines: visibleLines
+        ) else {
             // Clear stale agent activity after the slot returns to an
             // interactive shell prompt. This avoids lingering sidebar status
             // while also tolerating transient inference misses mid-run.
@@ -1095,13 +1095,11 @@ private extension TerminalRuntimeRegistry {
             return
         }
 
-        let inferredPhase = Self.inferredAgentPhase(visibleText: visibleText, visibleLines: visibleLines)
-        let inferredRunningCommand = TerminalVisibleTextInspector.inferredRunningCommand(visibleText)
         panelActivityByPanelID[panelID] = PanelActivityState(
             workspaceID: workspaceID,
-            agent: inferredAgentKind,
-            phase: inferredPhase,
-            runningCommand: inferredRunningCommand,
+            agent: inferredActivity.agent == .codex ? .codex : .claudeCode,
+            phase: inferredActivity.phase == .waitingInput ? .waitingInput : .running,
+            runningCommand: inferredActivity.runningCommand,
             updatedAt: now
         )
     }
@@ -2233,16 +2231,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         return agentKind(forPromptToken: token)
     }
 
-    private static func inferredAgentPhase(visibleText: String, visibleLines: [String]) -> AgentActivityPhase {
-        if visibleTextShowsWaitingForInput(visibleLines) {
-            return .waitingInput
-        }
-        if visibleTextShowsInteractiveShellPrompt(visibleText) {
-            return .idle
-        }
-        return .running
-    }
-
     private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
         guard visibleLines.isEmpty == false else { return false }
         let candidateLines = Array(visibleLines.suffix(agentTitleDetectionLineWindow))
@@ -2410,6 +2398,146 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     private static let promptPathTrailingPunctuationCharacters = CharacterSet(charactersIn: ",;")
 }
 #endif
+
+struct TerminalAgentActivityInference {
+    enum Agent: Equatable {
+        case codex
+        case claudeCode
+    }
+
+    enum Phase: Equatable {
+        case running
+        case waitingInput
+    }
+
+    struct Activity: Equatable {
+        let agent: Agent
+        let phase: Phase
+        let runningCommand: String?
+    }
+
+    static func infer(
+        terminalTitle: String,
+        visibleText: String,
+        visibleLines: [String]
+    ) -> Activity? {
+        guard TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false else {
+            return nil
+        }
+
+        guard let agent = inferredAgentKind(terminalTitle: terminalTitle, visibleText: visibleText) else {
+            return nil
+        }
+
+        let phase: Phase = visibleTextShowsWaitingForInput(visibleLines) ? .waitingInput : .running
+        return Activity(
+            agent: agent,
+            phase: phase,
+            runningCommand: TerminalVisibleTextInspector.inferredRunningCommand(visibleText)
+        )
+    }
+
+    private static func inferredAgentKind(
+        terminalTitle: String,
+        visibleText: String
+    ) -> Agent? {
+        if canonicalInferredAgentTitle(from: terminalTitle) == "Codex" {
+            return .codex
+        }
+        if canonicalInferredAgentTitle(from: terminalTitle) == "Claude Code" {
+            return .claudeCode
+        }
+        if let inferredTitle = inferredAgentTitleFromVisibleTerminalText(visibleText) {
+            return inferredTitle == "Codex" ? .codex : .claudeCode
+        }
+        guard let token = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) else {
+            return nil
+        }
+        if ["codex", "cdx"].contains(token) {
+            return .codex
+        }
+        if token == "claude" {
+            return .claudeCode
+        }
+        return nil
+    }
+
+    private static func inferredAgentTitleFromVisibleTerminalText(_ visibleText: String) -> String? {
+        let lines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
+        guard lines.isEmpty == false else { return nil }
+        let candidateLines = Array(lines.suffix(16))
+
+        for line in candidateLines.reversed() {
+            let lowercasedLine = line.lowercased()
+            if lowercasedLine.contains("openai codex (v") {
+                return "Codex"
+            }
+            if lowercasedLine.contains("claude code v") {
+                return "Claude Code"
+            }
+        }
+        return nil
+    }
+
+    private static func canonicalInferredAgentTitle(from title: String) -> String? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else {
+            return nil
+        }
+
+        var candidate = trimmed
+        while let first = candidate.first,
+              first.isLetter == false,
+              first.isNumber == false {
+            candidate.removeFirst()
+        }
+        let normalizedLowercased = candidate.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        for inferredTitle in ["Codex", "Claude Code"] {
+            let lowercasedTitle = inferredTitle.lowercased()
+            guard normalizedLowercased.hasPrefix(lowercasedTitle) else {
+                continue
+            }
+            let boundaryIndex = normalizedLowercased.index(
+                normalizedLowercased.startIndex,
+                offsetBy: lowercasedTitle.count
+            )
+            if boundaryIndex == normalizedLowercased.endIndex {
+                return inferredTitle
+            }
+            let boundaryCharacter = normalizedLowercased[boundaryIndex]
+            if boundaryCharacter.isLetter == false && boundaryCharacter.isNumber == false {
+                return inferredTitle
+            }
+        }
+        return nil
+    }
+
+    private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
+        guard visibleLines.isEmpty == false else { return false }
+        let candidateLines = Array(visibleLines.suffix(16))
+
+        for line in candidateLines.reversed() {
+            let lowercased = line.lowercased()
+            if lowercased.contains("waiting for input")
+                || lowercased.contains("waiting on user input")
+                || lowercased.contains("needs your input")
+                || lowercased.contains("select an option")
+                || lowercased.contains("enter your choice")
+                || lowercased.contains("press enter to continue")
+                || lowercased.contains("press return to continue")
+                || lowercased.contains("approve command")
+                || lowercased.contains("approval required") {
+                return true
+            }
+
+            if lowercased.contains("y/n") || lowercased.contains("[y]") || lowercased.contains("[n]") {
+                return true
+            }
+        }
+
+        return false
+    }
+}
 
 @MainActor
 final class TerminalSurfaceController: PanelHostLifecycleControlling {

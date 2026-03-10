@@ -155,6 +155,7 @@ struct SidebarView: View {
         isSelected: Bool
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let hasActiveManagedSession = sessionRuntimeStore.hasActiveSession(in: workspace.id)
 
         return workspaceRowChrome(isSelected: isSelected) {
             VStack(alignment: .leading, spacing: 2) {
@@ -163,7 +164,11 @@ struct SidebarView: View {
                 } label: {
                     workspacePrimaryContent(
                         shortcutLabel: shortcutLabel,
-                        selectionSubtitle: selectionSubtitle(for: workspace, sessionStatuses: sessionStatuses),
+                        selectionSubtitle: selectionSubtitle(
+                            for: workspace,
+                            sessionStatuses: sessionStatuses,
+                            hasActiveManagedSession: hasActiveManagedSession
+                        ),
                         isSelected: isSelected
                     ) {
                         Text(workspace.title)
@@ -189,12 +194,17 @@ struct SidebarView: View {
         isSelected: Bool
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
+        let hasActiveManagedSession = sessionRuntimeStore.hasActiveSession(in: workspace.id)
 
         return workspaceRowChrome(isSelected: isSelected) {
             VStack(alignment: .leading, spacing: 2) {
                 workspacePrimaryContent(
                     shortcutLabel: shortcutLabel,
-                    selectionSubtitle: selectionSubtitle(for: workspace, sessionStatuses: sessionStatuses),
+                    selectionSubtitle: selectionSubtitle(
+                        for: workspace,
+                        sessionStatuses: sessionStatuses,
+                        hasActiveManagedSession: hasActiveManagedSession
+                    ),
                     isSelected: isSelected
                 ) {
                     TextField("Workspace name", text: $renameDraftTitle)
@@ -299,13 +309,19 @@ struct SidebarView: View {
 
     private func selectionSubtitle(
         for workspace: WorkspaceState,
-        sessionStatuses: [WorkspaceSessionStatus]
+        sessionStatuses: [WorkspaceSessionStatus],
+        hasActiveManagedSession: Bool
     ) -> String? {
         guard sessionStatuses.isEmpty || sessionStatuses.contains(where: { $0.status.kind == .working }) else {
             return nil
         }
         let paneCount = workspace.layoutTree.allSlotInfos.count
-        return workspaceSubtitle(workspace: workspace, paneCount: paneCount)
+        return workspaceSubtitle(
+            workspace: workspace,
+            paneCount: paneCount,
+            sessionStatuses: sessionStatuses,
+            hasActiveManagedSession: hasActiveManagedSession
+        )
     }
 
     @ViewBuilder
@@ -536,10 +552,25 @@ struct SidebarView: View {
         var id: UUID { workspaceID }
     }
 
-    /// Build a subtitle string like "3 panes · dev server running" or "1 pane"
-    private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
+    /// Build a subtitle string like "3 panes · 1 CC · 1 working" or "1 pane".
+    /// Managed session state is authoritative for built-in agent runs; terminal
+    /// activity scraping is only a fallback when there are no active sessions.
+    private func workspaceSubtitle(
+        workspace: WorkspaceState,
+        paneCount: Int,
+        sessionStatuses: [WorkspaceSessionStatus],
+        hasActiveManagedSession: Bool
+    ) -> String {
         let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
-        if let activitySubtext = terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id),
+        let heuristicSubtext = hasActiveManagedSession
+            ? nil
+            : terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id)
+        let activitySubtext = WorkspaceActivitySubtitleFormatter.subtext(
+            managedSessionStatuses: sessionStatuses,
+            hasActiveManagedSession: hasActiveManagedSession,
+            heuristicSubtext: heuristicSubtext
+        )
+        if let activitySubtext,
            activitySubtext.isEmpty == false {
             return "\(paneLabel) · \(activitySubtext)"
         }
@@ -583,6 +614,71 @@ struct SidebarView: View {
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
+    }
+}
+
+struct WorkspaceActivitySubtitleFormatter {
+    static func subtext(
+        managedSessionStatuses: [WorkspaceSessionStatus],
+        hasActiveManagedSession: Bool,
+        heuristicSubtext: String?
+    ) -> String? {
+        let activeManagedStatuses = managedSessionStatuses.filter(\.isActive)
+        if activeManagedStatuses.isEmpty == false {
+            return managedSubtext(for: activeManagedStatuses)
+        }
+        if hasActiveManagedSession {
+            return nil
+        }
+
+        guard let heuristicSubtext,
+              heuristicSubtext.isEmpty == false else {
+            return nil
+        }
+        return heuristicSubtext
+    }
+
+    private static func managedSubtext(for statuses: [WorkspaceSessionStatus]) -> String {
+        let claudeCount = statuses.filter { $0.agent == .claude }.count
+        let codexCount = statuses.filter { $0.agent == .codex }.count
+        let otherAgentCounts = Dictionary(grouping: statuses.filter { $0.agent != .claude && $0.agent != .codex }, by: \.agent)
+            .mapValues(\.count)
+
+        var agentSegments: [String] = []
+        if claudeCount > 0 {
+            agentSegments.append("\(claudeCount) CC")
+        }
+        if codexCount > 0 {
+            agentSegments.append("\(codexCount) Codex")
+        }
+        for agent in otherAgentCounts.keys.sorted(by: { $0.rawValue < $1.rawValue }) {
+            guard let count = otherAgentCounts[agent] else { continue }
+            agentSegments.append("\(count) \(agent.rawValue)")
+        }
+
+        let errorCount = statuses.filter { $0.status.kind == .error }.count
+        let needsApprovalCount = statuses.filter { $0.status.kind == .needsApproval }.count
+        let workingCount = statuses.filter { $0.status.kind == .working }.count
+        let readyCount = statuses.filter { $0.status.kind == .ready }.count
+
+        var statusSegments: [String] = []
+        if errorCount > 0 {
+            statusSegments.append("\(errorCount) error")
+        }
+        if needsApprovalCount > 0 {
+            statusSegments.append("\(needsApprovalCount) needs approval")
+        }
+        if workingCount > 0 {
+            statusSegments.append("\(workingCount) working")
+        }
+        if readyCount > 0 {
+            statusSegments.append("\(readyCount) ready")
+        }
+
+        if statusSegments.isEmpty {
+            return agentSegments.joined(separator: ", ")
+        }
+        return "\(agentSegments.joined(separator: ", ")) · \(statusSegments.joined(separator: ", "))"
     }
 }
 
