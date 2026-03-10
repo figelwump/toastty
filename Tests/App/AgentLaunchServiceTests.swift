@@ -42,6 +42,7 @@ struct AgentLaunchServiceTests {
         #expect(activeSession.repoRoot == projectRoot.path)
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
+        #expect(injectedCommand.contains("\(ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey)=1"))
         #expect(injectedCommand.contains("/bin/sh"))
         #expect(injectedCommand.contains("--socket-path /tmp/toastty-tests.sock"))
         #expect(injectedCommand.contains("agent run codex"))

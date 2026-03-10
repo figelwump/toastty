@@ -660,7 +660,10 @@ public enum ToasttyCLI {
                 socketPath: options.socketPath,
                 environment: environment
             )
-            try AgentRunCommandRunner.exec(preparedProcess)
+            try AgentRunCommandRunner.launch(
+                preparedProcess,
+                socketPath: options.socketPath
+            )
             return 0
         } catch let error as ToasttyCLIError {
             fputs((error.localizedDescription + "\n").applyingNewline(), stderr)
@@ -720,6 +723,121 @@ enum AgentRunCommandRunner {
         }
 
         return PreparedAgentProcess(argv: profile.argv, environment: childEnvironment)
+    }
+
+    static func launch(
+        _ preparedProcess: PreparedAgentProcess,
+        socketPath: String
+    ) throws {
+        try launch(preparedProcess, sender: { envelope in
+            try ToasttySocketClient(socketPath: socketPath).send(envelope)
+        }, executor: exec)
+    }
+
+    static func launch(
+        _ preparedProcess: PreparedAgentProcess,
+        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope,
+        executor: (PreparedAgentProcess) throws -> Void
+    ) throws {
+        let didRegister = try registerSessionStartIfNeeded(
+            preparedProcess,
+            sender: sender
+        )
+
+        do {
+            try executor(preparedProcess)
+        } catch {
+            if didRegister {
+                try? registerSessionStopAfterLaunchFailure(
+                    preparedProcess,
+                    sender: sender
+                )
+            }
+            throw error
+        }
+    }
+
+    @discardableResult
+    static func registerSessionStartIfNeeded(
+        _ preparedProcess: PreparedAgentProcess,
+        socketPath: String
+    ) throws -> Bool {
+        try registerSessionStartIfNeeded(preparedProcess) { envelope in
+            try ToasttySocketClient(socketPath: socketPath).send(envelope)
+        }
+    }
+
+    @discardableResult
+    static func registerSessionStartIfNeeded(
+        _ preparedProcess: PreparedAgentProcess,
+        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope
+    ) throws -> Bool {
+        guard let command = try baselineSessionStartCommand(for: preparedProcess) else {
+            return false
+        }
+
+        try sendLifecycleCommand(command, sender: sender)
+        return true
+    }
+
+    static func baselineSessionStartCommand(
+        for preparedProcess: PreparedAgentProcess
+    ) throws -> CLICommand? {
+        let environment = preparedProcess.environment
+        guard environment[ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey] != "1" else {
+            return nil
+        }
+
+        let agentValue = try requiredLaunchContextValue(
+            ToasttyLaunchContextEnvironment.agentKey,
+            in: environment
+        )
+        guard let agent = AgentKind(rawValue: agentValue) else {
+            throw ToasttyCLIError.runtime(
+                "\(ToasttyLaunchContextEnvironment.agentKey) must be a lowercase agent ID"
+            )
+        }
+
+        return .sessionStart(
+            sessionID: try requiredLaunchContextValue(
+                ToasttyLaunchContextEnvironment.sessionIDKey,
+                in: environment
+            ),
+            agent: agent,
+            panelID: try requiredLaunchContextUUID(
+                ToasttyLaunchContextEnvironment.panelIDKey,
+                in: environment
+            ),
+            cwd: nonEmptyValue(environment[ToasttyLaunchContextEnvironment.cwdKey]),
+            repoRoot: nonEmptyValue(environment[ToasttyLaunchContextEnvironment.repoRootKey])
+        )
+    }
+
+    static func registerSessionStopAfterLaunchFailure(
+        _ preparedProcess: PreparedAgentProcess,
+        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope
+    ) throws {
+        try sendLifecycleCommand(
+            failedLaunchSessionStopCommand(for: preparedProcess),
+            sender: sender
+        )
+    }
+
+    static func failedLaunchSessionStopCommand(
+        for preparedProcess: PreparedAgentProcess
+    ) throws -> CLICommand {
+        let environment = preparedProcess.environment
+        return .sessionStop(
+            sessionID: try requiredLaunchContextValue(
+                ToasttyLaunchContextEnvironment.sessionIDKey,
+                in: environment
+            ),
+            panelID: try requiredLaunchContextUUID(
+                ToasttyLaunchContextEnvironment.panelIDKey,
+                in: environment
+            ),
+            reason: "agent run launch failed"
+        )
     }
 
     static func exec(_ preparedProcess: PreparedAgentProcess) throws {
@@ -791,6 +909,50 @@ enum AgentRunCommandRunner {
         }
 
         return nil
+    }
+
+    private static func requiredLaunchContextValue(
+        _ environmentKey: String,
+        in environment: [String: String]
+    ) throws -> String {
+        guard let value = nonEmptyValue(environment[environmentKey]) else {
+            throw ToasttyCLIError.runtime("launch context missing \(environmentKey)")
+        }
+        return value
+    }
+
+    private static func requiredLaunchContextUUID(
+        _ environmentKey: String,
+        in environment: [String: String]
+    ) throws -> UUID {
+        let value = try requiredLaunchContextValue(environmentKey, in: environment)
+        guard let uuid = UUID(uuidString: value) else {
+            throw ToasttyCLIError.runtime("\(environmentKey) must be a UUID")
+        }
+        return uuid
+    }
+
+    private static func nonEmptyValue(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    @discardableResult
+    private static func sendLifecycleCommand(
+        _ command: CLICommand,
+        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope
+    ) throws -> AutomationResponseEnvelope {
+        let response = try sender(command.makeEventEnvelope())
+        guard response.ok else {
+            if let error = response.error {
+                throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+            }
+            throw ToasttyCLIError.runtime("request failed")
+        }
+        return response
     }
 }
 

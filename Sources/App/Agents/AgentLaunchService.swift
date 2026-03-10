@@ -321,6 +321,7 @@ private enum ShellCommandRenderer {
         panelID: UUID
     ) -> String {
         let command = [
+            "\(ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey)=1",
             quote(cliExecutablePath),
             "--socket-path",
             quote(socketPath),

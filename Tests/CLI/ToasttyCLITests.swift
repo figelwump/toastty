@@ -131,6 +131,141 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func agentRunRegistersBaselineSessionStartFromLaunchContext() throws {
+        let panelID = UUID()
+        let prepared = PreparedAgentProcess(
+            argv: ["codex", "--model", "gpt-5-codex"],
+            environment: [
+                "TOASTTY_AGENT": "codex",
+                "TOASTTY_SESSION_ID": "sess-123",
+                "TOASTTY_PANEL_ID": panelID.uuidString,
+                "TOASTTY_CWD": "/tmp/project",
+                "TOASTTY_REPO_ROOT": "/tmp",
+            ]
+        )
+
+        var sentEnvelope: AutomationEventEnvelope?
+        try AgentRunCommandRunner.registerSessionStartIfNeeded(prepared) { envelope in
+            sentEnvelope = envelope
+            return AutomationResponseEnvelope(
+                requestID: envelope.requestID ?? UUID().uuidString,
+                ok: true,
+                result: [
+                    "eventType": .string(envelope.eventType),
+                    "sessionID": .string(envelope.sessionID ?? ""),
+                ],
+                error: nil
+            )
+        }
+
+        let envelope = try #require(sentEnvelope)
+        #expect(envelope.eventType == "session.start")
+        #expect(envelope.sessionID == "sess-123")
+        #expect(envelope.panelID == panelID.uuidString)
+        #expect(envelope.payload.string("agent") == "codex")
+        #expect(envelope.payload.string("cwd") == "/tmp/project")
+        #expect(envelope.payload.string("repoRoot") == "/tmp")
+    }
+
+    @Test
+    func agentRunCanSkipBaselineSessionStartWhenCallerAlreadyRecordedIt() throws {
+        let prepared = PreparedAgentProcess(
+            argv: ["codex"],
+            environment: [
+                "TOASTTY_AGENT": "codex",
+                "TOASTTY_SESSION_ID": "sess-123",
+                "TOASTTY_PANEL_ID": UUID().uuidString,
+                ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey: "1",
+            ]
+        )
+
+        var didSend = false
+        try AgentRunCommandRunner.registerSessionStartIfNeeded(prepared) { envelope in
+            didSend = true
+            return AutomationResponseEnvelope(
+                requestID: envelope.requestID ?? UUID().uuidString,
+                ok: true,
+                result: nil,
+                error: nil
+            )
+        }
+
+        #expect(didSend == false)
+    }
+
+    @Test
+    func agentRunLaunchStopsTrackedSessionWhenExecFails() throws {
+        let panelID = UUID()
+        let prepared = PreparedAgentProcess(
+            argv: ["codex"],
+            environment: [
+                "TOASTTY_AGENT": "codex",
+                "TOASTTY_SESSION_ID": "sess-123",
+                "TOASTTY_PANEL_ID": panelID.uuidString,
+            ]
+        )
+
+        var sentEnvelopes: [AutomationEventEnvelope] = []
+        #expect(throws: ToasttyCLIError.runtime("exec failed")) {
+            try AgentRunCommandRunner.launch(
+                prepared,
+                sender: { envelope in
+                    sentEnvelopes.append(envelope)
+                    return AutomationResponseEnvelope(
+                        requestID: envelope.requestID ?? UUID().uuidString,
+                        ok: true,
+                        result: nil,
+                        error: nil
+                    )
+                },
+                executor: { _ in
+                    throw ToasttyCLIError.runtime("exec failed")
+                }
+            )
+        }
+
+        #expect(sentEnvelopes.map(\.eventType) == ["session.start", "session.stop"])
+        #expect(sentEnvelopes.last?.sessionID == "sess-123")
+        #expect(sentEnvelopes.last?.panelID == panelID.uuidString)
+        #expect(sentEnvelopes.last?.payload.string("reason") == "agent run launch failed")
+    }
+
+    @Test
+    func agentRunLaunchDoesNotExecWhenSessionRegistrationFails() throws {
+        let prepared = PreparedAgentProcess(
+            argv: ["codex"],
+            environment: [
+                "TOASTTY_AGENT": "codex",
+                "TOASTTY_SESSION_ID": "sess-123",
+                "TOASTTY_PANEL_ID": UUID().uuidString,
+            ]
+        )
+
+        var didExec = false
+        #expect(throws: ToasttyCLIError.runtime("INVALID_PAYLOAD: start rejected")) {
+            try AgentRunCommandRunner.launch(
+                prepared,
+                sender: { _ in
+                    AutomationResponseEnvelope(
+                        requestID: UUID().uuidString,
+                        ok: false,
+                        result: nil,
+                        error: AutomationResponseError(
+                            code: "INVALID_PAYLOAD",
+                            message: "start rejected"
+                        )
+                    )
+                },
+                executor: { _ in
+                    didExec = true
+                }
+            )
+        }
+
+        #expect(didExec == false)
+    }
+
+    @Test
     func sessionStartGeneratesSessionIDWhenOmitted() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(

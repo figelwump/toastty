@@ -166,6 +166,12 @@ For Toastty-owned launch flows, the CLI also accepts launch context from environ
 
 Explicit CLI flags override the launch-context environment when both are present.
 
+When launched via `toastty agent run`, the CLI emits a baseline `session.start`
+from the resolved launch context before it `exec`s the provider. Toastty-owned
+Run Agent launches set `__TOASTTY_INTERNAL_AGENT_RUN_SKIP_SESSION_START=1`
+because the app already recorded that baseline start before injecting the
+command.
+
 In the built-in Run Agent path, Toastty allocates the `sessionID`, records the
 baseline `session.start`, and launches the provider directly in the terminal
 with `TOASTTY_*` command-scoped environment assignments (including
