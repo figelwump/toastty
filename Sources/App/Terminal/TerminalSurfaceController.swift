@@ -142,11 +142,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let sourceContainerChanged = activeSourceContainer !== container
         let hostedViewWillReattach = hostedView.superview !== container
         let attachmentChanged = activeAttachment != attachment
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        let shouldDeferVisibleTransfer = shouldDeferHostTransfer(to: container)
-        #else
-        let shouldDeferVisibleTransfer = false
-        #endif
         // Claim the newest token even if the move is deferred so stale callbacks
         // from the previous SwiftUI container cannot reclaim the host. The
         // controller continues to receive attachHost/update retries while
@@ -154,9 +149,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         activeAttachment = attachment
         #if TOASTTY_HAS_GHOSTTY_KIT
         diagnostics.attachCount += 1
-        #endif
-
-        if shouldDeferVisibleTransfer {
+        if shouldDeferHostTransfer(to: container) {
             ToasttyLog.debug(
                 "Deferring panel host transfer until replacement container is ready",
                 category: .terminal,
@@ -172,6 +165,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
             return
         }
+        #endif
 
         activeSourceContainer = container
         if hostedViewWillReattach {

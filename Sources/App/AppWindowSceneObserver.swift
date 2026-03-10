@@ -53,6 +53,8 @@ final class WindowTrackingView: NSView {
 
 @MainActor
 final class AppWindowSceneObserverCoordinator: NSObject {
+    typealias MainActorScheduler = @Sendable (@escaping @MainActor @Sendable () -> Void) -> Void
+
     var windowID: UUID
     var desiredFrame: CGRect?
     var onWindowDidBecomeKey: @MainActor () -> Void
@@ -61,17 +63,27 @@ final class AppWindowSceneObserverCoordinator: NSObject {
 
     private weak var observedWindow: NSWindow?
     private var observerTokens: [NSObjectProtocol] = []
+    private let scheduleOnMainActor: MainActorScheduler
 
     init(
         windowID: UUID,
         onWindowDidBecomeKey: @escaping @MainActor () -> Void,
         onWindowFrameChange: @escaping @MainActor (CGRectCodable) -> Void,
-        onWindowWillClose: @escaping @MainActor () -> Void
+        onWindowWillClose: @escaping @MainActor () -> Void,
+        scheduleOnMainActor: @escaping MainActorScheduler = { operation in
+            // Hop to the next MainActor turn so scene/window callbacks triggered
+            // during updateNSView don't synchronously publish AppStore changes
+            // inside SwiftUI's view update transaction.
+            Task { @MainActor in
+                operation()
+            }
+        }
     ) {
         self.windowID = windowID
         self.onWindowDidBecomeKey = onWindowDidBecomeKey
         self.onWindowFrameChange = onWindowFrameChange
         self.onWindowWillClose = onWindowWillClose
+        self.scheduleOnMainActor = scheduleOnMainActor
         super.init()
     }
 
@@ -83,6 +95,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
 
         guard let window else { return }
         let notificationCenter = NotificationCenter.default
+        let scheduleOnMainActor = self.scheduleOnMainActor
 
         observerTokens.append(
             notificationCenter.addObserver(
@@ -90,7 +103,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                scheduleOnMainActor { [weak self] in
                     self?.onWindowDidBecomeKey()
                 }
             }
@@ -101,7 +114,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                scheduleOnMainActor { [weak self] in
                     self?.publishWindowFrame()
                 }
             }
@@ -112,7 +125,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                scheduleOnMainActor { [weak self] in
                     self?.publishWindowFrame()
                 }
             }
@@ -123,7 +136,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
                 object: window,
                 queue: .main
             ) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                scheduleOnMainActor { [weak self] in
                     self?.onWindowWillClose()
                 }
             }
@@ -132,7 +145,9 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         applyDesiredFrameIfNeeded()
 
         if window.isKeyWindow {
-            onWindowDidBecomeKey()
+            scheduleOnMainActor { [weak self] in
+                self?.onWindowDidBecomeKey()
+            }
         }
     }
 
