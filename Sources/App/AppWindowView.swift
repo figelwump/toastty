@@ -1,17 +1,9 @@
-import AppKit
 import SwiftUI
 
 struct AppWindowView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
-
-    private var terminalRuntimeContext: TerminalWindowRuntimeContext {
-        TerminalWindowRuntimeContext(
-            windowID: windowID,
-            runtimeRegistry: terminalRuntimeRegistry
-        )
-    }
+    let terminalRuntimeContext: TerminalWindowRuntimeContext
 
     var body: some View {
         HStack(spacing: 0) {
@@ -36,9 +28,6 @@ struct AppWindowView: View {
             scheduleWindowFocusRestore()
         }
         .onChange(of: slotFocusSignature) { _, _ in
-            scheduleWindowFocusRestore()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             scheduleWindowFocusRestore()
         }
     }

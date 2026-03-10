@@ -159,4 +159,42 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(workspaceOneTerminal.title == "Terminal 1")
         #expect(workspaceTwoTerminal.title == "Terminal 1")
     }
+
+    @Test
+    func makeAppStatePreservesMultipleWindowsAndSelectedWindow() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 20, y: 30, width: 1200, height: 800),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 200, y: 180, width: 960, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: secondWindowID,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+
+        #expect(restoredState.windows == state.windows)
+        #expect(restoredState.selectedWindowID == secondWindowID)
+        try StateValidator.validate(restoredState)
+    }
 }

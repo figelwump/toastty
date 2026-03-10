@@ -16,6 +16,12 @@ public struct AppReducer {
             state.selectedWindowID = windowID
             return true
 
+        case .updateWindowFrame(let windowID, let frame):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            guard state.windows[windowIndex].frame != frame else { return false }
+            state.windows[windowIndex].frame = frame
+            return true
+
         case .selectWorkspace(let windowID, let workspaceID):
             guard let index = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
             guard state.windows[index].workspaceIDs.contains(workspaceID) else { return false }
@@ -34,6 +40,9 @@ public struct AppReducer {
             state.windows[windowIndex].workspaceIDs.append(workspace.id)
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
             return true
+
+        case .closeWindow(let windowID):
+            return removeWindow(windowID, state: &state)
 
         case .renameWorkspace(let workspaceID, let title):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -757,6 +766,24 @@ public struct AppReducer {
         if state.selectedWindowID == nil {
             state.selectedWindowID = window.id
         }
+        return true
+    }
+
+    @discardableResult
+    private static func removeWindow(_ windowID: UUID, state: inout AppState) -> Bool {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        let removedWindow = state.windows.remove(at: windowIndex)
+
+        for workspaceID in removedWindow.workspaceIDs {
+            state.workspacesByID.removeValue(forKey: workspaceID)
+        }
+
+        if state.selectedWindowID == windowID {
+            state.selectedWindowID = state.windows.first?.id
+        } else if state.selectedWindowID == nil {
+            state.selectedWindowID = state.windows.first?.id
+        }
+
         return true
     }
 

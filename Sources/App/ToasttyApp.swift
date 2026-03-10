@@ -183,6 +183,31 @@ private final class AppTerminationObserver: NSObject {
     }
 }
 
+private final class AppResignActiveObserver: NSObject {
+    private let onDidResignActive: () -> Void
+
+    init(onDidResignActive: @escaping () -> Void) {
+        self.onDidResignActive = onDidResignActive
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDidResignActiveNotification),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc
+    private func handleDidResignActiveNotification(_ notification: Notification) {
+        _ = notification
+        onDidResignActive()
+    }
+}
+
 @MainActor
 @main
 struct ToasttyApp: App {
@@ -191,6 +216,7 @@ struct ToasttyApp: App {
     @NSApplicationDelegateAdaptor(ReloadConfigurationMenuIconInstaller.self)
     private var reloadConfigurationMenuIconInstaller
     @StateObject private var store: AppStore
+    private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
@@ -199,12 +225,14 @@ struct ToasttyApp: App {
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
+    private let appResignActiveObserver: AppResignActiveObserver
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
     init() {
+        Self.configureWindowPersistenceDefaults()
         let bootstrap = AppBootstrap.make()
         let persistTerminalFontPreference = bootstrap.automationConfig == nil
         let store = AppStore(
@@ -234,9 +262,13 @@ struct ToasttyApp: App {
         )
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
+        appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
+        appResignActiveObserver = AppResignActiveObserver { [weak terminalRuntimeRegistry] in
+            terminalRuntimeRegistry?.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -281,10 +313,11 @@ struct ToasttyApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            AppRootView(
+        WindowGroup(id: AppWindowSceneID.value) {
+            AppWindowSceneHostView(
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 disableAnimations: disableAnimations
@@ -436,5 +469,14 @@ struct ToasttyApp: App {
         } else {
             _ = store.send(.resetGlobalTerminalFont)
         }
+    }
+
+    @MainActor
+    private static func configureWindowPersistenceDefaults() {
+        // Toastty persists window/workspace state explicitly, so AppKit's
+        // saved-state restoration only adds stale SwiftUI scene identifiers.
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: "ApplePersistenceIgnoreState")
+        defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
     }
 }

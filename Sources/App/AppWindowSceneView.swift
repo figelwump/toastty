@@ -1,22 +1,34 @@
 import AppKit
+import CoreState
 import SwiftUI
 
-struct AppRootView: View {
+struct AppWindowSceneView: View {
+    let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
-    let automationLifecycle: AutomationLifecycle?
-    let automationStartupError: String?
     let disableAnimations: Bool
+
     @State private var fontHUDPoints: Double?
     @State private var hideFontHUDTask: Task<Void, Never>?
 
+    private var terminalRuntimeContext: TerminalWindowRuntimeContext {
+        TerminalWindowRuntimeContext(
+            windowID: windowID,
+            runtimeRegistry: terminalRuntimeRegistry
+        )
+    }
+
+    private var windowState: WindowState? {
+        store.window(id: windowID)
+    }
+
     var body: some View {
         Group {
-            if let selectedWindowID = store.state.selectedWindowID {
+            if windowState != nil {
                 AppWindowView(
-                    windowID: selectedWindowID,
+                    windowID: windowID,
                     store: store,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                    terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
                 EmptyStateView()
@@ -32,11 +44,18 @@ struct AppRootView: View {
                     .padding(.top, 12)
             }
         }
-        .task {
-            automationLifecycle?.markReady(runtimeError: automationStartupError)
+        .background {
+            AppWindowSceneObserver(
+                windowID: windowID,
+                desiredFrame: windowState?.frame,
+                onWindowDidBecomeKey: handleWindowDidBecomeKey,
+                onWindowFrameChange: handleWindowFrameChange,
+                onWindowWillClose: handleWindowWillClose
+            )
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
-            terminalRuntimeRegistry.synchronizeGhosttySurfaceFocusFromApplicationState()
+        .onDisappear {
+            hideFontHUDTask?.cancel()
+            hideFontHUDTask = nil
         }
         .onChange(of: store.state.globalTerminalFontPoints) { _, nextPoints in
             fontHUDPoints = nextPoints
@@ -51,16 +70,35 @@ struct AppRootView: View {
                 hideFontHUDTask = nil
             }
         }
-        .onDisappear {
-            hideFontHUDTask?.cancel()
-            hideFontHUDTask = nil
-        }
         .transaction { transaction in
             if disableAnimations {
                 transaction.disablesAnimations = true
                 transaction.animation = nil
             }
         }
+    }
+
+    private func handleWindowDidBecomeKey() {
+        guard windowState != nil else { return }
+        _ = store.send(.selectWindow(windowID: windowID))
+        scheduleWindowFocusRestore()
+    }
+
+    private func handleWindowFrameChange(_ frame: CGRectCodable) {
+        _ = store.send(.updateWindowFrame(windowID: windowID, frame: frame))
+    }
+
+    private func handleWindowWillClose() {
+        guard windowState != nil else { return }
+        _ = store.send(.closeWindow(windowID: windowID))
+    }
+
+    private func scheduleWindowFocusRestore(avoidStealingKeyboardFocus: Bool = true) {
+        guard let workspaceID = store.selectedWorkspace(in: windowID)?.id else { return }
+        terminalRuntimeContext.scheduleWorkspaceFocusRestore(
+            workspaceID: workspaceID,
+            avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
+        )
     }
 }
 
