@@ -260,7 +260,8 @@ struct ToasttyApp: App {
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
-            agentCatalogProvider: agentCatalogStore
+            agentCatalogProvider: agentCatalogStore,
+            socketPathProvider: { socketPath }
         )
         do {
             automationSocketServer = try AutomationSocketServer(

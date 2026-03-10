@@ -81,6 +81,7 @@ final class AgentLaunchService {
     private let fileManager: FileManager
     private let nowProvider: @Sendable () -> Date
     private let cliExecutablePathProvider: @Sendable () -> String?
+    private let socketPathProvider: @Sendable () -> String
 
     init(
         store: AppStore,
@@ -89,7 +90,8 @@ final class AgentLaunchService {
         agentCatalogProvider: any AgentCatalogProviding,
         fileManager: FileManager = .default,
         nowProvider: @escaping @Sendable () -> Date = Date.init,
-        cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath
+        cliExecutablePathProvider: @escaping @Sendable () -> String? = AgentLaunchService.defaultCLIExecutablePath,
+        socketPathProvider: @escaping @Sendable () -> String = AgentLaunchService.defaultSocketPath
     ) {
         self.store = store
         self.terminalCommandRouter = terminalCommandRouter
@@ -98,6 +100,7 @@ final class AgentLaunchService {
         self.fileManager = fileManager
         self.nowProvider = nowProvider
         self.cliExecutablePathProvider = cliExecutablePathProvider
+        self.socketPathProvider = socketPathProvider
     }
 
     func canLaunchAgent(profileID: String? = nil, workspaceID: UUID? = nil, panelID: UUID? = nil) -> Bool {
@@ -135,8 +138,10 @@ final class AgentLaunchService {
         }
         let repoRoot = RepositoryRootLocator.inferRepoRoot(from: target.cwd, fileManager: fileManager)
         let cliExecutablePath = try resolveCLIExecutablePath()
+        let socketPath = socketPathProvider()
         let commandLine = ShellCommandRenderer.render(
             cliExecutablePath: cliExecutablePath,
+            socketPath: socketPath,
             profileID: launchProfile.id,
             sessionID: sessionID,
             panelID: target.panelID
@@ -294,6 +299,10 @@ final class AgentLaunchService {
             .appendingPathComponent("toastty")
             .path
     }
+
+    nonisolated private static func defaultSocketPath() -> String {
+        AutomationConfig.resolveServerSocketPath(environment: ProcessInfo.processInfo.environment)
+    }
 }
 
 private struct LaunchTarget {
@@ -306,12 +315,15 @@ private struct LaunchTarget {
 private enum ShellCommandRenderer {
     static func render(
         cliExecutablePath: String,
+        socketPath: String,
         profileID: String,
         sessionID: String,
         panelID: UUID
     ) -> String {
         let command = [
             quote(cliExecutablePath),
+            "--socket-path",
+            quote(socketPath),
             "agent",
             "run",
             quote(profileID),

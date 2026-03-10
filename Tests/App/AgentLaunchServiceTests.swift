@@ -25,7 +25,8 @@ struct AgentLaunchServiceTests {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
             nowProvider: { Date(timeIntervalSince1970: 1_700_000_000) },
-            cliExecutablePathProvider: { "/bin/sh" }
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
         )
 
         let result = try service.launch(profileID: "codex")
@@ -42,6 +43,7 @@ struct AgentLaunchServiceTests {
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
         #expect(injectedCommand.contains("/bin/sh"))
+        #expect(injectedCommand.contains("--socket-path /tmp/toastty-tests.sock"))
         #expect(injectedCommand.contains("agent run codex"))
         #expect(injectedCommand.contains("--panel \(panelID.uuidString)"))
         #expect(injectedCommand.contains("--session \(result.sessionID)"))
@@ -63,12 +65,38 @@ struct AgentLaunchServiceTests {
             terminalCommandRouter: terminalRouter,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
-            cliExecutablePathProvider: { "/bin/sh" }
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
         )
 
         #expect(throws: AgentLaunchError.panelBusy(runningCommand: "npm run dev")) {
             try service.launch(profileID: "claude")
         }
+    }
+
+    @Test
+    func launchQuotesSocketPathWhenItContainsSpaces() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        let agentCatalogProvider = TestAgentCatalogProvider()
+        let workspace = try #require(store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty sockets/test.sock" }
+        )
+
+        _ = try service.launch(profileID: "codex")
+
+        let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
+        #expect(injectedCommand.contains("--socket-path '/tmp/toastty sockets/test.sock'"))
     }
 
     private func makeProjectRoot() throws -> URL {

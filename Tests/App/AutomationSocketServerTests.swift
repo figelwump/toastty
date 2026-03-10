@@ -325,7 +325,8 @@ struct AutomationSocketServerTests {
             terminalCommandRouter: terminalCommandRouter ?? terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogProvider,
-            cliExecutablePathProvider: { "/bin/sh" }
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { socketPath }
         )
         let server = try AutomationSocketServer(
             socketPath: socketPath,
