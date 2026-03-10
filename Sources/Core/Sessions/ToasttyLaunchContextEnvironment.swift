@@ -8,5 +8,4 @@ public enum ToasttyLaunchContextEnvironment {
     public static let repoRootKey = "TOASTTY_REPO_ROOT"
     public static let socketPathKey = "TOASTTY_SOCKET_PATH"
     public static let cliPathKey = "TOASTTY_CLI_PATH"
-    public static let agentRunSkipSessionStartKey = "__TOASTTY_INTERNAL_AGENT_RUN_SKIP_SESSION_START"
 }

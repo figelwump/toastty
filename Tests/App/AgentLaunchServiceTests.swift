@@ -52,7 +52,6 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=\(projectRoot.path)"))
         #expect(trimmedCommand.hasSuffix(" codex"))
         #expect(injectedCommand.contains(" agent run ") == false)
-        #expect(injectedCommand.contains(ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey) == false)
         #expect(injectedCommand.hasPrefix("exec ") == false)
         #expect(injectedCommand.hasSuffix("\n"))
     }

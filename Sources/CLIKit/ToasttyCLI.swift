@@ -13,7 +13,6 @@ struct CLIInvocation: Equatable {
 }
 
 enum CLICommand: Equatable {
-    case agentRun(AgentRunCommand)
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
@@ -22,8 +21,6 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
-        case .agentRun:
-            preconditionFailure("agent run is a local CLI command and does not emit a socket event")
         case .notify(let title, let body, let workspaceID, let panelID):
             var payload: [String: AutomationJSONValue] = [
                 "title": .string(title),
@@ -110,8 +107,6 @@ enum CLICommand: Equatable {
 
     func successMessage(using response: AutomationResponseEnvelope) -> String {
         switch self {
-        case .agentRun(let command):
-            return "launched \(command.profileID)"
         case .notify:
             return "notification emitted"
         case .sessionStart(let sessionID, _, _, _, _):
@@ -144,10 +139,6 @@ public enum ToasttyCLI {
     public static func run(arguments: [String], environment: [String: String]) -> Int32 {
         do {
             let invocation = try parse(arguments: arguments, environment: environment)
-            if case .agentRun(let command) = invocation.command {
-                return runAgentCommand(command, options: invocation.options, environment: environment)
-            }
-
             let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
             let response = try client.send(invocation.command.makeEventEnvelope())
 
@@ -185,12 +176,6 @@ public enum ToasttyCLI {
         }
 
         switch command {
-        case "agent":
-            return CLIInvocation(
-                options: options,
-                command: try parseAgentCommand(Array(remainingArguments.dropFirst()), environment: environment)
-            )
-
         case "notify":
             return CLIInvocation(
                 options: options,
@@ -210,7 +195,6 @@ public enum ToasttyCLI {
 
     static let usage = """
     Usage:
-      toastty [--json] [--socket-path <path>] agent run <profile-id> [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind working|needs_approval|ready|error --summary <text> [--detail <text>]
@@ -267,57 +251,6 @@ public enum ToasttyCLI {
             workspaceID: workspaceID,
             panelID: panelID
         )
-    }
-
-    private static func parseAgentCommand(
-        _ arguments: [String],
-        environment: [String: String]
-    ) throws -> CLICommand {
-        guard let subcommand = arguments.first else {
-            throw ToasttyCLIError.usage("agent requires a subcommand\n\n\(usage)")
-        }
-
-        let remainingArguments = Array(arguments.dropFirst())
-        switch subcommand {
-        case "run":
-            let parsed = try parseCommandArguments(
-                remainingArguments,
-                valueOptions: ["--session", "--panel"]
-            )
-
-            guard parsed.positionals.count == 1 else {
-                throw ToasttyCLIError.usage("agent run requires <profile-id>\n\n\(usage)")
-            }
-
-            let profileID = parsed.positionals[0]
-            guard let agent = AgentKind(rawValue: profileID) else {
-                throw ToasttyCLIError.usage("profile-id must be a lowercase agent ID\n\n\(usage)")
-            }
-
-            let sessionID = try requireResolvedValue(
-                flag: "--session",
-                environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
-                in: parsed,
-                environment: environment
-            ).value
-            let panelID = try parseRequiredUUID(
-                flag: "--panel",
-                environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
-                in: parsed,
-                environment: environment
-            )
-
-            return .agentRun(
-                AgentRunCommand(
-                    profileID: agent.rawValue,
-                    sessionID: sessionID,
-                    panelID: panelID
-                )
-            )
-
-        default:
-            throw ToasttyCLIError.usage("unknown agent subcommand: \(subcommand)\n\n\(usage)")
-        }
     }
 
     private static func parseSessionCommand(
@@ -649,311 +582,6 @@ public enum ToasttyCLI {
         FileHandle.standardOutput.write((string.applyingNewline()).data(using: .utf8) ?? Data())
     }
 
-    private static func runAgentCommand(
-        _ command: AgentRunCommand,
-        options: CLIOptions,
-        environment: [String: String]
-    ) -> Int32 {
-        do {
-            let preparedProcess = try AgentRunCommandRunner.prepareProcess(
-                command: command,
-                socketPath: options.socketPath,
-                environment: environment
-            )
-            try AgentRunCommandRunner.launch(
-                preparedProcess,
-                socketPath: options.socketPath
-            )
-            return 0
-        } catch let error as ToasttyCLIError {
-            fputs((error.localizedDescription + "\n").applyingNewline(), stderr)
-            return 1
-        } catch {
-            fputs((error.localizedDescription + "\n").applyingNewline(), stderr)
-            return 1
-        }
-    }
-}
-
-struct AgentRunCommand: Equatable {
-    let profileID: String
-    let sessionID: String
-    let panelID: UUID
-}
-
-struct PreparedAgentProcess: Equatable {
-    let argv: [String]
-    let environment: [String: String]
-}
-
-enum AgentRunCommandRunner {
-    static func prepareProcess(
-        command: AgentRunCommand,
-        socketPath: String,
-        environment: [String: String],
-        fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory(),
-        currentDirectoryPath: String = FileManager.default.currentDirectoryPath,
-        executablePath: String? = ProcessInfo.processInfo.arguments.first
-    ) throws -> PreparedAgentProcess {
-        let catalog = try AgentProfilesFile.load(
-            fileManager: fileManager,
-            homeDirectoryPath: homeDirectoryPath
-        )
-        guard let profile = catalog.profile(id: command.profileID) else {
-            throw ToasttyCLIError.runtime(
-                "Unknown agent profile '\(command.profileID)' in \(AgentProfilesFile.fileURL(homeDirectoryPath: homeDirectoryPath).path)"
-            )
-        }
-
-        var childEnvironment = environment
-        childEnvironment[ToasttyLaunchContextEnvironment.agentKey] = profile.id
-        childEnvironment[ToasttyLaunchContextEnvironment.socketPathKey] = socketPath
-        childEnvironment[ToasttyLaunchContextEnvironment.sessionIDKey] = command.sessionID
-        childEnvironment[ToasttyLaunchContextEnvironment.panelIDKey] = command.panelID.uuidString
-
-        if let executablePath, executablePath.isEmpty == false {
-            childEnvironment[ToasttyLaunchContextEnvironment.cliPathKey] = executablePath
-        }
-        if currentDirectoryPath.isEmpty == false {
-            childEnvironment[ToasttyLaunchContextEnvironment.cwdKey] = currentDirectoryPath
-        }
-        if let repoRoot = RepositoryRootLocator.inferRepoRoot(from: currentDirectoryPath, fileManager: fileManager) {
-            childEnvironment[ToasttyLaunchContextEnvironment.repoRootKey] = repoRoot
-        }
-
-        return PreparedAgentProcess(argv: profile.argv, environment: childEnvironment)
-    }
-
-    static func launch(
-        _ preparedProcess: PreparedAgentProcess,
-        socketPath: String
-    ) throws {
-        try launch(preparedProcess, sender: { envelope in
-            try ToasttySocketClient(socketPath: socketPath).send(envelope)
-        }, executor: exec)
-    }
-
-    static func launch(
-        _ preparedProcess: PreparedAgentProcess,
-        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope,
-        executor: (PreparedAgentProcess) throws -> Void
-    ) throws {
-        let didRegister = try registerSessionStartIfNeeded(
-            preparedProcess,
-            sender: sender
-        )
-
-        do {
-            try executor(preparedProcess)
-        } catch {
-            if didRegister {
-                try? registerSessionStopAfterLaunchFailure(
-                    preparedProcess,
-                    sender: sender
-                )
-            }
-            throw error
-        }
-    }
-
-    @discardableResult
-    static func registerSessionStartIfNeeded(
-        _ preparedProcess: PreparedAgentProcess,
-        socketPath: String
-    ) throws -> Bool {
-        try registerSessionStartIfNeeded(preparedProcess) { envelope in
-            try ToasttySocketClient(socketPath: socketPath).send(envelope)
-        }
-    }
-
-    @discardableResult
-    static func registerSessionStartIfNeeded(
-        _ preparedProcess: PreparedAgentProcess,
-        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope
-    ) throws -> Bool {
-        guard let command = try baselineSessionStartCommand(for: preparedProcess) else {
-            return false
-        }
-
-        try sendLifecycleCommand(command, sender: sender)
-        return true
-    }
-
-    static func baselineSessionStartCommand(
-        for preparedProcess: PreparedAgentProcess
-    ) throws -> CLICommand? {
-        let environment = preparedProcess.environment
-        guard environment[ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey] != "1" else {
-            return nil
-        }
-
-        let agentValue = try requiredLaunchContextValue(
-            ToasttyLaunchContextEnvironment.agentKey,
-            in: environment
-        )
-        guard let agent = AgentKind(rawValue: agentValue) else {
-            throw ToasttyCLIError.runtime(
-                "\(ToasttyLaunchContextEnvironment.agentKey) must be a lowercase agent ID"
-            )
-        }
-
-        return .sessionStart(
-            sessionID: try requiredLaunchContextValue(
-                ToasttyLaunchContextEnvironment.sessionIDKey,
-                in: environment
-            ),
-            agent: agent,
-            panelID: try requiredLaunchContextUUID(
-                ToasttyLaunchContextEnvironment.panelIDKey,
-                in: environment
-            ),
-            cwd: nonEmptyValue(environment[ToasttyLaunchContextEnvironment.cwdKey]),
-            repoRoot: nonEmptyValue(environment[ToasttyLaunchContextEnvironment.repoRootKey])
-        )
-    }
-
-    static func registerSessionStopAfterLaunchFailure(
-        _ preparedProcess: PreparedAgentProcess,
-        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope
-    ) throws {
-        try sendLifecycleCommand(
-            failedLaunchSessionStopCommand(for: preparedProcess),
-            sender: sender
-        )
-    }
-
-    static func failedLaunchSessionStopCommand(
-        for preparedProcess: PreparedAgentProcess
-    ) throws -> CLICommand {
-        let environment = preparedProcess.environment
-        return .sessionStop(
-            sessionID: try requiredLaunchContextValue(
-                ToasttyLaunchContextEnvironment.sessionIDKey,
-                in: environment
-            ),
-            panelID: try requiredLaunchContextUUID(
-                ToasttyLaunchContextEnvironment.panelIDKey,
-                in: environment
-            ),
-            reason: "agent run launch failed"
-        )
-    }
-
-    static func exec(_ preparedProcess: PreparedAgentProcess) throws {
-        guard let executable = preparedProcess.argv.first, executable.isEmpty == false else {
-            throw ToasttyCLIError.runtime("Configured argv is empty")
-        }
-        let currentDirectoryPath = preparedProcess.environment[ToasttyLaunchContextEnvironment.cwdKey]
-            ?? FileManager.default.currentDirectoryPath
-        guard let resolvedExecutable = resolveExecutablePath(
-            executable: executable,
-            environment: preparedProcess.environment,
-            currentDirectoryPath: currentDirectoryPath
-        ) else {
-            throw ToasttyCLIError.runtime(
-                "Configured argv[0] '\(executable)' was not found on PATH. Toastty runs configured argv directly, so shell aliases and functions are not supported."
-            )
-        }
-
-        for (key, value) in preparedProcess.environment {
-            setenv(key, value, 1)
-        }
-
-        let argvPointers = preparedProcess.argv.map { strdup($0) } + [nil]
-        defer {
-            for pointer in argvPointers where pointer != nil {
-                free(pointer)
-            }
-        }
-
-        _ = argvPointers.withUnsafeBufferPointer { buffer in
-            execvp(executable, UnsafeMutablePointer(mutating: buffer.baseAddress))
-        }
-
-        if errno == ENOENT {
-            throw ToasttyCLIError.runtime(
-                "Failed to launch \(resolvedExecutable): No such file or directory. If this is a script, check that its interpreter exists."
-            )
-        }
-        let failureReason = String(cString: strerror(errno))
-        throw ToasttyCLIError.runtime("Failed to launch \(executable): \(failureReason)")
-    }
-
-    static func resolveExecutablePath(
-        executable: String,
-        environment: [String: String],
-        currentDirectoryPath: String
-    ) -> String? {
-        if executable.contains("/") {
-            let candidatePath: String
-            if executable.hasPrefix("/") {
-                candidatePath = executable
-            } else {
-                candidatePath = URL(filePath: currentDirectoryPath, directoryHint: .isDirectory)
-                    .appending(path: executable, directoryHint: .notDirectory)
-                    .path
-            }
-            return FileManager.default.isExecutableFile(atPath: candidatePath) ? candidatePath : nil
-        }
-
-        let path = environment["PATH"] ?? ""
-        for entry in path.split(separator: ":", omittingEmptySubsequences: false) {
-            let basePath = entry.isEmpty ? currentDirectoryPath : String(entry)
-            let candidatePath = URL(filePath: basePath, directoryHint: .isDirectory)
-                .appending(path: executable, directoryHint: .notDirectory)
-                .path
-            if FileManager.default.isExecutableFile(atPath: candidatePath) {
-                return candidatePath
-            }
-        }
-
-        return nil
-    }
-
-    private static func requiredLaunchContextValue(
-        _ environmentKey: String,
-        in environment: [String: String]
-    ) throws -> String {
-        guard let value = nonEmptyValue(environment[environmentKey]) else {
-            throw ToasttyCLIError.runtime("launch context missing \(environmentKey)")
-        }
-        return value
-    }
-
-    private static func requiredLaunchContextUUID(
-        _ environmentKey: String,
-        in environment: [String: String]
-    ) throws -> UUID {
-        let value = try requiredLaunchContextValue(environmentKey, in: environment)
-        guard let uuid = UUID(uuidString: value) else {
-            throw ToasttyCLIError.runtime("\(environmentKey) must be a UUID")
-        }
-        return uuid
-    }
-
-    private static func nonEmptyValue(_ value: String?) -> String? {
-        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
-              trimmed.isEmpty == false else {
-            return nil
-        }
-        return trimmed
-    }
-
-    @discardableResult
-    private static func sendLifecycleCommand(
-        _ command: CLICommand,
-        sender: (AutomationEventEnvelope) throws -> AutomationResponseEnvelope
-    ) throws -> AutomationResponseEnvelope {
-        let response = try sender(command.makeEventEnvelope())
-        guard response.ok else {
-            if let error = response.error {
-                throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
-            }
-            throw ToasttyCLIError.runtime("request failed")
-        }
-        return response
-    }
 }
 
 private struct ParsedCommandArguments {
