@@ -751,18 +751,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         _ = invokeGhosttyBindingAction(action, on: surface)
     }
 
-    private static func currentWorkingDirectory(for surface: ghostty_surface_t) -> String? {
-        let inheritedConfig = ghostty_surface_inherited_config(surface, GHOSTTY_SURFACE_CONTEXT_SPLIT)
-        guard let rawPointer = inheritedConfig.working_directory else {
-            return nil
-        }
-        let candidate = String(cString: rawPointer).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard candidate.isEmpty == false else {
-            return nil
-        }
-        return candidate
-    }
-
     @discardableResult
     private func invokeGhosttyBindingAction(_ action: String, on surface: ghostty_surface_t) -> Bool {
         let cString = action.utf8CString
@@ -896,10 +884,11 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             expectedWorkingDirectory: requestedWorkingDirectory
         )
 
-        delegate.reconcileSurfaceWorkingDirectoryFromSurface(
+        // The requested cwd is just launch config, not authoritative live shell
+        // state. Ask metadata to refresh from the spawned child process instead.
+        delegate.requestImmediateProcessWorkingDirectoryRefresh(
             panelID: panelID,
-            workingDirectory: Self.currentWorkingDirectory(for: surface) ?? createdSurface.workingDirectory,
-            source: "surface_create"
+            source: "surface_create_process"
         )
     }
 

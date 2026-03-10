@@ -252,13 +252,11 @@ private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceContro
         _ = expectedWorkingDirectory
     }
 
-    func reconcileSurfaceWorkingDirectoryFromSurface(
+    func requestImmediateProcessWorkingDirectoryRefresh(
         panelID: UUID,
-        workingDirectory: String?,
         source: String
     ) {
         _ = panelID
-        _ = workingDirectory
         _ = source
     }
 }

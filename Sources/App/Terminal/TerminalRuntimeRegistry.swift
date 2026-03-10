@@ -528,14 +528,12 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         )
     }
 
-    func reconcileSurfaceWorkingDirectoryFromSurface(
+    func requestImmediateProcessWorkingDirectoryRefresh(
         panelID: UUID,
-        workingDirectory: String?,
         source: String
     ) {
-        reconcileSurfaceWorkingDirectory(
+        metadataService?.requestImmediateWorkingDirectoryRefresh(
             panelID: panelID,
-            workingDirectory: workingDirectory,
             source: source
         )
     }

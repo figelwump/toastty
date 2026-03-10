@@ -21,9 +21,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
         previousChildren: Set<pid_t>,
         expectedWorkingDirectory: String
     )
-    func reconcileSurfaceWorkingDirectoryFromSurface(
+    func requestImmediateProcessWorkingDirectoryRefresh(
         panelID: UUID,
-        workingDirectory: String?,
         source: String
     )
     #endif
