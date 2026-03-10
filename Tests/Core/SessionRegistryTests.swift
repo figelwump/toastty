@@ -284,7 +284,7 @@ struct SessionRegistryTests {
     }
 
     @Test
-    func workspaceStatusesFallBackToMostRecentStoppedSession() throws {
+    func workspaceStatusesHideStoppedSessions() {
         var registry = SessionRegistry()
         let workspaceID = UUID()
         let now = Date(timeIntervalSince1970: 900)
@@ -323,11 +323,51 @@ struct SessionRegistryTests {
         )
         registry.stopSession(sessionID: "latest-ready", at: now.addingTimeInterval(5))
 
-        let workspaceStatus = try #require(registry.workspaceStatuses(for: workspaceID).first)
-        #expect(workspaceStatus.sessionID == "latest-ready")
-        #expect(workspaceStatus.status.kind == .ready)
-        #expect(workspaceStatus.status.detail == "Added auth middleware")
-        #expect(workspaceStatus.isActive == false)
+        #expect(registry.workspaceStatuses(for: workspaceID).isEmpty)
+    }
+
+    @Test
+    func workspaceStatusesIgnoreStoppedSessionsWhenActiveStatusesExist() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 950)
+
+        registry.startSession(
+            sessionID: "stopped",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "stopped",
+            status: SessionStatus(kind: .ready, summary: "ready", detail: "Finished cleanup"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "stopped", at: now.addingTimeInterval(2))
+
+        registry.startSession(
+            sessionID: "active",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(3)
+        )
+        registry.updateStatus(
+            sessionID: "active",
+            status: SessionStatus(kind: .working, summary: "editing", detail: "Updating sidebar state"),
+            at: now.addingTimeInterval(4)
+        )
+
+        let workspaceStatuses = registry.workspaceStatuses(for: workspaceID)
+        #expect(workspaceStatuses.map(\.sessionID) == ["active"])
+        #expect(workspaceStatuses.map(\.isActive) == [true])
     }
 
     @Test

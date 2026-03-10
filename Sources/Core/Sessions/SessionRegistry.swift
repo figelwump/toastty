@@ -152,29 +152,14 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     public func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
-        let candidates = sessionsByID.values.filter { record in
-            record.workspaceID == workspaceID && record.status != nil
-        }
-        let activeCandidates = candidates.filter(\.isActive)
-
-        if activeCandidates.isEmpty == false {
-            return activeCandidates
-                .sorted(by: activeWorkspaceStatusSort)
-                .compactMap(Self.workspaceSessionStatus(from:))
-        }
-
-        let activeSessionExists = sessionsByID.values.contains { record in
-            record.workspaceID == workspaceID && record.isActive
-        }
-        if activeSessionExists {
-            return []
-        }
-
-        guard let latestStoppedRecord = candidates.sorted(by: stoppedWorkspaceStatusSort).first,
-              let status = Self.workspaceSessionStatus(from: latestStoppedRecord) else {
-            return []
-        }
-        return [status]
+        sessionsByID.values
+            .filter { record in
+                record.workspaceID == workspaceID &&
+                record.status != nil &&
+                record.isActive
+            }
+            .sorted(by: activeWorkspaceStatusSort)
+            .compactMap(Self.workspaceSessionStatus(from:))
     }
 
     public mutating func pruneStoppedSessions(olderThan cutoff: Date) {
