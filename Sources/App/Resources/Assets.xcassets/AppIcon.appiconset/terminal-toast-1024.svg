@@ -25,8 +25,8 @@
   <path d="M296 940 L296 380 Q296 180 448 180 L576 180 Q728 180 728 380 L728 940 Z" fill="url(#toastInner)"/>
 
   <!-- Terminal chevron > -->
-  <path d="M360 460 L540 590 L360 720" stroke="#E8A849" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <path d="M360 460 L540 590 L360 720" stroke="#F5A623" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 
   <!-- Cursor underscore _ -->
-  <rect x="588" y="672" width="152" height="52" rx="26" fill="#E8A849"/>
+  <rect x="588" y="672" width="152" height="52" rx="26" fill="#F5A623"/>
 </svg>
