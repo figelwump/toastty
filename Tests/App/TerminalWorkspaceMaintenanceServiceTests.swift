@@ -7,6 +7,30 @@ import XCTest
 
 @MainActor
 final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
+    func testSynchronizePublishesPanelDisplayTitleOverrides() throws {
+        let fixture = try makeMaintenanceFixture()
+        fixture.visibleTextStore.textByPanelID[fixture.panelID] = """
+        vishal@host ~/repo % claude
+        Claude Code v1.2.3
+        """
+        fixture.activityInferenceService.refreshVisibleTextInference(
+            state: fixture.store.state,
+            selectedPanelWorkspaceIDs: [fixture.panelID: fixture.workspaceID],
+            backgroundPanelWorkspaceIDs: [:]
+        )
+
+        fixture.service.synchronize(
+            state: fixture.store.state,
+            livePanelIDs: [fixture.panelID],
+            removedPanelIDs: []
+        )
+
+        XCTAssertEqual(
+            fixture.publishedDisplayTitleOverrides.overridesByPanelID[fixture.panelID],
+            "Claude Code"
+        )
+    }
+
     func testSynchronizePublishesWorkspaceActivitySubtext() throws {
         let fixture = try makeMaintenanceFixture()
         fixture.visibleTextStore.textByPanelID[fixture.panelID] = """
@@ -105,15 +129,16 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
     panelID: UUID,
     panelIDs: [UUID],
     visibleTextStore: VisibleTextStore,
+    publishedDisplayTitleOverrides: PublishedDisplayTitleOverrideStore,
     publishedSubtext: PublishedSubtextStore
 ) {
     let store = AppStore(state: state, persistTerminalFontPreference: false)
     let registry = TerminalRuntimeRegistry()
     let metadataService = TerminalMetadataService(store: store, registry: registry)
     let visibleTextStore = VisibleTextStore()
-    let activityInferenceService = TerminalActivityInferenceService(store: store) { panelID in
+    let activityInferenceService = TerminalActivityInferenceService(readVisibleText: { panelID in
         visibleTextStore.textByPanelID[panelID]
-    }
+    })
     let controllerStore = TerminalControllerStore()
     let workspace = try XCTUnwrap(store.selectedWorkspace)
     let workspaceID = workspace.id
@@ -123,6 +148,7 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
     for panelID in panelIDs {
         _ = controllerStore.controller(for: panelID, delegate: delegate)
     }
+    let publishedDisplayTitleOverrides = PublishedDisplayTitleOverrideStore()
     let publishedSubtext = PublishedSubtextStore()
     let service = TerminalWorkspaceMaintenanceService(
         store: store,
@@ -133,6 +159,9 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
         },
         controllerForPanelID: { panelID in
             controllerStore.existingController(for: panelID)
+        },
+        updatePanelDisplayTitleOverrides: { nextOverridesByPanelID in
+            publishedDisplayTitleOverrides.overridesByPanelID = nextOverridesByPanelID
         }
     ) { nextSubtextByWorkspaceID in
         publishedSubtext.subtextByWorkspaceID = nextSubtextByWorkspaceID
@@ -145,6 +174,7 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
         panelID,
         panelIDs,
         visibleTextStore,
+        publishedDisplayTitleOverrides,
         publishedSubtext
     )
 }
@@ -164,6 +194,11 @@ private func makeSplitFixtureState() throws -> AppState {
 @MainActor
 private final class PublishedSubtextStore {
     var subtextByWorkspaceID: [UUID: String] = [:]
+}
+
+@MainActor
+private final class PublishedDisplayTitleOverrideStore {
+    var overridesByPanelID: [UUID: String] = [:]
 }
 
 @MainActor

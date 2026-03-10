@@ -4,7 +4,7 @@ import CoreState
 import XCTest
 
 final class TerminalActivityInferenceServiceTests: XCTestCase {
-    func testRefreshVisibleTextInferenceInfersAndRestoresAgentTitle() async throws {
+    func testRefreshVisibleTextInferencePublishesTransientAgentDisplayTitleOverride() async throws {
         try await MainActor.run {
             let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
             let originalTitle = try terminalState(panelID: panelID, state: store.state).title
@@ -19,7 +19,27 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 backgroundPanelWorkspaceIDs: [:]
             )
 
-            XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Codex")
+            XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, originalTitle)
+            XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "Codex")
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testRefreshVisibleTextInferenceClearsDisplayTitleOverrideAtIdlePrompt() async throws {
+        try await MainActor.run {
+            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+            let originalTitle = try terminalState(panelID: panelID, state: store.state).title
+
+            visibleTextStore.textByPanelID[panelID] = """
+            vishal@host ~/repo % codex
+            OpenAI Codex (v0.1)
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+            XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "Codex")
 
             visibleTextStore.textByPanelID[panelID] = "vishal@host ~/repo %"
             service.refreshVisibleTextInference(
@@ -28,7 +48,67 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 backgroundPanelWorkspaceIDs: [:]
             )
 
+            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
             XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, originalTitle)
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testRefreshVisibleTextInferenceKeepsDisplayTitleOverrideAcrossTransientBannerMiss() async throws {
+        try await MainActor.run {
+            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+            let originalTitle = try terminalState(panelID: panelID, state: store.state).title
+
+            visibleTextStore.textByPanelID[panelID] = """
+            vishal@host ~/repo % claude
+            Claude Code v1.2.3
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+            XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "Claude Code")
+
+            visibleTextStore.textByPanelID[panelID] = "Applying patch..."
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+
+            XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "Claude Code")
+            XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, originalTitle)
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testRefreshVisibleTextInferenceDoesNotOverrideCustomTerminalTitle() async throws {
+        try await MainActor.run {
+            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+
+            XCTAssertTrue(
+                store.send(
+                    .updateTerminalPanelMetadata(
+                        panelID: panelID,
+                        title: "Dev Server",
+                        cwd: nil
+                    )
+                )
+            )
+
+            visibleTextStore.textByPanelID[panelID] = """
+            vishal@host ~/repo % codex
+            OpenAI Codex (v0.1)
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+
+            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
+            XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Dev Server")
             try StateValidator.validate(store.state)
         }
     }
@@ -72,6 +152,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             service.synchronizeLivePanels([], liveWorkspaceIDs: [])
 
             XCTAssertNil(service.workspaceActivitySubtext(for: workspaceID))
+            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
             try StateValidator.validate(store.state)
         }
     }
@@ -94,9 +175,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 Applying diff...
                 """
             }
-            let service = TerminalActivityInferenceService(store: store) { panelID in
-                visibleTextStore.textByPanelID[panelID]
-            }
+            let service = makeActivityInferenceService(visibleTextStore: visibleTextStore)
 
             let trackedPanels = Dictionary(uniqueKeysWithValues: panelIDs.map { ($0, workspaceID) })
             service.refreshVisibleTextInference(
@@ -132,10 +211,19 @@ throws -> (
     let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
     let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
     let visibleTextStore = VisibleTextStore()
-    let service = TerminalActivityInferenceService(store: store) { panelID in
-        visibleTextStore.textByPanelID[panelID]
-    }
+    let service = makeActivityInferenceService(visibleTextStore: visibleTextStore)
     return (store, service, workspaceID, panelID, visibleTextStore)
+}
+
+@MainActor
+private func makeActivityInferenceService(
+    visibleTextStore: VisibleTextStore
+) -> TerminalActivityInferenceService {
+    TerminalActivityInferenceService(
+        readVisibleText: { panelID in
+            visibleTextStore.textByPanelID[panelID]
+        }
+    )
 }
 
 private func terminalState(panelID: UUID, state: AppState) throws -> TerminalPanelState {

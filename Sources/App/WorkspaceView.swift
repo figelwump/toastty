@@ -5,6 +5,7 @@ import SwiftUI
 struct WorkspaceView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
@@ -130,6 +131,7 @@ struct WorkspaceView: View {
                         workspace: workspace,
                         isWorkspaceSelected: isSelected,
                         store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
                         globalFontPoints: store.state.globalTerminalFontPoints,
                         appIsActive: appIsActive,
@@ -306,6 +308,7 @@ private struct SlotPlacementView: View {
     let workspace: WorkspaceState
     let isWorkspaceSelected: Bool
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let globalFontPoints: Double
     let appIsActive: Bool
@@ -322,6 +325,7 @@ private struct SlotPlacementView: View {
                     isWorkspaceSelected: isWorkspaceSelected,
                     focusedPanelID: workspace.focusedPanelID,
                     hasUnreadNotification: workspace.unreadPanelIDs.contains(placement.panelID),
+                    terminalDisplayTitleOverride: terminalRuntimeRegistry.panelDisplayTitleOverride(for: placement.panelID),
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
                     globalFontPoints: globalFontPoints,
                     appIsActive: appIsActive,
@@ -355,6 +359,7 @@ private struct PanelCardView: View {
     let isWorkspaceSelected: Bool
     let focusedPanelID: UUID?
     let hasUnreadNotification: Bool
+    let terminalDisplayTitleOverride: String?
     let shortcutNumber: Int?
     let globalFontPoints: Double
     let appIsActive: Bool
@@ -455,7 +460,7 @@ private struct PanelCardView: View {
     private var panelLabel: String {
         switch panelState {
         case .terminal(let terminal):
-            return terminal.displayPanelLabel
+            return terminalDisplayTitleOverride ?? terminal.displayPanelLabel
         case .diff:
             return "Diff Panel"
         case .markdown:

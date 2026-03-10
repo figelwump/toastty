@@ -9,6 +9,7 @@ final class TerminalWorkspaceMaintenanceService {
     private let activityInferenceService: TerminalActivityInferenceService
     private let containsController: (UUID) -> Bool
     private let controllerForPanelID: (UUID) -> TerminalSurfaceController?
+    private let updatePanelDisplayTitleOverrides: ([UUID: String]) -> Void
     private let updateWorkspaceActivitySubtext: ([UUID: String]) -> Void
     private var previousSelectedWorkspaceID: UUID?
     private var visibilityPulseTask: Task<Void, Never>?
@@ -20,6 +21,7 @@ final class TerminalWorkspaceMaintenanceService {
         activityInferenceService: TerminalActivityInferenceService,
         containsController: @escaping (UUID) -> Bool,
         controllerForPanelID: @escaping (UUID) -> TerminalSurfaceController?,
+        updatePanelDisplayTitleOverrides: @escaping ([UUID: String]) -> Void,
         updateWorkspaceActivitySubtext: @escaping ([UUID: String]) -> Void
     ) {
         self.store = store
@@ -27,6 +29,7 @@ final class TerminalWorkspaceMaintenanceService {
         self.activityInferenceService = activityInferenceService
         self.containsController = containsController
         self.controllerForPanelID = controllerForPanelID
+        self.updatePanelDisplayTitleOverrides = updatePanelDisplayTitleOverrides
         self.updateWorkspaceActivitySubtext = updateWorkspaceActivitySubtext
     }
 
@@ -37,6 +40,10 @@ final class TerminalWorkspaceMaintenanceService {
 
     func publishWorkspaceActivitySubtext() {
         updateWorkspaceActivitySubtext(activityInferenceService.workspaceActivitySubtextByID)
+    }
+
+    func publishPanelDisplayTitleOverrides() {
+        updatePanelDisplayTitleOverrides(activityInferenceService.panelDisplayTitleOverrideByID)
     }
 
     func synchronize(
@@ -64,6 +71,7 @@ final class TerminalWorkspaceMaintenanceService {
                 liveWorkspaceIDs: Set(store.state.workspacesByID.keys)
             )
         }
+        publishPanelDisplayTitleOverrides()
         publishWorkspaceActivitySubtext()
     }
 
@@ -89,6 +97,7 @@ final class TerminalWorkspaceMaintenanceService {
             livePanelIDs,
             liveWorkspaceIDs: liveWorkspaceIDs
         )
+        publishPanelDisplayTitleOverrides()
         publishWorkspaceActivitySubtext()
     }
 
@@ -102,6 +111,7 @@ final class TerminalWorkspaceMaintenanceService {
             selectedPanelWorkspaceIDs: selectedPanelWorkspaceIDs,
             backgroundPanelWorkspaceIDs: backgroundPanelWorkspaceIDs
         )
+        publishPanelDisplayTitleOverrides()
         publishWorkspaceActivitySubtext()
     }
 

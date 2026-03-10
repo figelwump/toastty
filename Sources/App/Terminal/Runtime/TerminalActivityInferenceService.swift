@@ -23,35 +23,35 @@ final class TerminalActivityInferenceService {
         case idle
     }
 
-    private weak var store: AppStore?
     private let readVisibleText: (UUID) -> String?
-    private var titleBeforeAgentInferenceByPanelID: [UUID: String] = [:]
-    private var suppressedAgentTitleInferencePanelIDs: Set<UUID> = []
+    // Keep inferred agent labels out of persisted terminal metadata. The pane
+    // header reads from this transient override and falls back to terminal
+    // title/CWD metadata when no override is present.
+    private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     private var panelActivityByPanelID: [UUID: PanelActivityState] = [:]
     private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
 
-    init(store: AppStore, readVisibleText: @escaping (UUID) -> String?) {
-        self.store = store
+    init(readVisibleText: @escaping (UUID) -> String?) {
         self.readVisibleText = readVisibleText
     }
 
     func invalidate(panelID: UUID) {
-        titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
-        suppressedAgentTitleInferencePanelIDs.remove(panelID)
+        panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
         panelActivityByPanelID.removeValue(forKey: panelID)
     }
 
     func synchronizeLivePanels(_ livePanelIDs: Set<UUID>, liveWorkspaceIDs: Set<UUID>) {
-        titleBeforeAgentInferenceByPanelID = titleBeforeAgentInferenceByPanelID.filter { panelID, _ in
-            livePanelIDs.contains(panelID)
-        }
-        suppressedAgentTitleInferencePanelIDs = suppressedAgentTitleInferencePanelIDs.filter { panelID in
+        panelDisplayTitleOverrideByID = panelDisplayTitleOverrideByID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
         panelActivityByPanelID = panelActivityByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
         refreshWorkspaceActivitySubtext(liveWorkspaceIDs: liveWorkspaceIDs)
+    }
+
+    func panelDisplayTitleOverride(for panelID: UUID) -> String? {
+        panelDisplayTitleOverrideByID[panelID]
     }
 
     func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
@@ -73,7 +73,7 @@ final class TerminalActivityInferenceService {
         backgroundPanelWorkspaceIDs: [UUID: UUID]
     ) {
         for (panelID, workspaceID) in selectedPanelWorkspaceIDs {
-            refreshAgentTitleFromVisibleTextIfNeeded(
+            refreshPanelDisplayTitleOverrideFromVisibleTextIfNeeded(
                 panelID: panelID,
                 workspaceID: workspaceID,
                 state: state
@@ -103,145 +103,66 @@ final class TerminalActivityInferenceService {
         updateWorkspaceActivitySubtext(state: state, now: now)
     }
 
-    private func refreshAgentTitleFromVisibleTextIfNeeded(
+    private func refreshPanelDisplayTitleOverrideFromVisibleTextIfNeeded(
         panelID: UUID,
         workspaceID: UUID,
         state: AppState
     ) {
-        guard let store else { return }
         guard let workspace = state.workspacesByID[workspaceID],
               let panelState = workspace.panels[panelID],
               case .terminal(let terminalState) = panelState else {
-            titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
-            suppressedAgentTitleInferencePanelIDs.remove(panelID)
+            panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
             return
         }
 
         let currentTitle = terminalState.title
-        let currentCanonicalInferredAgentTitle = Self.canonicalInferredAgentTitle(from: currentTitle)
-        let titleIsAgentInferred = currentCanonicalInferredAgentTitle != nil
+        let legacyAgentTitle = Self.canonicalInferredAgentTitle(from: currentTitle)
         let titleEligibleForInference = Self.titleIsEligibleForAgentInference(
             terminalTitle: currentTitle,
             terminalCWD: terminalState.cwd
         )
-        guard titleIsAgentInferred || titleEligibleForInference else {
-            titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
-            suppressedAgentTitleInferencePanelIDs.remove(panelID)
+        guard legacyAgentTitle != nil || titleEligibleForInference else {
+            panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
             return
         }
 
         guard let visibleText = readVisibleText(panelID) else {
             return
         }
-        let inferredAgentTitle = Self.inferredAgentTitleFromVisibleTerminalText(visibleText)
-        let shellPromptIsActive = Self.visibleTextShowsInteractiveShellPrompt(visibleText)
-        let recentAgentLaunchCommandIsVisible = Self.visibleTextShowsRecentAgentLaunchCommand(visibleText)
+        if Self.visibleTextShowsIdleShellPrompt(visibleText) {
+            panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
+            return
+        }
 
-        if titleIsAgentInferred {
-            if shellPromptIsActive {
-                restoreTitleBeforeAgentInferenceIfNeeded(
-                    panelID: panelID,
-                    workspaceID: workspaceID,
-                    currentTitle: currentTitle
+        if let promptToken = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText),
+           Self.agentKind(forPromptToken: promptToken) == nil {
+            panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
+            return
+        }
+
+        if let inferredAgentTitle = Self.inferredAgentDisplayTitle(
+            visibleText: visibleText,
+            legacyAgentTitle: legacyAgentTitle
+        ) {
+            if panelDisplayTitleOverrideByID[panelID] != inferredAgentTitle {
+                panelDisplayTitleOverrideByID[panelID] = inferredAgentTitle
+                ToasttyLog.debug(
+                    "Updated transient inferred agent display title from visible terminal text",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "inferred_title": inferredAgentTitle,
+                    ]
                 )
-                suppressedAgentTitleInferencePanelIDs.insert(panelID)
-                return
             }
-
-            if inferredAgentTitle == currentCanonicalInferredAgentTitle {
-                return
-            }
-
-            if let inferredAgentTitle {
-                let handled = store.send(
-                    .updateTerminalPanelMetadata(
-                        panelID: panelID,
-                        title: inferredAgentTitle,
-                        cwd: nil
-                    )
-                )
-                if handled {
-                    ToasttyLog.debug(
-                        "Updated inferred agent title from visible terminal text",
-                        category: .terminal,
-                        metadata: [
-                            "workspace_id": workspaceID.uuidString,
-                            "panel_id": panelID.uuidString,
-                            "inferred_title": inferredAgentTitle,
-                        ]
-                    )
-                } else {
-                    ToasttyLog.warning(
-                        "Reducer rejected inferred agent title update",
-                        category: .terminal,
-                        metadata: [
-                            "workspace_id": workspaceID.uuidString,
-                            "panel_id": panelID.uuidString,
-                            "inferred_title": inferredAgentTitle,
-                        ]
-                    )
-                }
-                return
-            }
-
-            restoreTitleBeforeAgentInferenceIfNeeded(
-                panelID: panelID,
-                workspaceID: workspaceID,
-                currentTitle: currentTitle
-            )
-            suppressedAgentTitleInferencePanelIDs.insert(panelID)
             return
         }
 
-        if shellPromptIsActive {
-            // Avoid re-inference loops from stale banner text once control has
-            // returned to an interactive shell prompt.
-            return
-        }
-
-        if suppressedAgentTitleInferencePanelIDs.contains(panelID) {
-            // Do not re-infer from stale banner text after prompt restore unless
-            // a fresh launch command is visible near the current prompt.
-            guard recentAgentLaunchCommandIsVisible else {
-                return
-            }
-            suppressedAgentTitleInferencePanelIDs.remove(panelID)
-        }
-
-        guard let inferredAgentTitle else {
-            return
-        }
-
-        let handled = store.send(
-            .updateTerminalPanelMetadata(
-                panelID: panelID,
-                title: inferredAgentTitle,
-                cwd: nil
-            )
-        )
-        if handled {
-            titleBeforeAgentInferenceByPanelID[panelID] = currentTitle
-            suppressedAgentTitleInferencePanelIDs.remove(panelID)
-            ToasttyLog.debug(
-                "Inferred agent title from visible terminal text",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "inferred_title": inferredAgentTitle,
-                ]
-            )
-        } else {
-            ToasttyLog.warning(
-                "Reducer rejected inferred agent title update",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "inferred_title": inferredAgentTitle,
-                ]
-            )
-        }
+        // Visible-text inspection can miss banner text transiently while the
+        // agent is still streaming output. Keep any existing override until the
+        // shell returns to an idle prompt or a new non-agent prompt command
+        // becomes visible.
     }
 
     private func refreshPanelActivityFromVisibleTextIfNeeded(
@@ -267,10 +188,10 @@ final class TerminalActivityInferenceService {
             visibleText: visibleText
         )
         guard let inferredAgentKind else {
-            // Clear stale agent activity after the slot returns to an
-            // interactive shell prompt. This avoids lingering sidebar status
-            // while also tolerating transient inference misses mid-run.
-            if Self.visibleTextShowsInteractiveShellPrompt(visibleText) {
+            // Clear stale agent activity after the slot returns to an idle
+            // shell prompt. This avoids lingering sidebar status while also
+            // tolerating transient inference misses mid-run.
+            if Self.visibleTextShowsIdleShellPrompt(visibleText) {
                 panelActivityByPanelID.removeValue(forKey: panelID)
             }
             return
@@ -299,81 +220,6 @@ final class TerminalActivityInferenceService {
             liveWorkspaceIDs: Set(state.workspacesByID.keys),
             now: now
         )
-    }
-
-    private func restoreTitleBeforeAgentInferenceIfNeeded(
-        panelID: UUID,
-        workspaceID: UUID,
-        currentTitle: String
-    ) {
-        guard let store else { return }
-        if let previousTitle = titleBeforeAgentInferenceByPanelID[panelID] {
-            let handled = store.send(
-                .updateTerminalPanelMetadata(
-                    panelID: panelID,
-                    title: previousTitle,
-                    cwd: nil
-                )
-            )
-            if handled {
-                titleBeforeAgentInferenceByPanelID.removeValue(forKey: panelID)
-                ToasttyLog.debug(
-                    "Restored terminal title after inferred agent title became stale",
-                    category: .terminal,
-                    metadata: [
-                        "workspace_id": workspaceID.uuidString,
-                        "panel_id": panelID.uuidString,
-                        "restored_title": previousTitle,
-                    ]
-                )
-                return
-            } else {
-                ToasttyLog.warning(
-                    "Reducer rejected restoring stale inferred terminal title",
-                    category: .terminal,
-                    metadata: [
-                        "workspace_id": workspaceID.uuidString,
-                        "panel_id": panelID.uuidString,
-                        "restored_title": previousTitle,
-                    ]
-                )
-            }
-            // Fall through to stale-title fallback when restore is rejected.
-        }
-
-        guard Self.isInferredAgentTitle(currentTitle) else {
-            return
-        }
-
-        let resetTitle = Self.defaultTerminalTitleAfterAgentInferenceRestore
-        guard currentTitle != resetTitle else {
-            return
-        }
-
-        let handled = store.send(
-            .updateTerminalPanelMetadata(panelID: panelID, title: resetTitle, cwd: nil)
-        )
-        if handled {
-            ToasttyLog.debug(
-                "Reset stale inferred terminal title after restart",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "restored_title": resetTitle,
-                ]
-            )
-        } else {
-            ToasttyLog.warning(
-                "Reducer rejected resetting stale inferred terminal title",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "restored_title": resetTitle,
-                ]
-            )
-        }
     }
 
     private func nextWorkspaceActivitySubtext(
@@ -412,15 +258,33 @@ final class TerminalActivityInferenceService {
         return nil
     }
 
-    private static func visibleTextShowsInteractiveShellPrompt(_ visibleText: String) -> Bool {
-        TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText)
+    private static func inferredAgentDisplayTitle(
+        visibleText: String,
+        legacyAgentTitle: String?
+    ) -> String? {
+        if let inferredBannerTitle = inferredAgentTitleFromVisibleTerminalText(visibleText) {
+            return inferredBannerTitle
+        }
+
+        if let token = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText),
+           let agent = agentKind(forPromptToken: token) {
+            switch agent {
+            case .codex:
+                return "Codex"
+            case .claudeCode:
+                return "Claude Code"
+            }
+        }
+
+        // Preserve exact legacy inferred titles as a transient override when we
+        // still see them in persisted metadata, but do not rewrite metadata
+        // here. There is no reliable way to distinguish old inferred titles
+        // from deliberate user titles like "Claude Code".
+        return legacyAgentTitle
     }
 
-    private static func visibleTextShowsRecentAgentLaunchCommand(_ visibleText: String) -> Bool {
-        guard let commandToken = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) else {
-            return false
-        }
-        return agentLaunchCommandTokens.contains(commandToken)
+    private static func visibleTextShowsIdleShellPrompt(_ visibleText: String) -> Bool {
+        TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText)
     }
 
     private static func titleIsEligibleForAgentInference(terminalTitle: String, terminalCWD: String) -> Bool {
@@ -437,10 +301,6 @@ final class TerminalActivityInferenceService {
         }
 
         return canonicalCWDForComparison(normalizedTitlePath) == canonicalCWDForComparison(normalizedCurrentCWD)
-    }
-
-    private static func isInferredAgentTitle(_ title: String) -> Bool {
-        canonicalInferredAgentTitle(from: title) != nil
     }
 
     private static func canonicalInferredAgentTitle(from title: String) -> String? {
@@ -529,7 +389,7 @@ final class TerminalActivityInferenceService {
         if visibleTextShowsWaitingForInput(visibleLines) {
             return .waitingInput
         }
-        if visibleTextShowsInteractiveShellPrompt(visibleText) {
+        if visibleTextShowsIdleShellPrompt(visibleText) {
             return .idle
         }
         return .running
@@ -669,13 +529,11 @@ final class TerminalActivityInferenceService {
     }
 
     private static let inferredAgentTitleCandidates: [String] = ["Codex", "Claude Code"]
-    private static let defaultTerminalTitleAfterAgentInferenceRestore = "Terminal"
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
     private static let activityCommandFreshnessInterval: TimeInterval = 60
     private static let claudeCodeActivityLabel = "CC"
     private static let activityRetentionInterval: TimeInterval = 240
     private static let agentTitleDetectionLineWindow = 16
-    private static let agentLaunchCommandTokens: Set<String> = ["cdx", "codex", "cc", "claude"]
 }
 #endif

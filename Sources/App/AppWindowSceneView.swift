@@ -28,6 +28,7 @@ struct AppWindowSceneView: View {
                 AppWindowView(
                     windowID: windowID,
                     store: store,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {

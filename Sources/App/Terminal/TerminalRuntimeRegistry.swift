@@ -60,6 +60,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     private var stateObservation: AnyCancellable?
     private var observedGlobalFontPoints: Double?
+    @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
@@ -88,7 +89,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
         storeActionCoordinator?.unbind()
         let metadataService = TerminalMetadataService(store: store, registry: self)
         let activityInferenceService = TerminalActivityInferenceService(
-            store: store,
             readVisibleText: { [weak self] panelID in
                 self?.automationReadVisibleText(panelID: panelID)
             }
@@ -121,10 +121,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
             controllerForPanelID: { [weak self] panelID in
                 self?.runtimeStore.existingController(for: panelID)
             },
+            updatePanelDisplayTitleOverrides: { [weak self] nextOverridesByPanelID in
+                self?.setPanelDisplayTitleOverrides(nextOverridesByPanelID)
+            },
             updateWorkspaceActivitySubtext: { [weak self] nextSubtextByWorkspaceID in
                 self?.setWorkspaceActivitySubtext(nextSubtextByWorkspaceID)
             }
         )
+        workspaceMaintenanceService?.publishPanelDisplayTitleOverrides()
         workspaceMaintenanceService?.publishWorkspaceActivitySubtext()
         workspaceMaintenanceService?.startProcessWorkingDirectoryRefreshLoopIfNeeded()
         #endif
@@ -274,6 +278,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
         workspaceActivitySubtextByID[workspaceID]
+    }
+
+    func panelDisplayTitleOverride(for panelID: UUID) -> String? {
+        panelDisplayTitleOverrideByID[panelID]
     }
 
     func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
@@ -655,6 +663,12 @@ private extension TerminalRuntimeRegistry {
     func setWorkspaceActivitySubtext(_ nextSubtextByWorkspaceID: [UUID: String]) {
         if workspaceActivitySubtextByID != nextSubtextByWorkspaceID {
             workspaceActivitySubtextByID = nextSubtextByWorkspaceID
+        }
+    }
+
+    func setPanelDisplayTitleOverrides(_ nextOverridesByPanelID: [UUID: String]) {
+        if panelDisplayTitleOverrideByID != nextOverridesByPanelID {
+            panelDisplayTitleOverrideByID = nextOverridesByPanelID
         }
     }
 }
