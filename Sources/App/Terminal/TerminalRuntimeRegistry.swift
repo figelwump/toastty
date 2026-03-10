@@ -617,8 +617,8 @@ private extension TerminalRuntimeRegistry {
         workspaceMaintenanceService?.handleSurfaceUnregister(panelID: panelID)
     }
 
-    func prefersNativeCWDSignal(panelID: UUID, now: Date = Date()) -> Bool {
-        metadataService?.prefersNativeCWDSignal(panelID: panelID, now: now) ?? false
+    func prefersNativeCWDSignal(panelID: UUID) -> Bool {
+        metadataService?.prefersNativeCWDSignal(panelID: panelID) ?? false
     }
 
     func shouldRunProcessCWDFallbackPoll(panelID: UUID, now: Date = Date()) -> Bool {

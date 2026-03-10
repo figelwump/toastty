@@ -11,7 +11,6 @@ final class TerminalMetadataService {
         let source: String
     }
 
-    private static let nativeCWDSignalFreshnessInterval: TimeInterval = 120
     private static let nativeCWDProcessFallbackPollInterval: TimeInterval = 30
     static let immediateProcessRefreshAttemptCount = immediateProcessRefreshRetryDelaysNanoseconds.count + 1
     // Retry quickly on startup so restored pane labels stop showing stale cwd
@@ -25,7 +24,9 @@ final class TerminalMetadataService {
 
     private unowned let store: AppStore
     private unowned let registry: TerminalRuntimeRegistry
-    private var nativeCWDLastSignalAtByPanelID: [UUID: Date] = [:]
+    // Once a panel proves native Ghostty cwd support, keep process-based cwd
+    // fallback disabled for that panel's lifetime to avoid misbinding drift.
+    private var panelsWithConfirmedNativeCWDSupport: Set<UUID> = []
     private var nativeCWDLastProcessFallbackPollAtByPanelID: [UUID: Date] = [:]
     private let processWorkingDirectoryResolver = TerminalProcessWorkingDirectoryResolver()
     private let resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?
@@ -71,9 +72,7 @@ final class TerminalMetadataService {
         immediateProcessRefreshTokenByPanelID = immediateProcessRefreshTokenByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
-        nativeCWDLastSignalAtByPanelID = nativeCWDLastSignalAtByPanelID.filter { panelID, _ in
-            livePanelIDs.contains(panelID)
-        }
+        panelsWithConfirmedNativeCWDSupport = panelsWithConfirmedNativeCWDSupport.filter { livePanelIDs.contains($0) }
         nativeCWDLastProcessFallbackPollAtByPanelID = nativeCWDLastProcessFallbackPollAtByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
@@ -83,7 +82,7 @@ final class TerminalMetadataService {
         processWorkingDirectoryResolver.invalidate(panelID: panelID)
         immediateProcessRefreshTaskByPanelID.removeValue(forKey: panelID)?.cancel()
         immediateProcessRefreshTokenByPanelID.removeValue(forKey: panelID)
-        nativeCWDLastSignalAtByPanelID.removeValue(forKey: panelID)
+        panelsWithConfirmedNativeCWDSupport.remove(panelID)
         nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
     }
 
@@ -114,11 +113,10 @@ final class TerminalMetadataService {
     ) -> Bool {
         switch intent {
         case .setTerminalTitle(let title):
-            let now = Date()
             return handleTerminalMetadataUpdate(
                 title: title,
                 cwd: nil,
-                allowLegacyCWDInference: prefersNativeCWDSignal(panelID: panelID, now: now) == false,
+                allowLegacyCWDInference: prefersNativeCWDSignal(panelID: panelID) == false,
                 workspaceID: workspaceID,
                 panelID: panelID,
                 state: state
@@ -150,16 +148,13 @@ final class TerminalMetadataService {
         }
     }
 
-    func prefersNativeCWDSignal(panelID: UUID, now: Date = Date()) -> Bool {
-        guard let lastSignalAt = nativeCWDLastSignalAtByPanelID[panelID] else {
-            return false
-        }
-        return now.timeIntervalSince(lastSignalAt) <= Self.nativeCWDSignalFreshnessInterval
+    func prefersNativeCWDSignal(panelID: UUID) -> Bool {
+        panelsWithConfirmedNativeCWDSupport.contains(panelID)
     }
 
     func shouldRunProcessCWDFallbackPoll(panelID: UUID, now: Date = Date()) -> Bool {
-        guard nativeCWDLastSignalAtByPanelID[panelID] != nil else {
-            return true
+        guard panelsWithConfirmedNativeCWDSupport.contains(panelID) == false else {
+            return false
         }
         guard let lastPollAt = nativeCWDLastProcessFallbackPollAtByPanelID[panelID] else {
             return true
@@ -235,6 +230,9 @@ final class TerminalMetadataService {
     }
 
     func refreshWorkingDirectoryFromProcessIfNeeded(panelID: UUID, source: String) -> String? {
+        guard prefersNativeCWDSignal(panelID: panelID) == false else {
+            return nil
+        }
         guard let processWorkingDirectory = resolvedWorkingDirectoryFromProcess(panelID: panelID),
               let normalizedWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(processWorkingDirectory) else {
             return nil
@@ -280,6 +278,9 @@ final class TerminalMetadataService {
 
                 await self.processRefreshRetryDelay(delay)
                 guard Task.isCancelled == false else { return }
+                guard self.prefersNativeCWDSignal(panelID: panelID) == false else {
+                    break
+                }
 
                 let attemptSource = "\(source)_retry_\(attempt + 1)"
                 if let refreshedWorkingDirectory = self.refreshWorkingDirectoryFromProcessIfNeeded(
@@ -320,13 +321,12 @@ final class TerminalMetadataService {
         immediateProcessRefreshTaskByPanelID[panelID] = task
     }
 
-    private func recordNativeCWDSignal(panelID: UUID, now: Date = Date()) {
-        let isFirstSignal = nativeCWDLastSignalAtByPanelID[panelID] == nil
-        nativeCWDLastSignalAtByPanelID[panelID] = now
-        nativeCWDLastProcessFallbackPollAtByPanelID[panelID] = now
+    private func recordNativeCWDSignal(panelID: UUID) {
+        let isFirstSignal = panelsWithConfirmedNativeCWDSupport.insert(panelID).inserted
+        nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
         if isFirstSignal {
             ToasttyLog.info(
-                "Detected native Ghostty cwd callback for terminal panel; process cwd polling will be treated as fallback",
+                "Detected native Ghostty cwd callback for terminal panel; disabling process cwd fallback",
                 category: .terminal,
                 metadata: ["panel_id": panelID.uuidString]
             )
