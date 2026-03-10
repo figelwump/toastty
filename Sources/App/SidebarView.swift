@@ -530,7 +530,7 @@ struct SidebarView: View {
         var id: UUID { workspaceID }
     }
 
-    /// Build a subtitle string like "3 panes · 2 busy panes" or "1 pane".
+    /// Build a subtitle string like "3 panes · 2 busy panes" or "1 pane · 1 busy".
     private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
         let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
         if let activitySubtext = terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id),

@@ -2205,7 +2205,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         guard activities.isEmpty == false else { return nil }
         let busyPaneCount = activities.count
         if busyPaneCount == 1 {
-            return "1 busy pane"
+            return "1 busy"
         }
         return "\(busyPaneCount) busy panes"
     }
