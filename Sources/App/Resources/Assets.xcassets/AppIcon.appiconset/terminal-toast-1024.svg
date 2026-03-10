@@ -1,0 +1,32 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Toastty App Icon — Terminal Toast</title>
+  <defs>
+    <linearGradient id="bg" x1="200" y1="0" x2="824" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4A2A16"/>
+      <stop offset="1" stop-color="#3D2215"/>
+    </linearGradient>
+    <linearGradient id="toastCrust" x1="0" y1="80" x2="0" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#9B6B3A"/>
+      <stop offset="1" stop-color="#8B5E34"/>
+    </linearGradient>
+    <linearGradient id="toastInner" x1="0" y1="160" x2="0" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7A5030"/>
+      <stop offset="1" stop-color="#6B4528"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background fill (macOS applies squircle mask) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+
+  <!-- Toast silhouette (crust) -->
+  <path d="M220 980 L220 340 Q220 100 420 100 L604 100 Q804 100 804 340 L804 980 Z" fill="url(#toastCrust)"/>
+
+  <!-- Inner bread -->
+  <path d="M296 940 L296 380 Q296 180 448 180 L576 180 Q728 180 728 380 L728 940 Z" fill="url(#toastInner)"/>
+
+  <!-- Terminal chevron > -->
+  <path d="M360 460 L540 590 L360 720" stroke="#E8A849" stroke-width="64" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Cursor underscore _ -->
+  <rect x="588" y="672" width="152" height="52" rx="26" fill="#E8A849"/>
+</svg>
