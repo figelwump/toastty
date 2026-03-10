@@ -12,13 +12,12 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Logo header: orange icon + "Toastty"
+            // Logo header: app icon + "Toastty"
             HStack(spacing: 8) {
-                Text("T")
-                    .font(.system(size: 11, weight: .heavy, design: .default))
-                    .foregroundStyle(ToastyTheme.accentDark)
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
                     .frame(width: 20, height: 20)
-                    .background(ToastyTheme.accent, in: RoundedRectangle(cornerRadius: 5))
 
                 Text("Toastty")
                     .font(ToastyTheme.fontLogoTitle)
