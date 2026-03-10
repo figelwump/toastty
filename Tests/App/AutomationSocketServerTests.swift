@@ -268,13 +268,16 @@ struct AutomationSocketServerTests {
         #expect(response.ok)
         let sessionID = try #require(response.result?.string("sessionID"))
         let didInjectCodex = await MainActor.run {
-            terminalRouter.sentTextByPanelID[server.panelID]?.contains("agent run codex") == true
+            terminalRouter.sentTextByPanelID[server.panelID]?.contains("TOASTTY_AGENT=codex") == true
         }
+        let command = try #require(response.result?.string("command"))
         #expect(response.result?.string("profileID") == AgentKind.codex.rawValue)
         #expect(response.result?.string("agent") == AgentKind.codex.rawValue)
         #expect(response.result?.string("panelID") == server.panelID.uuidString)
         #expect(response.result?.string("workspaceID") == server.workspaceID.uuidString)
-        #expect(response.result?.string("command")?.contains("--session \(sessionID)") == true)
+        #expect(command.contains("TOASTTY_SESSION_ID=\(sessionID)"))
+        #expect(command.contains("TOASTTY_PANEL_ID=\(server.panelID.uuidString)"))
+        #expect(command.contains(" codex") || command.hasPrefix("codex"))
         #expect(didInjectCodex)
         let activeAgent = await MainActor.run {
             server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.agent

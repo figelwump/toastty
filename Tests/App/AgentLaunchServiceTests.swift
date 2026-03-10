@@ -42,12 +42,17 @@ struct AgentLaunchServiceTests {
         #expect(activeSession.repoRoot == projectRoot.path)
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
-        #expect(injectedCommand.contains("\(ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey)=1"))
-        #expect(injectedCommand.contains("/bin/sh"))
-        #expect(injectedCommand.contains("--socket-path /tmp/toastty-tests.sock"))
-        #expect(injectedCommand.contains("agent run codex"))
-        #expect(injectedCommand.contains("--panel \(panelID.uuidString)"))
-        #expect(injectedCommand.contains("--session \(result.sessionID)"))
+        let trimmedCommand = injectedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(injectedCommand.contains("TOASTTY_AGENT=codex"))
+        #expect(injectedCommand.contains("TOASTTY_SESSION_ID=\(result.sessionID)"))
+        #expect(injectedCommand.contains("TOASTTY_PANEL_ID=\(panelID.uuidString)"))
+        #expect(injectedCommand.contains("TOASTTY_SOCKET_PATH=/tmp/toastty-tests.sock"))
+        #expect(injectedCommand.contains("TOASTTY_CLI_PATH=/bin/sh"))
+        #expect(injectedCommand.contains("TOASTTY_CWD=\(cwd)"))
+        #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=\(projectRoot.path)"))
+        #expect(trimmedCommand.hasSuffix(" codex"))
+        #expect(injectedCommand.contains(" agent run ") == false)
+        #expect(injectedCommand.contains(ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey) == false)
         #expect(injectedCommand.hasPrefix("exec ") == false)
         #expect(injectedCommand.hasSuffix("\n"))
     }
@@ -76,14 +81,32 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
-    func launchQuotesSocketPathWhenItContainsSpaces() throws {
+    func launchQuotesDirectLaunchEnvironmentAndArgv() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
-        let agentCatalogProvider = TestAgentCatalogProvider()
+        let agentCatalogProvider = TestAgentCatalogProvider(
+            profiles: [
+                AgentProfile(
+                    id: "claude",
+                    displayName: "Claude Code",
+                    argv: [
+                        "/Applications/Claude Code.app/Contents/MacOS/cc",
+                        "--append-system-prompt=review only"
+                    ]
+                )
+            ]
+        )
         let workspace = try #require(store.selectedWorkspace)
         let panelID = try #require(workspace.focusedPanelID)
+        _ = store.send(
+            .updateTerminalPanelMetadata(
+                panelID: panelID,
+                title: nil,
+                cwd: "/tmp/toastty project/src"
+            )
+        )
 
         let service = AgentLaunchService(
             store: store,
@@ -94,10 +117,14 @@ struct AgentLaunchServiceTests {
             socketPathProvider: { "/tmp/toastty sockets/test.sock" }
         )
 
-        _ = try service.launch(profileID: "codex")
+        _ = try service.launch(profileID: "claude")
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
-        #expect(injectedCommand.contains("--socket-path '/tmp/toastty sockets/test.sock'"))
+        let trimmedCommand = injectedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(injectedCommand.contains("TOASTTY_SOCKET_PATH='/tmp/toastty sockets/test.sock'"))
+        #expect(injectedCommand.contains("TOASTTY_CWD='/tmp/toastty project/src'"))
+        #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=") == false)
+        #expect(trimmedCommand.hasSuffix("'/Applications/Claude Code.app/Contents/MacOS/cc' '--append-system-prompt=review only'"))
     }
 
     private func makeProjectRoot() throws -> URL {

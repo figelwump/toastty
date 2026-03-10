@@ -140,11 +140,14 @@ final class AgentLaunchService {
         let cliExecutablePath = try resolveCLIExecutablePath()
         let socketPath = socketPathProvider()
         let commandLine = ShellCommandRenderer.render(
+            agentID: launchProfile.id,
+            argv: launchProfile.argv,
             cliExecutablePath: cliExecutablePath,
             socketPath: socketPath,
-            profileID: launchProfile.id,
             sessionID: sessionID,
-            panelID: target.panelID
+            panelID: target.panelID,
+            cwd: target.cwd,
+            repoRoot: repoRoot
         )
         let now = nowProvider()
 
@@ -314,25 +317,31 @@ private struct LaunchTarget {
 
 private enum ShellCommandRenderer {
     static func render(
+        agentID: String,
+        argv: [String],
         cliExecutablePath: String,
         socketPath: String,
-        profileID: String,
         sessionID: String,
-        panelID: UUID
+        panelID: UUID,
+        cwd: String?,
+        repoRoot: String?
     ) -> String {
-        let command = [
-            "\(ToasttyLaunchContextEnvironment.agentRunSkipSessionStartKey)=1",
-            quote(cliExecutablePath),
-            "--socket-path",
-            quote(socketPath),
-            "agent",
-            "run",
-            quote(profileID),
-            "--session",
-            quote(sessionID),
-            "--panel",
-            quote(panelID.uuidString),
+        var command = [
+            assignment(ToasttyLaunchContextEnvironment.agentKey, agentID),
+            assignment(ToasttyLaunchContextEnvironment.sessionIDKey, sessionID),
+            assignment(ToasttyLaunchContextEnvironment.panelIDKey, panelID.uuidString),
+            assignment(ToasttyLaunchContextEnvironment.socketPathKey, socketPath),
+            assignment(ToasttyLaunchContextEnvironment.cliPathKey, cliExecutablePath),
         ]
+
+        if let cwd {
+            command.append(assignment(ToasttyLaunchContextEnvironment.cwdKey, cwd))
+        }
+        if let repoRoot {
+            command.append(assignment(ToasttyLaunchContextEnvironment.repoRootKey, repoRoot))
+        }
+
+        command.append(contentsOf: argv.map(quote))
         return command.joined(separator: " ")
     }
 
@@ -346,6 +355,10 @@ private enum ShellCommandRenderer {
 
         let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
         return "'\(escaped)'"
+    }
+
+    private static func assignment(_ key: String, _ value: String) -> String {
+        "\(key)=\(quote(value))"
     }
 }
 
