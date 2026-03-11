@@ -30,7 +30,9 @@ enum ToastyTheme {
     static let emptyStateShortcutText = Color(hex: 0x8A7B6E)
 
     static let sidebarWidth: CGFloat = 180
-    static let topBarHeight: CGFloat = 36
+    static let topBarHeight: CGFloat = 28
+    /// Standard macOS titlebar height — used for sidebar top padding to clear traffic lights.
+    static let titlebarHeight: CGFloat = 28
 
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)

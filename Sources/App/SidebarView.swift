@@ -87,7 +87,8 @@ struct SidebarView: View {
             .buttonStyle(SidebarRowButtonStyle())
             .accessibilityIdentifier("sidebar.workspaces.new")
         }
-        .padding(.vertical, 10)
+        .padding(.top, ToastyTheme.titlebarHeight + 4)
+        .padding(.bottom, 10)
         .padding(.horizontal, 8)
         .background(ToastyTheme.chromeBackground)
         .alert(

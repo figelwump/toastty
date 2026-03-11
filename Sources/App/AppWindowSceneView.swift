@@ -36,13 +36,14 @@ struct AppWindowSceneView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea(.container, edges: .top)
         .background(ToastyTheme.chromeBackground)
         .foregroundStyle(ToastyTheme.primaryText)
         .preferredColorScheme(.dark)
         .overlay(alignment: .top) {
             if let fontHUDPoints {
                 FontHUD(points: fontHUDPoints)
-                    .padding(.top, 12)
+                    .padding(.top, ToastyTheme.titlebarHeight + 12)
             }
         }
         .background {
