@@ -30,6 +30,7 @@ Do not use this skill just to narrate trivial work. If the run is so short that 
 - Use `ready` when the agent is waiting on the user with a useful result or decision point.
 - Use `needs_approval` only when the agent is actually blocked on user approval, missing input, or an access decision.
 - Use `error` when progress has stopped because of a failure the agent cannot reasonably route around.
+- Treat `ready`, `needs_approval`, and `error` as state-entry updates, not heartbeat pings. If the session is still in the same waiting, blocked, or failed state, do not re-emit the same status just to refresh recency.
 - Treat telemetry failures as best-effort in normal runs. Do not let a failed status emission abort the main task unless the task is specifically about Toastty telemetry.
 - Use `session stop` only when the run or wrapper is actually ending. Do not stop a still-live session just because the agent is waiting for the next user turn.
 

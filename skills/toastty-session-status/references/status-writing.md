@@ -38,7 +38,7 @@ The UI renders both `summary` and `detail` on a single line.
 
 Prefer compact noun or verb phrases over full narrative sentences. Summaries are lowercase phrases; details are capitalized clauses. Neither uses trailing punctuation.
 
-Repeating the same status is allowed, but it refreshes recency in the workspace. Use repeated `working` updates as deliberate liveness signals, not as background chatter.
+Repeating the same status is allowed, but it refreshes recency in the workspace. Use repeated `working` updates as deliberate liveness signals, not as background chatter. Avoid re-emitting `ready`, `needs_approval`, or `error` unless the user-meaningful state changed or the session left that state and later re-entered it.
 
 Good summaries:
 
@@ -84,8 +84,8 @@ Use `error` when the run hit a real failure, such as missing CLI integration, in
 
 ## `ready` vs `stop`
 
-Use `ready` when the session is live and waiting on the user. Use `session stop` only when the process or wrapper is actually exiting.
+Use `ready` when the session is live and waiting on the user. Emit it when the agent reaches a handoff point, not as a periodic reminder while the same handoff is still pending. Use `session stop` only when the process or wrapper is actually exiting.
 
 ## State Transitions
 
-Any status kind can transition to any other. There is no required ordering — if the agent recovers from an `error`, it can send `working` directly. If a `ready` result needs more work, send `working` again. Just send the status that reflects the current reality.
+Any status kind can transition to any other. There is no required ordering — if the agent recovers from an `error`, it can send `working` directly. If a `ready` result needs more work, send `working` again. If the agent is already `ready` and still waiting on the same review or response, do not emit another `ready` just to refresh recency. Send `ready` again only after work resumed and a new handoff point was reached. Just send the status that reflects the current reality.

@@ -86,6 +86,7 @@ Notes:
 - `ready` is the waiting-with-results state.
 - `error` is the stopped-by-failure state.
 - Re-emitting the same status is safe. Toastty keeps the latest value, but each emission refreshes recency, so repeated updates should still be intentional.
+- Use repeated `working` updates for liveness when the work phase changed or the old summary went stale. Do not keep refreshing `ready`, `needs_approval`, or `error` while the session is still in the same user-meaningful state.
 - Status updates are idempotent. Any state can transition to any other state — sending `working` after `error` resumes the session normally. If the agent recovers from a failure or the user provides new direction, just send the appropriate new status.
 
 ## Telemetry Failure Behavior
