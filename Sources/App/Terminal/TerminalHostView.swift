@@ -209,6 +209,7 @@ final class TerminalHostView: NSView {
             options: [
                 .mouseEnteredAndExited,
                 .mouseMoved,
+                .cursorUpdate,
                 .inVisibleRect,
                 .activeAlways,
             ],
@@ -218,6 +219,11 @@ final class TerminalHostView: NSView {
         addTrackingArea(trackingArea)
         mouseTrackingArea = trackingArea
         super.updateTrackingAreas()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        // Refresh the live hover state before invalidating cursor rects so any
+        // immediate cursorUpdate callback observes current inside/outside state.
+        refreshMouseInsideTrackingAreaState()
+        #endif
         window?.invalidateCursorRects(for: self)
     }
 
@@ -230,9 +236,14 @@ final class TerminalHostView: NSView {
 
     override func cursorUpdate(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        // Override default cursor-rect handling so that AppKit's internal
-        // pop/push cycle during invalidateCursorRects never reverts to a
-        // stale cursor. We always set the live Ghostty cursor directly.
+        // AppKit can deliver cursorUpdate on both entry and exit for tracking
+        // areas using .cursorUpdate, so re-read the live pointer position
+        // before overriding the cursor stack.
+        refreshMouseInsideTrackingAreaState()
+        guard isMouseInsideTrackingArea else {
+            super.cursorUpdate(with: event)
+            return
+        }
         ghosttyMouseCursorStyle.nsCursor.set()
         #else
         super.cursorUpdate(with: event)
@@ -311,6 +322,7 @@ final class TerminalHostView: NSView {
     }
 
     func setGhosttyMouseShape(_ shape: ghostty_action_mouse_shape_e) {
+        assert(Thread.isMainThread)
         guard let nextCursorStyle = Self.ghosttyMouseCursorStyle(for: shape),
               nextCursorStyle != ghosttyMouseCursorStyle else {
             return
@@ -409,10 +421,27 @@ final class TerminalHostView: NSView {
     }
 
     private func syncMouseCursorAppearance() {
+        refreshMouseInsideTrackingAreaState()
         window?.invalidateCursorRects(for: self)
         if isMouseInsideTrackingArea {
             ghosttyMouseCursorStyle.nsCursor.set()
         }
+    }
+
+    /// Tracking-area enter/exit callbacks can be stale when this host view is
+    /// attached or resized underneath a stationary pointer, so derive the
+    /// current hover state from the window's live mouse location.
+    private func refreshMouseInsideTrackingAreaState() {
+        guard let window,
+              isHidden == false,
+              hasHiddenAncestor == false else {
+            isMouseInsideTrackingArea = false
+            return
+        }
+
+        let windowPoint = window.mouseLocationOutsideOfEventStream
+        let point = convert(windowPoint, from: nil)
+        isMouseInsideTrackingArea = Self.isMouseLocation(point, inside: bounds)
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -811,6 +840,7 @@ final class TerminalHostView: NSView {
 
     private func forwardMousePosition(_ event: NSEvent, surface: ghostty_surface_t) {
         let point = convert(event.locationInWindow, from: nil)
+        isMouseInsideTrackingArea = Self.isMouseLocation(point, inside: bounds)
         let y = bounds.height - point.y
         let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
         ghostty_surface_mouse_pos(surface, point.x, y, mods)
@@ -827,6 +857,7 @@ final class TerminalHostView: NSView {
         guard let ghosttySurface, let window else { return false }
         let windowPoint = window.mouseLocationOutsideOfEventStream
         let point = convert(windowPoint, from: nil)
+        isMouseInsideTrackingArea = Self.isMouseLocation(point, inside: bounds)
         let y = bounds.height - point.y
         let mods = Self.ghosttyModifierFlags(for: modifierFlags)
         ghostty_surface_mouse_pos(ghosttySurface, point.x, y, mods)
@@ -1116,6 +1147,13 @@ final class TerminalHostView: NSView {
         default:
             return nil
         }
+    }
+
+    static func isMouseLocation(_ point: CGPoint, inside bounds: CGRect) -> Bool {
+        guard bounds.isEmpty == false else {
+            return false
+        }
+        return bounds.contains(point)
     }
     #endif
 

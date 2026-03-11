@@ -85,5 +85,41 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertNil(cursorStyle)
     }
+
+    func testIsMouseLocationReturnsTrueForPointInsideBounds() {
+        let isInside = TerminalHostView.isMouseLocation(
+            CGPoint(x: 24, y: 18),
+            inside: CGRect(x: 0, y: 0, width: 80, height: 40)
+        )
+
+        XCTAssertTrue(isInside)
+    }
+
+    func testIsMouseLocationReturnsFalseForPointOutsideBounds() {
+        let isInside = TerminalHostView.isMouseLocation(
+            CGPoint(x: 81, y: 18),
+            inside: CGRect(x: 0, y: 0, width: 80, height: 40)
+        )
+
+        XCTAssertFalse(isInside)
+    }
+
+    func testIsMouseLocationReturnsFalseForMaxBoundsEdge() {
+        let isInside = TerminalHostView.isMouseLocation(
+            CGPoint(x: 80, y: 40),
+            inside: CGRect(x: 0, y: 0, width: 80, height: 40)
+        )
+
+        XCTAssertFalse(isInside)
+    }
+
+    func testIsMouseLocationReturnsFalseForEmptyBounds() {
+        let isInside = TerminalHostView.isMouseLocation(
+            CGPoint(x: 0, y: 0),
+            inside: .zero
+        )
+
+        XCTAssertFalse(isInside)
+    }
 }
 #endif
