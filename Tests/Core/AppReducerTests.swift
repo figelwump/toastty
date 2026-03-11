@@ -362,6 +362,31 @@ struct AppReducerTests {
     }
 
     @Test
+    func createWindowCreatesSelectedWindowAndInitialWorkspace() throws {
+        var state = AppState(
+            windows: [],
+            workspacesByID: [:],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: 13,
+            globalTerminalFontPoints: 15
+        )
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil), state: &state))
+
+        let window = try #require(state.windows.first)
+        let workspaceID = try #require(window.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(state.selectedWindowID == window.id)
+        #expect(window.workspaceIDs == [workspaceID])
+        #expect(workspace.title == "Workspace 1")
+        #expect(state.configuredTerminalFontPoints == 13)
+        #expect(state.globalTerminalFontPoints == 15)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func updateWindowFrameMutatesOnlyTheTargetWindow() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

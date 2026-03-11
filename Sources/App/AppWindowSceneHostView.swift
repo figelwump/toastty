@@ -35,7 +35,7 @@ struct AppWindowSceneHostView: View {
                     disableAnimations: disableAnimations
                 )
             } else {
-                EmptyStateView()
+                EmptyStateView(onCreateWorkspace: createWorkspaceAction)
             }
         }
         .onAppear {
@@ -94,5 +94,12 @@ struct AppWindowSceneHostView: View {
         let persistedValue = windowID.uuidString
         guard sceneWindowIDValue != persistedValue else { return }
         sceneWindowIDValue = persistedValue
+    }
+
+    private var createWorkspaceAction: (() -> Void)? {
+        guard store.canCreateWorkspaceFromCommand(preferredWindowID: nil) else { return nil }
+        return {
+            _ = store.createWorkspaceFromCommand(preferredWindowID: nil)
+        }
     }
 }

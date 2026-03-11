@@ -23,7 +23,7 @@ struct WorkspaceView: View {
             if let window = store.window(id: windowID) {
                 workspaceStack(for: window)
             } else {
-                EmptyStateView()
+                EmptyStateView(onCreateWorkspace: createWorkspaceAction)
             }
         }
         .background(ToastyTheme.surfaceBackground)
@@ -82,6 +82,13 @@ struct WorkspaceView: View {
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = selectedWorkspace?.id else { return }
         terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
+    }
+
+    private var createWorkspaceAction: (() -> Void)? {
+        guard store.canCreateWorkspaceFromCommand(preferredWindowID: windowID) else { return nil }
+        return {
+            _ = store.createWorkspaceFromCommand(preferredWindowID: windowID)
+        }
     }
 
     private func workspaceStack(for window: WindowState) -> some View {

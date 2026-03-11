@@ -7,6 +7,11 @@ struct WindowCommandSelection {
     let workspace: WorkspaceState
 }
 
+private enum WorkspaceCommandTarget {
+    case existingWindow(UUID)
+    case newWindow
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
@@ -76,6 +81,13 @@ final class AppStore: ObservableObject {
         state.workspaceSelection(in: windowID)?.workspace
     }
 
+    func commandWindowID(preferredWindowID: UUID?) -> UUID? {
+        guard case .existingWindow(let windowID)? = createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) else {
+            return nil
+        }
+        return windowID
+    }
+
     func commandSelection(preferredWindowID: UUID?) -> WindowCommandSelection? {
         if let preferredWindowID {
             // A focused scene/window should be authoritative. If SwiftUI is still
@@ -100,6 +112,24 @@ final class AppStore: ObservableObject {
             window: selection.window,
             workspace: selection.workspace
         )
+    }
+
+    func canCreateWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
+        createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) != nil
+    }
+
+    @discardableResult
+    func createWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let target = createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        switch target {
+        case .existingWindow(let windowID):
+            return send(.createWorkspace(windowID: windowID, title: nil))
+        case .newWindow:
+            return send(.createWindow(initialWorkspaceTitle: nil))
+        }
     }
 
     var selectedWindow: WindowState? {
@@ -137,5 +167,25 @@ final class AppStore: ObservableObject {
         default:
             break
         }
+    }
+
+    private func createWorkspaceCommandTarget(preferredWindowID: UUID?) -> WorkspaceCommandTarget? {
+        if let preferredWindowID {
+            guard state.window(id: preferredWindowID) != nil else {
+                return state.windows.isEmpty ? .newWindow : nil
+            }
+            return .existingWindow(preferredWindowID)
+        }
+
+        if let selectedWindowID = state.selectedWindowID,
+           state.window(id: selectedWindowID) != nil {
+            return .existingWindow(selectedWindowID)
+        }
+
+        if let firstWindowID = state.windows.first?.id {
+            return .existingWindow(firstWindowID)
+        }
+
+        return .newWindow
     }
 }

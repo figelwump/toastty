@@ -32,7 +32,7 @@ struct AppWindowSceneView: View {
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
-                EmptyStateView()
+                EmptyStateView(onCreateWorkspace: createWorkspaceAction)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -100,6 +100,13 @@ struct AppWindowSceneView: View {
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         )
+    }
+
+    private var createWorkspaceAction: (() -> Void)? {
+        guard store.canCreateWorkspaceFromCommand(preferredWindowID: windowID) else { return nil }
+        return {
+            _ = store.createWorkspaceFromCommand(preferredWindowID: windowID)
+        }
     }
 }
 

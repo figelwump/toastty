@@ -26,8 +26,8 @@ struct ToasttyCommandMenus: Commands {
 
     var body: some Commands {
         CommandGroup(after: .appInfo) {
-            Button("Reload Configuration") {
-                reloadConfiguration()
+            Button(action: reloadConfiguration) {
+                Label("Reload Configuration", systemImage: "arrow.clockwise")
             }
             .disabled(!supportsConfigurationReload)
         }
@@ -51,10 +51,10 @@ struct ToasttyCommandMenus: Commands {
 
         CommandMenu("Workspace") {
             Button("New Workspace") {
-                createWorkspaceFromCommandSelection()
+                store.createWorkspaceFromCommand(preferredWindowID: focusedWindowID)
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
-            .disabled(commandWindow == nil)
+            .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: focusedWindowID) == false)
 
             Button("Close Panel") {
                 closeFocusedPanelFromCommandSelection()
@@ -111,12 +111,6 @@ struct ToasttyCommandMenus: Commands {
         }
         #endif
     }
-
-    private func createWorkspaceFromCommandSelection() {
-        guard let windowID = commandSelection?.windowID else { return }
-        store.send(.createWorkspace(windowID: windowID, title: nil))
-    }
-
     private func selectWorkspaceFromShortcutIndex(_ index: Int) {
         guard let commandSelection else { return }
         guard commandSelection.window.workspaceIDs.indices.contains(index) else { return }

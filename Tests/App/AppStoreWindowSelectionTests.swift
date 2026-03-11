@@ -183,4 +183,83 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(store.selectedWorkspace)
         XCTAssertNil(store.commandSelection(preferredWindowID: windowID))
     }
+
+    func testCommandWindowIDResolvesFocusedWindowWithoutAnyWorkspaces() {
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [],
+                    selectedWorkspaceID: nil
+                )
+            ],
+            workspacesByID: [:],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertEqual(store.commandWindowID(preferredWindowID: windowID), windowID)
+        XCTAssertTrue(store.canCreateWorkspaceFromCommand(preferredWindowID: windowID))
+    }
+
+    func testCreateWorkspaceFromCommandPopulatesFocusedEmptyWindow() throws {
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [],
+                    selectedWorkspaceID: nil
+                )
+            ],
+            workspacesByID: [:],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(store.createWorkspaceFromCommand(preferredWindowID: windowID))
+
+        let window = try XCTUnwrap(store.window(id: windowID))
+        let workspaceID = try XCTUnwrap(window.selectedWorkspaceID)
+        XCTAssertEqual(window.workspaceIDs, [workspaceID])
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.title, "Workspace 1")
+    }
+
+    func testCreateWorkspaceFromCommandRecreatesFirstWindowFromEmptyState() throws {
+        let state = AppState(
+            windows: [],
+            workspacesByID: [:],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: 13,
+            globalTerminalFontPoints: 15
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(store.canCreateWorkspaceFromCommand(preferredWindowID: nil))
+        XCTAssertTrue(store.createWorkspaceFromCommand(preferredWindowID: nil))
+
+        let window = try XCTUnwrap(store.state.windows.first)
+        let workspaceID = try XCTUnwrap(window.selectedWorkspaceID)
+        XCTAssertEqual(store.state.selectedWindowID, window.id)
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.title, "Workspace 1")
+        XCTAssertEqual(store.state.configuredTerminalFontPoints, 13)
+        XCTAssertEqual(store.state.globalTerminalFontPoints, 15)
+    }
+
+    func testCreateWorkspaceFromCommandDoesNotRerouteMissingFocusedWindow() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = store.state.windows[0].id
+        let originalWorkspaceIDs = store.state.windows[0].workspaceIDs
+
+        XCTAssertFalse(store.canCreateWorkspaceFromCommand(preferredWindowID: UUID()))
+        XCTAssertFalse(store.createWorkspaceFromCommand(preferredWindowID: UUID()))
+
+        XCTAssertEqual(store.state.windows[0].id, windowID)
+        XCTAssertEqual(store.state.windows[0].workspaceIDs, originalWorkspaceIDs)
+    }
 }
