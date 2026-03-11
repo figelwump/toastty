@@ -228,6 +228,17 @@ final class TerminalHostView: NSView {
         #endif
     }
 
+    override func cursorUpdate(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        // Override default cursor-rect handling so that AppKit's internal
+        // pop/push cycle during invalidateCursorRects never reverts to a
+        // stale cursor. We always set the live Ghostty cursor directly.
+        ghosttyMouseCursorStyle.nsCursor.set()
+        #else
+        super.cursorUpdate(with: event)
+        #endif
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
         let surfaceChanged = ghosttySurface != surface
