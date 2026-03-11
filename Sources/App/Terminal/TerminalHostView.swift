@@ -701,7 +701,10 @@ final class TerminalHostView: NSView {
         // Apply the modifier transition first so stationary pointer hover
         // state re-evaluates against Ghostty's current modifier set.
         let handled = handleKeyEvent(event, action: action)
-        _ = forwardMousePosition(event)
+
+        // FlagsChanged events can carry stale or zero-origin locationInWindow
+        // values, so use the window's live mouse location instead of the event's.
+        _ = forwardCurrentMousePosition(modifierFlags: event.modifierFlags)
         guard handled else {
             super.flagsChanged(with: event)
             return
@@ -800,6 +803,23 @@ final class TerminalHostView: NSView {
         let y = bounds.height - point.y
         let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
         ghostty_surface_mouse_pos(surface, point.x, y, mods)
+    }
+
+    /// Forwards the current mouse position using the window's live cursor
+    /// location rather than an event's potentially stale `locationInWindow`.
+    /// Useful for non-mouse events (e.g. `flagsChanged`) where the event
+    /// position may not reflect where the pointer actually is.
+    @discardableResult
+    private func forwardCurrentMousePosition(
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        guard let ghosttySurface, let window else { return false }
+        let windowPoint = window.mouseLocationOutsideOfEventStream
+        let point = convert(windowPoint, from: nil)
+        let y = bounds.height - point.y
+        let mods = Self.ghosttyModifierFlags(for: modifierFlags)
+        ghostty_surface_mouse_pos(ghosttySurface, point.x, y, mods)
+        return true
     }
 
     @discardableResult
