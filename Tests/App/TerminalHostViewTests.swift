@@ -129,5 +129,32 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertEqual(scrollView.terminalHostView.frame.size, scrollView.contentView.bounds.size)
     }
+
+    func testHostViewRequestsFirstResponderRestorationWhenAttachedToWindow() {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var requestCount = 0
+
+        window.contentView = contentView
+        hostView.requestFirstResponderIfNeeded = {
+            requestCount += 1
+        }
+
+        contentView.addSubview(hostView)
+
+        XCTAssertEqual(requestCount, 1)
+    }
+}
+
+private final class TestWindow: NSWindow {
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+    }
 }
 #endif

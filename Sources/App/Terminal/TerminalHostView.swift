@@ -22,6 +22,9 @@ private extension NSView {
 final class TerminalHostView: NSView {
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
+    /// Gives the owning controller a chance to reclaim AppKit first responder
+    /// when the host view finishes attaching or becomes visible again.
+    var requestFirstResponderIfNeeded: (() -> Void)?
     private var pendingImageFileDrop: PreparedImageFileDrop?
     private var pendingVisibilitySyncTask: Task<Void, Never>?
     private var mouseTrackingArea: NSTrackingArea?
@@ -194,6 +197,7 @@ final class TerminalHostView: NSView {
         syncLayerContentsScale()
         isEffectivelyVisible = window != nil && isHidden == false && hasHiddenAncestor == false
         #endif
+        requestFirstResponderIfNeeded?()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -354,6 +358,9 @@ final class TerminalHostView: NSView {
 
     private func applySurfaceVisibility(visible: Bool, reason: String) {
         isEffectivelyVisible = visible
+        if visible {
+            requestFirstResponderIfNeeded?()
+        }
 
         guard let ghosttySurface else {
             lastKnownSurfaceVisibility = nil

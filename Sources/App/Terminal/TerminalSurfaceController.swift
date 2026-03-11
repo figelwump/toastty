@@ -14,6 +14,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var activeAttachment: PanelHostAttachmentToken?
     private var pendingDetachAttachment: PanelHostAttachmentToken?
     private var pendingDetachTask: Task<Void, Never>?
+    private var requestedFocus = false
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private let terminalSurfaceScrollView: TerminalSurfaceScrollView
@@ -97,6 +98,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         terminalSurfaceScrollView = surfaceScrollView
         terminalHostView = surfaceScrollView.terminalHostView
         hostedView = surfaceScrollView
+        terminalHostView.requestFirstResponderIfNeeded = { [weak self] in
+            guard let self else { return }
+            self.ensureFirstResponderIfNeeded(
+                focused: self.requestedFocus && self.terminalHostView.isEffectivelyVisible
+            )
+        }
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
             return self.delegate?.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
@@ -311,6 +318,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
 
         #if TOASTTY_HAS_GHOSTTY_KIT
         diagnostics.updateCount += 1
+        requestedFocus = focused
         if activeSourceContainer !== sourceContainer || hostedView.superview !== sourceContainer {
             attachHost(to: sourceContainer, attachment: attachment)
         }
@@ -437,8 +445,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         temporarilyHiddenForViewportDeferral = false
         resetViewportResumeStability()
         let effectiveFocused = focused && hostView.isEffectivelyVisible
-        hostView.syncSurfaceFocus(effectiveFocused)
         ensureFirstResponderIfNeeded(focused: effectiveFocused)
+        if focused {
+            hostView.synchronizeGhosttySurfaceFocusFromApplicationState()
+        } else {
+            hostView.syncSurfaceFocus(false)
+        }
 
         let presentationSignature = SurfacePresentationSignature(
             logicalWidth: logicalWidth,
@@ -497,6 +509,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         #endif
         activeSourceContainer = nil
         activeAttachment = nil
+        requestedFocus = false
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }
