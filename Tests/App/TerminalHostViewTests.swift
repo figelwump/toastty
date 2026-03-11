@@ -46,6 +46,26 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertNil(action)
     }
 
+    func testUnshiftedCodepointSkipsCharacterLookupForFlagsChangedEvents() {
+        var providerWasCalled = false
+
+        let codepoint = TerminalHostView.ghosttyUnshiftedCodepoint(eventType: .flagsChanged) {
+            providerWasCalled = true
+            return "x"
+        }
+
+        XCTAssertEqual(codepoint, 0)
+        XCTAssertFalse(providerWasCalled)
+    }
+
+    func testUnshiftedCodepointUsesFirstScalarForKeyDownEvents() {
+        let codepoint = TerminalHostView.ghosttyUnshiftedCodepoint(eventType: .keyDown) {
+            "A"
+        }
+
+        XCTAssertEqual(codepoint, UnicodeScalar("A").value)
+    }
+
     func testMouseShapeMapsPointerToLinkCursorStyle() {
         let cursorStyle = TerminalHostView.ghosttyMouseCursorStyle(for: GHOSTTY_MOUSE_SHAPE_POINTER)
 

@@ -738,9 +738,7 @@ final class TerminalHostView: NSView {
             composing: false
         )
 
-        if let scalar = event.characters(byApplyingModifiers: [])?.unicodeScalars.first {
-            keyEvent.unshifted_codepoint = scalar.value
-        }
+        keyEvent.unshifted_codepoint = Self.ghosttyUnshiftedCodepoint(for: event)
 
         let text = Self.ghosttyText(for: event)
         let handled: Bool
@@ -984,6 +982,24 @@ final class TerminalHostView: NSView {
         }
 
         return characters
+    }
+
+    static func ghosttyUnshiftedCodepoint(
+        eventType: NSEvent.EventType,
+        characterProvider: () -> String?
+    ) -> UInt32 {
+        switch eventType {
+        case .keyDown, .keyUp:
+            return characterProvider()?.unicodeScalars.first?.value ?? 0
+        default:
+            return 0
+        }
+    }
+
+    private static func ghosttyUnshiftedCodepoint(for event: NSEvent) -> UInt32 {
+        ghosttyUnshiftedCodepoint(eventType: event.type) {
+            event.characters(byApplyingModifiers: [])
+        }
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
