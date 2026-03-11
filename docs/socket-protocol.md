@@ -198,24 +198,20 @@ Routing rules:
 
 ## 6) automation mode contract
 
-Automation commands are accepted only when the app is launched with:
+Automation commands are accepted when the app is launched with either:
 
 - args: `--automation --run-id <id> --fixture <name> --artifacts-dir <path>`
 - env: `TOASTTY_AUTOMATION=1`
 
-If automation mode is disabled:
-
-- return `AUTOMATION_DISABLED` for all `automation.*` requests
-
 Enablement rule:
 
-- Both launch args and env marker are required. If either is missing, automation commands are rejected.
+- Either launch args or env marker is sufficient. Automation is enabled when at least one is present.
 
 ### readiness handshake
 
 After fixture load and socket bind, app writes:
 
-- `artifacts/ui/<run-id>/ready.json`
+- `artifacts/automation-ready-<run-id>.json`
 
 `run-id` is provided by required launch arg `--run-id`.
 
@@ -225,11 +221,16 @@ After fixture load and socket bind, app writes:
 {
   "protocolVersion": "1.0",
   "ready": true,
-  "socketPath": "/tmp/toastty-501/events-v1.sock",
+  "runID": "run-20260227-083100",
   "fixture": "baseline-main",
+  "socketPath": "/tmp/toastty-501/events-v1.sock",
+  "status": "ready",
+  "error": null,
   "timestamp": "2026-02-27T08:31:00Z"
 }
 ```
+
+When startup fails, `ready` is `false`, `status` is `"error"`, and `error` contains the error message.
 
 Smoke script must wait for this file (with timeout) before sending commands.
 
@@ -249,10 +250,7 @@ Result:
 
 Resets transient runtime state to baseline for deterministic test run.
 
-Request payload:
-
-- `clearNotifications?: Bool` (default `true`)
-- `clearSessions?: Bool` (default `true`)
+Request payload: empty
 
 Result:
 
@@ -260,9 +258,9 @@ Result:
 
 Semantics:
 
-- `clearSessions=true`: clear `SessionRegistry` and session-linked transient metadata.
-- `clearSessions=true` does not remove panel layout objects by itself.
-- use `automation.load_fixture` after reset to reach deterministic full-state baseline.
+- Replaces app state with bootstrap state, resets fixture name to `"default"`.
+- Clears session registry, notification store, coalesced updates, progress, and errors.
+- Use `automation.load_fixture` after reset to reach deterministic full-state baseline.
 
 ### `automation.load_fixture`
 
@@ -285,7 +283,6 @@ Request payload:
 Result:
 
 - `stateVersion: Int`
-- `warnings?: [String]`
 
 ### `automation.terminal_send_text`
 
@@ -373,6 +370,27 @@ Result:
 - `slotIDs: [UUID]`
 - `slotPanelIDs: [UUID]`
 
+### `automation.terminal_state`
+
+Returns terminal-specific state snapshot for a resolved terminal panel.
+
+Request payload:
+
+- `panelID?: UUID` (optional explicit terminal panel target)
+- `workspaceID?: UUID` (optional; used when `panelID` is omitted)
+
+Result: terminal state snapshot (structure varies by terminal runtime).
+
+### `automation.workspace_render_snapshot`
+
+Returns workspace render-level snapshot for visual assertions.
+
+Request payload:
+
+- `workspaceID?: UUID` (defaults to selected workspace)
+
+Result: render snapshot (structure varies by workspace configuration).
+
 ### `automation.capture_screenshot`
 
 Request payload:
@@ -412,8 +430,6 @@ Result:
 - `UNKNOWN_EVENT_TYPE`
 - `UNKNOWN_COMMAND`
 - `INVALID_PAYLOAD`
-- `AUTOMATION_DISABLED`
-- `TIMEOUT`
 - `INTERNAL_ERROR`
 
 ## 9) security requirements
