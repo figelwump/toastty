@@ -3,10 +3,7 @@ import CoreState
 import SwiftUI
 
 @MainActor
-private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicationDelegate {
-    private static let menuItemTitle = "Reload Configuration"
-    private static let symbolName = "arrow.clockwise"
-    private var iconWasApplied = false
+private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
 
     override init() {
@@ -18,23 +15,7 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
         super.init()
     }
 
-    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
-        Task { @MainActor [weak self] in
-            self?.applyReloadIconIfPresent()
-        }
-        DispatchQueue.main.async { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.applyReloadIconIfPresent()
-            }
-        }
-    }
-
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard !self.iconWasApplied else { return }
-            self.applyReloadIconIfPresent()
-        }
         #if TOASTTY_HAS_GHOSTTY_KIT
         Task { @MainActor in
             GhosttyRuntimeManager.shared.setAppFocus(true)
@@ -62,61 +43,6 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
 
         let response = confirmationAlert.runModal()
         return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
-    }
-
-    private func applyReloadIconIfPresent() {
-        guard !iconWasApplied else { return }
-        guard let mainMenu = NSApp.mainMenu else { return }
-        guard let menuItem = findMenuItem(in: mainMenu.items) else { return }
-        guard menuItem.image == nil else { return }
-        menuItem.image = NSImage(
-            systemSymbolName: Self.symbolName,
-            accessibilityDescription: Self.menuItemTitle
-        )
-        menuItem.image?.isTemplate = true
-        iconWasApplied = true
-    }
-
-    private func findMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
-        for item in items {
-            if item.title == Self.menuItemTitle {
-                return item
-            }
-            if let submenu = item.submenu,
-               let nestedItem = findMenuItem(in: submenu.items) {
-                return nestedItem
-            }
-        }
-        return nil
-    }
-}
-
-@MainActor
-private final class ClosePanelShortcutInterceptor {
-    private let commandController: FocusedPanelCommandController
-    nonisolated(unsafe) private var eventMonitor: Any?
-
-    init(commandController: FocusedPanelCommandController) {
-        self.commandController = commandController
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            guard Self.isClosePanelShortcut(event) else { return event }
-            let closeResult = self.commandController.closeFocusedPanel()
-            // Only fall back to AppKit when Toastty could not resolve a panel close target.
-            return closeResult.consumesShortcut ? nil : event
-        }
-    }
-
-    deinit {
-        if let eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
-        }
-    }
-
-    private static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags == [.command] else { return false }
-        return event.charactersIgnoringModifiers?.lowercased() == "w"
     }
 }
 
@@ -211,8 +137,8 @@ private final class AppResignActiveObserver: NSObject {
 @MainActor
 @main
 struct ToasttyApp: App {
-    @NSApplicationDelegateAdaptor(ReloadConfigurationMenuIconInstaller.self)
-    private var reloadConfigurationMenuIconInstaller
+    @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self)
+    private var appLifecycleDelegate
     @StateObject private var store: AppStore
     private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -225,8 +151,9 @@ struct ToasttyApp: App {
     private let appTerminationObserver: AppTerminationObserver?
     private let appResignActiveObserver: AppResignActiveObserver
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
+    private let windowCommandController: WindowCommandController
+    private let closeWindowMenuBridge: CloseWindowMenuBridge
     private let focusedPanelCommandController: FocusedPanelCommandController
-    private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
     init() {
@@ -249,15 +176,15 @@ struct ToasttyApp: App {
             Self.applyInitialTerminalFontState(to: store)
         }
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
+        let windowCommandController = WindowCommandController(store: store)
+        self.windowCommandController = windowCommandController
+        closeWindowMenuBridge = CloseWindowMenuBridge(windowCommandController: windowCommandController)
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
-        closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(
-            commandController: focusedPanelCommandController
-        )
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         appWindowSceneCoordinator = AppWindowSceneCoordinator()
@@ -320,7 +247,10 @@ struct ToasttyApp: App {
                 automationStartupError: automationStartupError,
                 disableAnimations: disableAnimations
             )
-                .frame(minWidth: 980, minHeight: 620)
+            .frame(minWidth: 980, minHeight: 620)
+            .onAppear {
+                closeWindowMenuBridge.installIfNeeded()
+            }
         }
         .commands {
             ToasttyCommandMenus(
