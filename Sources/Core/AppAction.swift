@@ -28,7 +28,7 @@ public enum AppAction: Equatable, Sendable {
     case updateWindowFrame(windowID: UUID, frame: CGRectCodable)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
     case createWorkspace(windowID: UUID, title: String?)
-    case createWindow(initialWorkspaceTitle: String?)
+    case createWindow(initialWorkspaceTitle: String?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
     case closeWorkspace(workspaceID: UUID)

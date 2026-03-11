@@ -231,6 +231,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
     }
 
     func testCreateWorkspaceFromCommandRecreatesFirstWindowFromEmptyState() throws {
+        let expectedFrame = CGRectCodable(x: 320, y: 240, width: 1600, height: 960)
         let state = AppState(
             windows: [],
             workspacesByID: [:],
@@ -238,7 +239,11 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             configuredTerminalFontPoints: 13,
             globalTerminalFontPoints: 15
         )
-        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let store = AppStore(
+            state: state,
+            persistTerminalFontPreference: false,
+            commandCreateWindowFrameProvider: { expectedFrame }
+        )
 
         XCTAssertTrue(store.canCreateWorkspaceFromCommand(preferredWindowID: nil))
         XCTAssertTrue(store.createWorkspaceFromCommand(preferredWindowID: nil))
@@ -246,6 +251,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let window = try XCTUnwrap(store.state.windows.first)
         let workspaceID = try XCTUnwrap(window.selectedWorkspaceID)
         XCTAssertEqual(store.state.selectedWindowID, window.id)
+        XCTAssertEqual(window.frame, expectedFrame)
         XCTAssertEqual(store.state.workspacesByID[workspaceID]?.title, "Workspace 1")
         XCTAssertEqual(store.state.configuredTerminalFontPoints, 13)
         XCTAssertEqual(store.state.globalTerminalFontPoints, 15)

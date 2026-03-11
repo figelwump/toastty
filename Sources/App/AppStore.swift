@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 
@@ -15,19 +16,23 @@ private enum WorkspaceCommandTarget {
 @MainActor
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
+    typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
 
     @Published private(set) var state: AppState
 
     private let reducer = AppReducer()
     private let persistTerminalFontPreference: Bool
+    private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
 
     init(
         state: AppState = .bootstrap(),
-        persistTerminalFontPreference: Bool = true
+        persistTerminalFontPreference: Bool = true,
+        commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame
     ) {
         self.state = state
         self.persistTerminalFontPreference = persistTerminalFontPreference
+        self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
     }
 
     @discardableResult
@@ -128,7 +133,12 @@ final class AppStore: ObservableObject {
         case .existingWindow(let windowID):
             return send(.createWorkspace(windowID: windowID, title: nil))
         case .newWindow:
-            return send(.createWindow(initialWorkspaceTitle: nil))
+            return send(
+                .createWindow(
+                    initialWorkspaceTitle: nil,
+                    initialFrame: commandCreateWindowFrameProvider()
+                )
+            )
         }
     }
 
@@ -187,5 +197,15 @@ final class AppStore: ObservableObject {
         }
 
         return .newWindow
+    }
+
+    private static func currentCommandCreateWindowFrame() -> CGRectCodable? {
+        if let frame = NSApp.mainWindow?.frame {
+            return CGRectCodable(frame)
+        }
+        if let frame = NSApp.keyWindow?.frame {
+            return CGRectCodable(frame)
+        }
+        return nil
     }
 }

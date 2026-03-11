@@ -41,11 +41,11 @@ public struct AppReducer {
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
             return true
 
-        case .createWindow(let initialWorkspaceTitle):
+        case .createWindow(let initialWorkspaceTitle, let initialFrame):
             let workspace = WorkspaceState.bootstrap(title: initialWorkspaceTitle ?? "Workspace 1")
             let window = WindowState(
                 id: UUID(),
-                frame: CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
+                frame: initialFrame ?? CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
                 workspaceIDs: [workspace.id],
                 selectedWorkspaceID: workspace.id
             )

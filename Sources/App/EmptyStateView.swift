@@ -1,9 +1,11 @@
+import AppKit
 import SwiftUI
 
 /// Branded empty state shown when no workspace is selected.
 /// Displays a Canvas-drawn toast character, headline, body copy, and recovery CTA.
 struct EmptyStateView: View {
     let onCreateWorkspace: (() -> Void)?
+    @State private var isCreateWorkspaceHovered = false
 
     init(onCreateWorkspace: (() -> Void)? = nil) {
         self.onCreateWorkspace = onCreateWorkspace
@@ -185,18 +187,50 @@ struct EmptyStateView: View {
             .padding(.vertical, 14)
             .background(
                 Capsule()
-                    .fill(ToastyTheme.accent)
+                    .fill(isCreateWorkspaceHovered ? ToastyTheme.accent.opacity(0.92) : ToastyTheme.accent)
             )
             .overlay(
                 Capsule()
-                    .stroke(ToastyTheme.emptyStateToastHighlight.opacity(0.35), lineWidth: 1)
+                    .stroke(
+                        isCreateWorkspaceHovered
+                            ? ToastyTheme.emptyStateToastHighlight.opacity(0.6)
+                            : ToastyTheme.emptyStateToastHighlight.opacity(0.35),
+                        lineWidth: 1
+                    )
             )
-            .shadow(color: ToastyTheme.accent.opacity(0.18), radius: 14, y: 8)
+            .shadow(
+                color: ToastyTheme.accent.opacity(isCreateWorkspaceHovered ? 0.28 : 0.18),
+                radius: isCreateWorkspaceHovered ? 18 : 14,
+                y: isCreateWorkspaceHovered ? 10 : 8
+            )
+            .scaleEffect(isCreateWorkspaceHovered ? 1.02 : 1)
         }
         .buttonStyle(.plain)
         .disabled(onCreateWorkspace == nil)
         .opacity(onCreateWorkspace == nil ? 0.55 : 1)
+        .animation(.easeOut(duration: 0.12), value: isCreateWorkspaceHovered)
+        .onHover(perform: updateCreateWorkspaceHover)
+        .onChange(of: onCreateWorkspace == nil) { _, isDisabled in
+            if isDisabled {
+                updateCreateWorkspaceHover(false)
+            }
+        }
+        .onDisappear {
+            updateCreateWorkspaceHover(false)
+        }
         .accessibilityIdentifier("empty-state.new-workspace")
+    }
+
+    private func updateCreateWorkspaceHover(_ hovering: Bool) {
+        let canCreateWorkspace = onCreateWorkspace != nil
+        let nextHoverState = canCreateWorkspace && hovering
+        guard nextHoverState != isCreateWorkspaceHovered else { return }
+        if nextHoverState {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
+        }
+        isCreateWorkspaceHovered = nextHoverState
     }
 }
 

@@ -66,7 +66,11 @@ struct AppWindowSceneHostView: View {
                 sceneCoordinator.unregisterPresentedWindow(windowID: boundWindowID)
             }
             boundWindowID = nil
+            hasBoundWindow = false
             sceneWindowIDValue = nil
+            // Keep the scene alive when the app falls back to the global empty
+            // state so the existing window stays on its current display.
+            guard store.state.windows.isEmpty == false else { return }
             dismiss()
             return
         } else if let claimedWindowID = sceneCoordinator.claimWindowID(in: store.state) {

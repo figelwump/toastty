@@ -371,17 +371,38 @@ struct AppReducerTests {
             globalTerminalFontPoints: 15
         )
         let reducer = AppReducer()
+        let frame = CGRectCodable(x: 240, y: 180, width: 1440, height: 900)
 
-        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil), state: &state))
+        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: frame), state: &state))
 
         let window = try #require(state.windows.first)
         let workspaceID = try #require(window.selectedWorkspaceID)
         let workspace = try #require(state.workspacesByID[workspaceID])
         #expect(state.selectedWindowID == window.id)
         #expect(window.workspaceIDs == [workspaceID])
+        #expect(window.frame == frame)
         #expect(workspace.title == "Workspace 1")
         #expect(state.configuredTerminalFontPoints == 13)
         #expect(state.globalTerminalFontPoints == 15)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func createWindowFallsBackToDefaultFrameWhenNoInitialFrameIsProvided() throws {
+        var state = AppState(
+            windows: [],
+            workspacesByID: [:],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: 13,
+            globalTerminalFontPoints: 15
+        )
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: nil), state: &state))
+
+        let window = try #require(state.windows.first)
+        #expect(window.frame == CGRectCodable(x: 120, y: 120, width: 1280, height: 760))
 
         try StateValidator.validate(state)
     }
