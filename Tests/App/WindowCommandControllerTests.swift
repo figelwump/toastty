@@ -190,6 +190,42 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(windowMenu.items[2].isHidden)
     }
 
+    func testHiddenSystemMenuItemsBridgeRehidesItemsAfterMenuMutation() {
+        let bridge = HiddenSystemMenuItemsBridge()
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "File")
+        initialFileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
+        fileItem.submenu = initialFileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        let rebuiltFileMenu = NSMenu(title: "File")
+        let rebuiltNewWindowItem = NSMenuItem(title: "New Window", action: nil, keyEquivalent: "n")
+        let rebuiltOpenRecentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        rebuiltFileMenu.addItem(rebuiltNewWindowItem)
+        rebuiltFileMenu.addItem(rebuiltOpenRecentItem)
+        fileItem.submenu = rebuiltFileMenu
+
+        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
+        let refreshExpectation = expectation(description: "menu refresh")
+        DispatchQueue.main.async {
+            refreshExpectation.fulfill()
+        }
+        wait(for: [refreshExpectation], timeout: 1)
+
+        XCTAssertTrue(rebuiltNewWindowItem.isHidden)
+        XCTAssertFalse(rebuiltOpenRecentItem.isHidden)
+        XCTAssertTrue(rebuiltFileMenu.delegate === bridge)
+    }
+
     private func makeSplitWorkspaceFixture() throws -> SplitWorkspaceFixture {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
