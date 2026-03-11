@@ -24,6 +24,7 @@ final class TerminalHostView: NSView {
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
     private var pendingImageFileDrop: PreparedImageFileDrop?
     private var pendingVisibilitySyncTask: Task<Void, Never>?
+    private var mouseTrackingArea: NSTrackingArea?
     private weak var observedWindow: NSWindow?
     private var windowOcclusionObserver: NSObjectProtocol?
     private var lastKnownSurfaceVisibility: Bool?
@@ -58,6 +59,26 @@ final class TerminalHostView: NSView {
 
     override var acceptsFirstResponder: Bool {
         true
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let result = super.becomeFirstResponder()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if result {
+            synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
+        #endif
+        return result
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if result {
+            syncSurfaceFocus(false)
+        }
+        #endif
+        return result
     }
 
     override var isHidden: Bool {
@@ -103,6 +124,27 @@ final class TerminalHostView: NSView {
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
         syncLayerContentsScale()
+    }
+
+    override func updateTrackingAreas() {
+        if let mouseTrackingArea {
+            removeTrackingArea(mouseTrackingArea)
+        }
+
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [
+                .mouseEnteredAndExited,
+                .mouseMoved,
+                .inVisibleRect,
+                .activeAlways,
+            ],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(trackingArea)
+        mouseTrackingArea = trackingArea
+        super.updateTrackingAreas()
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -393,6 +435,24 @@ final class TerminalHostView: NSView {
         }
     }
 
+    override func mouseEntered(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        _ = forwardMousePosition(event)
+        #endif
+        super.mouseEntered(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        if NSEvent.pressedMouseButtons == 0,
+           let ghosttySurface {
+            let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
+            ghostty_surface_mouse_pos(ghosttySurface, -1, -1, mods)
+        }
+        #endif
+        super.mouseExited(with: event)
+    }
+
     override func mouseMoved(with event: NSEvent) {
         guard forwardMousePosition(event) else {
             super.mouseMoved(with: event)
@@ -522,6 +582,29 @@ final class TerminalHostView: NSView {
             super.keyUp(with: event)
             return
         }
+    }
+
+    override func flagsChanged(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let action = Self.ghosttyModifierActionForFlagsChanged(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags
+        ) else {
+            super.flagsChanged(with: event)
+            return
+        }
+
+        // Apply the modifier transition first so stationary pointer hover
+        // state re-evaluates against Ghostty's current modifier set.
+        let handled = handleKeyEvent(event, action: action)
+        _ = forwardMousePosition(event)
+        guard handled else {
+            super.flagsChanged(with: event)
+            return
+        }
+        #else
+        super.flagsChanged(with: event)
+        #endif
     }
 
     private func handleKeyEvent(_ event: NSEvent, action: ghostty_input_action_e) -> Bool {
@@ -798,6 +881,50 @@ final class TerminalHostView: NSView {
 
         return characters
     }
+
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    static func ghosttyModifierActionForFlagsChanged(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> ghostty_input_action_e? {
+        let changedModifierRawValue: UInt32
+        switch keyCode {
+        case 0x39:
+            changedModifierRawValue = GHOSTTY_MODS_CAPS.rawValue
+        case 0x38, 0x3C:
+            changedModifierRawValue = GHOSTTY_MODS_SHIFT.rawValue
+        case 0x3B, 0x3E:
+            changedModifierRawValue = GHOSTTY_MODS_CTRL.rawValue
+        case 0x3A, 0x3D:
+            changedModifierRawValue = GHOSTTY_MODS_ALT.rawValue
+        case 0x37, 0x36:
+            changedModifierRawValue = GHOSTTY_MODS_SUPER.rawValue
+        default:
+            return nil
+        }
+
+        let mods = ghosttyModifierFlags(for: modifierFlags)
+        guard mods.rawValue & changedModifierRawValue != 0 else {
+            return GHOSTTY_ACTION_RELEASE
+        }
+
+        let sidePressed: Bool
+        switch keyCode {
+        case 0x3C:
+            sidePressed = modifierFlags.rawValue & UInt(NX_DEVICERSHIFTKEYMASK) != 0
+        case 0x3E:
+            sidePressed = modifierFlags.rawValue & UInt(NX_DEVICERCTLKEYMASK) != 0
+        case 0x3D:
+            sidePressed = modifierFlags.rawValue & UInt(NX_DEVICERALTKEYMASK) != 0
+        case 0x36:
+            sidePressed = modifierFlags.rawValue & UInt(NX_DEVICERCMDKEYMASK) != 0
+        default:
+            sidePressed = true
+        }
+
+        return sidePressed ? GHOSTTY_ACTION_PRESS : GHOSTTY_ACTION_RELEASE
+    }
+    #endif
 
     private static func modifierDescription(_ flags: NSEvent.ModifierFlags) -> String {
         var parts: [String] = []
