@@ -75,3 +75,76 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
         return nil
     }
 }
+
+@MainActor
+final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
+    private static let hiddenMenuActionNames: Set<String> = [
+        NSStringFromSelector(#selector(NSResponder.newWindowForTab(_:))),
+        NSStringFromSelector(#selector(NSWindow.toggleTabBar(_:))),
+        NSStringFromSelector(#selector(NSWindow.toggleTabOverview(_:)))
+    ]
+
+    private static let hiddenMenuTitles: Set<String> = [
+        "New Window",
+        "Show Tab Bar",
+        "Show All Tabs"
+    ]
+
+    func installIfNeeded() {
+        guard let mainMenu = NSApp.mainMenu else { return }
+        installDelegatesRecursively(on: mainMenu)
+        Self.updateMenuVisibility(in: mainMenu)
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        installDelegatesRecursively(on: menu)
+        Self.updateMenuVisibility(in: menu)
+    }
+
+    private static func updateMenuVisibility(in menu: NSMenu) {
+        for item in menu.items {
+            if let submenu = item.submenu {
+                updateMenuVisibility(in: submenu)
+            }
+
+            if item.isSeparatorItem == false {
+                item.isHidden = shouldHide(item)
+            }
+        }
+
+        updateSeparatorVisibility(in: menu)
+    }
+
+    private static func shouldHide(_ item: NSMenuItem) -> Bool {
+        if let action = item.action,
+           hiddenMenuActionNames.contains(NSStringFromSelector(action)) {
+            return true
+        }
+
+        return hiddenMenuTitles.contains(item.title)
+    }
+
+    private static func updateSeparatorVisibility(in menu: NSMenu) {
+        for (index, item) in menu.items.enumerated() where item.isSeparatorItem {
+            let visibleItemsBefore = menu.items[..<index].contains(where: {
+                $0.isHidden == false && $0.isSeparatorItem == false
+            })
+            let visibleItemsAfter = menu.items.dropFirst(index + 1).contains(where: {
+                $0.isHidden == false && $0.isSeparatorItem == false
+            })
+            item.isHidden = visibleItemsBefore == false || visibleItemsAfter == false
+        }
+    }
+
+    private func installDelegatesRecursively(on menu: NSMenu) {
+        if menu.delegate !== self {
+            menu.delegate = self
+        }
+
+        for item in menu.items {
+            if let submenu = item.submenu {
+                installDelegatesRecursively(on: submenu)
+            }
+        }
+    }
+}

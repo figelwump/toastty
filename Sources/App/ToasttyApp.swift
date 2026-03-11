@@ -5,7 +5,9 @@ import SwiftUI
 @MainActor
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
-    private weak var closeWindowMenuBridge: CloseWindowMenuBridge?
+    private var closeWindowMenuBridge: CloseWindowMenuBridge?
+    private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
+    private var menuBridgeInstallationTask: Task<Void, Never>?
 
     override init() {
         let processInfo = ProcessInfo.processInfo
@@ -18,19 +20,24 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func setCloseWindowMenuBridge(_ bridge: CloseWindowMenuBridge) {
         closeWindowMenuBridge = bridge
-        bridge.installIfNeeded()
+        scheduleMenuBridgeInstallations()
+    }
+
+    func setHiddenSystemMenuItemsBridge(_ bridge: HiddenSystemMenuItemsBridge) {
+        hiddenSystemMenuItemsBridge = bridge
+        scheduleMenuBridgeInstallations()
     }
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
         Task { @MainActor [weak self] in
-            self?.closeWindowMenuBridge?.installIfNeeded()
+            self?.scheduleMenuBridgeInstallations()
         }
     }
 
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
         Task { @MainActor [weak self] in
-            self?.closeWindowMenuBridge?.installIfNeeded()
+            self?.scheduleMenuBridgeInstallations()
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
         Task { @MainActor in
@@ -59,6 +66,24 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
         let response = confirmationAlert.runModal()
         return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    private func installMenuBridges() {
+        closeWindowMenuBridge?.installIfNeeded()
+        hiddenSystemMenuItemsBridge?.installIfNeeded()
+    }
+
+    private func scheduleMenuBridgeInstallations() {
+        menuBridgeInstallationTask?.cancel()
+        installMenuBridges()
+
+        menuBridgeInstallationTask = Task { @MainActor [weak self] in
+            for delay in [100, 500, 1_000] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard Task.isCancelled == false else { return }
+                self?.installMenuBridges()
+            }
+        }
     }
 }
 
@@ -168,6 +193,7 @@ struct ToasttyApp: App {
     private let appResignActiveObserver: AppResignActiveObserver
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let closeWindowMenuBridge: CloseWindowMenuBridge
+    private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
@@ -202,6 +228,7 @@ struct ToasttyApp: App {
                 focusedPanelCommandController: focusedPanelCommandController
             )
         )
+        hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         appWindowSceneCoordinator = AppWindowSceneCoordinator()
@@ -267,6 +294,7 @@ struct ToasttyApp: App {
             .frame(minWidth: 980, minHeight: 620)
             .onAppear {
                 appLifecycleDelegate.setCloseWindowMenuBridge(closeWindowMenuBridge)
+                appLifecycleDelegate.setHiddenSystemMenuItemsBridge(hiddenSystemMenuItemsBridge)
             }
         }
         .commands {
@@ -316,6 +344,8 @@ struct ToasttyApp: App {
 
     @MainActor
     private static func configureWindowPersistenceDefaults() {
+        NSWindow.allowsAutomaticWindowTabbing = false
+
         // Toastty persists window/workspace state explicitly, so AppKit's
         // saved-state restoration only adds stale SwiftUI scene identifiers.
         let defaults = UserDefaults.standard

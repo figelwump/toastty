@@ -98,6 +98,98 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
     }
 
+    func testHiddenSystemMenuItemsBridgeHidesRequestedItemsByAction() {
+        let bridge = HiddenSystemMenuItemsBridge()
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let newWindowItem = NSMenuItem(
+            title: "Nouvelle fenetre",
+            action: #selector(NSResponder.newWindowForTab(_:)),
+            keyEquivalent: "n"
+        )
+        let keepFileItem = NSMenuItem(title: "Close Window", action: nil, keyEquivalent: "w")
+        fileMenu.addItem(newWindowItem)
+        fileMenu.addItem(.separator())
+        fileMenu.addItem(keepFileItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        let windowItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Window")
+        let keepWindowItem = NSMenuItem(
+            title: "Bring All to Front",
+            action: #selector(NSApplication.arrangeInFront(_:)),
+            keyEquivalent: ""
+        )
+        let showTabBarItem = NSMenuItem(
+            title: "Afficher la barre d’onglets",
+            action: #selector(NSWindow.toggleTabBar(_:)),
+            keyEquivalent: ""
+        )
+        let showAllTabsItem = NSMenuItem(
+            title: "Afficher tous les onglets",
+            action: #selector(NSWindow.toggleTabOverview(_:)),
+            keyEquivalent: ""
+        )
+        windowMenu.addItem(keepWindowItem)
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(showTabBarItem)
+        windowMenu.addItem(showAllTabsItem)
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(newWindowItem.isHidden)
+        XCTAssertFalse(keepFileItem.isHidden)
+        XCTAssertTrue(fileMenu.items[1].isHidden)
+
+        XCTAssertTrue(showTabBarItem.isHidden)
+        XCTAssertTrue(showAllTabsItem.isHidden)
+        XCTAssertFalse(keepWindowItem.isHidden)
+        XCTAssertTrue(windowMenu.items[1].isHidden)
+    }
+
+    func testHiddenSystemMenuItemsBridgeFallsBackToMenuTitles() {
+        let bridge = HiddenSystemMenuItemsBridge()
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        fileMenu.addItem(NSMenuItem(title: "New Window", action: nil, keyEquivalent: "n"))
+        fileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        let windowItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Window")
+        windowMenu.addItem(NSMenuItem(title: "Show Tab Bar", action: nil, keyEquivalent: ""))
+        windowMenu.addItem(NSMenuItem(title: "Show All Tabs", action: nil, keyEquivalent: ""))
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: nil, keyEquivalent: "m"))
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(fileMenu.items[0].isHidden)
+        XCTAssertFalse(fileMenu.items[1].isHidden)
+        XCTAssertTrue(windowMenu.items[0].isHidden)
+        XCTAssertTrue(windowMenu.items[1].isHidden)
+        XCTAssertFalse(windowMenu.items[2].isHidden)
+    }
+
     private func makeSplitWorkspaceFixture() throws -> SplitWorkspaceFixture {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
