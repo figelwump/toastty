@@ -13,7 +13,7 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
 fi
 
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
-APP_BINARY="$DERIVED_PATH/Build/Products/Debug/ToasttyApp.app/Contents/MacOS/ToasttyApp"
+APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
 LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"

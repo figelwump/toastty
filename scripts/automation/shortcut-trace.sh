@@ -22,7 +22,7 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
 fi
 
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
-APP_BINARY="$DERIVED_PATH/Build/Products/Debug/ToasttyApp.app/Contents/MacOS/ToasttyApp"
+APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
 APP_LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
 
@@ -144,7 +144,7 @@ count_input_key_logs() {
 
 focus_app_terminal() {
   osascript <<OSA
-tell application "ToasttyApp" to activate
+tell application "Toastty" to activate
 delay 0.5
 tell application "System Events"
   click at {${CLICK_X}, ${CLICK_Y}}
@@ -188,10 +188,10 @@ send_close_shortcut() {
 
 send_workspace_close_menu() {
   osascript <<'OSA'
-tell application "ToasttyApp" to activate
+tell application "Toastty" to activate
 delay 0.2
 tell application "System Events"
-  tell process "ToasttyApp"
+  tell process "Toastty"
     click menu item "Close Panel" of menu "Workspace" of menu bar item "Workspace" of menu bar 1
   end tell
 end tell

@@ -118,6 +118,9 @@ var appTestTargetSettingsBase: SettingsDictionary = [:]
 let developmentTeam = ProcessInfo.processInfo.environment["TUIST_DEVELOPMENT_TEAM"]
 var appTargetSettingsBase: SettingsDictionary = [
     "CODE_SIGNING_ALLOWED": "YES",
+    // Keep the Swift module name as "ToasttyApp" even though the product is "Toastty",
+    // so @testable import ToasttyApp and the struct ToasttyApp: App name stay consistent.
+    "PRODUCT_MODULE_NAME": "ToasttyApp",
 ]
 if let developmentTeam {
     appTargetSettingsBase["CODE_SIGN_IDENTITY"] = "Apple Development"
@@ -194,6 +197,7 @@ let project = Project(
             name: "ToasttyApp",
             destinations: .macOS,
             product: .app,
+            productName: "Toastty",
             bundleId: "com.GiantThings.toastty",
             deploymentTargets: .macOS("14.0"),
             infoPlist: .default,

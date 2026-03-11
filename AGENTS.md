@@ -63,7 +63,7 @@ Click into the target terminal panel before typing — activation alone is insuf
 
 ```bash
 osascript <<'OSA'
-tell application "ToasttyApp" to activate
+tell application "Toastty" to activate
 delay 0.5
 tell application "System Events"
   click at {720, 360}
