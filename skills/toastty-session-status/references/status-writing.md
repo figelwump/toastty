@@ -27,7 +27,7 @@ Avoid updates when:
 - the new status text would just restate the old status with different wording
 - the task is so short that intermediate telemetry adds more noise than value
 
-For longer stretches of uninterrupted work, refresh `working` when the previous update no longer describes reality well, or after roughly 3 to 5 minutes so the user can tell the run is still alive.
+For longer stretches of uninterrupted work, refresh `working` when the previous summary no longer describes the current work, or after several substeps where the status has gone stale. This keeps the user confident the run is still alive.
 
 ## Length
 
@@ -36,7 +36,7 @@ The UI renders both `summary` and `detail` on a single line.
 - `summary`: aim for 2 to 5 words, roughly 24 characters or less
 - `detail`: aim for a single short clause, roughly 72 characters or less
 
-Prefer compact noun or verb phrases over full narrative sentences.
+Prefer compact noun or verb phrases over full narrative sentences. Summaries are lowercase phrases; details are capitalized clauses. Neither uses trailing punctuation.
 
 Repeating the same status is allowed, but it refreshes recency in the workspace. Use repeated `working` updates as deliberate liveness signals, not as background chatter.
 
@@ -85,3 +85,7 @@ Use `error` when the run hit a real failure, such as missing CLI integration, in
 ## `ready` vs `stop`
 
 Use `ready` when the session is live and waiting on the user. Use `session stop` only when the process or wrapper is actually exiting.
+
+## State Transitions
+
+Any status kind can transition to any other. There is no required ordering — if the agent recovers from an `error`, it can send `working` directly. If a `ready` result needs more work, send `working` again. Just send the status that reflects the current reality.

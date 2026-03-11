@@ -25,8 +25,8 @@ Do not use this skill just to narrate trivial work. If the run is so short that 
 - Prefer one update per meaningful state change: investigation, implementation, validation, blocked, or handoff.
 - Do not emit a new status for every shell command, every file read, or every tiny substep.
 - Send a fresh `working` update when the current status would become misleading or stale during longer work, or after several minutes of steady long-running work.
-- Use `session.update-files` when you know which files changed. Batch related paths instead of sending one event per file.
-- When a milestone both changes files and changes visible state, send `session.update-files` before the corresponding status update.
+- Use `session update-files` when you know which files changed. Batch related paths instead of sending one event per file.
+- When a milestone both changes files and changes visible state, send `session update-files` before the corresponding status update.
 - Use `ready` when the agent is waiting on the user with a useful result or decision point.
 - Use `needs_approval` only when the agent is actually blocked on user approval, missing input, or an access decision.
 - Use `error` when progress has stopped because of a failure the agent cannot reasonably route around.
@@ -39,9 +39,10 @@ Resolve the CLI from launch context when available:
 
 ```bash
 TOASTTY_BIN="${TOASTTY_CLI_PATH:-toastty}"
+command -v "$TOASTTY_BIN" >/dev/null 2>&1 || return 0
 ```
 
-In a normal Toastty-launched run, the environment usually provides session, panel, socket, and path context already, so follow-up updates can be minimal:
+In a normal Toastty-launched run, the environment provides session, panel, socket, and path context already, so follow-up updates can be minimal:
 
 ```bash
 "$TOASTTY_BIN" session status \
@@ -75,9 +76,11 @@ Read [references/status-writing.md](references/status-writing.md) when choosing 
 
 ## Command Reference
 
-Read [references/cli-workflow.md](references/cli-workflow.md) for:
+Read [references/cli-workflow.md](references/cli-workflow.md) first for the command model:
 
 - launch-context environment behavior
 - when `session start` is needed and when it is not
-- `session status`, `session update-files`, `session stop`, and `notify`
+- `session status`, `session update-files`, and `session stop`
 - manual wrapper flows outside the built-in Toastty launch path
+
+Then read [references/status-writing.md](references/status-writing.md) for wording, cadence, and state selection guidance.

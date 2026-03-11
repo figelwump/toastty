@@ -22,7 +22,7 @@ Toastty may provide these environment variables:
 - `TOASTTY_AGENT`
 - `TOASTTY_CLI_PATH`
 
-For follow-up session commands, explicit flags override the environment. If the environment is present, `session status`, `session update-files`, and `session stop` can usually omit `--session` and `--panel`.
+For follow-up session commands, explicit flags override the environment. When the current process inherits the Toastty environment, `session status`, `session update-files`, and `session stop` can omit `--session` and `--panel`.
 
 Only rely on omitted flags when the current process has the needed Toastty environment values in scope. If a wrapper, subshell, sandbox, or `env -i` boundary may have dropped them, pass `--session`, `--panel`, and any other required context explicitly.
 
@@ -60,8 +60,8 @@ SESSION_ID="$("$TOASTTY_BIN" session start \
   --agent codex \
   --panel "$PANEL_ID")"
 [ -n "$SESSION_ID" ] || {
-  printf 'toastty session start failed\n' >&2
-  exit 1
+  printf 'toastty session start failed; skipping telemetry\n' >&2
+  # Continue the main task without telemetry rather than aborting.
 }
 ```
 
@@ -86,6 +86,7 @@ Notes:
 - `ready` is the waiting-with-results state.
 - `error` is the stopped-by-failure state.
 - Re-emitting the same status is safe. Toastty keeps the latest value, but each emission refreshes recency, so repeated updates should still be intentional.
+- Status updates are idempotent. Any state can transition to any other state — sending `working` after `error` resumes the session normally. If the agent recovers from a failure or the user provides new direction, just send the appropriate new status.
 
 ## Telemetry Failure Behavior
 
@@ -101,15 +102,14 @@ Use `session update-files` when you know which files changed and the changed pat
 
 ```bash
 "$TOASTTY_BIN" session update-files \
-  --file Sources/App/SidebarView.swift \
-  --file skills/toastty-session-status/SKILL.md
+  --file /Users/dev/project/Sources/App/SidebarView.swift \
+  --file /Users/dev/project/skills/toastty-session-status/SKILL.md
 ```
 
 Guidance:
 
 - Batch related files together.
-- Absolute paths are preferred.
-- Relative paths are acceptable only when `--cwd` or `TOASTTY_CWD` is present and matches the path base you are sending.
+- Use absolute paths. Relative paths are acceptable only when `--cwd` or `TOASTTY_CWD` is present and matches the path base you are sending.
 - If you changed no files, do not emit `update-files`.
 - When the same milestone also changes visible session state, emit `session update-files` before the corresponding `ready` or `error` status.
 
@@ -125,12 +125,6 @@ Use `session stop` when the run is truly ending, such as a wrapper handing contr
 
 Do not stop the session merely because you are waiting for the user's next message. In that case, send `ready` instead.
 
-## Notifications
+## Missing Session Context
 
-`session status` updates the session UI only. If the user also needs an interruptive notification or badge-worthy alert, update the session status first, then emit `notify`.
-
-```bash
-"$TOASTTY_BIN" notify \
-  "Needs approval" \
-  "Approve applying the migration?"
-```
+If `session status` or other session commands are called without valid session context (no `TOASTTY_SESSION_ID` in the environment and no `--session` flag), the CLI returns a non-zero exit. In that case, skip further telemetry for the run rather than retrying or aborting the main task.
