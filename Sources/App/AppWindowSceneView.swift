@@ -50,6 +50,7 @@ struct AppWindowSceneView: View {
             AppWindowSceneObserver(
                 windowID: windowID,
                 desiredFrame: windowState?.frame,
+                windowTitle: store.selectedWorkspace(in: windowID)?.title,
                 onWindowDidBecomeKey: handleWindowDidBecomeKey,
                 onWindowFrameChange: handleWindowFrameChange,
                 onWindowWillClose: handleWindowWillClose
