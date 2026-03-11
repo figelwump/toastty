@@ -86,40 +86,48 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertNil(cursorStyle)
     }
 
-    func testIsMouseLocationReturnsTrueForPointInsideBounds() {
-        let isInside = TerminalHostView.isMouseLocation(
-            CGPoint(x: 24, y: 18),
-            inside: CGRect(x: 0, y: 0, width: 80, height: 40)
-        )
+    func testSurfaceScrollViewAppliesGhosttyPointerCursorToDocumentCursor() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
 
-        XCTAssertTrue(isInside)
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_POINTER)
+
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.pointingHand)
     }
 
-    func testIsMouseLocationReturnsFalseForPointOutsideBounds() {
-        let isInside = TerminalHostView.isMouseLocation(
-            CGPoint(x: 81, y: 18),
-            inside: CGRect(x: 0, y: 0, width: 80, height: 40)
-        )
+    func testSurfaceScrollViewAppliesGhosttyTextCursorToDocumentCursor() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
 
-        XCTAssertFalse(isInside)
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
+
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
     }
 
-    func testIsMouseLocationReturnsFalseForMaxBoundsEdge() {
-        let isInside = TerminalHostView.isMouseLocation(
-            CGPoint(x: 80, y: 40),
-            inside: CGRect(x: 0, y: 0, width: 80, height: 40)
-        )
+    func testSurfaceScrollViewTracksGhosttyCursorVisibility() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
 
-        XCTAssertFalse(isInside)
+        hostView.setGhosttyMouseVisibility(GHOSTTY_MOUSE_HIDDEN)
+        XCTAssertFalse(scrollView.ghosttyCursorVisible)
+
+        hostView.setGhosttyMouseVisibility(GHOSTTY_MOUSE_VISIBLE)
+        XCTAssertTrue(scrollView.ghosttyCursorVisible)
     }
 
-    func testIsMouseLocationReturnsFalseForEmptyBounds() {
-        let isInside = TerminalHostView.isMouseLocation(
-            CGPoint(x: 0, y: 0),
-            inside: .zero
-        )
+    func testSurfaceScrollViewDisablesNativeScrollbars() {
+        let scrollView = TerminalSurfaceScrollView()
 
-        XCTAssertFalse(isInside)
+        XCTAssertFalse(scrollView.hasVerticalScroller)
+        XCTAssertFalse(scrollView.hasHorizontalScroller)
+    }
+
+    func testSurfaceScrollViewKeepsDocumentViewSizedToClipViewBounds() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 90)
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(scrollView.terminalHostView.frame.size, scrollView.contentView.bounds.size)
     }
 }
 #endif

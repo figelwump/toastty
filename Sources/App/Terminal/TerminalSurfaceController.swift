@@ -16,6 +16,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var pendingDetachTask: Task<Void, Never>?
 
     #if TOASTTY_HAS_GHOSTTY_KIT
+    private let terminalSurfaceScrollView: TerminalSurfaceScrollView
     private let terminalHostView: TerminalHostView
     private var ghosttySurface: ghostty_surface_t?
     private let ghosttyManager = GhosttyRuntimeManager.shared
@@ -92,9 +93,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         self.panelID = panelID
         self.delegate = delegate
         #if TOASTTY_HAS_GHOSTTY_KIT
-        let hostView = TerminalHostView()
-        terminalHostView = hostView
-        hostedView = hostView
+        let surfaceScrollView = TerminalSurfaceScrollView()
+        terminalSurfaceScrollView = surfaceScrollView
+        terminalHostView = surfaceScrollView.terminalHostView
+        hostedView = surfaceScrollView
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
             return self.delegate?.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
@@ -502,11 +504,16 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     @discardableResult
     func focusHostViewIfNeeded() -> Bool {
         guard let window = hostedView.window else { return false }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let focusTarget = terminalHostView
+        #else
+        let focusTarget = hostedView
+        #endif
         let didFocus: Bool
-        if window.firstResponder === hostedView {
+        if window.firstResponder === focusTarget {
             didFocus = true
         } else {
-            didFocus = window.makeFirstResponder(hostedView)
+            didFocus = window.makeFirstResponder(focusTarget)
         }
         #if TOASTTY_HAS_GHOSTTY_KIT
         if didFocus {
@@ -1115,8 +1122,13 @@ extension TerminalSurfaceController {
         guard focused else { return }
         guard let window = hostedView.window else { return }
         guard window.isKeyWindow else { return }
-        guard window.firstResponder !== hostedView else { return }
-        window.makeFirstResponder(hostedView)
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let focusTarget = terminalHostView
+        #else
+        let focusTarget = hostedView
+        #endif
+        guard window.firstResponder !== focusTarget else { return }
+        window.makeFirstResponder(focusTarget)
     }
 
     func pulseVisibilityRefresh() {

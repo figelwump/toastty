@@ -65,11 +65,14 @@ private final class WeakTerminalHostViewBox {
 
 private enum GhosttyDirectHostViewAction: Sendable {
     case mouseShape(surfaceHandle: UInt, shape: ghostty_action_mouse_shape_e)
+    case mouseVisibility(surfaceHandle: UInt, visibility: ghostty_action_mouse_visibility_e)
 
     var logIntentName: String {
         switch self {
         case .mouseShape:
             return "mouse_shape"
+        case .mouseVisibility:
+            return "mouse_visibility"
         }
     }
 }
@@ -211,6 +214,15 @@ private func makeGhosttyDirectHostViewAction(
         return .mouseShape(
             surfaceHandle: UInt(bitPattern: surface),
             shape: action.action.mouse_shape
+        )
+    case GHOSTTY_ACTION_MOUSE_VISIBILITY:
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+              let surface = target.target.surface else {
+            return nil
+        }
+        return .mouseVisibility(
+            surfaceHandle: UInt(bitPattern: surface),
+            visibility: action.action.mouse_visibility
         )
     default:
         return nil
@@ -808,6 +820,12 @@ final class GhosttyRuntimeManager {
                 return false
             }
             hostView.setGhosttyMouseShape(shape)
+            return true
+        case .mouseVisibility(let surfaceHandle, let visibility):
+            guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
+                return false
+            }
+            hostView.setGhosttyMouseVisibility(visibility)
             return true
         }
     }
