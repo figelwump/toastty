@@ -969,6 +969,9 @@ final class TerminalHostView: NSView {
     }
 
     private static func ghosttyText(for event: NSEvent) -> String? {
+        // FlagsChanged events (modifier-only) have no character data;
+        // accessing .characters on them triggers an NSEvent assertion.
+        guard event.type == .keyDown || event.type == .keyUp else { return nil }
         guard let characters = event.characters else { return nil }
 
         if characters.count == 1, let scalar = characters.unicodeScalars.first {
