@@ -31,7 +31,9 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(didBecomeKeyCallCount, 1)
     }
 
-    func testAttachConfiguresTransparentTitlebar() {
+    func testAttachLeavesWindowChromeConfigurationToSceneStyle() {
+        // Window chrome is owned by the scene-level hidden-titlebar style.
+        // The observer should stay neutral and only track lifecycle/frame events.
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
@@ -40,13 +42,17 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
             scheduleOnMainActor: { _ in }
         )
         let window = TestWindow()
+        let initialStyleMask = window.styleMask
+        let initialTitleVisibility = window.titleVisibility
+        let initialSeparatorStyle = window.titlebarSeparatorStyle
+        let initialTransparentTitlebar = window.titlebarAppearsTransparent
 
         coordinator.attach(to: window)
 
-        XCTAssertTrue(window.titlebarAppearsTransparent)
-        XCTAssertEqual(window.titleVisibility, .hidden)
-        XCTAssertEqual(window.titlebarSeparatorStyle, .none)
-        XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
+        XCTAssertEqual(window.styleMask, initialStyleMask)
+        XCTAssertEqual(window.titleVisibility, initialTitleVisibility)
+        XCTAssertEqual(window.titlebarSeparatorStyle, initialSeparatorStyle)
+        XCTAssertEqual(window.titlebarAppearsTransparent, initialTransparentTitlebar)
     }
 
     func testAttachDoesNotScheduleKeyCallbackForNonKeyWindow() {

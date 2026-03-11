@@ -297,6 +297,9 @@ struct ToasttyApp: App {
                 appLifecycleDelegate.setHiddenSystemMenuItemsBridge(hiddenSystemMenuItemsBridge)
             }
         }
+        // Let SwiftUI remove the native titlebar container so our custom
+        // workspace chrome can occupy that space without AppKit overlaying it.
+        .windowStyle(.hiddenTitleBar)
         .commands {
             ToasttyCommandMenus(
                 store: store,

@@ -94,7 +94,6 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         observedWindow = window
 
         guard let window else { return }
-        configureTransparentTitlebar(window)
         let notificationCenter = NotificationCenter.default
         let scheduleOnMainActor = self.scheduleOnMainActor
 
@@ -165,14 +164,6 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         guard let observedWindow, let desiredFrame else { return }
         guard framesEqual(observedWindow.frame, desiredFrame) == false else { return }
         observedWindow.setFrame(desiredFrame, display: true)
-    }
-
-    private func configureTransparentTitlebar(_ window: NSWindow) {
-        window.titlebarAppearsTransparent = true
-        window.titlebarSeparatorStyle = .none
-        window.titleVisibility = .hidden
-        window.styleMask.insert(.fullSizeContentView)
-        window.backgroundColor = NSColor(ToastyTheme.chromeBackground)
     }
 
     private func publishWindowFrame() {
