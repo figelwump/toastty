@@ -1,6 +1,12 @@
 import CoreState
 import Foundation
 
+struct WindowCommandSelection {
+    let windowID: UUID
+    let window: WindowState
+    let workspace: WorkspaceState
+}
+
 @MainActor
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
@@ -58,15 +64,51 @@ final class AppStore: ObservableObject {
         self.state = state
     }
 
+    func window(id windowID: UUID) -> WindowState? {
+        state.window(id: windowID)
+    }
+
+    func selectedWorkspaceID(in windowID: UUID) -> UUID? {
+        state.selectedWorkspaceID(in: windowID)
+    }
+
+    func selectedWorkspace(in windowID: UUID) -> WorkspaceState? {
+        state.workspaceSelection(in: windowID)?.workspace
+    }
+
+    func commandSelection(preferredWindowID: UUID?) -> WindowCommandSelection? {
+        if let preferredWindowID {
+            // A focused scene/window should be authoritative. If SwiftUI is still
+            // tearing it down, disable the command rather than rerouting it to
+            // whichever window happens to be globally selected next.
+            guard let selection = state.workspaceSelection(in: preferredWindowID) else {
+                return nil
+            }
+            return WindowCommandSelection(
+                windowID: selection.windowID,
+                window: selection.window,
+                workspace: selection.workspace
+            )
+        }
+
+        guard let selection = state.selectedWorkspaceSelection() else {
+            return nil
+        }
+
+        return WindowCommandSelection(
+            windowID: selection.windowID,
+            window: selection.window,
+            workspace: selection.workspace
+        )
+    }
+
     var selectedWindow: WindowState? {
         guard let selectedWindowID = state.selectedWindowID else { return nil }
-        return state.windows.first(where: { $0.id == selectedWindowID })
+        return state.window(id: selectedWindowID)
     }
 
     var selectedWorkspace: WorkspaceState? {
-        guard let window = selectedWindow,
-              let workspaceID = window.selectedWorkspaceID else { return nil }
-        return state.workspacesByID[workspaceID]
+        state.selectedWorkspaceSelection()?.workspace
     }
 
     @discardableResult

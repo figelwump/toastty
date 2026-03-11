@@ -3,8 +3,9 @@ import CoreState
 import SwiftUI
 
 struct SidebarView: View {
+    let windowID: UUID
     @ObservedObject var store: AppStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
@@ -29,14 +30,14 @@ struct SidebarView: View {
             .padding(.bottom, 6)
             .accessibilityIdentifier("sidebar.workspaces.title")
 
-            if let window = store.selectedWindow {
+            if let window = store.window(id: windowID) {
                 ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
                     if let workspace = store.state.workspacesByID[workspaceID] {
                         workspaceRow(
                             workspaceID: workspaceID,
                             workspace: workspace,
                             shortcutLabel: "⌘\(index + 1)",
-                            isSelected: window.selectedWorkspaceID == workspaceID,
+                            isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
                             index: index + 1
                         )
                     }
@@ -51,7 +52,6 @@ struct SidebarView: View {
 
             // New workspace button — full-width, matches workspace item sizing
             Button {
-                guard let windowID = store.selectedWindow?.id else { return }
                 cancelWorkspaceRename()
                 store.send(.createWorkspace(windowID: windowID, title: nil))
             } label: {
@@ -268,7 +268,6 @@ struct SidebarView: View {
             return
         }
 
-        guard let windowID = store.selectedWindow?.id else { return }
         cancelWorkspaceRename()
         store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }
@@ -305,16 +304,14 @@ struct SidebarView: View {
         renameDraftTitle = ""
     }
 
-    private func scheduleWorkspaceSlotFocusRestore(attempt: Int = 0) {
-        let delay = attempt == 0 ? 0 : 16
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
-            if terminalRuntimeRegistry.focusSelectedWorkspaceSlotIfPossible() {
-                return
-            }
-
-            guard attempt < 12 else { return }
-            scheduleWorkspaceSlotFocusRestore(attempt: attempt + 1)
-        }
+    private func scheduleWorkspaceSlotFocusRestore() {
+        // Renaming intentionally restores focus back to the terminal even if the
+        // field editor is still unwinding from the just-finished text edit.
+        guard let workspaceID = store.selectedWorkspace(in: windowID)?.id else { return }
+        terminalRuntimeContext.scheduleWorkspaceFocusRestore(
+            workspaceID: workspaceID,
+            avoidStealingKeyboardFocus: false
+        )
     }
 
     private func scheduleRenameSelection(workspaceID: UUID, attempt: Int = 0) {
@@ -382,7 +379,7 @@ struct SidebarView: View {
     /// Build a subtitle string like "3 panes · dev server running" or "1 pane"
     private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
         let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
-        if let activitySubtext = terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id),
+        if let activitySubtext = terminalRuntimeContext.workspaceActivitySubtext(for: workspace.id),
            activitySubtext.isEmpty == false {
             return "\(paneLabel) · \(activitySubtext)"
         }

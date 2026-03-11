@@ -16,6 +16,11 @@ READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
 APP_BINARY="$DERIVED_PATH/Build/Products/Debug/ToasttyApp.app/Contents/MacOS/ToasttyApp"
 LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
+GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
+GHOSTTY_INPUT_READINESS_REQUIRED=0
+if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
+  GHOSTTY_INPUT_READINESS_REQUIRED=1
+fi
 DROP_IMAGE_PATH_TO_CLEANUP=""
 
 mkdir -p "$ARTIFACTS_DIR"
@@ -168,6 +173,11 @@ canonicalize_path() {
   printf '%s' "$path"
 }
 
+probe_terminal_send_text_availability() {
+  local panel_id="$1"
+  send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${panel_id}\"}"
+}
+
 send_request "automation.ping" '{}'
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}"
 
@@ -296,6 +306,8 @@ CLOSE_SLOT_COUNT="$SPLIT_DOWN_SLOT_COUNT"
 ALL_RENDERABLE=""
 FINAL_CLOSE_LAYOUT_SIGNATURE=""
 FINAL_CLOSE_FOCUSED_PANEL_ID=""
+CLOSE_TERMINAL_READY="false"
+CLOSE_TERMINAL_PROBE_RESPONSE=""
 while (( CLOSE_SLOT_COUNT > 1 )); do
   send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}'
   EXPECTED_CLOSE_SLOT_COUNT=$((CLOSE_SLOT_COUNT - 1))
@@ -307,7 +319,18 @@ while (( CLOSE_SLOT_COUNT > 1 )); do
     FINAL_CLOSE_FOCUSED_PANEL_ID="$(extract_string_field "$CLOSE_SNAPSHOT_RESPONSE" "focusedPanelID")"
     RENDER_SNAPSHOT_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
     ALL_RENDERABLE="$(extract_bool_field "$RENDER_SNAPSHOT_RESPONSE" "allRenderable")"
-    if [[ "$CLOSE_SLOT_COUNT" == "$EXPECTED_CLOSE_SLOT_COUNT" && "$ALL_RENDERABLE" == "true" && -n "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
+    CLOSE_TERMINAL_PROBE_RESPONSE=""
+    CLOSE_TERMINAL_READY="true"
+    if [[ "$GHOSTTY_INPUT_READINESS_REQUIRED" == "1" ]]; then
+      CLOSE_TERMINAL_READY="false"
+      if [[ "$ALL_RENDERABLE" == "true" && -n "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
+        CLOSE_TERMINAL_PROBE_RESPONSE="$(probe_terminal_send_text_availability "$FINAL_CLOSE_FOCUSED_PANEL_ID")"
+        if [[ "$(extract_bool_field "$CLOSE_TERMINAL_PROBE_RESPONSE" "available")" == "true" ]]; then
+          CLOSE_TERMINAL_READY="true"
+        fi
+      fi
+    fi
+    if [[ "$CLOSE_SLOT_COUNT" == "$EXPECTED_CLOSE_SLOT_COUNT" && "$ALL_RENDERABLE" == "true" && -n "$FINAL_CLOSE_FOCUSED_PANEL_ID" && "$CLOSE_TERMINAL_READY" == "true" ]]; then
       break
     fi
     sleep 0.1
@@ -329,6 +352,18 @@ while (( CLOSE_SLOT_COUNT > 1 )); do
     echo "error: one or more terminal slots are not render-attached after close-focused-panel" >&2
     echo "workspace snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
     echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
+    exit 1
+  fi
+  if [[ -z "$FINAL_CLOSE_FOCUSED_PANEL_ID" ]]; then
+    echo "error: workspace snapshot missing focusedPanelID after close-focused-panel" >&2
+    echo "snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
+    exit 1
+  fi
+  if [[ "$GHOSTTY_INPUT_READINESS_REQUIRED" == "1" && "$CLOSE_TERMINAL_READY" != "true" ]]; then
+    echo "error: focused terminal surface not ready for send_text after close-focused-panel" >&2
+    echo "workspace snapshot response: ${CLOSE_SNAPSHOT_RESPONSE}" >&2
+    echo "render snapshot response: ${RENDER_SNAPSHOT_RESPONSE}" >&2
+    echo "last terminal probe response: ${CLOSE_TERMINAL_PROBE_RESPONSE}" >&2
     exit 1
   fi
 done
@@ -353,7 +388,6 @@ fi
 TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
 FOCUSED_TERMINAL_SCREENSHOT_PATH=""
 FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH=""
-GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
 if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
   if [[ ! -f "$GHOSTTY_XCFRAMEWORK_PATH/Info.plist" ]]; then
     echo "error: Ghostty xcframework appears invalid (missing Info.plist): $GHOSTTY_XCFRAMEWORK_PATH" >&2
@@ -377,7 +411,7 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
       if [[ -z "$candidate_panel_id" ]]; then
         continue
       fi
-      TERMINAL_PROBE_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${candidate_panel_id}\"}")"
+      TERMINAL_PROBE_RESPONSE="$(probe_terminal_send_text_availability "$candidate_panel_id")"
       if [[ "$(extract_bool_field "$TERMINAL_PROBE_RESPONSE" "available")" == "true" ]]; then
         TERMINAL_TARGET_PANEL_ID="$candidate_panel_id"
         TERMINAL_SEND_READY=1
@@ -401,7 +435,7 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
   TERMINAL_SEND_READY=0
   TERMINAL_PROBE_RESPONSE=""
   for _ in $(seq 1 "$TERMINAL_READY_ATTEMPTS"); do
-    TERMINAL_PROBE_RESPONSE="$(send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${TERMINAL_TARGET_PANEL_ID}\"}")"
+    TERMINAL_PROBE_RESPONSE="$(probe_terminal_send_text_availability "$TERMINAL_TARGET_PANEL_ID")"
     if [[ "$(extract_bool_field "$TERMINAL_PROBE_RESPONSE" "available")" == "true" ]]; then
       TERMINAL_SEND_READY=1
       break

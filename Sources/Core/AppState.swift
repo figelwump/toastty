@@ -1,5 +1,24 @@
 import Foundation
 
+public struct WindowWorkspaceSelection: Equatable, Sendable {
+    public let windowID: UUID
+    public let window: WindowState
+    public let workspaceID: UUID
+    public let workspace: WorkspaceState
+
+    public init(
+        windowID: UUID,
+        window: WindowState,
+        workspaceID: UUID,
+        workspace: WorkspaceState
+    ) {
+        self.windowID = windowID
+        self.window = window
+        self.workspaceID = workspaceID
+        self.workspace = workspace
+    }
+}
+
 public struct AppState: Codable, Equatable, Sendable {
     public static let defaultTerminalFontPoints: Double = 12
     public static let minTerminalFontPoints: Double = 6
@@ -47,5 +66,56 @@ public struct AppState: Codable, Equatable, Sendable {
             configuredTerminalFontPoints: nil,
             globalTerminalFontPoints: AppState.defaultTerminalFontPoints
         )
+    }
+
+    public func window(id windowID: UUID) -> WindowState? {
+        windows.first(where: { $0.id == windowID })
+    }
+
+    public func selectedWorkspaceID(in windowID: UUID) -> UUID? {
+        guard let window = window(id: windowID) else { return nil }
+        return window.selectedWorkspaceID ?? window.workspaceIDs.first
+    }
+
+    public func workspaceSelection(in windowID: UUID) -> WindowWorkspaceSelection? {
+        guard let window = window(id: windowID),
+              let workspaceID = selectedWorkspaceID(in: windowID),
+              let workspace = workspacesByID[workspaceID] else {
+            return nil
+        }
+
+        return WindowWorkspaceSelection(
+            windowID: windowID,
+            window: window,
+            workspaceID: workspaceID,
+            workspace: workspace
+        )
+    }
+
+    public func workspaceSelection(containingWorkspaceID workspaceID: UUID) -> WindowWorkspaceSelection? {
+        guard let window = windows.first(where: { $0.workspaceIDs.contains(workspaceID) }),
+              let workspace = workspacesByID[workspaceID] else {
+            return nil
+        }
+
+        return WindowWorkspaceSelection(
+            windowID: window.id,
+            window: window,
+            workspaceID: workspaceID,
+            workspace: workspace
+        )
+    }
+
+    public func selectedWorkspaceSelection() -> WindowWorkspaceSelection? {
+        guard let selectedWindowID else { return nil }
+        return workspaceSelection(in: selectedWindowID)
+    }
+
+    public func soleWorkspaceSelection() -> WindowWorkspaceSelection? {
+        guard windows.count == 1,
+              let windowID = windows.first?.id else {
+            return nil
+        }
+        return workspaceSelection(in: windowID)
     }
 }

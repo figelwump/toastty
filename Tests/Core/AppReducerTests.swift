@@ -362,6 +362,83 @@ struct AppReducerTests {
     }
 
     @Test
+    func updateWindowFrameMutatesOnlyTheTargetWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let firstWindowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let secondWindowID = UUID()
+        let secondWindow = WindowState(
+            id: secondWindowID,
+            frame: CGRectCodable(x: 450, y: 120, width: 900, height: 640),
+            workspaceIDs: [secondWorkspace.id],
+            selectedWorkspaceID: secondWorkspace.id
+        )
+        state.windows.append(secondWindow)
+        state.workspacesByID[secondWorkspace.id] = secondWorkspace
+        state.selectedWindowID = firstWindowID
+
+        let updatedFrame = CGRectCodable(x: 80, y: 90, width: 1280, height: 720)
+        #expect(reducer.send(.updateWindowFrame(windowID: secondWindowID, frame: updatedFrame), state: &state))
+
+        let updatedFirstWindow = try #require(state.windows.first(where: { $0.id == firstWindowID }))
+        let updatedSecondWindow = try #require(state.windows.first(where: { $0.id == secondWindowID }))
+        #expect(updatedFirstWindow.selectedWorkspaceID == firstWorkspaceID)
+        #expect(updatedSecondWindow.frame == updatedFrame)
+        #expect(state.selectedWindowID == firstWindowID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeWindowRemovesItsWorkspacesAndFallsBackToAnotherWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let firstWindowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let secondWindowID = UUID()
+        let secondWindow = WindowState(
+            id: secondWindowID,
+            frame: CGRectCodable(x: 450, y: 120, width: 900, height: 640),
+            workspaceIDs: [secondWorkspace.id],
+            selectedWorkspaceID: secondWorkspace.id
+        )
+        state.windows.append(secondWindow)
+        state.workspacesByID[secondWorkspace.id] = secondWorkspace
+        state.selectedWindowID = secondWindowID
+
+        #expect(reducer.send(.closeWindow(windowID: secondWindowID), state: &state))
+
+        #expect(state.windows.count == 1)
+        #expect(state.windows.first?.id == firstWindowID)
+        #expect(state.workspacesByID[secondWorkspace.id] == nil)
+        #expect(state.workspacesByID[firstWorkspaceID] != nil)
+        #expect(state.selectedWindowID == firstWindowID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastWindowLeavesAnEmptyState() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.closeWindow(windowID: windowID), state: &state))
+
+        #expect(state.windows.isEmpty)
+        #expect(state.workspacesByID[workspaceID] == nil)
+        #expect(state.selectedWindowID == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func renameWorkspaceUpdatesWorkspaceTitle() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

@@ -183,14 +183,38 @@ private final class AppTerminationObserver: NSObject {
     }
 }
 
+private final class AppResignActiveObserver: NSObject {
+    private let onDidResignActive: () -> Void
+
+    init(onDidResignActive: @escaping () -> Void) {
+        self.onDidResignActive = onDidResignActive
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDidResignActiveNotification),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc
+    private func handleDidResignActiveNotification(_ notification: Notification) {
+        _ = notification
+        onDidResignActive()
+    }
+}
+
 @MainActor
 @main
 struct ToasttyApp: App {
-    private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-
     @NSApplicationDelegateAdaptor(ReloadConfigurationMenuIconInstaller.self)
     private var reloadConfigurationMenuIconInstaller
     @StateObject private var store: AppStore
+    private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
@@ -199,12 +223,14 @@ struct ToasttyApp: App {
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
+    private let appResignActiveObserver: AppResignActiveObserver
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
     init() {
+        Self.configureWindowPersistenceDefaults()
         let bootstrap = AppBootstrap.make()
         let persistTerminalFontPreference = bootstrap.automationConfig == nil
         let store = AppStore(
@@ -234,9 +260,13 @@ struct ToasttyApp: App {
         )
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
+        appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
+        appResignActiveObserver = AppResignActiveObserver { [weak terminalRuntimeRegistry] in
+            terminalRuntimeRegistry?.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -281,10 +311,11 @@ struct ToasttyApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            AppRootView(
+        WindowGroup(id: AppWindowSceneID.value) {
+            AppWindowSceneHostView(
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 disableAnimations: disableAnimations
@@ -292,115 +323,13 @@ struct ToasttyApp: App {
                 .frame(minWidth: 980, minHeight: 620)
         }
         .commands {
-            CommandGroup(after: .appInfo) {
-                Button("Reload Configuration") {
-                    reloadConfiguration()
-                }
-                .disabled(!supportsConfigurationReload)
-            }
-
-            CommandMenu("Terminal") {
-                Button("Increase Terminal Font") {
-                    store.send(.increaseGlobalTerminalFont)
-                }
-                .keyboardShortcut("+", modifiers: [.command])
-
-                Button("Decrease Terminal Font") {
-                    store.send(.decreaseGlobalTerminalFont)
-                }
-                .keyboardShortcut("-", modifiers: [.command])
-
-                Button("Reset Terminal Font") {
-                    store.send(.resetGlobalTerminalFont)
-                }
-                .keyboardShortcut("0", modifiers: [.command])
-            }
-
-            CommandMenu("Workspace") {
-                Button("New Workspace") {
-                    createWorkspaceFromSelection()
-                }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(store.selectedWindow == nil)
-
-                Button("Close Panel") {
-                    closeFocusedPanelFromSelection()
-                }
-                .disabled(store.selectedWorkspace?.focusedPanelID == nil)
-
-                Button(store.selectedWorkspace?.focusedPanelModeActive == true ? "Restore Layout" : "Focus Panel") {
-                    toggleFocusedPanelFromSelection()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(store.selectedWorkspace == nil)
-
-                if let window = store.selectedWindow {
-                    ForEach(
-                        Array(window.workspaceIDs.prefix(Self.workspaceShortcutKeys.count).enumerated()),
-                        id: \.offset
-                    ) { index, workspaceID in
-                        let workspace = store.state.workspacesByID[workspaceID]
-                        let title = workspace?.title ?? "Missing Workspace \(index + 1)"
-                        Button(title) {
-                            selectWorkspaceFromShortcutIndex(index)
-                        }
-                        .keyboardShortcut(Self.workspaceShortcutKeys[index], modifiers: [.command])
-                        .disabled(workspace == nil)
-                    }
-                }
-            }
-
-            #if !TOASTTY_HAS_GHOSTTY_KIT
-            CommandMenu("Pane") {
-                Button("Split Right") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
-                }
-                .keyboardShortcut("d", modifiers: [.command])
-
-                Button("Split Down") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .down))
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-
-                Button("Focus Previous Pane") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
-                }
-                .keyboardShortcut("[", modifiers: [.command])
-
-                Button("Focus Next Pane") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
-                }
-                .keyboardShortcut("]", modifiers: [.command])
-            }
-            #endif
+            ToasttyCommandMenus(
+                store: store,
+                focusedPanelCommandController: focusedPanelCommandController,
+                supportsConfigurationReload: supportsConfigurationReload,
+                reloadConfiguration: reloadConfiguration
+            )
         }
-    }
-
-    private func createWorkspaceFromSelection() {
-        guard let windowID = store.selectedWindow?.id else { return }
-        store.send(.createWorkspace(windowID: windowID, title: nil))
-    }
-
-    private func selectWorkspaceFromShortcutIndex(_ index: Int) {
-        guard let window = store.selectedWindow else { return }
-        guard window.workspaceIDs.indices.contains(index) else { return }
-        let workspaceID = window.workspaceIDs[index]
-        guard store.state.workspacesByID[workspaceID] != nil else { return }
-        let windowID = window.id
-        store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
-    }
-
-    private func toggleFocusedPanelFromSelection() {
-        guard let workspaceID = store.selectedWorkspace?.id else { return }
-        store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
-    }
-
-    private func closeFocusedPanelFromSelection() {
-        _ = focusedPanelCommandController.closeFocusedPanel()
     }
 
     private var supportsConfigurationReload: Bool {
@@ -436,5 +365,14 @@ struct ToasttyApp: App {
         } else {
             _ = store.send(.resetGlobalTerminalFont)
         }
+    }
+
+    @MainActor
+    private static func configureWindowPersistenceDefaults() {
+        // Toastty persists window/workspace state explicitly, so AppKit's
+        // saved-state restoration only adds stale SwiftUI scene identifiers.
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: "ApplePersistenceIgnoreState")
+        defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
     }
 }
