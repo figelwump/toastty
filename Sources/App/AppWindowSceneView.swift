@@ -43,7 +43,7 @@ struct AppWindowSceneView: View {
         .overlay(alignment: .top) {
             if let fontHUDPoints {
                 FontHUD(points: fontHUDPoints)
-                    .padding(.top, ToastyTheme.titlebarHeight + 12)
+                    .padding(.top, ToastyTheme.fontHUDTopPadding)
             }
         }
         .background {

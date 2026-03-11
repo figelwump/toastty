@@ -1,4 +1,3 @@
-import AppKit
 import CoreState
 import SwiftUI
 
@@ -12,23 +11,6 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Logo header: app icon + "Toastty"
-            HStack(spacing: 8) {
-                Image(nsImage: NSApp.applicationIconImage)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 20, height: 20)
-
-                Text("Toastty")
-                    .font(ToastyTheme.fontLogoTitle)
-                    .foregroundStyle(ToastyTheme.primaryText)
-                    .tracking(-0.26) // -0.02em at 13px
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .padding(.bottom, 6)
-            .accessibilityIdentifier("sidebar.workspaces.title")
-
             if let window = store.window(id: windowID) {
                 ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
                     if let workspace = store.state.workspacesByID[workspaceID] {
@@ -86,7 +68,7 @@ struct SidebarView: View {
             .buttonStyle(SidebarRowButtonStyle())
             .accessibilityIdentifier("sidebar.workspaces.new")
         }
-        .padding(.top, ToastyTheme.titlebarHeight + 4)
+        .padding(.top, ToastyTheme.sidebarTopPadding)
         .padding(.bottom, 10)
         .padding(.horizontal, 8)
         .background(ToastyTheme.chromeBackground)

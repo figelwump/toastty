@@ -74,6 +74,7 @@ struct WorkspaceView: View {
             .accessibilityIdentifier("workspace.split.vertical")
         }
         .padding(.horizontal, 12)
+        .padding(.top, ToastyTheme.topBarContentTopPadding)
         .frame(height: ToastyTheme.topBarHeight)
         .background(ToastyTheme.chromeBackground)
         .accessibilityIdentifier("topbar.container")
