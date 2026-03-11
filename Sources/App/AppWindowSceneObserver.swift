@@ -33,7 +33,6 @@ struct AppWindowSceneObserver: NSViewRepresentable {
         context.coordinator.onWindowFrameChange = onWindowFrameChange
         context.coordinator.onWindowWillClose = onWindowWillClose
         context.coordinator.attach(to: nsView.window)
-        context.coordinator.applyWindowIdentifierIfNeeded()
         context.coordinator.applyDesiredFrameIfNeeded()
     }
 
@@ -95,7 +94,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         observedWindow = window
 
         guard let window else { return }
-        applyWindowIdentifierIfNeeded()
+        configureTransparentTitlebar(window)
         let notificationCenter = NotificationCenter.default
         let scheduleOnMainActor = self.scheduleOnMainActor
 
@@ -168,11 +167,12 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         observedWindow.setFrame(desiredFrame, display: true)
     }
 
-    func applyWindowIdentifierIfNeeded() {
-        guard let observedWindow else { return }
-        let desiredIdentifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
-        guard observedWindow.identifier != desiredIdentifier else { return }
-        observedWindow.identifier = desiredIdentifier
+    private func configureTransparentTitlebar(_ window: NSWindow) {
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.titleVisibility = .hidden
+        window.styleMask.insert(.fullSizeContentView)
+        window.backgroundColor = NSColor(ToastyTheme.chromeBackground)
     }
 
     private func publishWindowFrame() {

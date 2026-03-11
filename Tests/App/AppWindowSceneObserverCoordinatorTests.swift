@@ -31,6 +31,24 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(didBecomeKeyCallCount, 1)
     }
 
+    func testAttachConfiguresTransparentTitlebar() {
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        XCTAssertTrue(window.titlebarAppearsTransparent)
+        XCTAssertEqual(window.titleVisibility, .hidden)
+        XCTAssertEqual(window.titlebarSeparatorStyle, .none)
+        XCTAssertTrue(window.styleMask.contains(.fullSizeContentView))
+    }
+
     func testAttachDoesNotScheduleKeyCallbackForNonKeyWindow() {
         let recorder = ScheduledCallbackRecorder()
         let coordinator = AppWindowSceneObserverCoordinator(
@@ -48,21 +66,6 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         coordinator.attach(to: TestWindow())
 
         XCTAssertTrue(recorder.callbacks.isEmpty)
-    }
-
-    func testAttachSetsWindowIdentifierToWindowID() {
-        let windowID = UUID()
-        let coordinator = AppWindowSceneObserverCoordinator(
-            windowID: windowID,
-            onWindowDidBecomeKey: {},
-            onWindowFrameChange: { _ in },
-            onWindowWillClose: {}
-        )
-        let window = TestWindow()
-
-        coordinator.attach(to: window)
-
-        XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
     }
 }
 

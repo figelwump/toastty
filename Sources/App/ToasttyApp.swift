@@ -167,7 +167,6 @@ struct ToasttyApp: App {
     private let appTerminationObserver: AppTerminationObserver?
     private let appResignActiveObserver: AppResignActiveObserver
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
-    private let windowCommandController: WindowCommandController
     private let closeWindowMenuBridge: CloseWindowMenuBridge
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
@@ -192,15 +191,17 @@ struct ToasttyApp: App {
             Self.applyInitialTerminalFontState(to: store)
         }
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
-        let windowCommandController = WindowCommandController(store: store)
-        self.windowCommandController = windowCommandController
-        closeWindowMenuBridge = CloseWindowMenuBridge(windowCommandController: windowCommandController)
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
+        closeWindowMenuBridge = CloseWindowMenuBridge(
+            windowCommandController: WindowCommandController(
+                focusedPanelCommandController: focusedPanelCommandController
+            )
+        )
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         appWindowSceneCoordinator = AppWindowSceneCoordinator()

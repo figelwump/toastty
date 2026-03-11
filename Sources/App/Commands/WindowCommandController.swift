@@ -1,78 +1,30 @@
 import AppKit
 import CoreState
-import Foundation
 
 @MainActor
 final class WindowCommandController: NSObject {
-    typealias WindowProvider = @MainActor () -> NSWindow?
-
-    private weak var store: AppStore?
-    private let keyWindowProvider: WindowProvider
-    private let mainWindowProvider: WindowProvider
+    private let focusedPanelCommandController: FocusedPanelCommandController
 
     init(
-        store: AppStore,
-        keyWindowProvider: @escaping WindowProvider = { NSApp.keyWindow },
-        mainWindowProvider: @escaping WindowProvider = { NSApp.mainWindow }
+        focusedPanelCommandController: FocusedPanelCommandController
     ) {
-        self.store = store
-        self.keyWindowProvider = keyWindowProvider
-        self.mainWindowProvider = mainWindowProvider
+        self.focusedPanelCommandController = focusedPanelCommandController
     }
 
     @discardableResult
-    func closeWindow(preferredWindowID: UUID? = nil) -> Bool {
-        guard let store, let windowID = resolveWindowID(preferredWindowID: preferredWindowID) else {
-            return false
-        }
-        return store.send(.closeWindow(windowID: windowID))
+    func closeWindow() -> Bool {
+        // Toastty intentionally maps File > Close Window and Cmd+W to panel close.
+        focusedPanelCommandController.closeFocusedPanel().consumesShortcut
     }
 
-    func canCloseWindow(preferredWindowID: UUID? = nil) -> Bool {
-        resolveWindowID(preferredWindowID: preferredWindowID) != nil
-    }
-
-    private func resolveWindowID(preferredWindowID: UUID?) -> UUID? {
-        guard let store else { return nil }
-
-        if let preferredWindowID {
-            guard store.window(id: preferredWindowID) != nil else { return nil }
-            return preferredWindowID
-        }
-
-        if let activeWindowID = activeAppKitWindowID(in: store) {
-            return activeWindowID
-        }
-
-        if let selectedWindowID = store.state.selectedWindowID,
-           store.window(id: selectedWindowID) != nil {
-            return selectedWindowID
-        }
-
-        guard store.state.windows.count == 1 else { return nil }
-        return store.state.windows.first?.id
-    }
-
-    private func activeAppKitWindowID(in store: AppStore) -> UUID? {
-        if let keyWindowID = windowID(for: keyWindowProvider(), in: store) {
-            return keyWindowID
-        }
-        return windowID(for: mainWindowProvider(), in: store)
-    }
-
-    private func windowID(for window: NSWindow?, in store: AppStore) -> UUID? {
-        guard let rawValue = window?.identifier?.rawValue,
-              let windowID = UUID(uuidString: rawValue),
-              store.window(id: windowID) != nil else {
-            return nil
-        }
-        return windowID
+    func canCloseWindow() -> Bool {
+        focusedPanelCommandController.canCloseFocusedPanel()
     }
 }
 
 @MainActor
 final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
-    private weak var windowCommandController: WindowCommandController?
+    private let windowCommandController: WindowCommandController
 
     init(windowCommandController: WindowCommandController) {
         self.windowCommandController = windowCommandController
@@ -93,18 +45,17 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
 
     @objc
     func performCloseWindow(_: Any?) {
-        guard windowCommandController?.closeWindow() == true else {
+        guard windowCommandController.closeWindow() == true else {
             ToasttyLog.warning(
-                "Close Window menu action could not resolve an active window",
+                "Close Window menu action could not resolve a focused panel",
                 category: .store
             )
-            assertionFailure("Close Window menu action could not resolve an active window")
             return
         }
     }
 
     func validateMenuItem(_: NSMenuItem) -> Bool {
-        return windowCommandController?.canCloseWindow() ?? false
+        return windowCommandController.canCloseWindow()
     }
 
     private static func findCloseWindowMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {

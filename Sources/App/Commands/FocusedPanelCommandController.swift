@@ -71,16 +71,22 @@ final class FocusedPanelCommandController {
         )
     }
 
+    func canCloseFocusedPanel(in workspaceID: UUID? = nil) -> Bool {
+        guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID) else {
+            return false
+        }
+        return workspace.focusedPanelID != nil
+    }
+
     @discardableResult
     func closeFocusedPanel(in workspaceID: UUID? = nil) -> CloseResult {
         guard let store else { return .notHandled }
         let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
-        let resolvedWorkspaceID = workspaceID ?? store.selectedWorkspace?.id
-        guard let resolvedWorkspaceID,
-              let workspace = store.state.workspacesByID[resolvedWorkspaceID],
+        guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID),
               let focusedPanelID = workspace.focusedPanelID else {
             return .notHandled
         }
+        let resolvedWorkspaceID = workspace.id
 
         let focusedPanelState = workspace.panels[focusedPanelID]
         var didPromptForConfirmation = false
@@ -125,6 +131,13 @@ final class FocusedPanelCommandController {
             expectedFocusedPanelID: nextFocusedPanelID
         )
         return .closed
+    }
+
+    private func resolvedWorkspace(preferredWorkspaceID workspaceID: UUID?) -> WorkspaceState? {
+        guard let store else { return nil }
+        let resolvedWorkspaceID = workspaceID ?? store.selectedWorkspace?.id
+        guard let resolvedWorkspaceID else { return nil }
+        return store.state.workspacesByID[resolvedWorkspaceID]
     }
 
     private func confirmRunningTerminalClose(_ assessment: TerminalCloseConfirmationAssessment) -> Bool {
