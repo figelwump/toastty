@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
+    private weak var closeWindowMenuBridge: CloseWindowMenuBridge?
 
     override init() {
         let processInfo = ProcessInfo.processInfo
@@ -15,7 +16,22 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         super.init()
     }
 
+    func setCloseWindowMenuBridge(_ bridge: CloseWindowMenuBridge) {
+        closeWindowMenuBridge = bridge
+        bridge.installIfNeeded()
+    }
+
+    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = notification
+        Task { @MainActor [weak self] in
+            self?.closeWindowMenuBridge?.installIfNeeded()
+        }
+    }
+
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.closeWindowMenuBridge?.installIfNeeded()
+        }
         #if TOASTTY_HAS_GHOSTTY_KIT
         Task { @MainActor in
             GhosttyRuntimeManager.shared.setAppFocus(true)
@@ -249,7 +265,7 @@ struct ToasttyApp: App {
             )
             .frame(minWidth: 980, minHeight: 620)
             .onAppear {
-                closeWindowMenuBridge.installIfNeeded()
+                appLifecycleDelegate.setCloseWindowMenuBridge(closeWindowMenuBridge)
             }
         }
         .commands {

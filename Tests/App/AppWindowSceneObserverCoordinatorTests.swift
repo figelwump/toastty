@@ -49,6 +49,21 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(recorder.callbacks.isEmpty)
     }
+
+    func testAttachSetsWindowIdentifierToWindowID() {
+        let windowID = UUID()
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: windowID,
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {}
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
+    }
 }
 
 private final class ScheduledCallbackRecorder: @unchecked Sendable {
