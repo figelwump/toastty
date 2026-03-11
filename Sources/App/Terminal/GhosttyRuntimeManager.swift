@@ -55,6 +55,39 @@ private final class GhosttyActionCallbackResult: @unchecked Sendable {
     var handled = false
 }
 
+private final class WeakTerminalHostViewBox {
+    weak var value: TerminalHostView?
+
+    init(_ value: TerminalHostView) {
+        self.value = value
+    }
+}
+
+private enum GhosttyDirectHostViewAction: Sendable {
+    case mouseShape(surfaceHandle: UInt, shape: ghostty_action_mouse_shape_e)
+
+    var logIntentName: String {
+        switch self {
+        case .mouseShape:
+            return "mouse_shape"
+        }
+    }
+}
+
+private enum GhosttyMainThreadAction: Sendable {
+    case directHostView(GhosttyDirectHostViewAction)
+    case runtime(GhosttyRuntimeAction)
+
+    var logIntentName: String {
+        switch self {
+        case .directHostView(let action):
+            return action.logIntentName
+        case .runtime(let action):
+            return action.logIntentName
+        }
+    }
+}
+
 private func ghosttyTargetName(_ target: ghostty_target_s) -> String {
     switch target.tag {
     case GHOSTTY_TARGET_SURFACE:
@@ -82,6 +115,12 @@ private func ghosttyActionName(_ action: ghostty_action_s) -> String {
         return "set_title"
     case GHOSTTY_ACTION_PWD:
         return "pwd"
+    case GHOSTTY_ACTION_MOUSE_SHAPE:
+        return "mouse_shape"
+    case GHOSTTY_ACTION_MOUSE_VISIBILITY:
+        return "mouse_visibility"
+    case GHOSTTY_ACTION_MOUSE_OVER_LINK:
+        return "mouse_over_link"
     case GHOSTTY_ACTION_COMMAND_FINISHED:
         return "command_finished"
     case GHOSTTY_ACTION_DESKTOP_NOTIFICATION:
@@ -159,6 +198,57 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
     return GhosttyRuntimeAction(surfaceHandle: surfaceHandle, intent: intent)
 }
 
+private func makeGhosttyDirectHostViewAction(
+    target: ghostty_target_s,
+    action: ghostty_action_s
+) -> GhosttyDirectHostViewAction? {
+    switch action.tag {
+    case GHOSTTY_ACTION_MOUSE_SHAPE:
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+              let surface = target.target.surface else {
+            return nil
+        }
+        return .mouseShape(
+            surfaceHandle: UInt(bitPattern: surface),
+            shape: action.action.mouse_shape
+        )
+    default:
+        return nil
+    }
+}
+
+private func makeGhosttyMainThreadAction(
+    target: ghostty_target_s,
+    action: ghostty_action_s
+) -> GhosttyMainThreadAction? {
+    if let directHostViewAction = makeGhosttyDirectHostViewAction(target: target, action: action) {
+        return .directHostView(directHostViewAction)
+    }
+    if let runtimeAction = makeGhosttyRuntimeAction(target: target, action: action) {
+        return .runtime(runtimeAction)
+    }
+    return nil
+}
+
+@MainActor
+private func routeGhosttyMainThreadAction(
+    _ action: GhosttyMainThreadAction,
+    managerHandle: UInt
+) -> Bool {
+    switch action {
+    case .directHostView(let directHostViewAction):
+        return GhosttyRuntimeManager.shared.handleDirectHostViewAction(directHostViewAction)
+
+    case .runtime(let runtimeAction):
+        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
+            ToasttyLog.warning("Ghostty callback missing manager pointer", category: .ghostty)
+            return false
+        }
+        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
+        return manager.routeRuntimeAction(runtimeAction)
+    }
+}
+
 private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
     guard let userdata else { return }
     // Store as an integer handle to satisfy strict Sendable checks across dispatch hops.
@@ -187,7 +277,7 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
         ToasttyLog.warning("Ghostty callback missing app userdata", category: .ghostty)
         return false
     }
-    guard let runtimeAction = makeGhosttyRuntimeAction(target: target, action: action) else {
+    guard let mainThreadAction = makeGhosttyMainThreadAction(target: target, action: action) else {
         ToasttyLog.debug(
             "Skipping Ghostty action without Toastty handler",
             category: .ghostty,
@@ -202,19 +292,14 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
     // Keep callback semantics synchronous for Ghostty while safely hopping to main when needed.
     let managerHandle = UInt(bitPattern: userdata)
     if Thread.isMainThread {
-        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
-            ToasttyLog.warning("Ghostty callback missing manager pointer", category: .ghostty)
-            return false
-        }
-        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
         let handled = MainActor.assumeIsolated {
-            manager.routeRuntimeAction(runtimeAction)
+            routeGhosttyMainThreadAction(mainThreadAction, managerHandle: managerHandle)
         }
         ToasttyLog.debug(
             "Handled Ghostty runtime action",
             category: .ghostty,
             metadata: [
-                "intent": runtimeAction.logIntentName,
+                "intent": mainThreadAction.logIntentName,
                 "target": ghosttyTargetName(target),
                 "handled": handled ? "true" : "false",
                 "thread": "main",
@@ -226,12 +311,7 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
     let result = GhosttyActionCallbackResult()
     let semaphore = DispatchSemaphore(value: 0)
     DispatchQueue.main.async {
-        guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
-            semaphore.signal()
-            return
-        }
-        let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
-        result.handled = manager.routeRuntimeAction(runtimeAction)
+        result.handled = routeGhosttyMainThreadAction(mainThreadAction, managerHandle: managerHandle)
         semaphore.signal()
     }
 
@@ -241,7 +321,7 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
             "Ghostty action callback timed out waiting for main queue",
             category: .ghostty,
             metadata: [
-                "intent": runtimeAction.logIntentName,
+                "intent": mainThreadAction.logIntentName,
                 "target": ghosttyTargetName(target),
                 "thread": "background",
             ]
@@ -252,7 +332,7 @@ private func ghosttyActionCallback(app: ghostty_app_t?, target: ghostty_target_s
         "Handled Ghostty runtime action",
         category: .ghostty,
         metadata: [
-            "intent": runtimeAction.logIntentName,
+            "intent": mainThreadAction.logIntentName,
             "target": ghosttyTargetName(target),
             "handled": result.handled ? "true" : "false",
             "thread": "background",
@@ -587,6 +667,7 @@ final class GhosttyRuntimeManager {
     private(set) var configuredTerminalFontPoints: Double?
     private var isTickScheduled = false
     private var clipboardSurfaceHandleByHostViewHandle: [UInt: UInt] = [:]
+    private var hostViewBySurfaceHandle: [UInt: WeakTerminalHostViewBox] = [:]
 
     private init() {
         guard Self.initializeGhosttyRuntime() else {
@@ -704,6 +785,7 @@ final class GhosttyRuntimeManager {
             return
         }
         clipboardSurfaceHandleByHostViewHandle.removeValue(forKey: hostViewHandle)
+        hostViewBySurfaceHandle.removeValue(forKey: currentSurfaceHandle)
     }
 
     fileprivate func clipboardSurfaceHandle(forHostViewHandle hostViewHandle: UInt) -> UInt? {
@@ -712,7 +794,33 @@ final class GhosttyRuntimeManager {
 
     private func registerClipboardSurface(_ surface: ghostty_surface_t, forHostView hostView: NSView) {
         let hostViewHandle = UInt(bitPattern: Unmanaged.passUnretained(hostView).toOpaque())
-        clipboardSurfaceHandleByHostViewHandle[hostViewHandle] = UInt(bitPattern: surface)
+        let surfaceHandle = UInt(bitPattern: surface)
+        clipboardSurfaceHandleByHostViewHandle[hostViewHandle] = surfaceHandle
+        if let terminalHostView = hostView as? TerminalHostView {
+            hostViewBySurfaceHandle[surfaceHandle] = WeakTerminalHostViewBox(terminalHostView)
+        }
+    }
+
+    fileprivate func handleDirectHostViewAction(_ action: GhosttyDirectHostViewAction) -> Bool {
+        switch action {
+        case .mouseShape(let surfaceHandle, let shape):
+            guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
+                return false
+            }
+            hostView.setGhosttyMouseShape(shape)
+            return true
+        }
+    }
+
+    private func hostView(forSurfaceHandle surfaceHandle: UInt) -> TerminalHostView? {
+        guard let hostViewBox = hostViewBySurfaceHandle[surfaceHandle] else {
+            return nil
+        }
+        guard let hostView = hostViewBox.value else {
+            hostViewBySurfaceHandle.removeValue(forKey: surfaceHandle)
+            return nil
+        }
+        return hostView
     }
 
     @discardableResult

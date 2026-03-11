@@ -36,6 +36,77 @@ final class TerminalHostView: NSView {
     ]
 
     #if TOASTTY_HAS_GHOSTTY_KIT
+    enum GhosttyMouseCursorStyle: Equatable {
+        case `default`
+        case grabIdle
+        case grabActive
+        case horizontalText
+        case verticalText
+        case link
+        case resizeLeft
+        case resizeRight
+        case resizeUp
+        case resizeDown
+        case resizeUpDown
+        case resizeLeftRight
+        case contextMenu
+        case crosshair
+        case operationNotAllowed
+
+        var nsCursor: NSCursor {
+            switch self {
+            case .default:
+                return .arrow
+            case .grabIdle:
+                return .openHand
+            case .grabActive:
+                return .closedHand
+            case .horizontalText:
+                return .iBeam
+            case .verticalText:
+                return .iBeamCursorForVerticalLayout
+            case .link:
+                return .pointingHand
+            case .resizeLeft:
+                if #available(macOS 15.0, *) {
+                    return .columnResize(directions: .left)
+                }
+                return .resizeLeft
+            case .resizeRight:
+                if #available(macOS 15.0, *) {
+                    return .columnResize(directions: .right)
+                }
+                return .resizeRight
+            case .resizeUp:
+                if #available(macOS 15.0, *) {
+                    return .rowResize(directions: .up)
+                }
+                return .resizeUp
+            case .resizeDown:
+                if #available(macOS 15.0, *) {
+                    return .rowResize(directions: .down)
+                }
+                return .resizeDown
+            case .resizeUpDown:
+                if #available(macOS 15.0, *) {
+                    return .rowResize
+                }
+                return .resizeUpDown
+            case .resizeLeftRight:
+                if #available(macOS 15.0, *) {
+                    return .columnResize
+                }
+                return .resizeLeftRight
+            case .contextMenu:
+                return .contextualMenu
+            case .crosshair:
+                return .crosshair
+            case .operationNotAllowed:
+                return .operationNotAllowed
+            }
+        }
+    }
+
     private var ghosttySurface: ghostty_surface_t?
     /// Tracks the last focus value sent to Ghostty to avoid redundant calls.
     /// Each `ghostty_surface_set_focus` call restarts the internal cursor blink
@@ -43,6 +114,8 @@ final class TerminalHostView: NSView {
     /// input jitter.
     private var lastAppliedSurfaceFocus: Bool?
     private var rightMousePressWasForwarded = false
+    private var isMouseInsideTrackingArea = false
+    private var ghosttyMouseCursorStyle: GhosttyMouseCursorStyle = .horizontalText
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -145,15 +218,28 @@ final class TerminalHostView: NSView {
         addTrackingArea(trackingArea)
         mouseTrackingArea = trackingArea
         super.updateTrackingAreas()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        addCursorRect(bounds, cursor: ghosttyMouseCursorStyle.nsCursor)
+        #endif
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
+        let surfaceChanged = ghosttySurface != surface
         ghosttySurface = surface
         lastAppliedSurfaceFocus = nil
         rightMousePressWasForwarded = false
         pendingImageFileDrop = nil
         lastKnownSurfaceVisibility = nil
+        if surfaceChanged {
+            ghosttyMouseCursorStyle = .horizontalText
+            syncMouseCursorAppearance()
+        }
         syncSurfaceVisibility(reason: "surface_assignment")
     }
 
@@ -211,6 +297,15 @@ final class TerminalHostView: NSView {
             window?.isKeyWindow == true &&
             window?.firstResponder === self
         syncSurfaceFocus(focused)
+    }
+
+    func setGhosttyMouseShape(_ shape: ghostty_action_mouse_shape_e) {
+        guard let nextCursorStyle = Self.ghosttyMouseCursorStyle(for: shape),
+              nextCursorStyle != ghosttyMouseCursorStyle else {
+            return
+        }
+        ghosttyMouseCursorStyle = nextCursorStyle
+        syncMouseCursorAppearance()
     }
 
     private func resolvedSurfaceVisibility() -> Bool {
@@ -300,6 +395,13 @@ final class TerminalHostView: NSView {
                 "has_hidden_ancestor": hasHiddenAncestor ? "true" : "false",
             ]
         )
+    }
+
+    private func syncMouseCursorAppearance() {
+        window?.invalidateCursorRects(for: self)
+        if isMouseInsideTrackingArea {
+            ghosttyMouseCursorStyle.nsCursor.set()
+        }
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -437,6 +539,7 @@ final class TerminalHostView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        isMouseInsideTrackingArea = true
         _ = forwardMousePosition(event)
         #endif
         super.mouseEntered(with: event)
@@ -444,6 +547,7 @@ final class TerminalHostView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        isMouseInsideTrackingArea = false
         if NSEvent.pressedMouseButtons == 0,
            let ghosttySurface {
             let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
@@ -923,6 +1027,45 @@ final class TerminalHostView: NSView {
         }
 
         return sidePressed ? GHOSTTY_ACTION_PRESS : GHOSTTY_ACTION_RELEASE
+    }
+
+    static func ghosttyMouseCursorStyle(
+        for shape: ghostty_action_mouse_shape_e
+    ) -> GhosttyMouseCursorStyle? {
+        switch shape {
+        case GHOSTTY_MOUSE_SHAPE_DEFAULT:
+            return .default
+        case GHOSTTY_MOUSE_SHAPE_TEXT:
+            return .horizontalText
+        case GHOSTTY_MOUSE_SHAPE_GRAB:
+            return .grabIdle
+        case GHOSTTY_MOUSE_SHAPE_GRABBING:
+            return .grabActive
+        case GHOSTTY_MOUSE_SHAPE_POINTER:
+            return .link
+        case GHOSTTY_MOUSE_SHAPE_W_RESIZE:
+            return .resizeLeft
+        case GHOSTTY_MOUSE_SHAPE_E_RESIZE:
+            return .resizeRight
+        case GHOSTTY_MOUSE_SHAPE_N_RESIZE:
+            return .resizeUp
+        case GHOSTTY_MOUSE_SHAPE_S_RESIZE:
+            return .resizeDown
+        case GHOSTTY_MOUSE_SHAPE_NS_RESIZE:
+            return .resizeUpDown
+        case GHOSTTY_MOUSE_SHAPE_EW_RESIZE:
+            return .resizeLeftRight
+        case GHOSTTY_MOUSE_SHAPE_VERTICAL_TEXT:
+            return .verticalText
+        case GHOSTTY_MOUSE_SHAPE_CONTEXT_MENU:
+            return .contextMenu
+        case GHOSTTY_MOUSE_SHAPE_CROSSHAIR:
+            return .crosshair
+        case GHOSTTY_MOUSE_SHAPE_NOT_ALLOWED:
+            return .operationNotAllowed
+        default:
+            return nil
+        }
     }
     #endif
 
