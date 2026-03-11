@@ -9,7 +9,6 @@ struct SidebarView: View {
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
-    @FocusState private var focusedRenameWorkspaceID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -181,22 +180,19 @@ struct SidebarView: View {
             shortcutLabel: shortcutLabel,
             isSelected: isSelected
         ) {
-            TextField("Workspace name", text: $renameDraftTitle)
-                .textFieldStyle(.plain)
-                .font(ToastyTheme.fontWorkspaceName)
-                .foregroundStyle(ToastyTheme.primaryText)
-                .focused($focusedRenameWorkspaceID, equals: workspaceID)
-                .accessibilityIdentifier(renameTextFieldAccessibilityID(for: workspaceID))
-                .onSubmit {
+            WorkspaceRenameTextField(
+                text: $renameDraftTitle,
+                workspaceID: workspaceID,
+                accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
+                onSubmit: {
                     commitWorkspaceRename(workspaceID: workspaceID)
-                }
-                .onExitCommand {
+                },
+                onCancel: {
                     cancelWorkspaceRename()
+                    scheduleWorkspaceSlotFocusRestore()
                 }
-                .onAppear {
-                    focusedRenameWorkspaceID = workspaceID
-                    scheduleRenameSelection(workspaceID: workspaceID)
-                }
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -276,7 +272,6 @@ struct SidebarView: View {
     private func beginWorkspaceRename(_ workspace: WorkspaceState) {
         renamingWorkspaceID = workspace.id
         renameDraftTitle = workspace.title
-        focusedRenameWorkspaceID = workspace.id
     }
 
     private func commitWorkspaceRename(workspaceID: UUID) {
@@ -301,7 +296,6 @@ struct SidebarView: View {
 
     private func cancelWorkspaceRename() {
         renamingWorkspaceID = nil
-        focusedRenameWorkspaceID = nil
         renameDraftTitle = ""
     }
 
@@ -313,33 +307,6 @@ struct SidebarView: View {
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: false
         )
-    }
-
-    private func scheduleRenameSelection(workspaceID: UUID, attempt: Int = 0) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) {
-            guard renamingWorkspaceID == workspaceID,
-                  focusedRenameWorkspaceID == workspaceID else { return }
-
-            if let editor = currentRenameEditor(workspaceID: workspaceID) {
-                editor.selectAll(nil)
-                return
-            }
-
-            guard attempt < 12 else { return }
-            scheduleRenameSelection(workspaceID: workspaceID, attempt: attempt + 1)
-        }
-    }
-
-    private func currentRenameEditor(workspaceID: UUID) -> NSTextView? {
-        guard let keyWindow = NSApp.keyWindow,
-              let editor = keyWindow.firstResponder as? NSTextView,
-              let textField = editor.delegate as? NSTextField else {
-            return nil
-        }
-
-        let expectedIdentifier = renameTextFieldAccessibilityID(for: workspaceID)
-        guard textField.accessibilityIdentifier() == expectedIdentifier else { return nil }
-        return editor
     }
 
     private func renameTextFieldAccessibilityID(for workspaceID: UUID) -> String {
