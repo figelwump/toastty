@@ -10,8 +10,8 @@
   <!-- Background fill (macOS applies squircle mask) -->
   <rect width="1024" height="1024" fill="url(#bg)"/>
 
-  <!-- Toast slice icon, scaled 4x from 170x170 centered in 256x256 -->
-  <g transform="translate(172, 172) scale(4)">
+  <!-- Toast slice icon, scaled to fill more of the frame (236/170 ratio) -->
+  <g transform="translate(40, 40) scale(5.553)">
     <!-- Outer crust -->
     <path d="M40 145 L35 65 Q33 28 60 25 L110 25 Q137 28 135 65 L130 145 Q130 150 85 150 Q40 150 40 145 Z" fill="#D4943C" stroke="#1A1A1A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
     <!-- Inner bread face -->
