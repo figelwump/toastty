@@ -1,158 +1,148 @@
-# Ghostty integration notes
+# Ghostty Integration
 
-Date: 2026-02-27
+Toastty embeds Ghostty through a locally provided `GhosttyKit.xcframework`.
 
-## Spike status
+The repository intentionally does not commit Ghostty binaries. Contributors can:
 
-Status: partially validated (xcframework build succeeds for both native and universal targets; runtime integration in toastty still pending).
+- build their own Ghostty xcframework from an upstream Ghostty checkout, or
+- build Toastty in fallback mode without Ghostty by setting `TUIST_DISABLE_GHOSTTY=1`
 
-## Environment + prerequisites
+## Recommended Ghostty build
 
-- `zig` installed via Homebrew: `0.15.2`
-- Ghostty source clone used for spike: `/tmp/toastty-ghostty-spike/ghostty`
-- Ghostty commit used for spike: `32a9d35c8110a5f528e8c86eaa8128b92ae4d976`
+From an upstream Ghostty checkout:
 
-## Build commands exercised
+```bash
+zig build \
+  -Demit-macos-app=false \
+  -Demit-xcframework=true \
+  -Dxcframework-target=universal \
+  -Dsentry=false
+```
 
-1. `zig build --help` (to confirm relevant build options)
-2. `zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=native`
-3. `zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal`
+Why `-Dsentry=false`:
 
-Result:
-- command completed successfully (exit code `0`)
-- generated artifact:
-  - `/tmp/toastty-ghostty-spike/ghostty/macos/GhosttyKit.xcframework`
-  - note: native and universal builds write to the same output path; the later universal build output is the artifact currently present.
+- it prevents the embedded runtime from initializing Ghostty crash reporting inside Toastty
+- it keeps Toastty releases local-only by default
+- it avoids creating Ghostty Sentry cache data for end users
 
-Observed warning (non-fatal):
-- `libtool: warning duplicate member name 'ext.o' ...` while producing `libghostty-fat.a`
-  - warning reproduced in both native and universal builds.
-  - status: unresolved; build succeeded, but warning impact on downstream link behavior has not yet been validated.
+If you distribute signed Toastty binaries, publish the Ghostty commit and build flags you used for the embedded artifact in your release notes.
 
-Artifact details observed:
-- built slices:
+The generated artifact is typically:
+
+```text
+macos/GhosttyKit.xcframework
+```
+
+## Installing a local Ghostty artifact
+
+Install a built artifact into Toastty's local `Dependencies/` directory:
+
+```bash
+GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
+  ./scripts/ghostty/install-local-xcframework.sh
+```
+
+Variant options:
+
+- `GHOSTTY_XCFRAMEWORK_VARIANT=debug`
+- `GHOSTTY_XCFRAMEWORK_VARIANT=release`
+- `GHOSTTY_XCFRAMEWORK_VARIANT=legacy`
+
+The installer also auto-detects a sibling checkout at `../ghostty/macos/GhosttyKit.xcframework` when present.
+
+After installing an artifact, regenerate the workspace:
+
+```bash
+tuist generate
+```
+
+Keeping `Dependencies/` gitignored is intentional. The source repository should document the Ghostty build, not vendor the built binaries.
+
+## Toastty build behavior
+
+Ghostty integration in `Project.swift` is default-on when at least one local artifact exists:
+
+- `Dependencies/GhosttyKit.Debug.xcframework`
+- `Dependencies/GhosttyKit.Release.xcframework`
+- `Dependencies/GhosttyKit.xcframework` (legacy fallback)
+
+Disable it explicitly with:
+
+```bash
+TUIST_DISABLE_GHOSTTY=1 tuist generate
+```
+
+Current selection behavior:
+
+- `Debug` prefers `GhosttyKit.Debug`, then `GhosttyKit`, then `GhosttyKit.Release`
+- `Release` prefers `GhosttyKit.Release`, then `GhosttyKit`, then `GhosttyKit.Debug`
+- Toastty resolves the first matching macOS slice from:
   - `macos-arm64_x86_64`
-  - `ios-arm64`
-  - `ios-arm64-simulator`
-  - iOS slices appear as part of Ghostty's universal xcframework output; toastty's macOS integration path currently only needs the macOS slice.
-- files present:
-  - `Info.plist`
-  - `macos-arm64_x86_64/libghostty.a`
-  - `ios-arm64/libghostty-fat.a`
-  - `ios-arm64-simulator/libghostty-fat.a`
-  - per-slice headers:
-    - `Headers/ghostty.h`
-    - `Headers/module.modulemap`
+  - `macos-arm64`
+  - `macos-x86_64`
 
-Impact:
-- Ghostty build pipeline is now executable on this machine for the native xcframework target.
-- prior hard blocker (`zig` missing) is resolved.
-- phase 0 step 1 remains partially incomplete until framework wiring is proven in-toastty (surface lifecycle integration and runtime movement).
-- app integration is still pending: current toastty app continues using placeholder terminal representation.
-- built artifact is currently in `/tmp` and is ephemeral; it must be copied to a managed cache/path to persist across reboot/cleanup.
+When Ghostty is enabled, Toastty adds:
 
-Next actions:
-1. copy/cache `GhosttyKit.xcframework` into toastty-managed dependency path (artifact is currently under `/tmp`).
-2. wire a minimal `GhosttySurfaceController` spike in toastty and validate:
-   - create + destroy
-   - attach + detach from host view
-   - focus handoff
-   - resize behavior
-   - reparent behavior across pane moves
+- `TOASTTY_HAS_GHOSTTY_KIT`
+- `-lc++`
+- `-framework Carbon`
 
-## Toastty manifest wiring notes
+## Runtime config loading
 
-- Ghostty linking in `Project.swift` is default-on when at least one local Ghostty xcframework artifact exists:
-  - `Dependencies/GhosttyKit.Debug.xcframework`
-  - `Dependencies/GhosttyKit.Release.xcframework`
-  - `Dependencies/GhosttyKit.xcframework` (legacy fallback)
-- Disable linking explicitly with `TUIST_DISABLE_GHOSTTY=1` (preferred for Tuist flows) or compatibility alias `TOASTTY_DISABLE_GHOSTTY=1`.
-  - after generate, verify `TOASTTY_HAS_GHOSTTY_KIT` appears in `SWIFT_ACTIVE_COMPILATION_CONDITIONS` for `ToasttyApp` when Ghostty is enabled.
-- Current local integration status:
-  - when available, `Debug` builds prefer `GhosttyKit.Debug.xcframework` and `Release` builds prefer `GhosttyKit.Release.xcframework`.
-  - per-config fallback order is:
-    - `Debug`: `GhosttyKit.Debug` -> `GhosttyKit` (legacy) -> `GhosttyKit.Release`
-    - `Release`: `GhosttyKit.Release` -> `GhosttyKit` (legacy) -> `GhosttyKit.Debug`
-  - manifest resolves the first matching macOS slice from:
-    - `macos-arm64_x86_64`
-    - `macos-arm64`
-    - `macos-x86_64`
-  - app target must add Ghostty transitive linker flags:
-    - `-lc++`
-    - `-framework Carbon`
-  - with those flags in `Project.swift`, Ghostty-enabled app builds now succeed via:
-    - `tuist generate` (with xcframework present and Ghostty not disabled)
-    - `xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=arm64" -derivedDataPath Derived build`
-  - automation smoke currently exercises the Ghostty viewport path by default when the xcframework is present.
-    - run: `./scripts/automation/smoke-ui.sh`
-    - fallback verification: `TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh`
-  - generate path falls back automatically (no Ghostty compile condition) when the xcframework is absent or integration is disabled.
+Toastty resolves Ghostty config in this order:
 
-### Installing local Ghostty artifacts
+1. `TOASTTY_GHOSTTY_CONFIG_PATH`
+2. `$XDG_CONFIG_HOME/ghostty/config`
+3. `~/.config/ghostty/config`
+4. Ghostty default search paths
 
-- Default installer behavior now targets the Debug variant:
-  - `./scripts/ghostty/install-local-xcframework.sh`
-- Install a Release variant:
-  - `GHOSTTY_XCFRAMEWORK_VARIANT=release ./scripts/ghostty/install-local-xcframework.sh`
-- Install legacy single-path artifact (fallback mode):
-  - `GHOSTTY_XCFRAMEWORK_VARIANT=legacy ./scripts/ghostty/install-local-xcframework.sh`
-- Optional source override for all modes:
-  - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework ./scripts/ghostty/install-local-xcframework.sh`
+Recursive includes are loaded through Ghostty's normal recursive config loading.
 
-## Current action parity (MVP snapshot)
+By default Toastty does not ask Ghostty to parse Toastty's own CLI args. To re-enable that behavior:
 
-- supported Ghostty actions routed into app state:
-  - `new_split:{right,down,left,up}` -> directional pane split
-  - `goto_split:{previous,next,left,right,up,down}` -> pane focus movement
-  - `resize_split:{up,down,left,right}` -> focused split ratio adjustment
-  - `equalize_splits` -> normalize split ratios
-  - `toggle_split_zoom` -> focused-panel mode toggle
-- currently deferred / not yet mapped:
-  - Ghostty font action bindings (`increase_font_size`, `decrease_font_size`, `reset_font_size`)
-  - broader tabs/windows/clipboard parity beyond existing Toastty primitives
+```bash
+TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1
+```
 
-## Embedded config loading behavior
+## Host-side config keys
 
-- Toastty now resolves Ghostty config in this order:
-  - `TOASTTY_GHOSTTY_CONFIG_PATH` (if set and path exists)
-  - `$XDG_CONFIG_HOME/ghostty/config` (if present)
-  - `~/.config/ghostty/config` (if present)
-  - Ghostty default search paths via `ghostty_config_load_default_files`
-- Recursive Ghostty config includes are loaded via `ghostty_config_load_recursive_files`.
-- Startup logs now include:
-  - which source was used (`env_path`, `user_path`, `default_files`)
-  - diagnostic count and each diagnostic message (when present)
-- Embedded runtime skips `ghostty_config_load_cli_args` by default, preventing false Ghostty diagnostics for app-specific args (for example automation flags).
-- Optional override: set `TOASTTY_GHOSTTY_PARSE_CLI_ARGS=1` to restore Ghostty CLI arg parsing behavior.
-
-## Host-side config keys currently applied
+Toastty reads these additional keys from Ghostty config:
 
 - `unfocused-split-opacity`
-  - read via `ghostty_config_get`
-  - applied in Toastty pane rendering as overlay alpha `1 - config_value` on unfocused terminal panes
+  - applied as overlay alpha on unfocused terminal panes
 - `unfocused-split-fill`
-  - read via `ghostty_config_get`
-  - when unset, falls back to Ghostty `background` color
-  - used as the overlay color for unfocused terminal panes
+  - overlay color for unfocused terminal panes
+  - falls back to Ghostty `background` when unset
 - `font-size`
-  - read via `ghostty_config_get`
-  - used as Toastty’s baseline terminal font size when no Toastty-specific override is present
+  - baseline terminal font size when no Toastty override is present
 
-## Terminal font preference behavior
+## Toastty-owned terminal font preference
 
-- Baseline source: Ghostty `font-size` from loaded Ghostty config.
-- Toastty user override source: `~/.toastty/config` key `terminal-font-size`.
-- Legacy Toastty path `~/.config/toastty/config` is auto-migrated to `~/.toastty/config` on launch.
-- Runtime behavior:
-  - `Increase/Decrease Terminal Font` adjusts current font size and persists `terminal-font-size`.
-  - Toastty keeps the persisted override until `Reset Terminal Font` is used (it does not auto-clear when value matches baseline).
-  - `Reset Terminal Font` clears Toastty override and returns to Ghostty `font-size` baseline.
-  - `Reload Configuration` updates Ghostty baseline; if Toastty override is not set, current terminal font follows the new baseline.
+- Ghostty `font-size` is the baseline
+- Toastty persists user overrides in `~/.toastty/config` under `terminal-font-size`
+- `Reset Terminal Font` clears the Toastty override and returns to the Ghostty baseline
 
-## Manual reload entrypoint
+## Action parity
 
-- App menu entry: `Toastty -> Reload Configuration`
-- Behavior:
-  - re-loads Ghostty config using Toastty’s embedded config resolution order
-  - applies config via `ghostty_app_update_config`
-  - re-applies host-side unfocused split style keys
+Ghostty actions currently routed into Toastty app state:
+
+- `new_split:{right,down,left,up}`
+- `goto_split:{previous,next,left,right,up,down}`
+- `resize_split:{up,down,left,right}`
+- `equalize_splits`
+- `toggle_split_zoom`
+
+Still outside Toastty's current Ghostty action bridge:
+
+- Ghostty font action bindings
+- broader tabs, windows, and clipboard parity beyond existing Toastty primitives
+
+## Validation
+
+Recommended validation commands:
+
+```bash
+./scripts/automation/check.sh
+TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh
+./scripts/automation/smoke-ui.sh
+```

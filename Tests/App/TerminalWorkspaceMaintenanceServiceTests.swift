@@ -10,7 +10,7 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
     func testSynchronizePublishesPanelDisplayTitleOverrides() throws {
         let fixture = try makeMaintenanceFixture()
         fixture.visibleTextStore.textByPanelID[fixture.panelID] = """
-        vishal@host ~/repo % claude
+        dev@host ~/repo % claude
         Claude Code v1.2.3
         """
         fixture.activityInferenceService.refreshVisibleTextInference(
@@ -34,7 +34,7 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
     func testSynchronizePublishesWorkspaceActivitySubtext() throws {
         let fixture = try makeMaintenanceFixture()
         fixture.visibleTextStore.textByPanelID[fixture.panelID] = """
-        vishal@host ~/repo % codex
+        dev@host ~/repo % codex
         OpenAI Codex (v0.1)
         Applying diff...
         """
@@ -59,7 +59,7 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
     func testHandleSurfaceUnregisterClearsPublishedWorkspaceActivitySubtext() throws {
         let fixture = try makeMaintenanceFixture()
         fixture.visibleTextStore.textByPanelID[fixture.panelID] = """
-        vishal@host ~/repo % codex
+        dev@host ~/repo % codex
         OpenAI Codex (v0.1)
         Applying diff...
         """
@@ -90,7 +90,7 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
         let trackedPanels = Dictionary(uniqueKeysWithValues: fixture.panelIDs.map { ($0, fixture.workspaceID) })
         for panelID in fixture.panelIDs {
             fixture.visibleTextStore.textByPanelID[panelID] = """
-            vishal@host ~/repo % codex
+            dev@host ~/repo % codex
             OpenAI Codex (v0.1)
             Applying diff...
             """

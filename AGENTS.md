@@ -1,7 +1,7 @@
 # Toastty — Agent Workflow Guide
 
 ## Reference Architecture
-- When solving tricky problems, improving architecture, or looking for good patterns/best practices, consult the Ghostty source at `~/GiantThings/playground/ghostty`. It's a well-architected Swift/macOS codebase and a good source of inspiration for terminal, split-pane, keyboard bridging, and config patterns.
+- When solving tricky problems, improving architecture, or looking for good patterns/best practices, consult the Ghostty source tree when available. It's a well-architected Swift/macOS codebase and a good source of inspiration for terminal, split-pane, keyboard bridging, and config patterns.
 
 ## Build & Generate
 - **Source of truth:** `Project.swift` — never hand-edit generated Xcode project/workspace files.
@@ -54,8 +54,8 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - **Shortcut-trace env:** `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`
 
 ## Logging
-- Default log: `/tmp/toastty.log` (rotates at 5 MB to `/tmp/toastty.previous.log`)
-- Tail: `tail -f /tmp/toastty.log` (or pipe to `jq` for pretty JSON)
+- Default log: `~/Library/Logs/Toastty/toastty.log` (rotates at 5 MB to `toastty.previous.log`)
+- Tail: `tail -f ~/Library/Logs/Toastty/toastty.log` (or pipe to `jq` for pretty JSON)
 - Env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` to disable), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`
 - Key instrumentation points: `TerminalHostView` (key events), `GhosttyRuntimeManager` (action routing), `TerminalRuntimeRegistry` (dispatch), `AppReducer` (split resize/equalize)
 

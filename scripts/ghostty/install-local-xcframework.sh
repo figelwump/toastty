@@ -2,8 +2,19 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SOURCE_PATH="${GHOSTTY_XCFRAMEWORK_SOURCE:-/tmp/toastty-ghostty-spike/ghostty/macos/GhosttyKit.xcframework}"
+SOURCE_PATH="${GHOSTTY_XCFRAMEWORK_SOURCE:-}"
 VARIANT="${GHOSTTY_XCFRAMEWORK_VARIANT:-debug}"
+
+if [[ -z "$SOURCE_PATH" ]]; then
+  for candidate in \
+    "$ROOT_DIR/../ghostty/macos/GhosttyKit.xcframework" \
+    "$ROOT_DIR/GhosttyKit.xcframework"; do
+    if [[ -d "$candidate" ]]; then
+      SOURCE_PATH="$candidate"
+      break
+    fi
+  done
+fi
 
 case "$VARIANT" in
   debug)
@@ -23,8 +34,10 @@ case "$VARIANT" in
 esac
 
 if [[ ! -d "$SOURCE_PATH" ]]; then
-  echo "Ghostty xcframework not found at: $SOURCE_PATH" >&2
-  echo "Set GHOSTTY_XCFRAMEWORK_SOURCE to the built GhosttyKit.xcframework path." >&2
+  echo "Ghostty xcframework not found at: ${SOURCE_PATH:-<unset>}" >&2
+  echo "Build Ghostty upstream with:" >&2
+  echo "  zig build -Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal -Dsentry=false" >&2
+  echo "Then set GHOSTTY_XCFRAMEWORK_SOURCE to the built GhosttyKit.xcframework path." >&2
   exit 1
 fi
 

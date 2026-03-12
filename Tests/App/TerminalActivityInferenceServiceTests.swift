@@ -10,7 +10,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             let originalTitle = try terminalState(panelID: panelID, state: store.state).title
 
             visibleTextStore.textByPanelID[panelID] = """
-            vishal@host ~/repo % codex
+            dev@host ~/repo % codex
             OpenAI Codex (v0.1)
             """
             service.refreshVisibleTextInference(
@@ -31,7 +31,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             let originalTitle = try terminalState(panelID: panelID, state: store.state).title
 
             visibleTextStore.textByPanelID[panelID] = """
-            vishal@host ~/repo % codex
+            dev@host ~/repo % codex
             OpenAI Codex (v0.1)
             """
             service.refreshVisibleTextInference(
@@ -41,7 +41,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             )
             XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "Codex")
 
-            visibleTextStore.textByPanelID[panelID] = "vishal@host ~/repo %"
+            visibleTextStore.textByPanelID[panelID] = "dev@host ~/repo %"
             service.refreshVisibleTextInference(
                 state: store.state,
                 selectedPanelWorkspaceIDs: [panelID: workspaceID],
@@ -60,7 +60,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             let originalTitle = try terminalState(panelID: panelID, state: store.state).title
 
             visibleTextStore.textByPanelID[panelID] = """
-            vishal@host ~/repo % claude
+            dev@host ~/repo % claude
             Claude Code v1.2.3
             """
             service.refreshVisibleTextInference(
@@ -98,7 +98,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             )
 
             visibleTextStore.textByPanelID[panelID] = """
-            vishal@host ~/repo % codex
+            dev@host ~/repo % codex
             OpenAI Codex (v0.1)
             """
             service.refreshVisibleTextInference(
@@ -118,7 +118,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
 
             visibleTextStore.textByPanelID[panelID] = """
-            vishal@host ~/repo % codex
+            dev@host ~/repo % codex
             OpenAI Codex (v0.1)
             Applying diff...
             """
@@ -138,7 +138,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
 
             visibleTextStore.textByPanelID[panelID] = """
-            vishal@host ~/repo % codex
+            dev@host ~/repo % codex
             OpenAI Codex (v0.1)
             Applying diff...
             """
@@ -170,7 +170,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             let visibleTextStore = VisibleTextStore()
             for panelID in panelIDs {
                 visibleTextStore.textByPanelID[panelID] = """
-                vishal@host ~/repo % codex
+                dev@host ~/repo % codex
                 OpenAI Codex (v0.1)
                 Applying diff...
                 """

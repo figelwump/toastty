@@ -223,7 +223,7 @@ After fixture load and socket bind, app writes:
   "ready": true,
   "runID": "run-20260227-083100",
   "fixture": "baseline-main",
-  "socketPath": "/tmp/toastty-501/events-v1.sock",
+  "socketPath": "/path/to/tmp/toastty-501/events-v1.sock",
   "status": "ready",
   "error": null,
   "timestamp": "2026-02-27T08:31:00Z"
@@ -476,9 +476,9 @@ Every processed message should emit structured logs with:
   "panelID": "26E78311-470E-4E62-8F6A-2F87F949D318",
   "timestamp": "2026-02-27T08:32:00Z",
   "payload": {
-    "files": ["Sources/UI/TopBar/TopBarView.swift", "docs/implementation-plan.md"],
-    "cwd": "/Users/vishal/GiantThings/repos/toastty",
-    "repoRoot": "/Users/vishal/GiantThings/repos/toastty"
+    "files": ["Sources/App/SidebarView.swift", "docs/state-invariants.md"],
+    "cwd": "/path/to/toastty",
+    "repoRoot": "/path/to/toastty"
   }
 }
 ```
@@ -505,7 +505,7 @@ Every processed message should emit structured logs with:
   "requestID": "5C88E8A8-E5F8-487A-908A-D4467CB45E0F",
   "ok": true,
   "result": {
-    "path": "/Users/vishal/GiantThings/repos/toastty/artifacts/ui/run-20260227-083200/workspace-two-panes/after-move-panel.png"
+    "path": "/path/to/toastty/artifacts/automation/run-20260227-083200/workspace-two-panes/after-move-panel.png"
   }
 }
 ```

@@ -200,7 +200,9 @@ let project = Project(
             productName: "Toastty",
             bundleId: "com.GiantThings.toastty",
             deploymentTargets: .macOS("14.0"),
-            infoPlist: .default,
+            infoPlist: .extendingDefault(with: [
+                "LSApplicationCategoryType": .string("public.app-category.developer-tools"),
+            ]),
             sources: ["Sources/App/**"],
             resources: ["Sources/App/Resources/**"],
             dependencies: appDependencies,
