@@ -19,6 +19,8 @@ zig build \
   -Dsentry=false
 ```
 
+For local Toastty development, `-Dxcframework-target=native` is also acceptable if you only need the macOS slice. `universal` additionally builds the iOS slices.
+
 Why `-Dsentry=false`:
 
 - it prevents the embedded runtime from initializing Ghostty crash reporting inside Toastty
@@ -26,6 +28,8 @@ Why `-Dsentry=false`:
 - it avoids creating Ghostty Sentry cache data for end users
 
 If you distribute signed Toastty binaries, publish the Ghostty commit and build flags you used for the embedded artifact in your release notes.
+
+The local xcframeworks under `Dependencies/` are intentionally ignored by Git, so the checked-out repo may contain older or differently built local artifacts until they are rebuilt and reinstalled.
 
 The generated artifact is typically:
 
@@ -47,7 +51,7 @@ Variant options:
 - `GHOSTTY_XCFRAMEWORK_VARIANT=debug`
 - `GHOSTTY_XCFRAMEWORK_VARIANT=release`
 
-The installer also auto-detects a sibling checkout at `../ghostty/macos/GhosttyKit.xcframework` when present.
+The installer also auto-detects a sibling checkout at `../ghostty/macos/GhosttyKit.xcframework` when present. If your Ghostty checkout lives elsewhere, set `GHOSTTY_XCFRAMEWORK_SOURCE` explicitly.
 
 After installing an artifact, regenerate the workspace:
 
@@ -55,7 +59,7 @@ After installing an artifact, regenerate the workspace:
 tuist generate
 ```
 
-Keeping `Dependencies/` gitignored is intentional. The source repository should document the Ghostty build, not vendor the built binaries.
+Keeping `Dependencies/` gitignored is intentional. The source repository documents how to build Ghostty, but does not vendor the built binaries.
 
 ## Toastty build behavior
 
