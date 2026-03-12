@@ -28,6 +28,10 @@ GHOSTTY_INPUT_READINESS_REQUIRED=0
 if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
   GHOSTTY_INPUT_READINESS_REQUIRED=1
 fi
+RESTORE_GHOSTTY_ENABLED_WORKSPACE=0
+if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
+  RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
+fi
 DROP_IMAGE_PATH_TO_CLEANUP=""
 
 mkdir -p "$ARTIFACTS_DIR"
@@ -47,6 +51,7 @@ run_tuist() {
 }
 
 cleanup() {
+  local exit_code=$?
   if [[ -n "$DROP_IMAGE_PATH_TO_CLEANUP" && -f "$DROP_IMAGE_PATH_TO_CLEANUP" ]]; then
     rm -f "$DROP_IMAGE_PATH_TO_CLEANUP"
   fi
@@ -54,6 +59,19 @@ cleanup() {
     kill "$APP_PID" >/dev/null 2>&1 || true
     wait "$APP_PID" >/dev/null 2>&1 || true
   fi
+
+  # Fallback smoke runs regenerate the project without Ghostty; restore the
+  # default Xcode workspace afterward when local artifacts are available.
+  if [[ "$RESTORE_GHOSTTY_ENABLED_WORKSPACE" == "1" ]]; then
+    if ! (
+      unset TUIST_DISABLE_GHOSTTY TOASTTY_DISABLE_GHOSTTY
+      run_tuist generate --no-open >/dev/null
+    ); then
+      echo "warning: failed to restore Ghostty-enabled workspace after fallback smoke run" >&2
+    fi
+  fi
+
+  return "$exit_code"
 }
 trap cleanup EXIT
 
