@@ -23,12 +23,6 @@ TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh
 TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 ```
 
-**Manual QA** (launch app and verify):
-- `cmd+d` / `cmd+shift+d` / `cmd+[` / `cmd+]` on real panes
-- Focused panel toggle (`cmd+shift+f`) round-trip
-- Terminal viewport follows output growth (no stuck scroll)
-- Inspect screenshot artifacts: top bar, sidebar, pane separators, focused panel border
-
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 - Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
 
@@ -77,8 +71,3 @@ OSA
 - Coordinates are absolute screen coordinates; adjust per display layout.
 - `key code 36` = Return (layout-independent). Clipboard paste is more reliable than `keystroke` for non-US layouts.
 - Tune delay values upward if focus races occur.
-
-## Ghostty Shortcut Parity
-Currently mapped via `action_cb`: `new_split`, `goto_split`, `resize_split`, `equalize_splits`, `toggle_split_zoom`.
-
-Known gaps (deferred): font-size actions (`increase/decrease/reset_font_size`), tabs/windows/clipboard beyond current Toastty primitives.
