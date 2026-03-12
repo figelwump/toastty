@@ -2,6 +2,8 @@
 
 Toastty embeds Ghostty through a locally provided `GhosttyKit.xcframework`.
 
+For the broader build, launch, and automation flag reference, see [Environment and Launch Flags](environment-and-build-flags.md).
+
 The repository intentionally does not commit Ghostty binaries. Contributors can:
 
 - build their own Ghostty xcframework from an upstream Ghostty checkout, or

@@ -43,7 +43,7 @@ GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
   ./scripts/ghostty/install-local-xcframework.sh
 ```
 
-Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug|legacy` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
+Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
 
 For the recommended upstream Ghostty build command, release note guidance, and the `-Dsentry=false` recommendation, see [docs/ghostty-integration.md](docs/ghostty-integration.md).
 
@@ -170,6 +170,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 ## Documentation
 
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
+- [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
 - [Privacy and Local Data](docs/privacy-and-local-data.md) — local files, permissions, sockets, logging, and Ghostty crash-reporting notes
 - [Socket Protocol](docs/socket-protocol.md) — v1.0 JSON-RPC automation protocol
 - [State Invariants](docs/state-invariants.md) — AppState correctness rules and validation
