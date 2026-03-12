@@ -30,6 +30,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - Inspect screenshot artifacts: top bar, sidebar, pane separators, focused panel border
 
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
+- Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
 
 ## Ghostty Integration
 - **Default-on** when a local xcframework exists in `Dependencies/` and disable env is not set.

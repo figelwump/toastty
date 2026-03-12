@@ -4,7 +4,7 @@
 
 Add Sparkle after the DMG release pipeline is already working.
 
-This is a follow-up release plan, not part of the first DMG ship. It should reuse the release foundation from `artifacts/plans/dmg-installer.md` instead of rebuilding it.
+This is a follow-up release plan, not part of the first DMG ship. It should reuse the release foundation from `docs/plans/dmg-installer.md` instead of rebuilding it.
 
 Target shape:
 - one stable update channel

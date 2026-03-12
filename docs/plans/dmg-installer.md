@@ -249,4 +249,4 @@ Once the DMG flow is real and repeatable, the next release step is Sparkle:
 - extend the same `scripts/release/release.sh`
 - add `Check for Updates…`
 
-That follow-up is captured in `artifacts/plans/sparkle-auto-update.md`.
+That follow-up is captured in `docs/plans/sparkle-auto-update.md`.
