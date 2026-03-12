@@ -25,8 +25,11 @@ public enum SplitResizeDirection: String, Codable, Equatable, Sendable {
 
 public enum AppAction: Equatable, Sendable {
     case selectWindow(windowID: UUID)
+    case updateWindowFrame(windowID: UUID, frame: CGRectCodable)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
     case createWorkspace(windowID: UUID, title: String?)
+    case createWindow(initialWorkspaceTitle: String?, initialFrame: CGRectCodable?)
+    case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
     case closeWorkspace(workspaceID: UUID)
     case focusPanel(workspaceID: UUID, panelID: UUID)
@@ -58,10 +61,16 @@ public extension AppAction {
         switch self {
         case .selectWindow:
             return "selectWindow"
+        case .updateWindowFrame:
+            return "updateWindowFrame"
         case .selectWorkspace:
             return "selectWorkspace"
         case .createWorkspace:
             return "createWorkspace"
+        case .createWindow:
+            return "createWindow"
+        case .closeWindow:
+            return "closeWindow"
         case .renameWorkspace:
             return "renameWorkspace"
         case .closeWorkspace:

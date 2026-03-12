@@ -3,12 +3,12 @@ import Testing
 
 struct ToasttyLogConfigurationTests {
     @Test
-    func defaultConfigurationUsesInfoLevelAndTempLogFile() {
+    func defaultConfigurationUsesInfoLevelAndLibraryLogFile() {
         let config = ToasttyLogConfiguration.fromEnvironment([:])
 
         #expect(config.enabled == true)
         #expect(config.minimumLevel == .info)
-        #expect(config.filePath?.hasSuffix("/toastty.log") == true)
+        #expect(config.filePath?.hasSuffix("/Library/Logs/Toastty/toastty.log") == true)
         #expect(config.mirrorToStderr == false)
     }
 

@@ -41,7 +41,7 @@ For each workspace:
 - Every `LayoutNode.slot.panelID` must exist in `WorkspaceState.panels`.
 - Every key in `WorkspaceState.panels` must appear in exactly one slot.
 - Empty slots are not allowed after reducer actions.
-- Split `ratio` must satisfy `0.05 <= ratio <= 0.95`.
+- Split `ratio` must satisfy `0 < ratio < 1`.
 - `slotID` values (on slots) and `nodeID` values (on splits) must all be unique within a workspace tree. No ID may appear on both a slot and a split node.
 
 ## 4) panel-kind and toggle invariants
@@ -69,14 +69,7 @@ Path attribution rules:
 - Relative file paths require `cwd` from the same event.
 - After normalization, files outside `repoRoot` remain tracked as out-of-scope and must not be merged into the main diff view.
 
-## 6) layout/profile invariants
-
-- `DisplayLayoutState.displaySignature` uniquely identifies a display topology key.
-- One latest saved snapshot per display signature.
-- Revert applies to snapshot history of the current display signature only.
-- `AppLayoutSnapshot.windowID` values must be unique inside each snapshot.
-
-## 7) mutation contract
+## 6) mutation contract
 
 Every reducer action that mutates layout/panels must be atomic with respect to references:
 
@@ -111,51 +104,48 @@ Every reducer action that mutates layout/panels must be atomic with respect to r
   - install panel into new workspace tree
   - update session location metadata
 
-## 8) validation entry points
+## 7) validation entry points
 
-Implement a validator callable from:
+`StateValidator.validate(_:)` is callable from:
 
-- reducer debug assertions (all debug builds)
+- reducer test assertions
 - persistence decode/migration checkpoints
-- automation fixture loader (`--automation`)
 - integration test harness
 
-Suggested interface:
+Current violation cases (`StateInvariantViolation`):
 
 ```swift
-enum StateInvariantError: Error, Equatable {
-    case missingWorkspace(UUID)
-    case duplicateWorkspaceReference(UUID)
-    case panelMissingFromWorkspace(panelID: UUID, workspaceID: UUID)
-    case panelUnreachableInLayoutTree(panelID: UUID, workspaceID: UUID)
-    case duplicateNodeID(UUID) // covers both slot slotID and split nodeID
-    case invalidSplitRatio(Double)
-    case invalidFocusPanel(workspaceID: UUID, panelID: UUID)
-    case auxToggleInconsistency(workspaceID: UUID, panelKind: PanelKind)
-    case sessionLocationMismatch(sessionID: String, expectedWindowID: UUID, expectedWorkspaceID: UUID)
-    case invalidSessionTimestampOrder(sessionID: String)
-    case duplicateSnapshotWindowID(UUID)
+public enum StateInvariantViolation: Error, Equatable, Sendable {
+    case missingWorkspace(windowID: UUID, workspaceID: UUID)
+    case selectedWorkspaceMissing(windowID: UUID, workspaceID: UUID)
+    case workspaceInMultipleWindows(workspaceID: UUID)
+    case workspaceWithoutWindow(workspaceID: UUID)
+    case splitRatioOutOfBounds(workspaceID: UUID, nodeID: UUID, ratio: Double)
+    case emptySlotLeaf(workspaceID: UUID, slotID: UUID)
+    case missingPanel(workspaceID: UUID, panelID: UUID)
+    case panelMissingFromLayoutTree(workspaceID: UUID, panelID: UUID)
+    case panelReferencedMultipleTimes(workspaceID: UUID, panelID: UUID)
+    case focusedPanelMissing(workspaceID: UUID, panelID: UUID)
+    case focusedPanelNotInLayoutTree(workspaceID: UUID, panelID: UUID)
+    case unreadPanelMissing(workspaceID: UUID, panelID: UUID)
+    case duplicateNodeID(workspaceID: UUID, nodeID: UUID)
 }
-
-func validateAppState(_ state: AppState) throws
 ```
 
-## 9) violation handling policy
+Not yet validated (enforced by reducer logic only):
 
-- Debug builds:
-  - fail fast with assertion and invariant error details.
-- Release builds:
-  - emit telemetry/log event with invariant error details
-  - apply only safe auto-recovery actions:
-    - missing selected focus panel: clear `focusedPanelID`
-    - missing selected workspace id: clear `selectedWorkspaceID`
-  - do not auto-recover structural corruption:
-    - panel/tree reference mismatch
-    - duplicate ownership/ids
-    - session location mismatch
-  - when structural corruption is detected, reject load and request fixture/snapshot reset
+- Aux panel toggle consistency (at most one panel per aux kind, visibility set matches panel existence)
+- Session location metadata matching current panel location
+- Session timestamp ordering
 
-## 10) fixture requirements
+## 8) violation handling policy
+
+Currently, validation is used in tests and persistence checkpoints. Future considerations:
+
+- Debug builds: fail fast with assertion and invariant error details.
+- Release builds: log invariant violations; apply safe auto-recovery where possible (e.g., clear `focusedPanelID` if panel missing).
+
+## 9) fixture requirements
 
 Automation fixtures in `Automation/Fixtures/` must:
 

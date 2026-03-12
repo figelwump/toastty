@@ -1,45 +1,26 @@
-import AppKit
 import CoreState
 import SwiftUI
 
 struct SidebarView: View {
+    let windowID: UUID
     @ObservedObject var store: AppStore
-    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var hoveredPanelID: UUID?
-    @FocusState private var focusedRenameWorkspaceID: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            // Logo header: orange icon + "Toastty"
-            HStack(spacing: 8) {
-                Text("T")
-                    .font(.system(size: 11, weight: .heavy, design: .default))
-                    .foregroundStyle(ToastyTheme.accentDark)
-                    .frame(width: 20, height: 20)
-                    .background(ToastyTheme.accent, in: RoundedRectangle(cornerRadius: 5))
-
-                Text("Toastty")
-                    .font(ToastyTheme.fontLogoTitle)
-                    .foregroundStyle(ToastyTheme.primaryText)
-                    .tracking(-0.26) // -0.02em at 13px
-            }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .padding(.bottom, 6)
-            .accessibilityIdentifier("sidebar.workspaces.title")
-
-            if let window = store.selectedWindow {
+            if let window = store.window(id: windowID) {
                 ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
                     if let workspace = store.state.workspacesByID[workspaceID] {
                         workspaceRow(
                             workspaceID: workspaceID,
                             workspace: workspace,
                             shortcutLabel: "⌘\(index + 1)",
-                            isSelected: window.selectedWorkspaceID == workspaceID,
+                            isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
                             index: index + 1
                         )
                     }
@@ -52,14 +33,11 @@ struct SidebarView: View {
 
             Spacer(minLength: 0)
 
-            // New workspace button — full-width, matches workspace item sizing
             Button {
-                guard let windowID = store.selectedWindow?.id else { return }
                 cancelWorkspaceRename()
                 store.send(.createWorkspace(windowID: windowID, title: nil))
             } label: {
                 HStack(spacing: 6) {
-                    // Plus icon matching 11×11 stroke icon language
                     Canvas { context, _ in
                         var plus = Path()
                         plus.move(to: CGPoint(x: 5.5, y: 2))
@@ -90,7 +68,8 @@ struct SidebarView: View {
             .buttonStyle(SidebarRowButtonStyle())
             .accessibilityIdentifier("sidebar.workspaces.new")
         }
-        .padding(.vertical, 10)
+        .padding(.top, ToastyTheme.sidebarTopPadding)
+        .padding(.bottom, 10)
         .padding(.horizontal, 8)
         .background(ToastyTheme.chromeBackground)
         .alert(
@@ -162,6 +141,7 @@ struct SidebarView: View {
                     handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
                 } label: {
                     workspacePrimaryContent(
+                        workspace: workspace,
                         shortcutLabel: shortcutLabel,
                         selectionSubtitle: selectionSubtitle(for: workspace),
                         isSelected: isSelected
@@ -193,26 +173,24 @@ struct SidebarView: View {
         return workspaceRowChrome(isSelected: isSelected) {
             VStack(alignment: .leading, spacing: 2) {
                 workspacePrimaryContent(
+                    workspace: workspace,
                     shortcutLabel: shortcutLabel,
                     selectionSubtitle: selectionSubtitle(for: workspace),
                     isSelected: isSelected
                 ) {
-                    TextField("Workspace name", text: $renameDraftTitle)
-                        .textFieldStyle(.plain)
-                        .font(ToastyTheme.fontWorkspaceName)
-                        .foregroundStyle(ToastyTheme.primaryText)
-                        .focused($focusedRenameWorkspaceID, equals: workspaceID)
-                        .accessibilityIdentifier(renameTextFieldAccessibilityID(for: workspaceID))
-                        .onSubmit {
+                    WorkspaceRenameTextField(
+                        text: $renameDraftTitle,
+                        workspaceID: workspaceID,
+                        accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
+                        onSubmit: {
                             commitWorkspaceRename(workspaceID: workspaceID)
-                        }
-                        .onExitCommand {
+                        },
+                        onCancel: {
                             cancelWorkspaceRename()
+                            scheduleWorkspaceSlotFocusRestore()
                         }
-                        .onAppear {
-                            focusedRenameWorkspaceID = workspaceID
-                            scheduleRenameSelection(workspaceID: workspaceID)
-                        }
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 if !sessionStatuses.isEmpty {
@@ -227,20 +205,20 @@ struct SidebarView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-        .padding(.vertical, 7)
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
-        // Left accent border: orange for selected, transparent for others
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(isSelected ? ToastyTheme.accent : Color.clear)
-                .frame(width: 2)
-        }
-        .contentShape(Rectangle())
+            .padding(.vertical, 7)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+            .overlay(alignment: .leading) {
+                Rectangle()
+                    .fill(isSelected ? ToastyTheme.accent : Color.clear)
+                    .frame(width: 2)
+            }
+            .contentShape(Rectangle())
     }
 
     private func workspacePrimaryContent<Title: View>(
+        workspace: WorkspaceState,
         shortcutLabel: String,
         selectionSubtitle: String?,
         isSelected: Bool,
@@ -249,6 +227,13 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 titleView()
+
+                if workspace.unreadNotificationCount > 0 {
+                    Circle()
+                        .fill(ToastyTheme.badgeBlue)
+                        .frame(width: 7, height: 7)
+                        .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
+                }
 
                 Spacer(minLength: 0)
 
@@ -407,27 +392,27 @@ struct SidebarView: View {
             return
         }
 
-        guard let windowID = store.selectedWindow?.id else { return }
         cancelWorkspaceRename()
         store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
     }
 
     private func focusSessionPanel(workspaceID: UUID, panelID: UUID) {
-        guard let windowID = store.selectedWindow?.id else { return }
         cancelWorkspaceRename()
 
-        if store.selectedWorkspace?.id != workspaceID {
+        if store.selectedWorkspaceID(in: windowID) != workspaceID {
             _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
         }
 
         _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
-        terminalRuntimeRegistry.scheduleSelectedWorkspaceSlotFocusRestore()
+        terminalRuntimeContext.scheduleWorkspaceFocusRestore(
+            workspaceID: workspaceID,
+            avoidStealingKeyboardFocus: false
+        )
     }
 
     private func beginWorkspaceRename(_ workspace: WorkspaceState) {
         renamingWorkspaceID = workspace.id
         renameDraftTitle = workspace.title
-        focusedRenameWorkspaceID = workspace.id
     }
 
     private func commitWorkspaceRename(workspaceID: UUID) {
@@ -452,47 +437,15 @@ struct SidebarView: View {
 
     private func cancelWorkspaceRename() {
         renamingWorkspaceID = nil
-        focusedRenameWorkspaceID = nil
         renameDraftTitle = ""
     }
 
-    private func scheduleWorkspaceSlotFocusRestore(attempt: Int = 0) {
-        let delay = attempt == 0 ? 0 : 16
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delay)) {
-            if terminalRuntimeRegistry.focusSelectedWorkspaceSlotIfPossible() {
-                return
-            }
-
-            guard attempt < 12 else { return }
-            scheduleWorkspaceSlotFocusRestore(attempt: attempt + 1)
-        }
-    }
-
-    private func scheduleRenameSelection(workspaceID: UUID, attempt: Int = 0) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(16)) {
-            guard renamingWorkspaceID == workspaceID,
-                  focusedRenameWorkspaceID == workspaceID else { return }
-
-            if let editor = currentRenameEditor(workspaceID: workspaceID) {
-                editor.selectAll(nil)
-                return
-            }
-
-            guard attempt < 12 else { return }
-            scheduleRenameSelection(workspaceID: workspaceID, attempt: attempt + 1)
-        }
-    }
-
-    private func currentRenameEditor(workspaceID: UUID) -> NSTextView? {
-        guard let keyWindow = NSApp.keyWindow,
-              let editor = keyWindow.firstResponder as? NSTextView,
-              let textField = editor.delegate as? NSTextField else {
-            return nil
-        }
-
-        let expectedIdentifier = renameTextFieldAccessibilityID(for: workspaceID)
-        guard textField.accessibilityIdentifier() == expectedIdentifier else { return nil }
-        return editor
+    private func scheduleWorkspaceSlotFocusRestore() {
+        guard let workspaceID = store.selectedWorkspace(in: windowID)?.id else { return }
+        terminalRuntimeContext.scheduleWorkspaceFocusRestore(
+            workspaceID: workspaceID,
+            avoidStealingKeyboardFocus: false
+        )
     }
 
     private func renameTextFieldAccessibilityID(for workspaceID: UUID) -> String {
@@ -530,10 +483,9 @@ struct SidebarView: View {
         var id: UUID { workspaceID }
     }
 
-    /// Build a subtitle string like "3 panes · 2 busy panes" or "1 pane · 1 busy".
     private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
         let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
-        if let activitySubtext = terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id),
+        if let activitySubtext = terminalRuntimeContext.workspaceActivitySubtext(for: workspace.id),
            activitySubtext.isEmpty == false {
             return "\(paneLabel) · \(activitySubtext)"
         }
@@ -569,7 +521,6 @@ struct SidebarView: View {
         return (trimmed as NSString).abbreviatingWithTildeInPath
     }
 
-    /// Reusable keyboard shortcut badge pill (e.g. "⌘1", "⌘⇧N").
     private func shortcutBadge(_ label: String) -> some View {
         Text(label)
             .font(ToastyTheme.fontShortcutBadge)
@@ -580,7 +531,6 @@ struct SidebarView: View {
     }
 }
 
-/// Keeps sidebar rows visually stable while pressed (no default plain-style press highlight flash).
 private struct SidebarRowButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label

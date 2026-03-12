@@ -1,8 +1,16 @@
+import AppKit
 import SwiftUI
 
 /// Branded empty state shown when no workspace is selected.
-/// Displays a Canvas-drawn toast character, headline, body copy, and shortcut hints.
+/// Displays a Canvas-drawn toast character, headline, body copy, and recovery CTA.
 struct EmptyStateView: View {
+    let onCreateWorkspace: (() -> Void)?
+    @State private var isCreateWorkspaceHovered = false
+
+    init(onCreateWorkspace: (() -> Void)? = nil) {
+        self.onCreateWorkspace = onCreateWorkspace
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
@@ -12,7 +20,7 @@ struct EmptyStateView: View {
                 .padding(.bottom, 10)
             bodyText
                 .padding(.bottom, 32)
-            shortcutHints
+            createWorkspaceCTA
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -153,39 +161,79 @@ struct EmptyStateView: View {
         .multilineTextAlignment(.center)
     }
 
-    // MARK: - Shortcut Hints
+    // MARK: - Primary Action
 
     // TODO: derive shortcut labels from actual keybinding configuration
-    private var shortcutHints: some View {
-        HStack(spacing: 20) {
-            shortcutHint(keys: "\u{2318}\u{21E7}N", label: "New Workspace")
-            shortcutHint(keys: "\u{2318}D", label: "Split Right")
-            shortcutHint(keys: "\u{2318}\u{21E7}D", label: "Split Down")
+    private var createWorkspaceCTA: some View {
+        Button {
+            onCreateWorkspace?()
+        } label: {
+            HStack(spacing: 12) {
+                Text("New Workspace")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.accentDark)
+
+                Text("\u{2318}\u{21E7}N")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(ToastyTheme.accentDark.opacity(0.72))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(ToastyTheme.accentDark.opacity(0.12))
+                    )
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+            .background(
+                Capsule()
+                    .fill(isCreateWorkspaceHovered ? ToastyTheme.accent.opacity(0.92) : ToastyTheme.accent)
+            )
+            .overlay(
+                Capsule()
+                    .stroke(
+                        isCreateWorkspaceHovered
+                            ? ToastyTheme.emptyStateToastHighlight.opacity(0.6)
+                            : ToastyTheme.emptyStateToastHighlight.opacity(0.35),
+                        lineWidth: 1
+                    )
+            )
+            .shadow(
+                color: ToastyTheme.accent.opacity(isCreateWorkspaceHovered ? 0.28 : 0.18),
+                radius: isCreateWorkspaceHovered ? 18 : 14,
+                y: isCreateWorkspaceHovered ? 10 : 8
+            )
+            .scaleEffect(isCreateWorkspaceHovered ? 1.02 : 1)
         }
+        .buttonStyle(.plain)
+        .disabled(onCreateWorkspace == nil)
+        .opacity(onCreateWorkspace == nil ? 0.55 : 1)
+        .animation(.easeOut(duration: 0.12), value: isCreateWorkspaceHovered)
+        .onHover(perform: updateCreateWorkspaceHover)
+        .onChange(of: onCreateWorkspace == nil) { _, isDisabled in
+            if isDisabled {
+                updateCreateWorkspaceHover(false)
+            }
+        }
+        .onDisappear {
+            updateCreateWorkspaceHover(false)
+        }
+        .accessibilityIdentifier("empty-state.new-workspace")
     }
 
-    private func shortcutHint(keys: String, label: String) -> some View {
-        HStack(spacing: 6) {
-            Text(keys)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(ToastyTheme.emptyStateShortcutText)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(ToastyTheme.emptyStateShortcutBg)
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 4)
-                        .stroke(ToastyTheme.emptyStateShortcutBorder, lineWidth: 1)
-                )
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(ToastyTheme.emptyStateMutedText)
+    private func updateCreateWorkspaceHover(_ hovering: Bool) {
+        let canCreateWorkspace = onCreateWorkspace != nil
+        let nextHoverState = canCreateWorkspace && hovering
+        guard nextHoverState != isCreateWorkspaceHovered else { return }
+        if nextHoverState {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
         }
+        isCreateWorkspaceHovered = nextHoverState
     }
 }
 
 #Preview {
-    EmptyStateView()
+    EmptyStateView(onCreateWorkspace: {})
 }

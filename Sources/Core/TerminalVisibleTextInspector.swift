@@ -51,6 +51,22 @@ public enum TerminalVisibleTextInspector {
         }
     }
 
+    /// Returns true only when visible text shows an idle shell prompt with no
+    /// foreground command token. This is stricter than
+    /// `showsInteractiveShellPrompt(_:)`, which intentionally also treats
+    /// non-agent prompt commands as interactive for close-confirmation
+    /// heuristics.
+    public static func showsIdleShellPrompt(_ visibleText: String) -> Bool {
+        guard let promptContext = recentPromptContext(from: sanitizedLines(visibleText)) else {
+            return false
+        }
+
+        if case .interactive = promptContext {
+            return true
+        }
+        return false
+    }
+
     public static func recentPromptCommandToken(_ visibleText: String) -> String? {
         guard let promptContext = recentPromptContext(from: sanitizedLines(visibleText)) else {
             return nil

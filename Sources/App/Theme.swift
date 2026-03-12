@@ -44,7 +44,15 @@ enum ToastyTheme {
     static let emptyStateShortcutText = Color(hex: 0x8A7B6E)
 
     static let sidebarWidth: CGFloat = 280
-    static let topBarHeight: CGFloat = 36
+    // Slightly taller than the native compact titlebar so the custom
+    // title/buttons don't sit flush against the window edge.
+    static let topBarHeight: CGFloat = 32
+    static let topBarContentTopPadding: CGFloat = 2
+    static let fontHUDTopPadding: CGFloat = topBarHeight + 12
+    /// Standard macOS compact titlebar height on current supported macOS releases.
+    /// Used only to keep sidebar content clear of the traffic lights.
+    static let titlebarHeight: CGFloat = 28
+    static let sidebarTopPadding: CGFloat = titlebarHeight + 4
 
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)
@@ -53,7 +61,6 @@ enum ToastyTheme {
     static let fontMonoTerminalSlotTitle = Font.system(size: 12, weight: .regular, design: .monospaced)
 
     // Sidebar-specific fonts matching design spec
-    static let fontLogoTitle = Font.system(size: 13, weight: .bold, design: .default)
     static let fontWorkspaceName = Font.system(size: 12, weight: .semibold, design: .default)
     static let fontWorkspaceNameInactive = Font.system(size: 12, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)

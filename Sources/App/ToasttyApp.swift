@@ -3,11 +3,11 @@ import CoreState
 import SwiftUI
 
 @MainActor
-private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicationDelegate {
-    private static let menuItemTitle = "Reload Configuration"
-    private static let symbolName = "arrow.clockwise"
-    private var iconWasApplied = false
+private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
+    private var closeWindowMenuBridge: CloseWindowMenuBridge?
+    private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
+    private var menuBridgeInstallationTask: Task<Void, Never>?
 
     override init() {
         let processInfo = ProcessInfo.processInfo
@@ -18,23 +18,40 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
         super.init()
     }
 
+    func setCloseWindowMenuBridge(_ bridge: CloseWindowMenuBridge) {
+        closeWindowMenuBridge = bridge
+        scheduleMenuBridgeInstallations()
+    }
+
+    func setHiddenSystemMenuItemsBridge(_ bridge: HiddenSystemMenuItemsBridge) {
+        hiddenSystemMenuItemsBridge = bridge
+        scheduleMenuBridgeInstallations()
+    }
+
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = notification
         Task { @MainActor [weak self] in
-            self?.applyReloadIconIfPresent()
-        }
-        DispatchQueue.main.async { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.applyReloadIconIfPresent()
-            }
+            self?.scheduleMenuBridgeInstallations()
         }
     }
 
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
-            guard !self.iconWasApplied else { return }
-            self.applyReloadIconIfPresent()
+            self?.scheduleMenuBridgeInstallations()
         }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        Task { @MainActor in
+            GhosttyRuntimeManager.shared.setAppFocus(true)
+        }
+        #endif
+    }
+
+    nonisolated func applicationDidResignActive(_ notification: Notification) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        Task { @MainActor in
+            GhosttyRuntimeManager.shared.setAppFocus(false)
+        }
+        #endif
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -51,59 +68,22 @@ private final class ReloadConfigurationMenuIconInstaller: NSObject, NSApplicatio
         return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
-    private func applyReloadIconIfPresent() {
-        guard !iconWasApplied else { return }
-        guard let mainMenu = NSApp.mainMenu else { return }
-        guard let menuItem = findMenuItem(in: mainMenu.items) else { return }
-        guard menuItem.image == nil else { return }
-        menuItem.image = NSImage(
-            systemSymbolName: Self.symbolName,
-            accessibilityDescription: Self.menuItemTitle
-        )
-        menuItem.image?.isTemplate = true
-        iconWasApplied = true
+    private func installMenuBridges() {
+        closeWindowMenuBridge?.installIfNeeded()
+        hiddenSystemMenuItemsBridge?.installIfNeeded()
     }
 
-    private func findMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
-        for item in items {
-            if item.title == Self.menuItemTitle {
-                return item
-            }
-            if let submenu = item.submenu,
-               let nestedItem = findMenuItem(in: submenu.items) {
-                return nestedItem
+    private func scheduleMenuBridgeInstallations() {
+        menuBridgeInstallationTask?.cancel()
+        installMenuBridges()
+
+        menuBridgeInstallationTask = Task { @MainActor [weak self] in
+            for delay in [100, 500, 1_000] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard Task.isCancelled == false else { return }
+                self?.installMenuBridges()
             }
         }
-        return nil
-    }
-}
-
-@MainActor
-private final class ClosePanelShortcutInterceptor {
-    private let commandController: FocusedPanelCommandController
-    nonisolated(unsafe) private var eventMonitor: Any?
-
-    init(commandController: FocusedPanelCommandController) {
-        self.commandController = commandController
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            guard Self.isClosePanelShortcut(event) else { return event }
-            let closeResult = self.commandController.closeFocusedPanel()
-            // Only fall back to AppKit when Toastty could not resolve a panel close target.
-            return closeResult.consumesShortcut ? nil : event
-        }
-    }
-
-    deinit {
-        if let eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
-        }
-    }
-
-    private static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags == [.command] else { return false }
-        return event.charactersIgnoringModifiers?.lowercased() == "w"
     }
 }
 
@@ -118,7 +98,6 @@ private final class FocusTerminalShortcutInterceptor {
             guard let self else { return event }
             guard let shortcutNumber = Self.shortcutNumber(for: event) else { return event }
             let didFocusPanel = self.focusTerminalPanel(shortcutNumber: shortcutNumber)
-            // If no panel is mapped to this shortcut, keep default key behavior.
             return didFocusPanel ? nil : event
         }
     }
@@ -170,15 +149,39 @@ private final class AppTerminationObserver: NSObject {
     }
 }
 
+private final class AppResignActiveObserver: NSObject {
+    private let onDidResignActive: () -> Void
+
+    init(onDidResignActive: @escaping () -> Void) {
+        self.onDidResignActive = onDidResignActive
+        super.init()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleDidResignActiveNotification),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc
+    private func handleDidResignActiveNotification(_ notification: Notification) {
+        _ = notification
+        onDidResignActive()
+    }
+}
+
 @MainActor
 @main
 struct ToasttyApp: App {
-    private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-
-    @NSApplicationDelegateAdaptor(ReloadConfigurationMenuIconInstaller.self)
-    private var reloadConfigurationMenuIconInstaller
+    @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self)
+    private var appLifecycleDelegate
     @StateObject private var store: AppStore
     @StateObject private var agentCatalogStore: AgentCatalogStore
+    private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
     private let automationLifecycle: AutomationLifecycle?
@@ -188,13 +191,16 @@ struct ToasttyApp: App {
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
+    private let appResignActiveObserver: AppResignActiveObserver
     private let agentLaunchService: AgentLaunchService
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
+    private let closeWindowMenuBridge: CloseWindowMenuBridge
+    private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let focusedPanelCommandController: FocusedPanelCommandController
-    private let closePanelShortcutInterceptor: ClosePanelShortcutInterceptor
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
     init() {
+        Self.configureWindowPersistenceDefaults()
         let bootstrap = AppBootstrap.make()
         let persistTerminalFontPreference = bootstrap.automationConfig == nil
         let store = AppStore(
@@ -203,10 +209,10 @@ struct ToasttyApp: App {
         )
         let agentCatalogStore = AgentCatalogStore()
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
-        terminalRuntimeRegistry.bind(store: store)
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+        terminalRuntimeRegistry.bind(store: store)
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry
@@ -223,16 +229,23 @@ struct ToasttyApp: App {
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
-        closePanelShortcutInterceptor = ClosePanelShortcutInterceptor(
-            commandController: focusedPanelCommandController
+        closeWindowMenuBridge = CloseWindowMenuBridge(
+            windowCommandController: WindowCommandController(
+                focusedPanelCommandController: focusedPanelCommandController
+            )
         )
+        hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
+        appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
+        appResignActiveObserver = AppResignActiveObserver { [weak terminalRuntimeRegistry] in
+            terminalRuntimeRegistry?.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -284,163 +297,33 @@ struct ToasttyApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
-            AppRootView(
+        WindowGroup(id: AppWindowSceneID.value) {
+            AppWindowSceneHostView(
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
+                sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
                 disableAnimations: disableAnimations
             )
-                .frame(minWidth: 980, minHeight: 620)
+            .frame(minWidth: 980, minHeight: 620)
+            .onAppear {
+                appLifecycleDelegate.setCloseWindowMenuBridge(closeWindowMenuBridge)
+                appLifecycleDelegate.setHiddenSystemMenuItemsBridge(hiddenSystemMenuItemsBridge)
+            }
         }
+        .windowStyle(.hiddenTitleBar)
         .commands {
-            CommandGroup(after: .appInfo) {
-                Button("Reload Configuration") {
-                    reloadConfiguration()
-                }
-                .disabled(!supportsConfigurationReload)
-            }
-
-            CommandMenu("Terminal") {
-                Button("Increase Terminal Font") {
-                    store.send(.increaseGlobalTerminalFont)
-                }
-                .keyboardShortcut("+", modifiers: [.command])
-
-                Button("Decrease Terminal Font") {
-                    store.send(.decreaseGlobalTerminalFont)
-                }
-                .keyboardShortcut("-", modifiers: [.command])
-
-                Button("Reset Terminal Font") {
-                    store.send(.resetGlobalTerminalFont)
-                }
-                .keyboardShortcut("0", modifiers: [.command])
-            }
-
-            CommandMenu("Workspace") {
-                Button("New Workspace") {
-                    createWorkspaceFromSelection()
-                }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(store.selectedWindow == nil)
-
-                Button("Close Panel") {
-                    closeFocusedPanelFromSelection()
-                }
-                .disabled(store.selectedWorkspace?.focusedPanelID == nil)
-
-                Button(store.selectedWorkspace?.focusedPanelModeActive == true ? "Restore Layout" : "Focus Panel") {
-                    toggleFocusedPanelFromSelection()
-                }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
-                .disabled(store.selectedWorkspace == nil)
-
-                if let window = store.selectedWindow {
-                    ForEach(
-                        Array(window.workspaceIDs.prefix(Self.workspaceShortcutKeys.count).enumerated()),
-                        id: \.offset
-                    ) { index, workspaceID in
-                        let workspace = store.state.workspacesByID[workspaceID]
-                        let title = workspace?.title ?? "Missing Workspace \(index + 1)"
-                        Button(title) {
-                            selectWorkspaceFromShortcutIndex(index)
-                        }
-                        .keyboardShortcut(Self.workspaceShortcutKeys[index], modifiers: [.command])
-                        .disabled(workspace == nil)
-                    }
-                }
-            }
-
-            CommandMenu("Agent") {
-                if agentCatalogStore.catalog.profiles.isEmpty {
-                    Button("No Agents Configured") {}
-                        .disabled(true)
-                } else {
-                    ForEach(agentCatalogStore.catalog.profiles) { profile in
-                        Button(profile.displayName) {
-                            launchAgentFromSelection(profile.id)
-                        }
-                        .disabled(!canLaunchAgent(profileID: profile.id))
-                    }
-                }
-
-                Divider()
-
-                Button("Manage Agents…") {
-                    openAgentProfilesConfiguration()
-                }
-            }
-
-            #if !TOASTTY_HAS_GHOSTTY_KIT
-            CommandMenu("Pane") {
-                Button("Split Right") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
-                }
-                .keyboardShortcut("d", modifiers: [.command])
-
-                Button("Split Down") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .down))
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-
-                Button("Focus Previous Pane") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
-                }
-                .keyboardShortcut("[", modifiers: [.command])
-
-                Button("Focus Next Pane") {
-                    guard let workspaceID = store.selectedWorkspace?.id else { return }
-                    store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
-                }
-                .keyboardShortcut("]", modifiers: [.command])
-            }
-            #endif
-        }
-    }
-
-    private func createWorkspaceFromSelection() {
-        guard let windowID = store.selectedWindow?.id else { return }
-        store.send(.createWorkspace(windowID: windowID, title: nil))
-    }
-
-    private func selectWorkspaceFromShortcutIndex(_ index: Int) {
-        guard let window = store.selectedWindow else { return }
-        guard window.workspaceIDs.indices.contains(index) else { return }
-        let workspaceID = window.workspaceIDs[index]
-        guard store.state.workspacesByID[workspaceID] != nil else { return }
-        let windowID = window.id
-        store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
-    }
-
-    private func toggleFocusedPanelFromSelection() {
-        guard let workspaceID = store.selectedWorkspace?.id else { return }
-        store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
-    }
-
-    private func closeFocusedPanelFromSelection() {
-        _ = focusedPanelCommandController.closeFocusedPanel()
-    }
-
-    private func canLaunchAgent(profileID: String) -> Bool {
-        agentLaunchService.canLaunchAgent(profileID: profileID)
-    }
-
-    private func launchAgentFromSelection(_ profileID: String) {
-        do {
-            _ = try agentLaunchService.launch(profileID: profileID)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Run Agent"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            ToasttyCommandMenus(
+                store: store,
+                agentCatalogStore: agentCatalogStore,
+                focusedPanelCommandController: focusedPanelCommandController,
+                agentLaunchService: agentLaunchService,
+                supportsConfigurationReload: supportsConfigurationReload,
+                reloadConfiguration: reloadConfiguration,
+                openAgentProfilesConfiguration: openAgentProfilesConfiguration
+            )
         }
     }
 
@@ -509,5 +392,14 @@ struct ToasttyApp: App {
         } else {
             _ = store.send(.resetGlobalTerminalFont)
         }
+    }
+
+    @MainActor
+    private static func configureWindowPersistenceDefaults() {
+        NSWindow.allowsAutomaticWindowTabbing = false
+
+        let defaults = UserDefaults.standard
+        defaults.set(true, forKey: "ApplePersistenceIgnoreState")
+        defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
     }
 }

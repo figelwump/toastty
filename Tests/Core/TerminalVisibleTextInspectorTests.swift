@@ -9,6 +9,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation == false)
         #expect(assessment.runningCommand == nil)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt("\u{0007}\n") == false)
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt("\u{0007}\n") == false)
         #expect(TerminalVisibleTextInspector.appearsBusy("\u{0007}\n") == false)
     }
 
@@ -28,6 +29,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation == false)
         #expect(assessment.runningCommand == nil)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
@@ -43,6 +45,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation)
         #expect(assessment.runningCommand == "npm run dev")
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "npm")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == "npm run dev")
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
@@ -59,6 +62,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation)
         #expect(assessment.runningCommand == "codex --model gpt-5")
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "codex")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
@@ -84,6 +88,7 @@ struct TerminalVisibleTextInspectorTests {
                 "TOASTTY_AGENT=codex TOASTTY_SESSION_ID=abc123 codex --model gpt-5"
         )
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "codex")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
@@ -106,6 +111,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation == false)
         #expect(assessment.runningCommand == nil)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
@@ -122,6 +128,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation)
         #expect(assessment.runningCommand == "FOO=bar npm run dev")
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "npm")
         #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == "FOO=bar npm run dev")
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
@@ -137,6 +144,7 @@ struct TerminalVisibleTextInspectorTests {
 
         #expect(assessment.requiresConfirmation == false)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 
@@ -151,6 +159,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation)
         #expect(assessment.runningCommand == nil)
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText))
     }
 
@@ -175,6 +184,7 @@ struct TerminalVisibleTextInspectorTests {
         """
 
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText))
         #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
     }
 }

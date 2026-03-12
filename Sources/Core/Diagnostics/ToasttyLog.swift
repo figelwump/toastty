@@ -94,7 +94,19 @@ public struct ToasttyLogConfiguration: Sendable, Equatable {
     }
 
     private static func defaultLogPath() -> String {
-        "/tmp/toastty.log"
+        let fileManager = FileManager.default
+        if let libraryDirectory = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first {
+            return libraryDirectory
+                .appendingPathComponent("Logs", isDirectory: true)
+                .appendingPathComponent("Toastty", isDirectory: true)
+                .appendingPathComponent("toastty.log", isDirectory: false)
+                .path
+        }
+
+        return URL(filePath: NSHomeDirectory())
+            .appending(path: "Library/Logs/Toastty", directoryHint: .isDirectory)
+            .appending(path: "toastty.log", directoryHint: .notDirectory)
+            .path
     }
 
     private static func truthy(_ value: String?) -> Bool {

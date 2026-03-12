@@ -10,7 +10,7 @@ SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock}"
 ARCH="${ARCH:-$(uname -m)}"
 CLICK_X="${CLICK_X:-760}"
 CLICK_Y="${CLICK_Y:-420}"
-TRACE_LOG_PATH="${TRACE_LOG_PATH:-/tmp/toastty.log}"
+TRACE_LOG_PATH="${TRACE_LOG_PATH:-$HOME/Library/Logs/Toastty/shortcut-trace.log}"
 SPLIT_KEY_CODE="${SPLIT_KEY_CODE:-2}"
 FOCUS_NEXT_KEY_CODE="${FOCUS_NEXT_KEY_CODE:-30}"
 FOCUS_PREVIOUS_KEY_CODE="${FOCUS_PREVIOUS_KEY_CODE:-33}"
@@ -22,9 +22,10 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
 fi
 
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
-APP_BINARY="$DERIVED_PATH/Build/Products/Debug/ToasttyApp.app/Contents/MacOS/ToasttyApp"
+APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
 APP_LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
-GHOSTTY_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
+GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
+GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 
 mkdir -p "$ARTIFACTS_DIR"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$APP_LOG_FILE"
@@ -35,8 +36,8 @@ if [[ "${TUIST_DISABLE_GHOSTTY:-0}" == "1" || "${TOASTTY_DISABLE_GHOSTTY:-0}" ==
   exit 1
 fi
 
-if [[ ! -f "$GHOSTTY_XCFRAMEWORK_PATH/Info.plist" ]]; then
-  echo "error: Ghostty xcframework missing or invalid: $GHOSTTY_XCFRAMEWORK_PATH" >&2
+if [[ ! -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" && ! -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  echo "error: Ghostty xcframework missing or invalid: expected $GHOSTTY_DEBUG_XCFRAMEWORK_PATH or $GHOSTTY_RELEASE_XCFRAMEWORK_PATH" >&2
   exit 1
 fi
 
@@ -144,7 +145,7 @@ count_input_key_logs() {
 
 focus_app_terminal() {
   osascript <<OSA
-tell application "ToasttyApp" to activate
+tell application "Toastty" to activate
 delay 0.5
 tell application "System Events"
   click at {${CLICK_X}, ${CLICK_Y}}
@@ -188,10 +189,10 @@ send_close_shortcut() {
 
 send_workspace_close_menu() {
   osascript <<'OSA'
-tell application "ToasttyApp" to activate
+tell application "Toastty" to activate
 delay 0.2
 tell application "System Events"
-  tell process "ToasttyApp"
+  tell process "Toastty"
     click menu item "Close Panel" of menu "Workspace" of menu bar item "Workspace" of menu bar 1
   end tell
 end tell

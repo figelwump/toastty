@@ -104,7 +104,8 @@ struct WorkspaceLayoutPersistenceStoreTests {
             return
         }
         #expect(restoredTerminalState.title == "Terminal 1")
-        #expect(restoredTerminalState.cwd == "/tmp/ephemeral")
+        #expect(restoredTerminalState.cwd.isEmpty)
+        #expect(restoredTerminalState.launchWorkingDirectory == "/tmp/ephemeral")
     }
 
     private func makeTempStoreURL() throws -> URL {

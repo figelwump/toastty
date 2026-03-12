@@ -1,22 +1,38 @@
+import AppKit
 import CoreState
 import Foundation
+
+struct WindowCommandSelection {
+    let windowID: UUID
+    let window: WindowState
+    let workspace: WorkspaceState
+}
+
+private enum WorkspaceCommandTarget {
+    case existingWindow(UUID)
+    case newWindow
+}
 
 @MainActor
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
+    typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
 
     @Published private(set) var state: AppState
 
     private let reducer = AppReducer()
     private let persistTerminalFontPreference: Bool
+    private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
 
     init(
         state: AppState = .bootstrap(),
-        persistTerminalFontPreference: Bool = true
+        persistTerminalFontPreference: Bool = true,
+        commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame
     ) {
         self.state = state
         self.persistTerminalFontPreference = persistTerminalFontPreference
+        self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
     }
 
     @discardableResult
@@ -58,15 +74,81 @@ final class AppStore: ObservableObject {
         self.state = state
     }
 
+    func window(id windowID: UUID) -> WindowState? {
+        state.window(id: windowID)
+    }
+
+    func selectedWorkspaceID(in windowID: UUID) -> UUID? {
+        state.selectedWorkspaceID(in: windowID)
+    }
+
+    func selectedWorkspace(in windowID: UUID) -> WorkspaceState? {
+        state.workspaceSelection(in: windowID)?.workspace
+    }
+
+    func commandWindowID(preferredWindowID: UUID?) -> UUID? {
+        guard case .existingWindow(let windowID)? = createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) else {
+            return nil
+        }
+        return windowID
+    }
+
+    func commandSelection(preferredWindowID: UUID?) -> WindowCommandSelection? {
+        if let preferredWindowID {
+            // A focused scene/window should be authoritative. If SwiftUI is still
+            // tearing it down, disable the command rather than rerouting it to
+            // whichever window happens to be globally selected next.
+            guard let selection = state.workspaceSelection(in: preferredWindowID) else {
+                return nil
+            }
+            return WindowCommandSelection(
+                windowID: selection.windowID,
+                window: selection.window,
+                workspace: selection.workspace
+            )
+        }
+
+        guard let selection = state.selectedWorkspaceSelection() else {
+            return nil
+        }
+
+        return WindowCommandSelection(
+            windowID: selection.windowID,
+            window: selection.window,
+            workspace: selection.workspace
+        )
+    }
+
+    func canCreateWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
+        createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) != nil
+    }
+
+    @discardableResult
+    func createWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let target = createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        switch target {
+        case .existingWindow(let windowID):
+            return send(.createWorkspace(windowID: windowID, title: nil))
+        case .newWindow:
+            return send(
+                .createWindow(
+                    initialWorkspaceTitle: nil,
+                    initialFrame: commandCreateWindowFrameProvider()
+                )
+            )
+        }
+    }
+
     var selectedWindow: WindowState? {
         guard let selectedWindowID = state.selectedWindowID else { return nil }
-        return state.windows.first(where: { $0.id == selectedWindowID })
+        return state.window(id: selectedWindowID)
     }
 
     var selectedWorkspace: WorkspaceState? {
-        guard let window = selectedWindow,
-              let workspaceID = window.selectedWorkspaceID else { return nil }
-        return state.workspacesByID[workspaceID]
+        state.selectedWorkspaceSelection()?.workspace
     }
 
     @discardableResult
@@ -95,5 +177,35 @@ final class AppStore: ObservableObject {
         default:
             break
         }
+    }
+
+    private func createWorkspaceCommandTarget(preferredWindowID: UUID?) -> WorkspaceCommandTarget? {
+        if let preferredWindowID {
+            guard state.window(id: preferredWindowID) != nil else {
+                return state.windows.isEmpty ? .newWindow : nil
+            }
+            return .existingWindow(preferredWindowID)
+        }
+
+        if let selectedWindowID = state.selectedWindowID,
+           state.window(id: selectedWindowID) != nil {
+            return .existingWindow(selectedWindowID)
+        }
+
+        if let firstWindowID = state.windows.first?.id {
+            return .existingWindow(firstWindowID)
+        }
+
+        return .newWindow
+    }
+
+    private static func currentCommandCreateWindowFrame() -> CGRectCodable? {
+        if let frame = NSApp.mainWindow?.frame {
+            return CGRectCodable(frame)
+        }
+        if let frame = NSApp.keyWindow?.frame {
+            return CGRectCodable(frame)
+        }
+        return nil
     }
 }

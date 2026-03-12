@@ -18,19 +18,8 @@ This document defines the local unix-socket protocol used by:
 Default path resolution:
 
 1. `TOASTTY_SOCKET_PATH` if set
-2. discovery record at `$TMPDIR/toastty-$UID/current-socket.json` (generic CLI / script fallback)
-3. newest live per-instance socket discovered under `$TMPDIR/toastty-$UID/events-v1-<pid>.sock`
-4. legacy path `$TMPDIR/toastty-$UID/events-v1.sock`
-
-Default server bind path:
-
-- `$TMPDIR/toastty-$UID/events-v1-<pid>.sock`
-
-Notes:
-
-- each Toastty app instance binds its own socket path
-- Toastty-launched agents always get the exact instance path through `TOASTTY_SOCKET_PATH`
-- when multiple app instances are open, generic CLI discovery prefers the latest discovery record and otherwise scans for the newest live instance
+2. `$TMPDIR/toastty-$UID/events-v1.sock`
+3. `/tmp/toastty-$UID/events-v1.sock`
 
 ## 2) message framing
 
@@ -128,7 +117,7 @@ Validation:
 Required top-level fields:
 
 - `sessionID: String`
-- `panelID?: UUID`
+- `panelID: UUID`
 
 Payload:
 
@@ -143,43 +132,51 @@ Normalization:
 - If normalized file is outside `repoRoot`, mark file as out-of-scope for diff rendering.
 - If later `session.update_files` events send a conflicting `repoRoot`, preserve the first accepted root and emit a warning state (`conflicting repo roots`) in app state.
 - If payload exceeds max frame size, sender must split files across multiple `session.update_files` events.
-- `sessionID` must identify an active session. If `panelID` is also present, it must match that active session's panel.
 
-### `session.status`
-
-Canonical session status event used for sidebar and other session-oriented UI.
+### `session.needs_input`
 
 Required top-level fields:
 
 - `sessionID: String`
-- `panelID?: UUID`
+- `panelID: UUID`
 
 Payload:
 
-- `kind: "working" | "needs_approval" | "ready" | "error"`
-- `summary: String`
-- `detail?: String`
+- `title: String`
+- `body: String`
 
-Notes:
+### `session.progress`
 
-- Use `kind: "needs_approval"` when the agent is blocked on user approval or input.
-- `session.status` updates session UI only. If the sender also wants a notification dot or system notification, emit `notification.emit` separately.
-- `sessionID` must identify an active session. If `panelID` is also present, it must match that active session's panel.
+Required top-level fields:
+
+- `sessionID: String`
+- `panelID: UUID`
+
+Payload:
+
+- `message: String`
+
+### `session.error`
+
+Required top-level fields:
+
+- `sessionID: String`
+- `panelID: UUID`
+
+Payload:
+
+- `message: String`
 
 ### `session.stop`
 
 Required top-level fields:
 
 - `sessionID: String`
-- `panelID?: UUID`
+- `panelID: UUID`
 
 Payload:
 
 - `reason?: String`
-
-Notes:
-
-- `sessionID` must identify an active session. If `panelID` is also present, it must match that active session's panel.
 
 ### `notification.emit`
 
@@ -201,24 +198,20 @@ Routing rules:
 
 ## 6) automation mode contract
 
-Automation commands are accepted only when the app is launched with:
+Automation commands are accepted when the app is launched with either:
 
 - args: `--automation --run-id <id> --fixture <name> --artifacts-dir <path>`
 - env: `TOASTTY_AUTOMATION=1`
 
-If automation mode is disabled:
-
-- return `AUTOMATION_DISABLED` for all `automation.*` requests
-
 Enablement rule:
 
-- Both launch args and env marker are required. If either is missing, automation commands are rejected.
+- Either launch args or env marker is sufficient. Automation is enabled when at least one is present.
 
 ### readiness handshake
 
 After fixture load and socket bind, app writes:
 
-- `artifacts/ui/<run-id>/ready.json`
+- `artifacts/automation-ready-<run-id>.json`
 
 `run-id` is provided by required launch arg `--run-id`.
 
@@ -228,11 +221,16 @@ After fixture load and socket bind, app writes:
 {
   "protocolVersion": "1.0",
   "ready": true,
-  "socketPath": "/tmp/toastty-501/events-v1.sock",
+  "runID": "run-20260227-083100",
   "fixture": "baseline-main",
+  "socketPath": "/path/to/tmp/toastty-501/events-v1.sock",
+  "status": "ready",
+  "error": null,
   "timestamp": "2026-02-27T08:31:00Z"
 }
 ```
+
+When startup fails, `ready` is `false`, `status` is `"error"`, and `error` contains the error message.
 
 Smoke script must wait for this file (with timeout) before sending commands.
 
@@ -252,10 +250,7 @@ Result:
 
 Resets transient runtime state to baseline for deterministic test run.
 
-Request payload:
-
-- `clearNotifications?: Bool` (default `true`)
-- `clearSessions?: Bool` (default `true`)
+Request payload: empty
 
 Result:
 
@@ -263,9 +258,9 @@ Result:
 
 Semantics:
 
-- `clearSessions=true`: clear `SessionRegistry` and session-linked transient metadata.
-- `clearSessions=true` does not remove panel layout objects by itself.
-- use `automation.load_fixture` after reset to reach deterministic full-state baseline.
+- Replaces app state with bootstrap state, resets fixture name to `"default"`.
+- Clears session registry, notification store, coalesced updates, progress, and errors.
+- Use `automation.load_fixture` after reset to reach deterministic full-state baseline.
 
 ### `automation.load_fixture`
 
@@ -288,7 +283,6 @@ Request payload:
 Result:
 
 - `stateVersion: Int`
-- `warnings?: [String]`
 
 ### `automation.terminal_send_text`
 
@@ -378,21 +372,24 @@ Result:
 
 ### `automation.launch_agent`
 
-Launches a built-in agent into a resolved terminal panel. Toastty records the
-baseline `session.start` before injecting the provider command and passes
-`TOASTTY_*` launch context with the command. If the agent does not emit
+Launches a configured agent profile into a resolved terminal panel. Toastty
+records the baseline `session.start` before injecting the provider command and
+passes `TOASTTY_*` launch context with the command. If the agent does not emit
 `session.stop`, Toastty falls back to stopping the session when the panel
 returns to an interactive shell prompt or the panel closes.
 
 Request payload:
 
-- `agent: "claude" | "codex"` (required)
+- `profileID?: String`
+- `agent?: String` (legacy alias for `profileID`)
 - `panelID?: UUID`
 - `workspaceID?: UUID`
 
 Result:
 
+- `profileID: String`
 - `agent: String`
+- `displayName: String`
 - `sessionID: String`
 - `windowID: UUID`
 - `workspaceID: UUID`
@@ -408,6 +405,27 @@ Validation:
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
 - if the target terminal appears busy (not at an interactive prompt), return `INVALID_PAYLOAD`.
+
+### `automation.terminal_state`
+
+Returns terminal-specific state snapshot for a resolved terminal panel.
+
+Request payload:
+
+- `panelID?: UUID` (optional explicit terminal panel target)
+- `workspaceID?: UUID` (optional; used when `panelID` is omitted)
+
+Result: terminal state snapshot (structure varies by terminal runtime).
+
+### `automation.workspace_render_snapshot`
+
+Returns workspace render-level snapshot for visual assertions.
+
+Request payload:
+
+- `workspaceID?: UUID` (defaults to selected workspace)
+
+Result: render snapshot (structure varies by workspace configuration).
 
 ### `automation.capture_screenshot`
 
@@ -448,8 +466,6 @@ Result:
 - `UNKNOWN_EVENT_TYPE`
 - `UNKNOWN_COMMAND`
 - `INVALID_PAYLOAD`
-- `AUTOMATION_DISABLED`
-- `TIMEOUT`
 - `INTERNAL_ERROR`
 
 ## 9) security requirements
@@ -467,7 +483,7 @@ Agents may emit `session.update_files` at high frequency. The app is responsible
 
 - **Recommended coalesce window**: 500ms per session. Merge file lists from events within the window. Keep latest `cwd` and `repoRoot`.
 - **Diff recompute**: trigger once after the coalesce window closes. If new events arrive during computation, cancel and restart after the next window.
-- **Other event types**: `session.status` and `notification.emit` are not coalesced (they update lightweight UI elements).
+- **Other event types**: `session.progress` and `session.needs_input` are not coalesced (they update lightweight UI elements).
 
 This coalescing happens in the app's event processing layer, not in the protocol itself. The protocol delivers events as-is.
 
@@ -496,9 +512,9 @@ Every processed message should emit structured logs with:
   "panelID": "26E78311-470E-4E62-8F6A-2F87F949D318",
   "timestamp": "2026-02-27T08:32:00Z",
   "payload": {
-    "files": ["Sources/UI/TopBar/TopBarView.swift", "docs/implementation-plan.md"],
-    "cwd": "/Users/vishal/GiantThings/repos/toastty",
-    "repoRoot": "/Users/vishal/GiantThings/repos/toastty"
+    "files": ["Sources/App/SidebarView.swift", "docs/state-invariants.md"],
+    "cwd": "/path/to/toastty",
+    "repoRoot": "/path/to/toastty"
   }
 }
 ```
@@ -525,7 +541,7 @@ Every processed message should emit structured logs with:
   "requestID": "5C88E8A8-E5F8-487A-908A-D4467CB45E0F",
   "ok": true,
   "result": {
-    "path": "/Users/vishal/GiantThings/repos/toastty/artifacts/ui/run-20260227-083200/workspace-two-panes/after-move-panel.png"
+    "path": "/path/to/toastty/artifacts/automation/run-20260227-083200/workspace-two-panes/after-move-panel.png"
   }
 }
 ```

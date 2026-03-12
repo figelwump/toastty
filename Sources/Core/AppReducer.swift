@@ -16,6 +16,12 @@ public struct AppReducer {
             state.selectedWindowID = windowID
             return true
 
+        case .updateWindowFrame(let windowID, let frame):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            guard state.windows[windowIndex].frame != frame else { return false }
+            state.windows[windowIndex].frame = frame
+            return true
+
         case .selectWorkspace(let windowID, let workspaceID):
             guard let index = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
             guard state.windows[index].workspaceIDs.contains(workspaceID) else { return false }
@@ -34,6 +40,23 @@ public struct AppReducer {
             state.windows[windowIndex].workspaceIDs.append(workspace.id)
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
             return true
+
+        case .createWindow(let initialWorkspaceTitle, let initialFrame):
+            let workspace = WorkspaceState.bootstrap(title: initialWorkspaceTitle ?? "Workspace 1")
+            let window = WindowState(
+                id: UUID(),
+                frame: initialFrame ?? CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
+                workspaceIDs: [workspace.id],
+                selectedWorkspaceID: workspace.id
+            )
+
+            state.workspacesByID[workspace.id] = workspace
+            state.windows.append(window)
+            state.selectedWindowID = window.id
+            return true
+
+        case .closeWindow(let windowID):
+            return removeWindow(windowID, state: &state)
 
         case .renameWorkspace(let workspaceID, let title):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -94,7 +117,7 @@ public struct AppReducer {
                 )
             }
 
-            guard let insertionSlotID = resolveInsertionSlotID(in: targetWorkspace, preferredSlotID: targetSlotID) else {
+            guard let insertionSlotID = targetWorkspace.insertionSlotID(preferred: targetSlotID) else {
                 return false
             }
 
@@ -106,7 +129,7 @@ public struct AppReducer {
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.layoutTree = updatedSourceTree
-                sourceWorkspace.focusedPanelID = resolveFocusedPanel(in: sourceWorkspace)?.panelID
+                _ = sourceWorkspace.synchronizeFocusedPanelToLayout()
                 updatedSourceWorkspace = sourceWorkspace
             } else {
                 updatedSourceWorkspace = nil
@@ -149,7 +172,7 @@ public struct AppReducer {
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.layoutTree = updatedSourceTree
-                sourceWorkspace.focusedPanelID = resolveFocusedPanel(in: sourceWorkspace)?.panelID
+                _ = sourceWorkspace.synchronizeFocusedPanelToLayout()
                 state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
             } else {
                 removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
@@ -185,7 +208,7 @@ public struct AppReducer {
             guard let panelState = workspace.panels[panelID] else { return false }
             let wasFocusedPanel = workspace.focusedPanelID == panelID
             let previousSlotIDBeforeRemoval = wasFocusedPanel
-                ? targetSlotID(from: sourceLocation.slotID, direction: .previous, layoutTree: workspace.layoutTree)
+                ? workspace.focusTargetSlotID(from: sourceLocation.slotID, direction: .previous)
                 : nil
 
             workspace.recentlyClosedPanels.append(
@@ -208,11 +231,9 @@ public struct AppReducer {
 
             if let updatedTree = removal.node {
                 workspace.layoutTree = updatedTree
-                workspace.focusedPanelID = resolveFocusedPanelAfterClose(
-                    in: workspace,
+                workspace.focusedPanelID = workspace.focusedPanelIDAfterClosing(
                     closedPanelID: panelID,
                     closedPanelWasFocused: wasFocusedPanel,
-                    sourceSlotID: sourceLocation.slotID,
                     previousSlotIDBeforeRemoval: previousSlotIDBeforeRemoval
                 )
                 state.workspacesByID[sourceLocation.workspaceID] = workspace
@@ -234,10 +255,7 @@ public struct AppReducer {
                 return true
             }
 
-            guard let targetSlotID = resolveReopenSlotID(
-                in: workspace,
-                preferredSlotID: closedRecord.sourceSlotID
-            ) else {
+            guard let targetSlotID = workspace.reopenSlotID(preferred: closedRecord.sourceSlotID) else {
                 return false
             }
 
@@ -280,7 +298,7 @@ public struct AppReducer {
                 if let updatedTree = removal.node {
                     workspace.layoutTree = updatedTree
                     if workspace.focusedPanelID == existingPanelID {
-                        workspace.focusedPanelID = resolveFocusedPanel(in: workspace)?.panelID
+                        _ = workspace.synchronizeFocusedPanelToLayout()
                     }
                     state.workspacesByID[workspaceID] = workspace
                 } else if let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) {
@@ -309,7 +327,7 @@ public struct AppReducer {
                     second: auxLeaf
                 )
             } else {
-                guard let auxColumnSlotID = resolveAuxColumnSlotID(in: workspace, auxPanelIDs: existingAuxPanelIDs) else {
+                guard let auxColumnSlotID = workspace.auxiliaryColumnSlotID(for: existingAuxPanelIDs) else {
                     workspace.panels.removeValue(forKey: panelID)
                     return false
                 }
@@ -342,11 +360,9 @@ public struct AppReducer {
 
         case .toggleFocusedPanelMode(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+            guard workspace.synchronizeFocusedPanelToLayout() != nil else {
                 return false
             }
-
-            workspace.focusedPanelID = focusResolution.panelID
             workspace.focusedPanelModeActive.toggle()
             state.workspacesByID[workspaceID] = workspace
             return true
@@ -494,15 +510,13 @@ public struct AppReducer {
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
         guard workspace.focusedPanelModeActive == false else { return false }
-        guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+        guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             return false
         }
-        workspace.focusedPanelID = focusResolution.panelID
 
-        let sourceLeaf = focusResolution.slot
         let inheritedCWD: String
         if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
-            inheritedCWD = focusedTerminalState.cwd
+            inheritedCWD = focusedTerminalState.workingDirectorySeed
         } else {
             inheritedCWD = NSHomeDirectory()
         }
@@ -518,42 +532,16 @@ public struct AppReducer {
             )
         )
 
-        let newLeaf = LayoutNode.slot(slotID: newSlotID, panelID: newPanelID)
-        let originalLeaf = LayoutNode.slot(
-            slotID: sourceLeaf.slotID,
-            panelID: sourceLeaf.panelID
-        )
-
-        let orientation: SplitOrientation = switch direction {
-        case .left, .right:
-            .horizontal
-        case .up, .down:
-            .vertical
-        }
-
-        let firstNode: LayoutNode
-        let secondNode: LayoutNode
-        switch direction {
-        case .right, .down:
-            firstNode = originalLeaf
-            secondNode = newLeaf
-        case .left, .up:
-            firstNode = newLeaf
-            secondNode = originalLeaf
-        }
-
-        let split = LayoutNode.split(
-            nodeID: UUID(),
-            orientation: orientation,
-            ratio: 0.5,
-            first: firstNode,
-            second: secondNode
-        )
-
-        guard workspace.layoutTree.replaceSlot(slotID: sourceLeaf.slotID, with: split) else {
+        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).splitting(
+            slotID: focusResolution.slot.slotID,
+            direction: direction,
+            newPanelID: newPanelID,
+            newSlotID: newSlotID
+        ) else {
             return false
         }
 
+        workspace.apply(splitTree: updatedSplitTree)
         workspace.focusedPanelID = newPanelID
         state.workspacesByID[workspaceID] = workspace
         return true
@@ -568,25 +556,17 @@ public struct AppReducer {
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
         guard workspace.focusedPanelModeActive == false else { return false }
-        guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+        guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             return false
         }
 
-        let sourceSlotID = focusResolution.slot.slotID
-        guard let targetSlotID = targetSlotID(
-            from: sourceSlotID,
-            direction: direction,
-            layoutTree: workspace.layoutTree
-        ) else {
+        guard let targetSlotID = workspace.focusTargetSlotID(from: focusResolution.slot.slotID, direction: direction) else {
             return false
         }
-        guard targetSlotID != sourceSlotID else {
+        guard targetSlotID != focusResolution.slot.slotID else {
             return false
         }
-        guard let targetLeaf = workspace.layoutTree.slotNode(slotID: targetSlotID) else {
-            return false
-        }
-        guard let targetPanelID = selectedPanelID(in: targetLeaf, workspace: workspace) else {
+        guard let targetPanelID = workspace.panelID(forSlotID: targetSlotID) else {
             return false
         }
         guard targetPanelID != workspace.focusedPanelID else {
@@ -629,7 +609,7 @@ public struct AppReducer {
             )
             return false
         }
-        guard let focusResolution = resolveFocusedPanel(in: workspace) else {
+        guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             ToasttyLog.debug(
                 "Resize split rejected: no focused panel",
                 category: .reducer,
@@ -637,16 +617,12 @@ public struct AppReducer {
             )
             return false
         }
-        workspace.focusedPanelID = focusResolution.panelID
 
-        let delta = splitResizeDelta(direction: direction, amount: amount)
-        let result = resizeNearestMatchingSplit(
-            in: workspace.layoutTree,
+        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).resized(
             focusedSlotID: focusResolution.slot.slotID,
             direction: direction,
-            delta: delta
-        )
-        guard result.didResize else {
+            amount: amount
+        ) else {
             ToasttyLog.debug(
                 "Resize split rejected: no matching split orientation",
                 category: .reducer,
@@ -659,7 +635,7 @@ public struct AppReducer {
             return false
         }
 
-        workspace.layoutTree = result.node
+        workspace.apply(splitTree: updatedSplitTree)
         state.workspacesByID[workspaceID] = workspace
         ToasttyLog.debug(
             "Resize split applied",
@@ -691,8 +667,7 @@ public struct AppReducer {
             return false
         }
 
-        let result = equalizeSplitRatios(in: workspace.layoutTree)
-        guard result.didMutate else {
+        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).equalized() else {
             ToasttyLog.debug(
                 "Equalize splits rejected: tree already equalized",
                 category: .reducer,
@@ -701,7 +676,7 @@ public struct AppReducer {
             return false
         }
 
-        workspace.layoutTree = result.node
+        workspace.apply(splitTree: updatedSplitTree)
         state.workspacesByID[workspaceID] = workspace
         ToasttyLog.debug(
             "Equalized layout splits",
@@ -709,364 +684,6 @@ public struct AppReducer {
             metadata: ["workspace_id": workspaceID.uuidString]
         )
         return true
-    }
-
-    private struct SplitResizeResult {
-        let node: LayoutNode
-        let containsFocusedSlot: Bool
-        let didResize: Bool
-    }
-
-    private struct SplitEqualizeResult {
-        let node: LayoutNode
-        let didMutate: Bool
-    }
-
-    // Suppresses floating-point noise near clamp bounds; this must stay well below the
-    // minimum intentional resize step (0.005) so real resizes always apply.
-    private static let splitRatioChangeEpsilon: Double = 0.0001
-
-    private static func splitResizeDelta(direction: SplitResizeDirection, amount: Int) -> Double {
-        // Keep headroom for large shortcut-supplied amounts while clamping pathological values.
-        let clampedAmount = max(1, min(amount, 60))
-        let magnitude = Double(clampedAmount) * 0.005
-        switch direction {
-        case .left, .up:
-            return -magnitude
-        case .right, .down:
-            return magnitude
-        }
-    }
-
-    private static func resizeNearestMatchingSplit(
-        in node: LayoutNode,
-        focusedSlotID: UUID,
-        direction: SplitResizeDirection,
-        delta: Double
-    ) -> SplitResizeResult {
-        switch node {
-        case .slot(let slotID, _):
-            return SplitResizeResult(node: node, containsFocusedSlot: slotID == focusedSlotID, didResize: false)
-
-        case .split(let nodeID, let orientation, let ratio, let first, let second):
-            let firstResult = resizeNearestMatchingSplit(
-                in: first,
-                focusedSlotID: focusedSlotID,
-                direction: direction,
-                delta: delta
-            )
-            if firstResult.containsFocusedSlot {
-                if firstResult.didResize {
-                    return SplitResizeResult(
-                        node: .split(
-                            nodeID: nodeID,
-                            orientation: orientation,
-                            ratio: ratio,
-                            first: firstResult.node,
-                            second: second
-                        ),
-                        containsFocusedSlot: true,
-                        didResize: true
-                    )
-                }
-
-                if splitOrientation(contains: direction, orientation: orientation) {
-                    let nextRatio = clampedSplitRatio(ratio + delta)
-                    if hasMeaningfulSplitRatioChange(from: ratio, to: nextRatio) {
-                        return SplitResizeResult(
-                            node: .split(
-                                nodeID: nodeID,
-                                orientation: orientation,
-                                ratio: nextRatio,
-                                first: firstResult.node,
-                                second: second
-                            ),
-                            containsFocusedSlot: true,
-                            didResize: true
-                        )
-                    }
-                }
-
-                return SplitResizeResult(
-                    node: .split(
-                        nodeID: nodeID,
-                        orientation: orientation,
-                        ratio: ratio,
-                        first: firstResult.node,
-                        second: second
-                    ),
-                    containsFocusedSlot: true,
-                    didResize: false
-                )
-            }
-
-            let secondResult = resizeNearestMatchingSplit(
-                in: second,
-                focusedSlotID: focusedSlotID,
-                direction: direction,
-                delta: delta
-            )
-            if secondResult.containsFocusedSlot {
-                if secondResult.didResize {
-                    return SplitResizeResult(
-                        node: .split(
-                            nodeID: nodeID,
-                            orientation: orientation,
-                            ratio: ratio,
-                            first: first,
-                            second: secondResult.node
-                        ),
-                        containsFocusedSlot: true,
-                        didResize: true
-                    )
-                }
-
-                if splitOrientation(contains: direction, orientation: orientation) {
-                    let nextRatio = clampedSplitRatio(ratio + delta)
-                    if hasMeaningfulSplitRatioChange(from: ratio, to: nextRatio) {
-                        return SplitResizeResult(
-                            node: .split(
-                                nodeID: nodeID,
-                                orientation: orientation,
-                                ratio: nextRatio,
-                                first: first,
-                                second: secondResult.node
-                            ),
-                            containsFocusedSlot: true,
-                            didResize: true
-                        )
-                    }
-                }
-
-                return SplitResizeResult(
-                    node: .split(
-                        nodeID: nodeID,
-                        orientation: orientation,
-                        ratio: ratio,
-                        first: first,
-                        second: secondResult.node
-                    ),
-                    containsFocusedSlot: true,
-                    didResize: false
-                )
-            }
-
-            return SplitResizeResult(node: node, containsFocusedSlot: false, didResize: false)
-        }
-    }
-
-    private static func equalizeSplitRatios(in node: LayoutNode) -> SplitEqualizeResult {
-        switch node {
-        case .slot:
-            return SplitEqualizeResult(node: node, didMutate: false)
-
-        case .split(let nodeID, let orientation, let ratio, let first, let second):
-            let firstResult = equalizeSplitRatios(in: first)
-            let secondResult = equalizeSplitRatios(in: second)
-            let firstWeight = equalizeWeight(in: firstResult.node, orientation: orientation)
-            let secondWeight = equalizeWeight(in: secondResult.node, orientation: orientation)
-            let totalWeight = firstWeight + secondWeight
-            let targetRatio = Double(firstWeight) / Double(totalWeight)
-            let didMutate = firstResult.didMutate
-                || secondResult.didMutate
-                || ratio != targetRatio
-            guard didMutate else {
-                return SplitEqualizeResult(node: node, didMutate: false)
-            }
-
-            return SplitEqualizeResult(
-                node: .split(
-                    nodeID: nodeID,
-                    orientation: orientation,
-                    ratio: targetRatio,
-                    first: firstResult.node,
-                    second: secondResult.node
-                ),
-                didMutate: didMutate
-            )
-        }
-    }
-
-    /// Match Ghostty equalization semantics:
-    /// only descendants with the same split orientation contribute recursive weight.
-    /// Opposite-orientation subtrees count as a single unit.
-    private static func equalizeWeight(in node: LayoutNode, orientation: SplitOrientation) -> Int {
-        switch node {
-        case .slot:
-            return 1
-        case .split(_, let nodeOrientation, _, let first, let second):
-            guard nodeOrientation == orientation else { return 1 }
-            return equalizeWeight(in: first, orientation: orientation)
-                + equalizeWeight(in: second, orientation: orientation)
-        }
-    }
-
-    private static func splitOrientation(contains direction: SplitResizeDirection, orientation: SplitOrientation) -> Bool {
-        switch (direction, orientation) {
-        case (.left, .horizontal), (.right, .horizontal), (.up, .vertical), (.down, .vertical):
-            return true
-        default:
-            return false
-        }
-    }
-
-    private static func clampedSplitRatio(_ value: Double) -> Double {
-        min(max(value, 0.1), 0.9)
-    }
-
-    private static func hasMeaningfulSplitRatioChange(from oldValue: Double, to newValue: Double) -> Bool {
-        abs(newValue - oldValue) > splitRatioChangeEpsilon
-    }
-
-    private static func targetSlotID(
-        from sourceSlotID: UUID,
-        direction: SlotFocusDirection,
-        layoutTree: LayoutNode
-    ) -> UUID? {
-        let leaves = layoutTree.allSlotInfos
-        guard let sourceLeafIndex = leaves.firstIndex(where: { $0.slotID == sourceSlotID }) else {
-            return nil
-        }
-
-        switch direction {
-        case .previous:
-            guard leaves.count > 1 else { return nil }
-            let previousIndex = (sourceLeafIndex - 1 + leaves.count) % leaves.count
-            return leaves[previousIndex].slotID
-        case .next:
-            guard leaves.count > 1 else { return nil }
-            let nextIndex = (sourceLeafIndex + 1) % leaves.count
-            return leaves[nextIndex].slotID
-        case .up, .down, .left, .right:
-            let frames = slotFrames(for: layoutTree)
-            guard let sourceFrame = frames.first(where: { $0.slotID == sourceSlotID }) else {
-                return nil
-            }
-            return closestSlotID(to: sourceFrame, direction: direction, frames: frames)
-        }
-    }
-
-    private static func selectedPanelID(in slotNode: LayoutNode, workspace: WorkspaceState) -> UUID? {
-        guard case .slot(_, let panelID) = slotNode else {
-            return nil
-        }
-        guard workspace.panels[panelID] != nil else {
-            return nil
-        }
-        return panelID
-    }
-
-    private struct SlotFrame {
-        let slotID: UUID
-        let minX: Double
-        let minY: Double
-        let maxX: Double
-        let maxY: Double
-        let centerX: Double
-        let centerY: Double
-    }
-
-    private static func slotFrames(for layoutTree: LayoutNode) -> [SlotFrame] {
-        layoutTree.projectLayout(
-            in: LayoutFrame(minX: 0, minY: 0, width: 1, height: 1),
-            dividerThickness: 0
-        )
-        .slots
-        .map { placement in
-            let frame = placement.frame
-            return SlotFrame(
-                slotID: placement.slotID,
-                minX: frame.minX,
-                minY: frame.minY,
-                maxX: frame.maxX,
-                maxY: frame.maxY,
-                centerX: frame.midX,
-                centerY: frame.midY
-            )
-        }
-    }
-
-    private static func closestSlotID(
-        to source: SlotFrame,
-        direction: SlotFocusDirection,
-        frames: [SlotFrame]
-    ) -> UUID? {
-        let directionalCandidates: [(frame: SlotFrame, primaryDistance: Double, secondaryDistance: Double)] = frames.compactMap { candidate in
-            guard candidate.slotID != source.slotID else {
-                return nil
-            }
-
-            switch direction {
-            case .left:
-                guard candidate.centerX < source.centerX else { return nil }
-                return (candidate, source.centerX - candidate.centerX, abs(candidate.centerY - source.centerY))
-            case .right:
-                guard candidate.centerX > source.centerX else { return nil }
-                return (candidate, candidate.centerX - source.centerX, abs(candidate.centerY - source.centerY))
-            case .up:
-                guard candidate.centerY < source.centerY else { return nil }
-                return (candidate, source.centerY - candidate.centerY, abs(candidate.centerX - source.centerX))
-            case .down:
-                guard candidate.centerY > source.centerY else { return nil }
-                return (candidate, candidate.centerY - source.centerY, abs(candidate.centerX - source.centerX))
-            case .previous, .next:
-                return nil
-            }
-        }
-
-        let sorted = directionalCandidates.sorted { lhs, rhs in
-            if lhs.primaryDistance != rhs.primaryDistance {
-                return lhs.primaryDistance < rhs.primaryDistance
-            }
-            if lhs.secondaryDistance != rhs.secondaryDistance {
-                return lhs.secondaryDistance < rhs.secondaryDistance
-            }
-            return lhs.frame.slotID.uuidString < rhs.frame.slotID.uuidString
-        }
-        return sorted.first?.frame.slotID
-    }
-
-    private static func resolveFocusedPanel(in workspace: WorkspaceState) -> (panelID: UUID, slot: SlotInfo)? {
-        if let focusedPanelID = workspace.focusedPanelID,
-           workspace.panels[focusedPanelID] != nil,
-           let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID) {
-            return (focusedPanelID, focusedSlot)
-        }
-
-        for slot in workspace.layoutTree.allSlotInfos {
-            if workspace.panels[slot.panelID] != nil {
-                return (slot.panelID, slot)
-            }
-        }
-
-        return nil
-    }
-
-    private static func resolveFocusedPanelAfterClose(
-        in workspace: WorkspaceState,
-        closedPanelID: UUID,
-        closedPanelWasFocused: Bool,
-        sourceSlotID: UUID,
-        previousSlotIDBeforeRemoval: UUID?
-    ) -> UUID? {
-        guard closedPanelWasFocused else {
-            return resolveFocusedPanel(in: workspace)?.panelID
-        }
-
-        if let focusedPanelID = workspace.focusedPanelID,
-           focusedPanelID != closedPanelID,
-           workspace.panels[focusedPanelID] != nil,
-           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil {
-            return focusedPanelID
-        }
-
-        if let previousSlotIDBeforeRemoval,
-           let previousSlot = workspace.layoutTree.slotNode(slotID: previousSlotIDBeforeRemoval),
-           let selectedPreviousPanelID = selectedPanelID(in: previousSlot, workspace: workspace) {
-            return selectedPreviousPanelID
-        }
-
-        return resolveFocusedPanel(in: workspace)?.panelID
     }
 
     private static func locatePanel(_ panelID: UUID, in state: AppState) -> PanelLocation? {
@@ -1102,46 +719,12 @@ public struct AppReducer {
         state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id
     }
 
-    private static func resolveInsertionSlotID(in workspace: WorkspaceState, preferredSlotID: UUID?) -> UUID? {
-        if let preferredSlotID {
-            guard workspace.layoutTree.allSlotInfos.contains(where: { $0.slotID == preferredSlotID }) else {
-                return nil
-            }
-            return preferredSlotID
-        }
-
-        if let focusedPanelID = workspace.focusedPanelID,
-           let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID) {
-            return focusedSlot.slotID
-        }
-
-        return workspace.layoutTree.allSlotInfos.first?.slotID
-    }
-
-    private static func resolveReopenSlotID(in workspace: WorkspaceState, preferredSlotID: UUID) -> UUID? {
-        if workspace.layoutTree.allSlotInfos.contains(where: { $0.slotID == preferredSlotID }) {
-            return preferredSlotID
-        }
-        if let focusedPanelID = workspace.focusedPanelID,
-           let focusedSlot = workspace.layoutTree.slotContaining(panelID: focusedPanelID) {
-            return focusedSlot.slotID
-        }
-        return workspace.layoutTree.allSlotInfos.first?.slotID
-    }
-
     private static func auxPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
         Set(
             workspace.panels.compactMap { panelID, panelState in
                 auxiliaryPanelKinds.contains(panelState.kind) ? panelID : nil
             }
         )
-    }
-
-    private static func resolveAuxColumnSlotID(in workspace: WorkspaceState, auxPanelIDs: Set<UUID>) -> UUID? {
-        guard auxPanelIDs.isEmpty == false else { return nil }
-        return workspace.layoutTree.allSlotInfos.last(where: { slot in
-            auxPanelIDs.contains(slot.panelID)
-        })?.slotID
     }
 
     private static func splitLeaf(
@@ -1197,6 +780,24 @@ public struct AppReducer {
         if state.selectedWindowID == nil {
             state.selectedWindowID = window.id
         }
+        return true
+    }
+
+    @discardableResult
+    private static func removeWindow(_ windowID: UUID, state: inout AppState) -> Bool {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        let removedWindow = state.windows.remove(at: windowIndex)
+
+        for workspaceID in removedWindow.workspaceIDs {
+            state.workspacesByID.removeValue(forKey: workspaceID)
+        }
+
+        if state.selectedWindowID == windowID {
+            state.selectedWindowID = state.windows.first?.id
+        } else if state.selectedWindowID == nil {
+            state.selectedWindowID = state.windows.first?.id
+        }
+
         return true
     }
 

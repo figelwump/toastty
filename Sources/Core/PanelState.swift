@@ -52,12 +52,35 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     public var title: String
     public var shell: String
     public var cwd: String
+    public var launchWorkingDirectory: String?
     private static let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
 
-    public init(title: String, shell: String, cwd: String) {
+    public init(
+        title: String,
+        shell: String,
+        cwd: String,
+        launchWorkingDirectory: String? = nil
+    ) {
         self.title = title
         self.shell = shell
         self.cwd = cwd
+        self.launchWorkingDirectory = Self.normalizedWorkingDirectoryValue(launchWorkingDirectory)
+    }
+
+    /// The cwd we should use when launching or re-launching a shell surface.
+    /// Prefer authoritative live cwd when available, otherwise fall back to the
+    /// persisted launch seed captured from the last known live cwd.
+    public var workingDirectorySeed: String {
+        Self.normalizedWorkingDirectoryValue(cwd)
+            ?? Self.normalizedWorkingDirectoryValue(launchWorkingDirectory)
+            ?? Self.homeDirectory
+    }
+
+    /// Only treat the live cwd field as a high-confidence process tracking hint.
+    /// Restored launch seeds are intentionally excluded so startup restore does
+    /// not bind panels to the wrong shell and overwrite live metadata later.
+    public var expectedProcessWorkingDirectory: String? {
+        Self.normalizedWorkingDirectoryValue(cwd)
     }
 
     public var displayPanelLabel: String {
@@ -90,9 +113,9 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     }
 
     private var directoryLabel: String? {
-        let trimmed = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.isEmpty == false else { return nil }
-        let normalizedPath = (trimmed as NSString).standardizingPath
+        guard let normalizedPath = Self.normalizedWorkingDirectoryValue(cwd) else {
+            return nil
+        }
         guard normalizedPath.isEmpty == false else { return nil }
 
         if normalizedPath == "/" {
@@ -162,6 +185,15 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
             return components.joined(separator: "/")
         }
         return ".../" + components.suffix(2).joined(separator: "/")
+    }
+
+    private static func normalizedWorkingDirectoryValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let normalizedPath = (trimmed as NSString).standardizingPath
+        guard normalizedPath.isEmpty == false else { return nil }
+        return normalizedPath
     }
 }
 

@@ -190,4 +190,30 @@ struct TerminalPanelStateLabelTests {
 
         #expect(state.displayPanelLabel == "zsh")
     }
+
+    @Test
+    func restoredLaunchWorkingDirectoryDoesNotDriveDisplayLabel() {
+        let state = TerminalPanelState(
+            title: "Terminal 4",
+            shell: "/bin/zsh",
+            cwd: "   ",
+            launchWorkingDirectory: "/tmp/restored"
+        )
+
+        #expect(state.displayPanelLabel == "zsh")
+        #expect(state.workingDirectorySeed == "/tmp/restored")
+        #expect(state.expectedProcessWorkingDirectory == nil)
+    }
+
+    @Test
+    func workingDirectorySeedFallsBackToHomeWhenBothValuesAreUnavailable() {
+        let state = TerminalPanelState(
+            title: "Terminal 4",
+            shell: "/bin/zsh",
+            cwd: "   ",
+            launchWorkingDirectory: nil
+        )
+
+        #expect(state.workingDirectorySeed == (NSHomeDirectory() as NSString).standardizingPath)
+    }
 }

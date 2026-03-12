@@ -24,7 +24,7 @@ fi
 
 if ! xcodebuild test \
   -workspace toastty.xcworkspace \
-  -scheme toastty-Workspace \
+  -scheme ToasttyApp \
   -destination "platform=macOS,arch=${ARCH}"; then
   exit 11
 fi

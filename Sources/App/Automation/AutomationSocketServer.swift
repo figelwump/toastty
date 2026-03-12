@@ -812,10 +812,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     throw AutomationSocketError.invalidPayload("panelID does not exist")
                 }
                 resolvedWorkspaceID = location.workspaceID
-            } else if let selectedWorkspaceID = store.selectedWorkspace?.id {
-                resolvedWorkspaceID = selectedWorkspaceID
             } else {
-                throw AutomationSocketError.invalidPayload("unable to resolve workspace")
+                resolvedWorkspaceID = try resolveWorkspaceSelection(args: event.payload).workspaceID
             }
 
             let decision = notificationStore.record(
@@ -849,59 +847,67 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
     @MainActor
     private func performAction(actionID: String, args: [String: AutomationJSONValue]) throws {
-        let workspaceID = try resolveWorkspaceID(args: args)
+        var resolvedWorkspaceID: UUID?
+        func workspaceID() throws -> UUID {
+            if let resolvedWorkspaceID {
+                return resolvedWorkspaceID
+            }
+            let workspaceID = try resolveWorkspaceID(args: args)
+            resolvedWorkspaceID = workspaceID
+            return workspaceID
+        }
 
         let didMutate: Bool
         switch actionID {
         case "workspace.split.horizontal":
-            didMutate = store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal))
+            didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .horizontal))
 
         case "workspace.split.vertical":
-            didMutate = store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical))
+            didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .vertical))
 
         case "workspace.split.right":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .right))
 
         case "workspace.split.down":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .down))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .down))
 
         case "workspace.split.left":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .left))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .left))
 
         case "workspace.split.up":
-            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .up))
+            didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .up))
 
         case "workspace.close-focused-panel":
-            didMutate = focusedPanelCommandController.closeFocusedPanel(in: workspaceID).didMutateState
+            didMutate = focusedPanelCommandController.closeFocusedPanel(in: try workspaceID()).didMutateState
 
         case "workspace.focus-slot.previous":
-            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .previous))
 
         case "workspace.focus-slot.next":
-            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .next))
 
         case "workspace.focus-slot.left":
-            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .left))
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .left))
 
         case "workspace.focus-slot.right":
-            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .right))
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .right))
 
         case "workspace.focus-slot.up":
-            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .up))
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .up))
 
         case "workspace.focus-slot.down":
-            didMutate = store.send(.focusSlot(workspaceID: workspaceID, direction: .down))
+            didMutate = store.send(.focusSlot(workspaceID: try workspaceID(), direction: .down))
 
         case "workspace.focus-panel":
             guard let panelID = args.uuid("panelID") else {
                 throw AutomationSocketError.invalidPayload("panelID must be a UUID")
             }
-            didMutate = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            didMutate = store.send(.focusPanel(workspaceID: try workspaceID(), panelID: panelID))
 
         case "workspace.resize-split.left":
             didMutate = store.send(
                 .resizeFocusedSlotSplit(
-                    workspaceID: workspaceID,
+                    workspaceID: try workspaceID(),
                     direction: .left,
                     amount: max(args.int("amount") ?? 1, 1)
                 )
@@ -910,7 +916,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.resize-split.right":
             didMutate = store.send(
                 .resizeFocusedSlotSplit(
-                    workspaceID: workspaceID,
+                    workspaceID: try workspaceID(),
                     direction: .right,
                     amount: max(args.int("amount") ?? 1, 1)
                 )
@@ -919,7 +925,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.resize-split.up":
             didMutate = store.send(
                 .resizeFocusedSlotSplit(
-                    workspaceID: workspaceID,
+                    workspaceID: try workspaceID(),
                     direction: .up,
                     amount: max(args.int("amount") ?? 1, 1)
                 )
@@ -928,26 +934,26 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.resize-split.down":
             didMutate = store.send(
                 .resizeFocusedSlotSplit(
-                    workspaceID: workspaceID,
+                    workspaceID: try workspaceID(),
                     direction: .down,
                     amount: max(args.int("amount") ?? 1, 1)
                 )
             )
 
         case "workspace.equalize-splits":
-            didMutate = store.send(.equalizeLayoutSplits(workspaceID: workspaceID))
+            didMutate = store.send(.equalizeLayoutSplits(workspaceID: try workspaceID()))
 
         case "topbar.toggle.diff":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff))
+            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .diff))
 
         case "topbar.toggle.markdown":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown))
+            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .markdown))
 
         case "topbar.toggle.scratchpad":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .scratchpad))
+            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .scratchpad))
 
         case "topbar.toggle.focused-panel":
-            didMutate = store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+            didMutate = store.send(.toggleFocusedPanelMode(workspaceID: try workspaceID()))
 
         case "app.font.increase":
             didMutate = store.send(.increaseGlobalTerminalFont)
@@ -959,9 +965,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             didMutate = store.send(.resetGlobalTerminalFont)
 
         case "sidebar.workspaces.new":
-            guard let windowID = resolveWindowID(args: args) else {
-                throw AutomationSocketError.invalidPayload("windowID not found")
-            }
+            let windowID = try resolveWindowID(args: args)
             let title = args.string("title")
             didMutate = store.send(.createWorkspace(windowID: windowID, title: title))
 
@@ -975,28 +979,72 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func resolveWorkspaceID(args: [String: AutomationJSONValue]) throws -> UUID {
+    private func resolveWorkspaceSelection(args: [String: AutomationJSONValue]) throws -> WindowWorkspaceSelection {
         if let rawWorkspaceID = args.string("workspaceID") {
             guard let workspaceID = UUID(uuidString: rawWorkspaceID) else {
                 throw AutomationSocketError.invalidPayload("workspaceID must be a UUID")
             }
-            guard store.state.workspacesByID[workspaceID] != nil else {
+            guard let selection = store.state.workspaceSelection(containingWorkspaceID: workspaceID) else {
                 throw AutomationSocketError.invalidPayload("workspaceID does not exist")
             }
-            return workspaceID
+            if let rawWindowID = args.string("windowID") {
+                guard let windowID = UUID(uuidString: rawWindowID) else {
+                    throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+                }
+                guard selection.windowID == windowID else {
+                    throw AutomationSocketError.invalidPayload("workspaceID does not belong to windowID")
+                }
+            }
+            return selection
         }
-        guard let workspaceID = store.selectedWorkspace?.id else {
-            throw AutomationSocketError.invalidPayload("no selected workspace")
+
+        if let rawWindowID = args.string("windowID") {
+            guard let windowID = UUID(uuidString: rawWindowID) else {
+                throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+            }
+            guard let selection = store.state.workspaceSelection(in: windowID) else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
+            return selection
         }
-        return workspaceID
+
+        if let selection = store.state.soleWorkspaceSelection() {
+            return selection
+        }
+
+        if store.state.windows.isEmpty {
+            throw AutomationSocketError.invalidPayload("no window is available")
+        }
+
+        throw AutomationSocketError.invalidPayload("workspaceID or windowID is required when multiple windows exist")
     }
 
     @MainActor
-    private func resolveWindowID(args: [String: AutomationJSONValue]) -> UUID? {
-        if let rawWindowID = args.string("windowID"), let windowID = UUID(uuidString: rawWindowID) {
+    private func resolveWorkspaceID(args: [String: AutomationJSONValue]) throws -> UUID {
+        try resolveWorkspaceSelection(args: args).workspaceID
+    }
+
+    @MainActor
+    private func resolveWindowID(args: [String: AutomationJSONValue]) throws -> UUID {
+        if let rawWindowID = args.string("windowID") {
+            guard let windowID = UUID(uuidString: rawWindowID) else {
+                throw AutomationSocketError.invalidPayload("windowID must be a UUID")
+            }
+            guard store.state.window(id: windowID) != nil else {
+                throw AutomationSocketError.invalidPayload("windowID does not exist")
+            }
             return windowID
         }
-        return store.selectedWindow?.id
+
+        if store.state.windows.count == 1, let windowID = store.state.windows.first?.id {
+            return windowID
+        }
+
+        if store.state.windows.isEmpty {
+            throw AutomationSocketError.invalidPayload("no window is available")
+        }
+
+        throw AutomationSocketError.invalidPayload("windowID is required when multiple windows exist")
     }
 
     @MainActor
@@ -1251,14 +1299,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
     @MainActor
     private func isPanelFocused(_ panelID: UUID) -> Bool {
-        guard let selectedWorkspaceID = store.selectedWorkspace?.id,
-              let selectedWorkspace = store.state.workspacesByID[selectedWorkspaceID] else {
+        guard let selection = store.state.selectedWorkspaceSelection() else {
             return false
         }
-        guard selectedWorkspace.focusedPanelID == panelID else {
+        guard selection.workspace.focusedPanelID == panelID else {
             return false
         }
-        return selectedWorkspace.layoutTree.slotContaining(panelID: panelID) != nil
+        return selection.workspace.layoutTree.slotContaining(panelID: panelID) != nil
     }
 
     @MainActor

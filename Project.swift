@@ -1,7 +1,6 @@
 import ProjectDescription
 import Foundation
 
-let ghosttyLegacyXCFrameworkRelativePath = "Dependencies/GhosttyKit.xcframework"
 let ghosttyDebugXCFrameworkRelativePath = "Dependencies/GhosttyKit.Debug.xcframework"
 let ghosttyReleaseXCFrameworkRelativePath = "Dependencies/GhosttyKit.Release.xcframework"
 let ghosttyMacOSSliceDirectoryCandidates = [
@@ -66,16 +65,9 @@ let ghosttyDebugVariantSelection = resolveGhosttyLibrarySelection(
 let ghosttyReleaseVariantSelection = resolveGhosttyLibrarySelection(
     xcframeworkRelativePath: ghosttyReleaseXCFrameworkRelativePath
 )
-let ghosttyLegacySelection = resolveGhosttyLibrarySelection(
-    xcframeworkRelativePath: ghosttyLegacyXCFrameworkRelativePath
-)
-let ghosttyDebugSelection = ghosttyDebugVariantSelection ?? ghosttyLegacySelection ?? ghosttyReleaseVariantSelection
-let ghosttyReleaseSelection = ghosttyReleaseVariantSelection ?? ghosttyLegacySelection ?? ghosttyDebugVariantSelection
-let hasGhosttyVariantLinkSettings = ghosttyDebugSelection != nil && ghosttyReleaseSelection != nil
-let hasGhosttyLegacyXCFrameworkArtifact = ghosttyPathExists(
-    relativePath: ghosttyLegacyXCFrameworkRelativePath
-)
-let hasGhosttyXCFrameworkArtifact = hasGhosttyVariantLinkSettings || hasGhosttyLegacyXCFrameworkArtifact
+let ghosttyDebugSelection = ghosttyDebugVariantSelection ?? ghosttyReleaseVariantSelection
+let ghosttyReleaseSelection = ghosttyReleaseVariantSelection ?? ghosttyDebugVariantSelection
+let hasGhosttyXCFrameworkArtifact = ghosttyDebugSelection != nil && ghosttyReleaseSelection != nil
 let hasGhosttyXCFramework = hasGhosttyXCFrameworkArtifact && !ghosttyIntegrationDisabled
 
 func applyGhosttyVariantModuleSettings(
@@ -129,6 +121,9 @@ var appDependencies: [TargetDependency] = [
 let developmentTeam = ProcessInfo.processInfo.environment["TUIST_DEVELOPMENT_TEAM"]
 var appTargetSettingsBase: SettingsDictionary = [
     "CODE_SIGNING_ALLOWED": "YES",
+    // Keep the Swift module name as "ToasttyApp" even though the product is "Toastty",
+    // so @testable import ToasttyApp and the struct ToasttyApp: App name stay consistent.
+    "PRODUCT_MODULE_NAME": "ToasttyApp",
 ]
 var appTestTargetSettingsBase: SettingsDictionary = [:]
 if let developmentTeam {
@@ -140,6 +135,7 @@ if let developmentTeam {
 }
 var appTestDependencies: [TargetDependency] = [
     .target(name: "ToasttyApp"),
+    .target(name: "CoreState"),
 ]
 
 if hasGhosttyXCFramework {
@@ -161,22 +157,18 @@ if hasGhosttyXCFramework {
             libraryRelativePath: ghosttyReleaseSelection.libraryRelativePath,
             settings: &appTargetSettingsBase
         )
-        applyGhosttyVariantModuleSettings(
+        applyGhosttyVariantLinkSettings(
             configurationName: "Debug",
             sliceRelativePath: ghosttyDebugSelection.sliceRelativePath,
+            libraryRelativePath: ghosttyDebugSelection.libraryRelativePath,
             settings: &appTestTargetSettingsBase
         )
-        applyGhosttyVariantModuleSettings(
+        applyGhosttyVariantLinkSettings(
             configurationName: "Release",
             sliceRelativePath: ghosttyReleaseSelection.sliceRelativePath,
+            libraryRelativePath: ghosttyReleaseSelection.libraryRelativePath,
             settings: &appTestTargetSettingsBase
         )
-        // The app test bundle loads inside ToasttyApp, so it only needs module
-        // visibility for explicit-module compilation. The app host already links
-        // the Ghostty static archive for execution.
-    } else {
-        appDependencies.append(.xcframework(path: .relativeToRoot(ghosttyLegacyXCFrameworkRelativePath)))
-        appTestDependencies.append(.xcframework(path: .relativeToRoot(ghosttyLegacyXCFrameworkRelativePath)))
     }
     appTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
     appTestTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
@@ -187,6 +179,13 @@ if hasGhosttyXCFramework {
         "-framework",
         "Carbon",
     ])
+    appTestTargetSettingsBase["OTHER_LDFLAGS"] = .array([
+        "$(inherited)",
+        "-lc++",
+        "-framework",
+        "Carbon",
+    ])
+    appTestTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
 }
 
 let appTargetSettings: Settings = .settings(base: appTargetSettingsBase)
@@ -205,10 +204,14 @@ let project = Project(
             name: "ToasttyApp",
             destinations: .macOS,
             product: .app,
+            productName: "Toastty",
             bundleId: "com.GiantThings.toastty",
             deploymentTargets: .macOS("14.0"),
-            infoPlist: .default,
+            infoPlist: .extendingDefault(with: [
+                "LSApplicationCategoryType": .string("public.app-category.developer-tools"),
+            ]),
             sources: ["Sources/App/**"],
+            resources: ["Sources/App/Resources/**"],
             dependencies: appDependencies,
             settings: appTargetSettings
         ),
@@ -288,6 +291,13 @@ let project = Project(
                 targets: [
                     .project(path: .relativeToRoot("."), target: "ToasttyApp"),
                     .project(path: .relativeToRoot("."), target: "toastty"),
+                ]
+            ),
+            testAction: .targets(
+                [
+                    .testableTarget(target: .target("CoreStateTests")),
+                    .testableTarget(target: .target("ToasttyCLITests")),
+                    .testableTarget(target: .target("ToasttyAppTests")),
                 ]
             ),
             runAction: .runAction(
