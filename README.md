@@ -6,14 +6,13 @@ Toastty is built for working with coding agents: workspaces, real-time agent sta
 
 ## Features
 
-- **Workspaces** — Organize terminals into named workspaces, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
-- **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response.
+- **Vertical tabs** — Organize terminals into named workspaces as vertical tabs, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
+- **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them, or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, persisted in `~/.toastty/config`
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine via XCFramework, with Ghostty config compatibility
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
-- **Session tracking** — Records terminal metadata including working directory, shell type, and file activity
-- **Desktop notifications** — Workspace-scoped notifications
+- **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
 ## Requirements
@@ -21,6 +20,7 @@ Toastty is built for working with coding agents: workspaces, real-time agent sta
 - macOS 14.0+
 - [Tuist](https://tuist.io) (build system)
 - Xcode 16+ with Swift 6.0
+- [sv](https://github.com/figelwump/sv) (secret vault for development credentials)
 - Ghostty XCFramework (optional — Toastty can build in fallback mode without it)
 
 ## Getting Started
@@ -35,7 +35,21 @@ tuist generate
 
 `Project.swift` is the source of truth. The generated `toastty.xcworkspace` is not committed, so re-run `tuist generate` after manifest or file-layout changes.
 
-### 2. Install Ghostty XCFramework (optional)
+### 2. Install sv
+
+[sv](https://github.com/figelwump/sv) is a lightweight macOS secret vault that stores API keys and credentials in the native Keychain and injects them into processes at runtime. Automation scripts in this repo use `sv exec --` to run commands that need secrets without exposing values in shell history or environment dumps.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/figelwump/sv/main/install.sh | bash
+```
+
+After installing, store any required secrets with `sv set <KEY>`. To run a command with secrets injected:
+
+```bash
+sv exec -- <command>
+```
+
+### 3. Install Ghostty XCFramework (optional)
 
 ```bash
 GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
@@ -58,7 +72,7 @@ To build without Ghostty:
 TUIST_DISABLE_GHOSTTY=1 tuist generate
 ```
 
-### 3. Build
+### 4. Build
 
 ```bash
 ARCH="$(uname -m)"
@@ -70,7 +84,7 @@ xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp \
 
 Or open `toastty.xcworkspace` in Xcode and hit Run.
 
-### 4. Validate
+### 5. Validate
 
 ```bash
 # Full gate: generate + build + test
