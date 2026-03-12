@@ -2,19 +2,18 @@
 
 A native macOS terminal multiplexer built with SwiftUI and powered by the [Ghostty](https://ghostty.org) rendering engine.
 
-Toastty gives you split panes, workspaces, and a native macOS UI while reusing your existing Ghostty configuration.
+Toastty is built for working with coding agents: workspaces, real-time agent status, and a native macOS UI with a lot of small touches.
 
 ## Features
 
-- **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them, or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Workspaces** — Organize terminals into named workspaces, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
-- **Multiple windows** — Detach panels into separate windows, each with independent workspace management
+- **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response.
+- **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them, or zoom a single pane to full view (`Cmd+Shift+F`)
+- **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, persisted in `~/.toastty/config`
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine via XCFramework, with Ghostty config compatibility
-- **Hot-reload configuration** — Change your Ghostty config and reload it live from the menu bar
-- **Font control** — Increase, decrease, or reset terminal font size globally, persisted in `~/.toastty/config`
-- **Recently closed panels** — Reopen the last 10 closed panels per workspace
+- **Hot-reload configuration** — Change your config and reload it live from the menu bar
 - **Session tracking** — Records terminal metadata including working directory, shell type, and file activity
-- **Desktop notifications** — Workspace-scoped notification routing
+- **Desktop notifications** — Workspace-scoped notifications
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
 ## Requirements
@@ -45,7 +44,7 @@ GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
 
 Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
 
-For the recommended upstream Ghostty build command, release note guidance, and the `-Dsentry=false` recommendation, see [docs/ghostty-integration.md](docs/ghostty-integration.md).
+For the recommended upstream Ghostty build command, release note guidance, see [docs/ghostty-integration.md](docs/ghostty-integration.md).
 
 After installing, regenerate:
 
@@ -128,6 +127,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 
 | Shortcut | Action |
 |---|---|
+| `Cmd+Shift+N` | New workspace |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
@@ -136,6 +136,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 | `Cmd+Ctrl+Arrow` | Resize split |
 | `Cmd+Ctrl+=` | Equalize splits |
 | `Cmd+1`–`Cmd+9` | Switch workspace |
+| `Option+1`–`Option+9` | Focus pane by position |
 
 ## Privacy and Local State
 
