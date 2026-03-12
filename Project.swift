@@ -1,7 +1,6 @@
 import ProjectDescription
 import Foundation
 
-let ghosttyLegacyXCFrameworkRelativePath = "Dependencies/GhosttyKit.xcframework"
 let ghosttyDebugXCFrameworkRelativePath = "Dependencies/GhosttyKit.Debug.xcframework"
 let ghosttyReleaseXCFrameworkRelativePath = "Dependencies/GhosttyKit.Release.xcframework"
 let ghosttyMacOSSliceDirectoryCandidates = [
@@ -66,16 +65,9 @@ let ghosttyDebugVariantSelection = resolveGhosttyLibrarySelection(
 let ghosttyReleaseVariantSelection = resolveGhosttyLibrarySelection(
     xcframeworkRelativePath: ghosttyReleaseXCFrameworkRelativePath
 )
-let ghosttyLegacySelection = resolveGhosttyLibrarySelection(
-    xcframeworkRelativePath: ghosttyLegacyXCFrameworkRelativePath
-)
-let ghosttyDebugSelection = ghosttyDebugVariantSelection ?? ghosttyLegacySelection ?? ghosttyReleaseVariantSelection
-let ghosttyReleaseSelection = ghosttyReleaseVariantSelection ?? ghosttyLegacySelection ?? ghosttyDebugVariantSelection
-let hasGhosttyVariantLinkSettings = ghosttyDebugSelection != nil && ghosttyReleaseSelection != nil
-let hasGhosttyLegacyXCFrameworkArtifact = ghosttyPathExists(
-    relativePath: ghosttyLegacyXCFrameworkRelativePath
-)
-let hasGhosttyXCFrameworkArtifact = hasGhosttyVariantLinkSettings || hasGhosttyLegacyXCFrameworkArtifact
+let ghosttyDebugSelection = ghosttyDebugVariantSelection ?? ghosttyReleaseVariantSelection
+let ghosttyReleaseSelection = ghosttyReleaseVariantSelection ?? ghosttyDebugVariantSelection
+let hasGhosttyXCFrameworkArtifact = ghosttyDebugSelection != nil && ghosttyReleaseSelection != nil
 let hasGhosttyXCFramework = hasGhosttyXCFrameworkArtifact && !ghosttyIntegrationDisabled
 
 func applyGhosttyVariantLinkSettings(
@@ -161,8 +153,6 @@ if hasGhosttyXCFramework {
             libraryRelativePath: ghosttyReleaseSelection.libraryRelativePath,
             settings: &appTestTargetSettingsBase
         )
-    } else {
-        appDependencies.append(.xcframework(path: .relativeToRoot(ghosttyLegacyXCFrameworkRelativePath)))
     }
     appTargetSettingsBase["SWIFT_ACTIVE_COMPILATION_CONDITIONS"] = "$(inherited) TOASTTY_HAS_GHOSTTY_KIT"
     // Ghostty's static archive includes C++ objects and macOS text-input symbols.

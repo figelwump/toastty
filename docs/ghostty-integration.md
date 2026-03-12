@@ -46,7 +46,6 @@ Variant options:
 
 - `GHOSTTY_XCFRAMEWORK_VARIANT=debug`
 - `GHOSTTY_XCFRAMEWORK_VARIANT=release`
-- `GHOSTTY_XCFRAMEWORK_VARIANT=legacy`
 
 The installer also auto-detects a sibling checkout at `../ghostty/macos/GhosttyKit.xcframework` when present.
 
@@ -64,7 +63,6 @@ Ghostty integration in `Project.swift` is default-on when at least one local art
 
 - `Dependencies/GhosttyKit.Debug.xcframework`
 - `Dependencies/GhosttyKit.Release.xcframework`
-- `Dependencies/GhosttyKit.xcframework` (legacy fallback)
 
 Disable it explicitly with:
 
@@ -74,8 +72,8 @@ TUIST_DISABLE_GHOSTTY=1 tuist generate
 
 Current selection behavior:
 
-- `Debug` prefers `GhosttyKit.Debug`, then `GhosttyKit`, then `GhosttyKit.Release`
-- `Release` prefers `GhosttyKit.Release`, then `GhosttyKit`, then `GhosttyKit.Debug`
+- `Debug` prefers `GhosttyKit.Debug`, then `GhosttyKit.Release`
+- `Release` prefers `GhosttyKit.Release`, then `GhosttyKit.Debug`
 - Toastty resolves the first matching macOS slice from:
   - `macos-arm64_x86_64`
   - `macos-arm64`

@@ -24,7 +24,8 @@ fi
 READY_FILE="$ARTIFACTS_DIR/automation-ready-${RUN_ID}.json"
 APP_BINARY="$DERIVED_PATH/Build/Products/Debug/Toastty.app/Contents/MacOS/Toastty"
 APP_LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
-GHOSTTY_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
+GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
+GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 
 mkdir -p "$ARTIFACTS_DIR"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$APP_LOG_FILE"
@@ -35,8 +36,8 @@ if [[ "${TUIST_DISABLE_GHOSTTY:-0}" == "1" || "${TOASTTY_DISABLE_GHOSTTY:-0}" ==
   exit 1
 fi
 
-if [[ ! -f "$GHOSTTY_XCFRAMEWORK_PATH/Info.plist" ]]; then
-  echo "error: Ghostty xcframework missing or invalid: $GHOSTTY_XCFRAMEWORK_PATH" >&2
+if [[ ! -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" && ! -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  echo "error: Ghostty xcframework missing or invalid: expected $GHOSTTY_DEBUG_XCFRAMEWORK_PATH or $GHOSTTY_RELEASE_XCFRAMEWORK_PATH" >&2
   exit 1
 fi
 

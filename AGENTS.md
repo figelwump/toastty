@@ -36,7 +36,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - **Default-on** when a local xcframework exists in `Dependencies/` and disable env is not set.
 - **Opt out:** `TUIST_DISABLE_GHOSTTY=1` (or alias `TOASTTY_DISABLE_GHOSTTY=1`)
 - **Install/update artifact:** `./scripts/ghostty/install-local-xcframework.sh`
-  - `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug|legacy` to pick variant
+  - `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to pick variant
   - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework` to override source
 - **Config loading order:** `TOASTTY_GHOSTTY_CONFIG_PATH` > `$XDG_CONFIG_HOME/ghostty/config` > `~/.config/ghostty/config` > Ghostty defaults.
 - **Font override:** `~/.toastty/config` key `terminal-font-size` (cleared by `Reset Terminal Font`).
