@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SOURCE_PATH="${GHOSTTY_XCFRAMEWORK_SOURCE:-}"
 VARIANT="${GHOSTTY_XCFRAMEWORK_VARIANT:-debug}"
-UNSUPPORTED_LEGACY_DEST_PATH="$ROOT_DIR/Dependencies/GhosttyKit.xcframework"
 
 if [[ -z "$SOURCE_PATH" ]]; then
   for candidate in \
@@ -40,7 +39,6 @@ if [[ ! -d "$SOURCE_PATH" ]]; then
 fi
 
 mkdir -p "$(dirname "$DEST_PATH")"
-rm -rf "$UNSUPPORTED_LEGACY_DEST_PATH"
 rm -rf "$DEST_PATH"
 cp -R "$SOURCE_PATH" "$DEST_PATH"
 
