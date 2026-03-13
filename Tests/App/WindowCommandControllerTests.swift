@@ -98,6 +98,35 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
     }
 
+    func testHelpMenuBridgeRetargetsToasttyHelpItemAndOpensGitHub() {
+        var openedURL: URL?
+        let bridge = HelpMenuBridge { url in
+            openedURL = url
+        }
+
+        let mainMenu = NSMenu(title: "Main")
+        let helpRootItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
+        let helpMenu = NSMenu(title: "Help")
+        let projectHelpItem = NSMenuItem(title: "Toastty Help", action: nil, keyEquivalent: "")
+        helpMenu.addItem(projectHelpItem)
+        helpRootItem.submenu = helpMenu
+        mainMenu.addItem(helpRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(projectHelpItem.target === bridge)
+        XCTAssertEqual(projectHelpItem.action, #selector(HelpMenuBridge.openProjectHelp(_:)))
+
+        bridge.openProjectHelp(nil)
+
+        XCTAssertEqual(openedURL, URL(string: "https://github.com/figelwump/toastty"))
+    }
+
     func testHiddenSystemMenuItemsBridgeHidesRequestedItemsByAction() {
         let bridge = HiddenSystemMenuItemsBridge()
 

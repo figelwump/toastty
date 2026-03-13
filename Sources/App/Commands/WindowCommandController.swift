@@ -77,6 +77,52 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
 }
 
 @MainActor
+final class HelpMenuBridge: NSObject {
+    private static let projectHelpURL = URL(string: "https://github.com/figelwump/toastty")!
+
+    private let openURL: (URL) -> Void
+
+    init(openURL: @escaping (URL) -> Void = { url in
+        NSWorkspace.shared.open(url)
+    }) {
+        self.openURL = openURL
+    }
+
+    func installIfNeeded() {
+        guard let mainMenu = NSApp.mainMenu,
+              let helpItem = Self.findProjectHelpItem(in: mainMenu.items) else {
+            return
+        }
+        guard helpItem.target !== self || helpItem.action != #selector(openProjectHelp(_:)) else {
+            return
+        }
+
+        helpItem.target = self
+        helpItem.action = #selector(openProjectHelp(_:))
+    }
+
+    @objc
+    func openProjectHelp(_: Any?) {
+        openURL(Self.projectHelpURL)
+    }
+
+    private static func findProjectHelpItem(in items: [NSMenuItem]) -> NSMenuItem? {
+        for item in items {
+            if item.title == "Toastty Help" {
+                return item
+            }
+
+            if let submenu = item.submenu,
+               let nestedItem = findProjectHelpItem(in: submenu.items) {
+                return nestedItem
+            }
+        }
+
+        return nil
+    }
+}
+
+@MainActor
 final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
     private static let hiddenMenuActionNames: Set<String> = [
         NSStringFromSelector(#selector(NSResponder.newWindowForTab(_:))),
