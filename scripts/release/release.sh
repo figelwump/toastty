@@ -230,15 +230,15 @@ on run argv
       set current view of container window to icon view
       set toolbar visible of container window to false
       set statusbar visible of container window to false
-      set the bounds of container window to {200, 120, 660, 360}
+      set the bounds of container window to {200, 120, 780, 430}
 
       set theViewOptions to the icon view options of container window
       set arrangement of theViewOptions to not arranged
       set icon size of theViewOptions to 128
       set text size of theViewOptions to 16
 
-      set position of item appBundleName of container window to {135, 125}
-      set position of item "Applications" of container window to {365, 125}
+      set position of item appBundleName of container window to {175, 135}
+      set position of item "Applications" of container window to {435, 135}
 
       update without registering applications
       delay 2
