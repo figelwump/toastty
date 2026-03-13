@@ -21,7 +21,7 @@
   <rect width="1024" height="1024" fill="url(#bg)"/>
 
   <!-- Toast slice, scaled to fill more of the icon frame -->
-  <g transform="translate(-83, -100.5) scale(7)">
+  <g transform="translate(-10.75, 4.6) scale(6.15)">
     <!-- Outer crust with golden gradient -->
     <path d="M40 145 L35 65 Q33 28 60 25 L110 25 Q137 28 135 65 L130 145 Q130 150 85 150 Q40 150 40 145 Z" fill="url(#crust)" />
     <!-- Highlight along top of crust -->
