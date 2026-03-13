@@ -1,154 +1,132 @@
-# toastty state invariants
+# toastty app-state contract
 
-Date: 2026-02-27
+Date: 2026-03-13
 
-This document defines invariants that must hold for `AppState` at all times.
-Reducers and migration code must preserve these rules.
+This document describes the current hard contract for persisted and reducer-managed
+`AppState`.
+
+It is intentionally narrow:
+
+- Include rules only when they are enforced by `StateValidator`, normalized during
+  decode/restore, or relied on by reducer/bootstrap code.
+- Exclude runtime-only services and aspirational rules that are not enforced today.
 
 ## 1) scope
 
-- Applies to:
-  - reducer state transitions
-  - persistence encode/decode and migrations
-  - automation fixture loading
-- Violations are treated as correctness bugs, not UI bugs.
+This document applies to:
 
-## 2) model ownership and identity
+- `AppState`
+- `WindowState`
+- `WorkspaceState`
+- `LayoutNode`
+- workspace layout snapshot restore
 
-### app-level ownership
+This document does not apply to:
+
+- `SessionRegistry`
+- `NotificationStore`
+- terminal runtime/controller state
+- other automation-only runtime bookkeeping
+
+## 2) app-level ownership and membership
+
+Current enforced rules:
 
 - `AppState.workspacesByID` is the canonical storage for `WorkspaceState`.
-- `AppState.windows` is an ordered array; window lookup by id may use linear scan or a transient index map.
-- `WindowState.workspaceIDs` stores ordered references to workspace ids.
-- A workspace id may appear in exactly one `WindowState.workspaceIDs`.
-- `AppState.selectedWindowID`, if non-nil, must exist in `AppState.windows`.
+- `AppState.windows` is an ordered array of windows.
+- Every `workspaceID` referenced by a window must exist in `AppState.workspacesByID`.
+- A workspace may appear in at most one window.
+- Every workspace in `AppState.workspacesByID` must belong to some window.
+- `WindowState.selectedWorkspaceID`, if non-nil, must be present in that window's
+  `workspaceIDs`.
 
-### window-level ownership
+Current non-rule:
 
-- `WindowState.selectedWorkspaceID`, if non-nil, must appear in the same window's `workspaceIDs`.
-- `WindowState.workspaceIDs` must not contain duplicates.
+- `AppState.selectedWindowID` is not validated. Callers must treat it as a UI
+  preference that may be nil or stale and fall back accordingly.
 
-### workspace-level ownership
+## 3) workspace layout invariants
 
-- `WorkspaceState.panels` is the canonical storage for panel state in that workspace.
-- `WorkspaceState.focusedPanelID`, if non-nil, must exist in `WorkspaceState.panels`.
-- `WorkspaceState.auxPanelVisibility` only contains aux kinds (`diff`, `markdown`, `scratchpad`) in v1.
+For each workspace, the validator enforces:
 
-## 3) layout tree invariants
+- `WorkspaceState.panels` is the canonical storage for panel state.
+- Every `LayoutNode.slot.panelID` exists in `WorkspaceState.panels`.
+- Every panel in `WorkspaceState.panels` appears in exactly one slot in the layout tree.
+- `WorkspaceState.focusedPanelID`, if non-nil, exists in `WorkspaceState.panels`.
+- `WorkspaceState.focusedPanelID`, if non-nil, is also present in the layout tree.
+- Every split ratio satisfies `0 < ratio < 1`.
+- Slot IDs and split node IDs are unique within a workspace tree.
+- `WorkspaceState.unreadPanelIDs` may only contain panel IDs present in
+  `WorkspaceState.panels`.
 
-For each workspace:
+Important model detail:
 
-- Every `LayoutNode.slot.panelID` must exist in `WorkspaceState.panels`.
-- Every key in `WorkspaceState.panels` must appear in exactly one slot.
-- Empty slots are not allowed after reducer actions.
-- Split `ratio` must satisfy `0 < ratio < 1`.
-- `slotID` values (on slots) and `nodeID` values (on splits) must all be unique within a workspace tree. No ID may appear on both a slot and a split node.
+- `LayoutNode` has no empty-slot representation. A tree can become smaller when a panel
+  is removed, but not contain an explicit empty leaf.
+- `StateInvariantViolation` still contains an `emptySlotLeaf` case, but the current
+  `LayoutNode` model and validator do not emit it.
 
-## 4) panel-kind and toggle invariants
+## 4) decode and restore normalization
 
-- In v1, each workspace has at most one panel instance per aux panel kind.
-- If aux toggle is on for a kind, one panel of that kind must exist in the workspace.
-- If aux toggle is off for a kind, no panel of that kind exists in the workspace.
-- Toggle-off behavior closes the panel even if the panel was moved out of the right column.
+These behaviors are intentional current contract, not incidental implementation detail.
 
-## 5) session registry invariants
+During `WorkspaceState` decode:
 
-For active session records:
+- `focusedPanelModeActive` is always reset to `false`.
+- `unreadPanelIDs` is intersected with the current `panels` keys.
+- `unreadWorkspaceNotificationCount` is clamped to `>= 0`.
 
-- `sessionID` is unique.
-- `panelID` is immutable for the lifetime of a session.
-- `windowID` and `workspaceID` must match current panel location in app state.
-- `startedAt <= updatedAt`.
-- If `stoppedAt` is non-nil, then `stoppedAt >= updatedAt`.
-- `repoRoot`, if present, is absolute.
-- `cwd`, if present, is absolute.
+During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 
-Path attribution rules:
+- window membership and `selectedWindowID` are restored from the snapshot as-is
+- `makeAppState()` itself does not call `StateValidator`
+- workspace titles, layout trees, panel kinds, `focusedPanelID`, and
+  `auxPanelVisibility` are restored
+- `focusedPanelModeActive` is reset to `false`
+- `unreadPanelIDs` is reset to `[]`
+- `unreadWorkspaceNotificationCount` is reset to `0`
+- `recentlyClosedPanels` is reset to `[]`
+- `configuredTerminalFontPoints` is reset to `nil`
+- `globalTerminalFontPoints` is reset to `AppState.defaultTerminalFontPoints`
+- restored terminal panels get regenerated `Terminal N` titles per workspace
+- restored terminal panels keep `launchWorkingDirectory`
+- restored terminal panels start with blank live `cwd` and wait for authoritative
+  runtime metadata
 
-- Absolute file paths are accepted directly.
-- Relative file paths require `cwd` from the same event.
-- After normalization, files outside `repoRoot` remain tracked as out-of-scope and must not be merged into the main diff view.
+## 5) reducer-maintained conventions that are not validator rules
 
-## 6) mutation contract
+These behaviors are current reducer contract, but `StateValidator` does not check them.
 
-Every reducer action that mutates layout/panels must be atomic with respect to references:
+- Aux panel uniqueness and toggle consistency are maintained by reducer actions:
+  at most one panel per aux kind, and `auxPanelVisibility` is updated alongside panel
+  creation/removal.
+- Panel removal collapses the layout tree instead of leaving placeholders.
+- Closing the last panel in a workspace removes the workspace, and removing the last
+  workspace in a window removes the window for valid reducer-managed state.
+- Reducer paths generally keep `selectedWindowID` pointing at a live window for valid
+  reducer-managed state, but that is not currently a validated invariant.
 
-- create panel:
-  - insert into `WorkspaceState.panels`
-  - insert id into exactly one slot
-- close panel:
-  - remove id from its slot
-  - remove from `WorkspaceState.panels`
-  - push `ClosedPanelRecord` onto `recentlyClosedPanels` (bounded stack, max 10)
-  - clear/adjust focus if needed
-  - if a slot becomes empty, collapse the split tree so no empty slot remains
-- close last panel in workspace (lifecycle cascade):
-  - close the workspace: remove from `AppState.workspacesByID`
-  - remove workspace id from owning window's `workspaceIDs`
-  - if workspace was `selectedWorkspaceID`, select nearest sibling
-  - if window's `workspaceIDs` is now empty, close the window (remove from `AppState.windows`)
-  - if no windows remain, app stays running with no windows (macOS dock persists; re-activate creates default window)
-- reopen panel:
-  - pop from `recentlyClosedPanels`
-  - re-insert panel state into `WorkspaceState.panels`
-  - split the original source slot if it still exists, otherwise split the focused slot
-  - runtime is re-created (terminal process is not recoverable; new shell session starts)
-- move panel:
-  - remove id from source slot
-  - split destination slot and insert into the new sibling slot
-  - preserve panel object identity
-  - preserve session identity; only location metadata may change
-- detach panel to new window:
-  - create `WindowState`
-  - create `WorkspaceState`
-  - install panel into new workspace tree
-  - update session location metadata
+## 6) validation entry points
 
-## 7) validation entry points
+`StateValidator.validate(_:)` is currently used from:
 
-`StateValidator.validate(_:)` is callable from:
+- reducer tests
+- persistence load/persist checkpoints
+- fixture and snapshot tests
 
-- reducer test assertions
-- persistence decode/migration checkpoints
-- integration test harness
+Current caveat:
 
-Current violation cases (`StateInvariantViolation`):
+- Automation fixtures are validated in tests, but fixture loading/bootstrap paths do
+  not currently call `StateValidator` before installing the fixture into the app store.
+  Treat this as a known gap, not a guarantee.
 
-```swift
-public enum StateInvariantViolation: Error, Equatable, Sendable {
-    case missingWorkspace(windowID: UUID, workspaceID: UUID)
-    case selectedWorkspaceMissing(windowID: UUID, workspaceID: UUID)
-    case workspaceInMultipleWindows(workspaceID: UUID)
-    case workspaceWithoutWindow(workspaceID: UUID)
-    case splitRatioOutOfBounds(workspaceID: UUID, nodeID: UUID, ratio: Double)
-    case emptySlotLeaf(workspaceID: UUID, slotID: UUID)
-    case missingPanel(workspaceID: UUID, panelID: UUID)
-    case panelMissingFromLayoutTree(workspaceID: UUID, panelID: UUID)
-    case panelReferencedMultipleTimes(workspaceID: UUID, panelID: UUID)
-    case focusedPanelMissing(workspaceID: UUID, panelID: UUID)
-    case focusedPanelNotInLayoutTree(workspaceID: UUID, panelID: UUID)
-    case unreadPanelMissing(workspaceID: UUID, panelID: UUID)
-    case duplicateNodeID(workspaceID: UUID, nodeID: UUID)
-}
-```
+## 7) primary enforcement points
 
-Not yet validated (enforced by reducer logic only):
+When this contract changes, update the code and the doc together.
 
-- Aux panel toggle consistency (at most one panel per aux kind, visibility set matches panel existence)
-- Session location metadata matching current panel location
-- Session timestamp ordering
-
-## 8) violation handling policy
-
-Currently, validation is used in tests and persistence checkpoints. Future considerations:
-
-- Debug builds: fail fast with assertion and invariant error details.
-- Release builds: log invariant violations; apply safe auto-recovery where possible (e.g., clear `focusedPanelID` if panel missing).
-
-## 9) fixture requirements
-
-Automation fixtures in `Automation/Fixtures/` must:
-
-- pass invariant validation before app UI is shown
-- include deterministic ids for windows/workspaces/panels to stabilize screenshots
-- avoid external dependencies (network, live agent processes)
+- `Sources/Core/StateValidator.swift`
+- `Sources/Core/WorkspaceState.swift`
+- `Sources/Core/AppReducer.swift`
+- `Sources/Core/WorkspaceLayoutSnapshot.swift`
+- `Tests/Core/StateValidatorTests.swift`
+- `Tests/Core/WorkspaceLayoutSnapshotTests.swift`
