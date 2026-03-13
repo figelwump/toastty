@@ -220,6 +220,7 @@ let project = Project(
                 "CFBundleShortVersionString": .string("$(MARKETING_VERSION)"),
                 "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
                 "LSApplicationCategoryType": .string("public.app-category.developer-tools"),
+                "NSHumanReadableCopyright": .string("Copyright © 2026 Vishal Kapur. All rights reserved."),
             ]),
             sources: ["Sources/App/**"],
             resources: ["Sources/App/Resources/**"],
