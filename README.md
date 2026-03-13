@@ -1,8 +1,8 @@
 # Toastty
 
-A native macOS terminal multiplexer built with SwiftUI and powered by the [libghostty](https://ghostty.org) rendering engine.
+A native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
 
-Toastty builds on the the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, notifications and unread badges when agents are done working, and the full performance and layout flexibility you're used to with Ghostty.
+Toastty builds on the the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, notifications and unread badges when agents are done working, and the performance and layout flexibility you're used to with Ghostty.
 
 There are also little features throughout. For example, keyboard shortcuts to jump directly to a panel and global font control (resize the font of all terminals at once, useful when switching between external monitors and your laptop for example).
 
@@ -173,7 +173,7 @@ Sources/
 
 The `CoreState` framework contains all business logic and state transitions, with no UI dependencies. The `App` layer handles SwiftUI views, Ghostty surface hosting, and system integration.
 
-State flows through a single `AppStore` using a reducer pattern: views dispatch `AppAction`s, the `AppReducer` produces new `AppState`, and SwiftUI re-renders.
+State flows through a single `AppStore` using a reducer pattern: views dispatch `AppAction`, the `AppReducer` produces new `AppState`, and SwiftUI re-renders.
 
 ## Keyboard Shortcuts
 
@@ -198,8 +198,6 @@ Toastty is local-first. The app itself does not send usage analytics or cloud te
 - Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`.
 - By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`.
 - Toastty requests macOS notification permission the first time it tries to deliver a desktop notification.
-- Toastty only opens its local Unix socket when automation mode is enabled.
-- The embedded Ghostty runtime is an external artifact. For public releases, build Ghostty with `-Dsentry=false` so Toastty does not initialize Ghostty crash reporting.
 
 More detail is in [docs/privacy-and-local-data.md](docs/privacy-and-local-data.md).
 
