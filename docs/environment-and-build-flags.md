@@ -134,6 +134,41 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
 
+The DMG packaging behavior is otherwise fixed in the script. There are no additional DMG-specific environment toggles today.
+
+### `scripts/release/publish-github-release.sh`
+
+Recommended invocation:
+
+```bash
+sv exec -- env \
+  TOASTTY_VERSION=0.1.0 \
+  TOASTTY_BUILD_NUMBER=1 \
+  ./scripts/release/publish-github-release.sh \
+  --notes-file /path/to/release-notes.md
+```
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOASTTY_VERSION` | none | Required release version used to derive the default Git tag (`v<version>`), release title, and expected DMG path. |
+| `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used to derive the expected DMG path under `artifacts/release/<version>-<build>/`. |
+
+Prerequisites:
+
+- `gh` must be installed and authenticated
+- the release tag must already exist locally and on `origin`
+
+CLI options:
+
+| Option | Default | Effect |
+|---|---|---|
+| `--notes-file <path>` | none | Required release notes file passed through to `gh release create`. |
+| `--publish` | draft mode | Publishes immediately instead of creating a draft release. |
+| `--dry-run` | off | Prints the derived `gh release create ...` command without creating a release. |
+| `--repo <owner/repo>` | inferred from `origin` | Overrides the target GitHub repository. Required when `origin` is not a parseable GitHub remote. |
+| `--tag <tag>` | `v<TOASTTY_VERSION>` | Overrides the Git tag used for the release. The tag must already exist locally and on `origin`. |
+| `--title <title>` | `Toastty <TOASTTY_VERSION>` | Overrides the release title shown on GitHub. |
+
 ## Internal or Derived Flags
 
 These names appear in the repo but are not intended as public runtime knobs.

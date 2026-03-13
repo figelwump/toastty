@@ -113,6 +113,26 @@ sv exec -- env \
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
 
+### 7. Publish a draft GitHub Release
+
+After the DMG exists locally, publish it to GitHub Releases with the helper script. The script defaults to a draft release; pass `--publish` only when you want the release to go live immediately.
+
+Prerequisites:
+- `gh` is installed and authenticated for the target repo
+- the matching Git tag already exists locally and on `origin`
+
+Create release notes first. For public releases, include the embedded Ghostty commit and build flags you used for the shipped xcframework.
+
+```bash
+sv exec -- env \
+  TOASTTY_VERSION=0.1.0 \
+  TOASTTY_BUILD_NUMBER=1 \
+  ./scripts/release/publish-github-release.sh \
+  --notes-file /path/to/release-notes.md
+```
+
+Add `--dry-run` to print the exact `gh release create ...` command without creating a release. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly.
+
 ## Configuration
 
 Toastty respects your Ghostty configuration. Config is loaded in this order:
