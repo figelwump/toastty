@@ -12,6 +12,7 @@ struct AppWindowView: View {
             SidebarView(
                 windowID: windowID,
                 store: store,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 terminalRuntimeContext: terminalRuntimeContext
             )

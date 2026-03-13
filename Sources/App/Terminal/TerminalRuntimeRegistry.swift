@@ -590,6 +590,20 @@ private extension TerminalRuntimeRegistry {
     }
 }
 
+extension TerminalRuntimeRegistry {
+    func setWorkspaceActivitySubtext(_ nextSubtextByWorkspaceID: [UUID: String]) {
+        if workspaceActivitySubtextByID != nextSubtextByWorkspaceID {
+            workspaceActivitySubtextByID = nextSubtextByWorkspaceID
+        }
+    }
+
+    func setPanelDisplayTitleOverrides(_ nextOverridesByPanelID: [UUID: String]) {
+        if panelDisplayTitleOverrideByID != nextOverridesByPanelID {
+            panelDisplayTitleOverrideByID = nextOverridesByPanelID
+        }
+    }
+}
+
 #if TOASTTY_HAS_GHOSTTY_KIT
 private extension TerminalRuntimeRegistry {
     func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
@@ -678,18 +692,6 @@ private extension TerminalRuntimeRegistry {
     @discardableResult
     func refreshWorkingDirectoryFromProcessIfNeeded(panelID: UUID, source: String) -> String? {
         metadataService?.refreshWorkingDirectoryFromProcessIfNeeded(panelID: panelID, source: source)
-    }
-
-    func setWorkspaceActivitySubtext(_ nextSubtextByWorkspaceID: [UUID: String]) {
-        if workspaceActivitySubtextByID != nextSubtextByWorkspaceID {
-            workspaceActivitySubtextByID = nextSubtextByWorkspaceID
-        }
-    }
-
-    func setPanelDisplayTitleOverrides(_ nextOverridesByPanelID: [UUID: String]) {
-        if panelDisplayTitleOverrideByID != nextOverridesByPanelID {
-            panelDisplayTitleOverrideByID = nextOverridesByPanelID
-        }
     }
 }
 #endif

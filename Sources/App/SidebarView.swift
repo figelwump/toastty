@@ -4,6 +4,7 @@ import SwiftUI
 struct SidebarView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var renamingWorkspaceID: UUID?
@@ -485,7 +486,7 @@ struct SidebarView: View {
 
     private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
         let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
-        if let activitySubtext = terminalRuntimeContext.workspaceActivitySubtext(for: workspace.id),
+        if let activitySubtext = terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id),
            activitySubtext.isEmpty == false {
             return "\(paneLabel) · \(activitySubtext)"
         }

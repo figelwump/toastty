@@ -29,7 +29,4 @@ struct TerminalWindowRuntimeContext {
         )
     }
 
-    func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
-        runtimeRegistry.workspaceActivitySubtext(for: workspaceID)
-    }
 }
