@@ -1,24 +1,38 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <title>Toastty App Icon — Terminal Toast Slice (Bold Outline)</title>
+  <title>Toastty App Icon — Heavy Bevel Toast Slice</title>
   <defs>
     <linearGradient id="bg" x1="200" y1="0" x2="824" y2="1024" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#3d2618"/>
       <stop offset="1" stop-color="#2a1407"/>
+    </linearGradient>
+    <linearGradient id="crust" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E8A948"/>
+      <stop offset="50%" stop-color="#C4832E"/>
+      <stop offset="100%" stop-color="#8B5A1B"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFF5E0"/>
+      <stop offset="40%" stop-color="#F5E2C0"/>
+      <stop offset="100%" stop-color="#DCC8A0"/>
     </linearGradient>
   </defs>
 
   <!-- Background fill (macOS applies squircle mask) -->
   <rect width="1024" height="1024" fill="url(#bg)"/>
 
-  <!-- Toast slice icon, scaled to fill more of the frame (236/170 ratio) -->
-  <g transform="translate(40, 40) scale(5.553)">
-    <!-- Outer crust -->
-    <path d="M40 145 L35 65 Q33 28 60 25 L110 25 Q137 28 135 65 L130 145 Q130 150 85 150 Q40 150 40 145 Z" fill="#D4943C" stroke="#1A1A1A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-    <!-- Inner bread face -->
-    <path d="M48 140 L44 70 Q43 38 64 35 L106 35 Q127 38 126 70 L122 140 Q122 143 85 143 Q48 143 48 140 Z" fill="#F5E2C0" stroke="#1A1A1A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Toast slice, scaled to fill more of the icon frame -->
+  <g transform="translate(-83, -100.5) scale(7)">
+    <!-- Outer crust with golden gradient -->
+    <path d="M40 145 L35 65 Q33 28 60 25 L110 25 Q137 28 135 65 L130 145 Q130 150 85 150 Q40 150 40 145 Z" fill="url(#crust)" />
+    <!-- Highlight along top of crust -->
+    <path d="M60 27 L110 27 Q134 30 133 65" fill="none" stroke="#FFEBB480" stroke-width="2" stroke-linecap="round" />
+    <!-- Inner bread face with cream gradient -->
+    <path d="M48 140 L44 70 Q43 38 64 35 L106 35 Q127 38 126 70 L122 140 Q122 143 85 143 Q48 143 48 140 Z" fill="url(#face)" />
+    <!-- Terminal prompt chevron (shadow) -->
+    <path d="M62 72 L82 90 L62 108" stroke="#3A1E0A" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round" />
     <!-- Terminal prompt chevron -->
-    <path d="M62 72 L82 90 L62 108" stroke="#1A1A1A" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M62 72 L82 90 L62 108" stroke="#1A1A1A" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round" />
     <!-- Cursor underscore -->
-    <rect x="90" y="102" width="24" height="6" rx="3" fill="#1A1A1A"/>
+    <rect x="90" y="101" width="24" height="7" rx="3.5" fill="#1A1A1A" />
   </g>
 </svg>
