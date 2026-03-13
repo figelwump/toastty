@@ -1,254 +1,151 @@
 # toastty socket protocol (v1)
 
-Date: 2026-02-27
+Date: 2026-03-13
 
-This document defines the local unix-socket protocol used by:
+This document describes the current socket protocol implemented by
+`Sources/App/Automation/AutomationSocketServer.swift`.
 
-- agent adapters/wrappers (session lifecycle + attribution events)
-- local CLI notifications (`toastty notify`)
-- automation commands (`--automation` mode)
+Important scope note:
 
-## 1) transport
+- The socket server is currently created only when Toastty launches in automation mode.
+- The same server accepts both automation requests and event-style envelopes
+  (`session.*`, `notification.emit`).
+- This is a narrow implementation doc, not an aspirational protocol design.
 
-- Type: unix domain socket
-- Scope: per-user, local machine only
-- Permissions: socket and parent directory are `0700`/`0600`
-- TCP is not supported in v1
+## 1) transport and lifecycle
 
-Default path resolution:
+- Transport: Unix domain socket only.
+- The server creates the parent directory with mode `0700` and the socket file with
+  mode `0600`.
+- The server is available only when automation mode is enabled through either:
+  - `--automation`
+  - a truthy `TOASTTY_AUTOMATION` environment value
 
-1. `TOASTTY_SOCKET_PATH` if set
-2. `$TMPDIR/toastty-$UID/events-v1.sock`
-3. `/tmp/toastty-$UID/events-v1.sock`
+Default socket path resolution:
 
-## 2) message framing
+1. `--socket-path <path>`
+2. `TOASTTY_SOCKET_PATH`
+3. `<TMPDIR-or-system-temp>/toastty-$UID/events-v1.sock`
 
-- UTF-8 JSON, newline-delimited (one JSON object per line)
-- Maximum message size: 256 KiB
-- Unknown fields must be ignored
-- Unknown message kinds must return an error response when a `requestID` is present
+Automation config defaults:
 
-## 3) versioning and compatibility
+- `runID` defaults to `"default"`
+- `fixture` is optional
+- `artifactsDirectory` defaults to
+  `<system-temp>/toastty-automation-<runID>`
 
-- `protocolVersion` format: `"major.minor"` (example: `"1.0"`)
-- Different major version: reject request/event as incompatible
-- Different minor version: accept when current-version required fields are present
-- v1.0 required top-level fields by envelope:
-  - event: `protocolVersion`, `kind`, `eventType`, `timestamp`, `payload`
-  - request: `protocolVersion`, `kind`, `requestID`, `command`, `payload`
-  - response: `protocolVersion`, `kind`, `requestID`, `ok`
+Ready file:
 
-## 4) envelope types
+- When the app reaches its ready signal, it writes
+  `<artifactsDirectory>/automation-ready-<sanitized-runID>.json`
+- The payload includes:
+  - `protocolVersion`
+  - `ready`
+  - `runID`
+  - `fixture`
+  - `socketPath`
+  - `status`
+  - `error`
+  - `timestamp`
 
-### event envelope (adapter/cli -> app)
+## 2) framing and compatibility
 
-```json
-{
-  "protocolVersion": "1.0",
-  "kind": "event",
-  "eventType": "session.update_files",
-  "sessionID": "sess_123",
-  "panelID": "26E78311-470E-4E62-8F6A-2F87F949D318",
-  "timestamp": "2026-02-27T08:30:00Z",
-  "payload": {}
-}
-```
+- Messages are UTF-8 JSON objects delimited by a single newline.
+- The server buffers at most 256 KiB per connection.
+- The server handles one envelope per connection, writes one response, then closes
+  that connection.
+- Unknown JSON fields are ignored by decoding.
+- Supported `protocolVersion` values must start with `"1."`.
 
-### request envelope (automation client -> app)
+## 3) envelope shapes
 
-```json
-{
-  "protocolVersion": "1.0",
-  "kind": "request",
-  "requestID": "D0FCA65E-6B36-4F00-AEAF-C5298C0E3E56",
-  "command": "automation.capture_screenshot",
-  "payload": {}
-}
-```
-
-### response envelope (app -> automation client)
-
-```json
-{
-  "protocolVersion": "1.0",
-  "kind": "response",
-  "requestID": "D0FCA65E-6B36-4F00-AEAF-C5298C0E3E56",
-  "ok": true,
-  "result": {}
-}
-```
-
-Error response:
-
-```json
-{
-  "protocolVersion": "1.0",
-  "kind": "response",
-  "requestID": "D0FCA65E-6B36-4F00-AEAF-C5298C0E3E56",
-  "ok": false,
-  "error": {
-    "code": "INVALID_PAYLOAD",
-    "message": "cwd is required when files are relative"
-  }
-}
-```
-
-## 5) event types and payloads
-
-### `session.start`
+### request envelope
 
 Required top-level fields:
 
-- `sessionID: String`
-- `panelID: UUID`
+- `protocolVersion: String`
+- `kind: "request"`
+- `requestID: String`
+- `command: String`
 
-Payload:
+Optional top-level fields:
 
-- `agent: "claude" | "codex"` (required)
-- `cwd?: String` (absolute path)
-- `repoRoot?: String` (absolute path)
+- `payload: Object`
+  - omitted payloads are treated as `{}`
 
-Validation:
-
-- Missing `agent` must return `INVALID_PAYLOAD`.
-
-### `session.update_files`
+### event envelope
 
 Required top-level fields:
 
+- `protocolVersion: String`
+- `kind: "event"`
+- `eventType: String`
+- `payload: Object`
+
+Optional top-level fields:
+
+- `requestID: String`
 - `sessionID: String`
-- `panelID: UUID`
+- `panelID: UUID string`
+- `timestamp: ISO-8601 string`
 
-Payload:
+Event timestamp behavior:
 
-- `files: [String]` (absolute paths preferred)
-- `cwd?: String` (absolute path, required when any file path is relative)
-- `repoRoot?: String` (absolute path)
+- If `timestamp` is present and parseable, the server uses it.
+- Otherwise it falls back to the current server time.
 
-Normalization:
+### response envelope
 
-- If `files` are absolute, they are used as-is.
-- If any `files` are relative, `cwd` is required and used for normalization.
-- If normalized file is outside `repoRoot`, mark file as out-of-scope for diff rendering.
-- If later `session.update_files` events send a conflicting `repoRoot`, preserve the first accepted root and emit a warning state (`conflicting repo roots`) in app state.
-- If payload exceeds max frame size, sender must split files across multiple `session.update_files` events.
+Every processed envelope returns a response:
 
-### `session.needs_input`
+- `protocolVersion: "1.0"`
+- `kind: "response"`
+- `requestID: String`
+- `ok: Bool`
+- `result?: Object`
+- `error?: { code: String, message: String }`
 
-Required top-level fields:
+If an incoming event omits `requestID`, the server generates a response ID.
+If parsing fails before a request ID can be recovered, the response uses
+`requestID: "unknown"`.
 
-- `sessionID: String`
-- `panelID: UUID`
+## 4) workspace and terminal target resolution
 
-Payload:
+Several commands and events accept `workspaceID`, `windowID`, or `panelID`.
 
-- `title: String`
-- `body: String`
+Workspace resolution rules:
 
-### `session.progress`
+- If `workspaceID` is supplied, it must be a UUID and refer to a live workspace.
+- If both `workspaceID` and `windowID` are supplied, the workspace must belong to that
+  window.
+- If only `windowID` is supplied, the window's selected workspace is used.
+- If neither is supplied:
+  - the call succeeds only when exactly one window exists
+  - zero windows or multiple windows return `INVALID_PAYLOAD`
 
-Required top-level fields:
+Terminal target resolution rules:
 
-- `sessionID: String`
-- `panelID: UUID`
+- If `panelID` is supplied, it must be a UUID for a live terminal panel.
+- Otherwise the server resolves a workspace first, then uses:
+  - the focused panel if it is terminal-backed
+  - otherwise the first terminal panel in slot order
+- If the resolved workspace has no terminal panels, the server returns
+  `INVALID_PAYLOAD`.
 
-Payload:
-
-- `message: String`
-
-### `session.error`
-
-Required top-level fields:
-
-- `sessionID: String`
-- `panelID: UUID`
-
-Payload:
-
-- `message: String`
-
-### `session.stop`
-
-Required top-level fields:
-
-- `sessionID: String`
-- `panelID: UUID`
-
-Payload:
-
-- `reason?: String`
-
-### `notification.emit`
-
-Used by CLI wrappers such as `toastty notify`.
-
-Payload:
-
-- `title: String`
-- `body: String`
-- `workspaceID?: UUID`
-- `panelID?: UUID`
-
-Routing rules:
-
-- If `workspaceID` is present, use it.
-- Else if `panelID` is present, resolve workspace from panel location.
-- Else route to focused workspace when one exists.
-- If no workspace can be resolved, return `INVALID_PAYLOAD`.
-
-## 6) automation mode contract
-
-Automation commands are accepted when the app is launched with either:
-
-- args: `--automation --run-id <id> --fixture <name> --artifacts-dir <path>`
-- env: `TOASTTY_AUTOMATION=1`
-
-Enablement rule:
-
-- Either launch args or env marker is sufficient. Automation is enabled when at least one is present.
-
-### readiness handshake
-
-After fixture load and socket bind, app writes:
-
-- `artifacts/automation-ready-<run-id>.json`
-
-`run-id` is provided by required launch arg `--run-id`.
-
-`ready.json` example:
-
-```json
-{
-  "protocolVersion": "1.0",
-  "ready": true,
-  "runID": "run-20260227-083100",
-  "fixture": "baseline-main",
-  "socketPath": "/path/to/tmp/toastty-501/events-v1.sock",
-  "status": "ready",
-  "error": null,
-  "timestamp": "2026-02-27T08:31:00Z"
-}
-```
-
-When startup fails, `ready` is `false`, `status` is `"error"`, and `error` contains the error message.
-
-Smoke script must wait for this file (with timeout) before sending commands.
-
-## 7) automation commands
+## 5) implemented automation commands
 
 ### `automation.ping`
 
-Request payload: empty  
+Request payload: empty
+
 Result:
 
 - `status: "ok"`
-- `automationEnabled: Bool`
+- `automationEnabled: true`
 - `appUptimeMs: Int`
-- `protocolVersion: String`
+- `protocolVersion: "1.0"`
 
 ### `automation.reset`
-
-Resets transient runtime state to baseline for deterministic test run.
 
 Request payload: empty
 
@@ -256,17 +153,24 @@ Result:
 
 - `stateVersion: Int`
 
-Semantics:
+Behavior:
 
-- Replaces app state with bootstrap state, resets fixture name to `"default"`.
-- Clears session registry, notification store, coalesced updates, progress, and errors.
-- Use `automation.load_fixture` after reset to reach deterministic full-state baseline.
+- Replaces app state with `AppState.bootstrap()`
+- Resets current fixture name to `"default"`
+- Clears session registry, notification store, coalesced updates, progress, and errors
 
 ### `automation.load_fixture`
 
 Request payload:
 
-- `name: String` (fixture name from `Automation/Fixtures/`)
+- `name: String`
+
+Current fixture names:
+
+- `default`
+- `single-workspace`
+- `two-workspaces`
+- `split-workspace`
 
 Result:
 
@@ -277,152 +181,367 @@ Result:
 
 Request payload:
 
-- `action: String` (typed app action id)
+- `action: String`
 - `args?: Object`
 
 Result:
 
 - `stateVersion: Int`
 
-### `automation.terminal_send_text`
+Supported action IDs:
 
-Sends raw terminal input text to a resolved terminal panel.
+- `workspace.split.horizontal`
+- `workspace.split.vertical`
+- `workspace.split.right`
+- `workspace.split.down`
+- `workspace.split.left`
+- `workspace.split.up`
+- `workspace.close-focused-panel`
+- `workspace.focus-slot.previous`
+- `workspace.focus-slot.next`
+- `workspace.focus-slot.left`
+- `workspace.focus-slot.right`
+- `workspace.focus-slot.up`
+- `workspace.focus-slot.down`
+- `workspace.focus-panel`
+  - requires `args.panelID`
+- `workspace.resize-split.left`
+- `workspace.resize-split.right`
+- `workspace.resize-split.up`
+- `workspace.resize-split.down`
+  - `args.amount` is optional and clamps to at least `1`
+- `workspace.equalize-splits`
+- `topbar.toggle.diff`
+- `topbar.toggle.markdown`
+- `topbar.toggle.scratchpad`
+- `topbar.toggle.focused-panel`
+- `app.font.increase`
+- `app.font.decrease`
+- `app.font.reset`
+- `sidebar.workspaces.new`
+  - `args.title` is optional
+  - `args.windowID` is required when multiple windows exist
+
+### `automation.terminal_send_text`
 
 Request payload:
 
-- `text: String` (required; empty string allowed)
-- `submit?: Bool` (default `false`; sends a Return key event after the text when `true`)
-- `panelID?: UUID` (optional explicit terminal panel target)
-- `workspaceID?: UUID` (optional; used when `panelID` is omitted)
-- `allowUnavailable?: Bool` (default `false`)
+- `text: String`
+- `submit?: Bool`
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
+- `allowUnavailable?: Bool`
 
 Result:
 
-- `workspaceID: UUID`
-- `panelID: UUID`
+- `workspaceID: UUID string`
+- `panelID: UUID string`
 - `submitted: Bool`
 - `available: Bool`
 
-Validation:
+Behavior:
 
-- rejects deprecated `waitForSurfaceMs` payload key.
-- only reports `available=true` when the resolved terminal host is render-attached and ready to accept focused input.
-- when `allowUnavailable=false`, unavailable terminal surfaces return `INVALID_PAYLOAD`.
+- `waitForSurfaceMs` is explicitly rejected as deprecated.
+- When the terminal surface is unavailable:
+  - return `available: false` if `allowUnavailable=true`
+  - otherwise return `INVALID_PAYLOAD`
 
 ### `automation.terminal_drop_image_files`
 
-Simulates dropping image files into a resolved terminal panel.
-
 Request payload:
 
-- `files: [String]` (required; absolute paths preferred)
-- `cwd?: String` (required when any file path is relative)
-- `panelID?: UUID` (optional explicit terminal panel target)
-- `workspaceID?: UUID` (optional; used when `panelID` is omitted)
-- `allowUnavailable?: Bool` (default `false`)
+- `files: [String]`
+- `cwd?: String`
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
+- `allowUnavailable?: Bool`
 
 Result:
 
-- `workspaceID: UUID`
-- `panelID: UUID`
+- `workspaceID: UUID string`
+- `panelID: UUID string`
 - `requestedFileCount: Int`
 - `acceptedImageCount: Int`
 - `available: Bool`
 
-Validation:
+Behavior:
 
-- normalizes paths using `cwd` for relative inputs.
-- returns `INVALID_PAYLOAD` when no image file paths remain after normalization/filtering.
-- when `allowUnavailable=false`, unavailable terminal surfaces return `INVALID_PAYLOAD`.
+- Relative file paths require `cwd`.
+- Paths are normalized with Foundation path standardization.
+- If no usable image paths remain, return `INVALID_PAYLOAD`.
+- When the terminal surface is unavailable:
+  - return `available: false` if `allowUnavailable=true`
+  - otherwise return `INVALID_PAYLOAD`
 
 ### `automation.terminal_visible_text`
 
-Reads visible text from a resolved terminal panel.
-
 Request payload:
 
-- `panelID?: UUID`
-- `workspaceID?: UUID`
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
 - `contains?: String`
 
 Result:
 
-- `workspaceID: UUID`
-- `panelID: UUID`
+- `workspaceID: UUID string`
+- `panelID: UUID string`
 - `text: String`
-- `contains?: Bool` (present when `contains` was requested)
-
-### `automation.workspace_snapshot`
-
-Returns deterministic workspace layout metrics for assertions.
-
-Request payload:
-
-- `workspaceID?: UUID` (defaults to selected workspace)
-
-Result:
-
-- `workspaceID: UUID`
-- `slotCount: Int`
-- `panelCount: Int`
-- `focusedPanelID: UUID | null`
-- `rootSplitRatio: Double | null`
-- `slotIDs: [UUID]`
-- `slotPanelIDs: [UUID]`
+- `contains?: Bool`
 
 ### `automation.terminal_state`
 
-Returns terminal-specific state snapshot for a resolved terminal panel.
+Request payload:
+
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
+
+Result:
+
+- `workspaceID: UUID string`
+- `panelID: UUID string`
+- `title: String`
+- `cwd: String`
+- `shell: String`
+
+### `automation.workspace_snapshot`
 
 Request payload:
 
-- `panelID?: UUID` (optional explicit terminal panel target)
-- `workspaceID?: UUID` (optional; used when `panelID` is omitted)
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
 
-Result: terminal state snapshot (structure varies by terminal runtime).
+Result:
+
+- `workspaceID: UUID string`
+- `slotCount: Int`
+- `panelCount: Int`
+- `focusedPanelID: UUID string | null`
+- `rootSplitRatio: Double | null`
+- `slotIDs: [UUID string]`
+- `slotPanelIDs: [UUID string]`
+- `slotMappings: [{ slotID, panelID }]`
+- `layoutSignature: String`
 
 ### `automation.workspace_render_snapshot`
 
-Returns workspace render-level snapshot for visual assertions.
-
 Request payload:
 
-- `workspaceID?: UUID` (defaults to selected workspace)
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
 
-Result: render snapshot (structure varies by workspace configuration).
+Result:
+
+- `workspaceID: UUID string`
+- `terminalPanelCount: Int`
+- `allRenderable: Bool`
+- `panels: [Object]`
+  - each panel object currently includes:
+    - `panelID`
+    - `controllerExists`
+    - `hostHasSuperview`
+    - `hostAttachedToWindow`
+    - `sourceContainerExists`
+    - `sourceContainerAttachedToWindow`
+    - `hostSuperviewMatchesSourceContainer`
+    - `hostLifecycleState`
+    - `hostAttachmentID`
+    - `ghosttySurfaceAvailable`
+    - `isRenderable`
 
 ### `automation.capture_screenshot`
 
 Request payload:
 
-- `fixture?: String`
 - `step: String`
+- `fixture?: String`
 
 Result:
 
-- `path: String` (absolute output path)
+- `path: String`
 
-Path contract:
+Behavior:
 
-- runtime output: `artifacts/ui/<run-id>/<fixture>/<step>.png`
-
-Validation:
-
-- if `fixture` is omitted, use currently loaded fixture name.
-- if `fixture` is provided and differs from loaded fixture, return `INVALID_PAYLOAD`.
+- If `fixture` is omitted, the current fixture name is used.
+- If `fixture` is provided and does not match the current fixture, return
+  `INVALID_PAYLOAD`.
+- Output path is:
+  `<artifactsDirectory>/ui/<sanitized-runID>/<sanitized-fixture>/<sanitized-step>.png`
 
 ### `automation.dump_state`
 
 Request payload:
 
-- `includeRuntime?: Bool` (default `false`)
+- `includeRuntime?: Bool`
 
 Result:
 
-- `path: String` (JSON dump file path)
-- `hash: String` (content hash for deterministic comparisons)
+- `path: String`
+- `hash: String`
 
-## 8) error codes
+Behavior:
+
+- Default output path is under
+  `<artifactsDirectory>/ui/<sanitized-runID>/state/state-<stateVersion>.json`
+- With `includeRuntime=false`, the dump contains serialized `AppState`
+- With `includeRuntime=true`, the dump contains:
+  - `appState`
+  - `sessionRegistry`
+  - `notifications`
+  - `progressBySessionID`
+  - `errorsBySessionID`
+
+## 6) implemented event types
+
+### `session.start`
+
+Required:
+
+- top-level `sessionID`
+- top-level `panelID`
+- payload `agent`
+
+Accepted payload keys:
+
+- `agent: "claude" | "codex"`
+- `cwd?: String`
+- `repoRoot?: String`
+
+Validation:
+
+- `panelID` must refer to a live panel
+- `agent` must be one of the supported values
+
+Result:
+
+- `eventType`
+- `stateVersion`
+
+### `session.update_files`
+
+Required:
+
+- top-level `sessionID`
+- top-level `panelID`
+- payload `files`
+
+Accepted payload keys:
+
+- `files: [String]`
+- `cwd?: String`
+- `repoRoot?: String`
+
+Behavior:
+
+- `panelID` must refer to a live panel
+- `files` must be a non-empty string array
+- Relative file paths require `cwd`
+- Updates are coalesced per session before being written into `SessionRegistry`
+
+Result:
+
+- `eventType`
+- `queuedFiles`
+- `stateVersion`
+
+### `session.needs_input`
+
+Required:
+
+- top-level `sessionID`
+- top-level `panelID`
+- payload `title`
+- payload `body`
+
+Behavior:
+
+- `panelID` must refer to a live panel
+- Records a notification decision and may trigger a system notification
+
+Result:
+
+- `eventType`
+- `notificationStored: Bool`
+- `sendSystemNotification: Bool`
+- `stateVersion`
+
+### `session.progress`
+
+Required:
+
+- top-level `sessionID`
+- top-level `panelID`
+- payload `message`
+
+Result:
+
+- `eventType`
+- `stateVersion`
+
+### `session.error`
+
+Required:
+
+- top-level `sessionID`
+- top-level `panelID`
+- payload `message`
+
+Result:
+
+- `eventType`
+- `stateVersion`
+
+### `session.stop`
+
+Required:
+
+- top-level `sessionID`
+- top-level `panelID`
+
+Behavior:
+
+- Flushes all coalesced file updates before stopping the session
+- Clears stored progress and error state for that session
+
+Result:
+
+- `eventType`
+- `stateVersion`
+
+### `notification.emit`
+
+Required payload:
+
+- `title: String`
+- `body: String`
+
+Optional payload:
+
+- `workspaceID?: UUID string`
+- `panelID?: UUID string`
+- `windowID?: UUID string`
+
+Routing:
+
+- If `workspaceID` is present, use that workspace
+- Else if `panelID` is present, resolve its workspace
+- Else resolve workspace selection from the remaining payload
+  - `windowID` is used when present
+  - otherwise the event succeeds only when exactly one window exists
+
+Result:
+
+- `eventType`
+- `notificationStored: Bool`
+- `sendSystemNotification: Bool`
+- `stateVersion`
+
+## 7) error codes
+
+Current response error codes:
 
 - `INVALID_JSON`
 - `INVALID_ENVELOPE`
@@ -432,80 +551,10 @@ Result:
 - `INVALID_PAYLOAD`
 - `INTERNAL_ERROR`
 
-## 9) security requirements
+## 8) implementation notes that are not separate protocol guarantees
 
-- Reject non-local transports.
-- Reject symlinked socket paths outside owned directory.
-- Enforce maximum message size.
-- Sanitize all file paths used for fixtures/artifacts; no path traversal.
-- Never execute shell commands from socket payloads.
-- `panelID` is stable for the lifetime of a session; panel/window/workspace moves do not rewrite it in protocol messages.
-
-## 10) event coalescing guidance
-
-Agents may emit `session.update_files` at high frequency. The app is responsible for coalescing these events to avoid downstream thrashing (e.g., rapid diff recomputes):
-
-- **Recommended coalesce window**: 500ms per session. Merge file lists from events within the window. Keep latest `cwd` and `repoRoot`.
-- **Diff recompute**: trigger once after the coalesce window closes. If new events arrive during computation, cancel and restart after the next window.
-- **Other event types**: `session.progress` and `session.needs_input` are not coalesced (they update lightweight UI elements).
-
-This coalescing happens in the app's event processing layer, not in the protocol itself. The protocol delivers events as-is.
-
-## 11) observability
-
-Every processed message should emit structured logs with:
-
-- `timestamp`
-- `kind`
-- `eventType` or `command`
-- `requestID` (when present)
-- `ok`
-- `error.code` (when failed)
-- `latencyMs`
-
-## 12) examples
-
-### adapter file update event
-
-```json
-{
-  "protocolVersion": "1.0",
-  "kind": "event",
-  "eventType": "session.update_files",
-  "sessionID": "sess_abc123",
-  "panelID": "26E78311-470E-4E62-8F6A-2F87F949D318",
-  "timestamp": "2026-02-27T08:32:00Z",
-  "payload": {
-    "files": ["Sources/App/SidebarView.swift", "docs/state-invariants.md"],
-    "cwd": "/path/to/toastty",
-    "repoRoot": "/path/to/toastty"
-  }
-}
-```
-
-### screenshot request/response
-
-```json
-{
-  "protocolVersion": "1.0",
-  "kind": "request",
-  "requestID": "5C88E8A8-E5F8-487A-908A-D4467CB45E0F",
-  "command": "automation.capture_screenshot",
-  "payload": {
-    "fixture": "workspace-two-panes",
-    "step": "after-move-panel"
-  }
-}
-```
-
-```json
-{
-  "protocolVersion": "1.0",
-  "kind": "response",
-  "requestID": "5C88E8A8-E5F8-487A-908A-D4467CB45E0F",
-  "ok": true,
-  "result": {
-    "path": "/path/to/toastty/artifacts/automation/run-20260227-083200/workspace-two-panes/after-move-panel.png"
-  }
-}
-```
+- `session.update_files` coalescing currently uses a 0.5 second window per session.
+- The protocol does not currently expose a standalone schema version beyond
+  `protocolVersion`.
+- This repo does not currently include a `toastty notify` CLI implementation; the
+  live behavior for `notification.emit` is the socket event handler described above.
