@@ -3,6 +3,17 @@ import Foundation
 
 let ghosttyDebugXCFrameworkRelativePath = "Dependencies/GhosttyKit.Debug.xcframework"
 let ghosttyReleaseXCFrameworkRelativePath = "Dependencies/GhosttyKit.Release.xcframework"
+let environment = ProcessInfo.processInfo.environment
+if let configuredMarketingVersion = environment["TOASTTY_VERSION"], configuredMarketingVersion.isEmpty {
+    fatalError("TOASTTY_VERSION must not be empty when set at `tuist generate` time.")
+}
+if let configuredBuildNumber = environment["TOASTTY_BUILD_NUMBER"], configuredBuildNumber.isEmpty {
+    fatalError("TOASTTY_BUILD_NUMBER must not be empty when set at `tuist generate` time.")
+}
+let marketingVersion = environment["TOASTTY_VERSION"] ?? "0.1.0"
+let buildNumber = environment["TOASTTY_BUILD_NUMBER"] ?? "1"
+// Repo-local toggle consumed by Project.swift, not a Tuist built-in.
+let distributionSigning = environment["TUIST_DISTRIBUTION_SIGNING"] == "1"
 let ghosttyMacOSSliceDirectoryCandidates = [
     "macos-arm64_x86_64",
     "macos-arm64",
@@ -13,7 +24,6 @@ let ghosttyStaticLibraryFilenameCandidates = [
     "libghostty-fat.a",
 ]
 let ghosttyIntegrationDisabled = {
-    let environment = ProcessInfo.processInfo.environment
     // Tuist manifest evaluation reliably exposes TUIST_* env vars; keep TOASTTY_* as best-effort compatibility.
     return environment["TUIST_DISABLE_GHOSTTY"] == "1"
         || environment["TOASTTY_DISABLE_GHOSTTY"] == "1"
@@ -107,17 +117,33 @@ var appTestTargetSettingsBase: SettingsDictionary = [:]
 // we override it here for the app target only.
 // Set TUIST_DEVELOPMENT_TEAM env var at `tuist generate` time for Apple Development
 // signing (required for UNUserNotificationCenter). Falls back to ad-hoc when unset.
-let developmentTeam = ProcessInfo.processInfo.environment["TUIST_DEVELOPMENT_TEAM"]
+let developmentTeam = environment["TUIST_DEVELOPMENT_TEAM"]
+if distributionSigning && developmentTeam == nil {
+    fatalError("TUIST_DISTRIBUTION_SIGNING=1 requires TUIST_DEVELOPMENT_TEAM to be set at `tuist generate` time.")
+}
+
 var appTargetSettingsBase: SettingsDictionary = [
     "CODE_SIGNING_ALLOWED": "YES",
+    "MARKETING_VERSION": SettingValue(stringLiteral: marketingVersion),
+    "CURRENT_PROJECT_VERSION": SettingValue(stringLiteral: buildNumber),
+    "ENABLE_HARDENED_RUNTIME[config=Debug]": "NO",
+    "ENABLE_HARDENED_RUNTIME[config=Release]": distributionSigning ? "YES" : "NO",
     // Keep the Swift module name as "ToasttyApp" even though the product is "Toastty",
     // so @testable import ToasttyApp and the struct ToasttyApp: App name stay consistent.
     "PRODUCT_MODULE_NAME": "ToasttyApp",
 ]
 if let developmentTeam {
-    appTargetSettingsBase["CODE_SIGN_IDENTITY"] = "Apple Development"
-    appTargetSettingsBase["CODE_SIGN_STYLE"] = "Automatic"
     appTargetSettingsBase["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
+    appTargetSettingsBase["CODE_SIGN_IDENTITY[config=Debug]"] = "Apple Development"
+    appTargetSettingsBase["CODE_SIGN_STYLE[config=Debug]"] = "Automatic"
+    if distributionSigning {
+        appTargetSettingsBase["CODE_SIGN_IDENTITY[config=Release]"] = "Developer ID Application"
+        appTargetSettingsBase["CODE_SIGN_STYLE[config=Release]"] = "Manual"
+        appTargetSettingsBase["PROVISIONING_PROFILE_SPECIFIER[config=Release]"] = ""
+    } else {
+        appTargetSettingsBase["CODE_SIGN_IDENTITY[config=Release]"] = "Apple Development"
+        appTargetSettingsBase["CODE_SIGN_STYLE[config=Release]"] = "Automatic"
+    }
 } else {
     appTargetSettingsBase["CODE_SIGN_IDENTITY"] = "-"
 }
@@ -191,6 +217,8 @@ let project = Project(
             bundleId: "com.GiantThings.toastty",
             deploymentTargets: .macOS("14.0"),
             infoPlist: .extendingDefault(with: [
+                "CFBundleShortVersionString": .string("$(MARKETING_VERSION)"),
+                "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
                 "LSApplicationCategoryType": .string("public.app-category.developer-tools"),
             ]),
             sources: ["Sources/App/**"],

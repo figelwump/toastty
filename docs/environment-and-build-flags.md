@@ -17,6 +17,9 @@ These flags affect `tuist generate`, project configuration, or Ghostty artifact 
 | `TUIST_DISABLE_GHOSTTY` | `Project.swift`, automation scripts | unset | Disables Ghostty integration and generates/builds the fallback app path. This is the preferred flag for local fallback builds. |
 | `TOASTTY_DISABLE_GHOSTTY` | `Project.swift`, automation scripts | unset | Compatibility alias for `TUIST_DISABLE_GHOSTTY`. Prefer `TUIST_DISABLE_GHOSTTY` for new usage. |
 | `TUIST_DEVELOPMENT_TEAM` | `Project.swift` during `tuist generate` | unset | Sets the Apple Development team used for app signing. If unset, the app target falls back to ad-hoc signing. |
+| `TUIST_DISTRIBUTION_SIGNING` | `Project.swift` during `tuist generate` | unset | When set to `1`, the Release configuration uses manual `Developer ID Application` signing and enables hardened runtime. Requires `TUIST_DEVELOPMENT_TEAM`. |
+| `TOASTTY_VERSION` | `Project.swift` during `tuist generate`, `scripts/release/release.sh` | `0.1.0` | Sets the marketing version (`CFBundleShortVersionString`) that is baked into generated project settings. |
+| `TOASTTY_BUILD_NUMBER` | `Project.swift` during `tuist generate`, `scripts/release/release.sh` | `1` | Sets the build number (`CFBundleVersion`) baked into generated project settings. Use a monotonically increasing integer for releases. |
 | `GHOSTTY_XCFRAMEWORK_SOURCE` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Source path for a built `GhosttyKit.xcframework` to install into Toastty's local `Dependencies/` directory. |
 | `GHOSTTY_XCFRAMEWORK_VARIANT` | `scripts/ghostty/install-local-xcframework.sh` | `debug` | Chooses the install destination. Supported values: `debug`, `release`. |
 
@@ -113,6 +116,23 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `FOCUS_PREVIOUS_KEY_CODE` | `33` | Key code used for previous-pane focus tracing. |
 | `RESIZE_KEY_CODE` | `124` | Key code used for split resize tracing. |
 | `EQUALIZE_KEY_CODE` | `24` | Key code used for equalize tracing. |
+
+### `scripts/release/release.sh`
+
+Recommended invocation:
+
+```bash
+sv exec -- ./scripts/release/release.sh
+```
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOASTTY_VERSION` | none | Required release version string used for app metadata and artifact naming. |
+| `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used for `CFBundleVersion` and artifact naming. |
+| `TUIST_DEVELOPMENT_TEAM` | none | Required team ID used by `Project.swift` and Xcode export signing. |
+| `TOASTTY_APPLE_ID` | none | Required Apple ID email passed to `xcrun notarytool submit`. |
+| `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
+| `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
 
 ## Internal or Derived Flags
 

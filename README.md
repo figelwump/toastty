@@ -97,6 +97,22 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 ./scripts/automation/shortcut-trace.sh
 ```
 
+### 6. Build a signed release DMG
+
+The release script expects a release Ghostty artifact at `Dependencies/GhosttyKit.Release.xcframework`, a local `Developer ID Application` certificate, and notarization credentials injected at runtime.
+
+Use an explicit marketing version plus a monotonically increasing build number:
+
+```bash
+sv exec -- env \
+  TOASTTY_VERSION=0.1.0 \
+  TOASTTY_BUILD_NUMBER=1 \
+  TUIST_DEVELOPMENT_TEAM=<TEAM_ID> \
+  ./scripts/release/release.sh
+```
+
+The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
+
 ## Configuration
 
 Toastty respects your Ghostty configuration. Config is loaded in this order:
