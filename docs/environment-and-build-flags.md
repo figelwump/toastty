@@ -129,14 +129,15 @@ sv exec -- ./scripts/release/release.sh
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TOASTTY_VERSION` | none | Required release version string used for app metadata and artifact naming. |
-| `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used for `CFBundleVersion` and artifact naming. |
+| `TOASTTY_VERSION` | none | Required release version string used for app metadata and the public DMG filename. |
+| `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used for `CFBundleVersion` and the internal release staging directory name. |
 | `TUIST_DEVELOPMENT_TEAM` | none | Required team ID used by `Project.swift` and Xcode export signing. |
 | `TOASTTY_APPLE_ID` | none | Required Apple ID email passed to `xcrun notarytool submit`. |
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
 
 The DMG packaging behavior is otherwise fixed in the script. There are no additional DMG-specific environment toggles today.
+The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
 
 ### `scripts/release/publish-github-release.sh`
 
@@ -152,13 +153,15 @@ sv exec -- env \
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TOASTTY_VERSION` | none | Required release version used to derive the default Git tag (`v<version>`), release title, and expected DMG path. |
-| `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used to derive the expected DMG path under `artifacts/release/<version>-<build>/`. |
+| `TOASTTY_VERSION` | none | Required release version used to derive the default Git tag (`v<version>`), default release title, and expected DMG filename. |
+| `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used to derive the expected staging directory under `artifacts/release/<version>-<build>/`. |
 
 Prerequisites:
 
 - `gh` must be installed and authenticated
 - the release tag must already exist locally and on `origin`
+
+The publisher expects the DMG at `artifacts/release/<version>-<build>/Toastty-<version>.dmg`.
 
 CLI options:
 
@@ -169,7 +172,7 @@ CLI options:
 | `--dry-run` | off | Prints the derived `gh release create ...` command without creating a release. |
 | `--repo <owner/repo>` | inferred from `origin` | Overrides the target GitHub repository. Required when `origin` is not a parseable GitHub remote. |
 | `--tag <tag>` | `v<TOASTTY_VERSION>` | Overrides the Git tag used for the release. The tag must already exist locally and on `origin`. |
-| `--title <title>` | `Toastty <TOASTTY_VERSION>` | Overrides the release title shown on GitHub. |
+| `--title <title>` | `v<TOASTTY_VERSION>` | Overrides the release title shown on GitHub. |
 
 ## Internal or Derived Flags
 

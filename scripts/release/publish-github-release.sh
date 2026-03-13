@@ -29,7 +29,7 @@ Options:
   --repo <owner/repo>
                      Override the target GitHub repository (required if origin is not a GitHub remote)
   --tag <tag>        Override the release tag (default: v$TOASTTY_VERSION)
-  --title <title>    Override the release title (default: Toastty $TOASTTY_VERSION)
+  --title <title>    Override the release title (default: v$TOASTTY_VERSION)
   -h, --help         Show this help text
 
 Recommended invocation:
@@ -142,13 +142,12 @@ resolve_defaults() {
   fi
 
   if [[ -z "$TITLE" ]]; then
-    TITLE="${APP_NAME} ${TOASTTY_VERSION}"
+    TITLE="v${TOASTTY_VERSION}"
   fi
 
   RELEASE_LABEL="${TOASTTY_VERSION}-${TOASTTY_BUILD_NUMBER}"
   RELEASE_DIR="$ROOT_DIR/artifacts/release/$RELEASE_LABEL"
-  DMG_PATH="$RELEASE_DIR/${APP_NAME}-${RELEASE_LABEL}.dmg"
-  ASSET_LABEL="${APP_NAME} ${TOASTTY_VERSION} (build ${TOASTTY_BUILD_NUMBER})"
+  DMG_PATH="$RELEASE_DIR/${APP_NAME}-${TOASTTY_VERSION}.dmg"
 }
 
 verify_inputs() {
@@ -175,7 +174,7 @@ ensure_release_absent() {
 }
 
 create_release() {
-  local asset_arg="$DMG_PATH#$ASSET_LABEL"
+  local asset_arg="$DMG_PATH"
   local command=(
     gh release create "$TAG"
     "$asset_arg"
