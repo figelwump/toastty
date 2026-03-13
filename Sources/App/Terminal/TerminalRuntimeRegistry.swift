@@ -761,12 +761,40 @@ extension TerminalRuntimeRegistry {
         store: AppStore
     ) -> Bool {
         _ = store
-        return metadataService?.handleRuntimeMetadataAction(
+        let metadataHandled = metadataService?.handleRuntimeMetadataAction(
             intent,
             workspaceID: workspaceID,
             panelID: panelID,
             state: state
         ) ?? false
+
+        switch intent {
+        case .commandFinished:
+            let activityHandled = handleCommandFinishedActivityUpdate(
+                panelID: panelID,
+                state: state
+            )
+            return metadataHandled || activityHandled
+
+        default:
+            return metadataHandled
+        }
+    }
+
+    private func handleCommandFinishedActivityUpdate(
+        panelID: UUID,
+        state: AppState
+    ) -> Bool {
+        guard let activityInferenceService else { return false }
+        let handled = activityInferenceService.handleCommandFinished(
+            panelID: panelID,
+            liveWorkspaceIDs: Set(state.workspacesByID.keys)
+        )
+        guard handled else { return false }
+
+        setPanelDisplayTitleOverrides(activityInferenceService.panelDisplayTitleOverrideByID)
+        setWorkspaceActivitySubtext(activityInferenceService.workspaceActivitySubtextByID)
+        return true
     }
 
     static func normalizedMetadataValue(_ value: String?) -> String? {

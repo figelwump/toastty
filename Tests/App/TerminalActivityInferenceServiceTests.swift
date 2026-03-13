@@ -113,7 +113,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
         }
     }
 
-    func testRefreshVisibleTextInferencePublishesWorkspaceSubtextForRunningAgent() async throws {
+    func testRefreshVisibleTextInferencePublishesWorkspaceSubtextForBusyAgent() async throws {
         try await MainActor.run {
             let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
 
@@ -128,7 +128,26 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 backgroundPanelWorkspaceIDs: [:]
             )
 
-            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 Codex · 1 running")
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testRefreshVisibleTextInferencePublishesWorkspaceSubtextForBusyNonAgentProcess() async throws {
+        try await MainActor.run {
+            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+
+            visibleTextStore.textByPanelID[panelID] = """
+            dev@host ~/repo % npm run dev
+            Ready in 250ms
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
             try StateValidator.validate(store.state)
         }
     }
@@ -147,7 +166,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 selectedPanelWorkspaceIDs: [panelID: workspaceID],
                 backgroundPanelWorkspaceIDs: [:]
             )
-            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 Codex · 1 running")
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
 
             service.synchronizeLivePanels([], liveWorkspaceIDs: [])
 
@@ -183,7 +202,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 selectedPanelWorkspaceIDs: trackedPanels,
                 backgroundPanelWorkspaceIDs: [:]
             )
-            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "2 Codex · 2 running")
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "2 busy")
 
             let survivingPanelID = try XCTUnwrap(panelIDs.first)
             service.synchronizeLivePanels(
@@ -191,7 +210,99 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 liveWorkspaceIDs: Set([workspaceID])
             )
 
-            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 Codex · 1 running")
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testCommandFinishedClearsWorkspaceBusySubtextImmediately() async throws {
+        try await MainActor.run {
+            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+
+            visibleTextStore.textByPanelID[panelID] = """
+            dev@host ~/repo % npm run dev
+            Ready in 250ms
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
+
+            XCTAssertTrue(
+                service.handleCommandFinished(
+                    panelID: panelID,
+                    liveWorkspaceIDs: Set([workspaceID])
+                )
+            )
+            XCTAssertNil(service.workspaceActivitySubtext(for: workspaceID))
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testRefreshVisibleTextInferenceClearsWorkspaceBusySubtextAtIdlePrompt() async throws {
+        try await MainActor.run {
+            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+
+            visibleTextStore.textByPanelID[panelID] = """
+            dev@host ~/repo % npm run dev
+            Ready in 250ms
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
+
+            visibleTextStore.textByPanelID[panelID] = "dev@host ~/repo %"
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+
+            XCTAssertNil(service.workspaceActivitySubtext(for: workspaceID))
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testCommandFinishedKeepsRemainingBusyPanelsCounted() async throws {
+        try await MainActor.run {
+            let state = try makeSplitFixtureState()
+            let store = AppStore(state: state, persistTerminalFontPreference: false)
+            let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+            let panelIDs = Array(try XCTUnwrap(store.selectedWorkspace?.panels.keys)).sorted {
+                $0.uuidString < $1.uuidString
+            }
+            XCTAssertEqual(panelIDs.count, 2)
+
+            let visibleTextStore = VisibleTextStore()
+            for panelID in panelIDs {
+                visibleTextStore.textByPanelID[panelID] = """
+                dev@host ~/repo % npm run dev
+                Ready in 250ms
+                """
+            }
+            let service = makeActivityInferenceService(visibleTextStore: visibleTextStore)
+
+            let trackedPanels = Dictionary(uniqueKeysWithValues: panelIDs.map { ($0, workspaceID) })
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: trackedPanels,
+                backgroundPanelWorkspaceIDs: [:]
+            )
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "2 busy")
+
+            XCTAssertTrue(
+                service.handleCommandFinished(
+                    panelID: panelIDs[0],
+                    liveWorkspaceIDs: Set([workspaceID])
+                )
+            )
+
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
             try StateValidator.validate(store.state)
         }
     }

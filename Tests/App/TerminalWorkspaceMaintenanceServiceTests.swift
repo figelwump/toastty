@@ -52,7 +52,7 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
 
         XCTAssertEqual(
             fixture.publishedSubtext.subtextByWorkspaceID[fixture.workspaceID],
-            "1 Codex · 1 running"
+            "1 busy"
         )
     }
 
@@ -75,7 +75,7 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
         )
         XCTAssertEqual(
             fixture.publishedSubtext.subtextByWorkspaceID[fixture.workspaceID],
-            "1 Codex · 1 running"
+            "1 busy"
         )
 
         fixture.service.handleSurfaceUnregister(panelID: fixture.panelID)
@@ -108,14 +108,14 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
         )
         XCTAssertEqual(
             fixture.publishedSubtext.subtextByWorkspaceID[fixture.workspaceID],
-            "2 Codex · 2 running"
+            "2 busy"
         )
 
         fixture.service.handleSurfaceUnregister(panelID: fixture.panelID)
 
         XCTAssertEqual(
             fixture.publishedSubtext.subtextByWorkspaceID[fixture.workspaceID],
-            "1 Codex · 1 running"
+            "1 busy"
         )
     }
 }

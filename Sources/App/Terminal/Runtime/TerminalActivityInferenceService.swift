@@ -4,11 +4,8 @@ import Foundation
 
 @MainActor
 final class TerminalActivityInferenceService {
-    private struct PanelActivityState {
+    private struct PanelBusyState {
         var workspaceID: UUID
-        var agent: AgentKindInference
-        var phase: AgentActivityPhase
-        var runningCommand: String?
         var updatedAt: Date
     }
 
@@ -17,19 +14,15 @@ final class TerminalActivityInferenceService {
         case claudeCode
     }
 
-    private enum AgentActivityPhase {
-        case running
-        case waitingInput
-        case idle
-    }
-
     private let readVisibleText: (UUID) -> String?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     // Keep inferred agent labels out of persisted terminal metadata. The pane
     // header reads from this transient override and falls back to terminal
     // title/CWD metadata when no override is present.
     private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
-    private var panelActivityByPanelID: [UUID: PanelActivityState] = [:]
+    // Workspace subtitles track generic terminal busy state, regardless of
+    // whether the foreground process is an agent, shell command, or TUI.
+    private var busyPanelStateByPanelID: [UUID: PanelBusyState] = [:]
     private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
 
     init(
@@ -46,14 +39,14 @@ final class TerminalActivityInferenceService {
 
     func invalidate(panelID: UUID) {
         panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
-        panelActivityByPanelID.removeValue(forKey: panelID)
+        busyPanelStateByPanelID.removeValue(forKey: panelID)
     }
 
     func synchronizeLivePanels(_ livePanelIDs: Set<UUID>, liveWorkspaceIDs: Set<UUID>) {
         panelDisplayTitleOverrideByID = panelDisplayTitleOverrideByID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
-        panelActivityByPanelID = panelActivityByPanelID.filter { panelID, _ in
+        busyPanelStateByPanelID = busyPanelStateByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
         refreshWorkspaceActivitySubtext(liveWorkspaceIDs: liveWorkspaceIDs)
@@ -69,11 +62,26 @@ final class TerminalActivityInferenceService {
 
     func refreshWorkspaceActivitySubtext(liveWorkspaceIDs: Set<UUID>) {
         let now = Date()
-        pruneStalePanelActivity(now: now)
+        pruneStaleBusyPanels(now: now)
         workspaceActivitySubtextByID = nextWorkspaceActivitySubtext(
             liveWorkspaceIDs: liveWorkspaceIDs,
             now: now
         )
+    }
+
+    func handleCommandFinished(panelID: UUID, liveWorkspaceIDs: Set<UUID>) -> Bool {
+        var didChange = busyPanelStateByPanelID.removeValue(forKey: panelID) != nil
+
+        if let visibleText = readVisibleText(panelID),
+           Self.visibleTextShowsIdleShellPrompt(visibleText),
+           panelDisplayTitleOverrideByID.removeValue(forKey: panelID) != nil {
+            didChange = true
+        }
+
+        if didChange {
+            refreshWorkspaceActivitySubtext(liveWorkspaceIDs: liveWorkspaceIDs)
+        }
+        return didChange
     }
 
     func refreshVisibleTextInference(
@@ -91,7 +99,7 @@ final class TerminalActivityInferenceService {
 
         let now = Date()
         for (panelID, workspaceID) in selectedPanelWorkspaceIDs {
-            refreshPanelActivityFromVisibleTextIfNeeded(
+            refreshPanelBusyStateFromVisibleTextIfNeeded(
                 panelID: panelID,
                 workspaceID: workspaceID,
                 state: state,
@@ -100,7 +108,7 @@ final class TerminalActivityInferenceService {
         }
 
         for (panelID, workspaceID) in backgroundPanelWorkspaceIDs {
-            refreshPanelActivityFromVisibleTextIfNeeded(
+            refreshPanelBusyStateFromVisibleTextIfNeeded(
                 panelID: panelID,
                 workspaceID: workspaceID,
                 state: state,
@@ -108,7 +116,7 @@ final class TerminalActivityInferenceService {
             )
         }
 
-        pruneStalePanelActivity(now: now)
+        pruneStaleBusyPanels(now: now)
         updateWorkspaceActivitySubtext(state: state, now: now)
     }
 
@@ -174,7 +182,7 @@ final class TerminalActivityInferenceService {
         // becomes visible.
     }
 
-    private func refreshPanelActivityFromVisibleTextIfNeeded(
+    private func refreshPanelBusyStateFromVisibleTextIfNeeded(
         panelID: UUID,
         workspaceID: UUID,
         state: AppState,
@@ -182,44 +190,25 @@ final class TerminalActivityInferenceService {
     ) {
         guard let workspace = state.workspacesByID[workspaceID],
               let panelState = workspace.panels[panelID],
-              case .terminal(let terminalState) = panelState else {
-            panelActivityByPanelID.removeValue(forKey: panelID)
+              case .terminal = panelState else {
+            busyPanelStateByPanelID.removeValue(forKey: panelID)
             return
         }
 
         guard let visibleText = readVisibleText(panelID) else {
             return
         }
-        let visibleLines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
-        let showsIdleShellPrompt = Self.visibleTextShowsIdleShellPrompt(visibleText)
 
-        let inferredAgentKind = Self.inferredAgentKind(
-            terminalTitle: terminalState.title,
-            visibleText: visibleText
-        )
-        guard let inferredAgentKind else {
-            if showsIdleShellPrompt {
-                panelActivityByPanelID.removeValue(forKey: panelID)
-                _ = sessionLifecycleTracker?.stopSessionForPanelIfOlderThan(
-                    panelID: panelID,
-                    minimumRuntime: Self.sessionAutoStopShellPromptGraceInterval,
-                    at: now
-                )
-            }
-            return
+        if TerminalVisibleTextInspector.appearsBusy(visibleText) {
+            busyPanelStateByPanelID[panelID] = PanelBusyState(
+                workspaceID: workspaceID,
+                updatedAt: now
+            )
+        } else {
+            busyPanelStateByPanelID.removeValue(forKey: panelID)
         }
 
-        let inferredPhase = Self.inferredAgentPhase(visibleText: visibleText, visibleLines: visibleLines)
-        let inferredRunningCommand = TerminalVisibleTextInspector.inferredRunningCommand(visibleText)
-        panelActivityByPanelID[panelID] = PanelActivityState(
-            workspaceID: workspaceID,
-            agent: inferredAgentKind,
-            phase: inferredPhase,
-            runningCommand: inferredRunningCommand,
-            updatedAt: now
-        )
-
-        if showsIdleShellPrompt {
+        if Self.visibleTextShowsIdleShellPrompt(visibleText) {
             _ = sessionLifecycleTracker?.stopSessionForPanelIfOlderThan(
                 panelID: panelID,
                 minimumRuntime: Self.sessionAutoStopShellPromptGraceInterval,
@@ -228,14 +217,14 @@ final class TerminalActivityInferenceService {
         }
     }
 
-    private func pruneStalePanelActivity(now: Date) {
-        panelActivityByPanelID = panelActivityByPanelID.filter { _, activity in
-            now.timeIntervalSince(activity.updatedAt) <= Self.activityRetentionInterval
+    private func pruneStaleBusyPanels(now: Date) {
+        busyPanelStateByPanelID = busyPanelStateByPanelID.filter { _, busyState in
+            now.timeIntervalSince(busyState.updatedAt) <= Self.activityRetentionInterval
         }
     }
 
     private func updateWorkspaceActivitySubtext(state: AppState, now: Date) {
-        pruneStalePanelActivity(now: now)
+        pruneStaleBusyPanels(now: now)
         workspaceActivitySubtextByID = nextWorkspaceActivitySubtext(
             liveWorkspaceIDs: Set(state.workspacesByID.keys),
             now: now
@@ -246,16 +235,16 @@ final class TerminalActivityInferenceService {
         liveWorkspaceIDs: Set<UUID>,
         now: Date
     ) -> [UUID: String] {
-        var activitiesByWorkspaceID: [UUID: [PanelActivityState]] = [:]
-        for activity in panelActivityByPanelID.values {
-            guard liveWorkspaceIDs.contains(activity.workspaceID) else { continue }
-            guard now.timeIntervalSince(activity.updatedAt) <= Self.activityRetentionInterval else { continue }
-            activitiesByWorkspaceID[activity.workspaceID, default: []].append(activity)
+        var busyCountByWorkspaceID: [UUID: Int] = [:]
+        for busyState in busyPanelStateByPanelID.values {
+            guard liveWorkspaceIDs.contains(busyState.workspaceID) else { continue }
+            guard now.timeIntervalSince(busyState.updatedAt) <= Self.activityRetentionInterval else { continue }
+            busyCountByWorkspaceID[busyState.workspaceID, default: 0] += 1
         }
 
         var nextSubtextByWorkspaceID: [UUID: String] = [:]
-        for (workspaceID, activities) in activitiesByWorkspaceID {
-            guard let subtext = Self.workspaceActivitySubtext(from: activities, now: now) else { continue }
+        for (workspaceID, busyCount) in busyCountByWorkspaceID {
+            guard let subtext = Self.workspaceActivitySubtext(forBusyPanelCount: busyCount) else { continue }
             nextSubtextByWorkspaceID[workspaceID] = subtext
         }
         return nextSubtextByWorkspaceID
@@ -386,133 +375,9 @@ final class TerminalActivityInferenceService {
         return trimmed.hasPrefix("/") || trimmed.hasPrefix("~") || trimmed.hasPrefix("file://")
     }
 
-    private static func inferredAgentKind(terminalTitle: String, visibleText: String) -> AgentKindInference? {
-        let inferredTitleFromTerminalTitle = canonicalInferredAgentTitle(from: terminalTitle)
-        if inferredTitleFromTerminalTitle == "Codex" {
-            return .codex
-        }
-        if inferredTitleFromTerminalTitle == "Claude Code" {
-            return .claudeCode
-        }
-
-        if let inferredTitle = inferredAgentTitleFromVisibleTerminalText(visibleText) {
-            return inferredTitle == "Codex" ? .codex : .claudeCode
-        }
-
-        guard let token = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) else {
-            return nil
-        }
-        return agentKind(forPromptToken: token)
-    }
-
-    private static func inferredAgentPhase(visibleText: String, visibleLines: [String]) -> AgentActivityPhase {
-        if visibleTextShowsWaitingForInput(visibleLines) {
-            return .waitingInput
-        }
-        if visibleTextShowsIdleShellPrompt(visibleText) {
-            return .idle
-        }
-        return .running
-    }
-
-    private static func visibleTextShowsWaitingForInput(_ visibleLines: [String]) -> Bool {
-        guard visibleLines.isEmpty == false else { return false }
-        let candidateLines = Array(visibleLines.suffix(agentTitleDetectionLineWindow))
-
-        for line in candidateLines.reversed() {
-            let lowercased = line.lowercased()
-            if lowercased.contains("waiting for input")
-                || lowercased.contains("waiting on user input")
-                || lowercased.contains("needs your input")
-                || lowercased.contains("select an option")
-                || lowercased.contains("enter your choice")
-                || lowercased.contains("press enter to continue")
-                || lowercased.contains("press return to continue")
-                || lowercased.contains("approve command")
-                || lowercased.contains("approval required") {
-                return true
-            }
-
-            if lowercased.contains("y/n") || lowercased.contains("[y]") || lowercased.contains("[n]") {
-                return true
-            }
-        }
-
-        return false
-    }
-
-    private static func workspaceActivitySubtext(from activities: [PanelActivityState], now: Date) -> String? {
-        guard activities.isEmpty == false else { return nil }
-
-        var codexCount = 0
-        var claudeCount = 0
-        var runningCount = 0
-        var waitingInputCount = 0
-        var idleCount = 0
-
-        for activity in activities {
-            switch activity.agent {
-            case .codex:
-                codexCount += 1
-            case .claudeCode:
-                claudeCount += 1
-            }
-
-            switch activity.phase {
-            case .running:
-                runningCount += 1
-            case .waitingInput:
-                waitingInputCount += 1
-            case .idle:
-                idleCount += 1
-            }
-        }
-
-        let totalAgentCount = codexCount + claudeCount
-        guard totalAgentCount > 0 else { return nil }
-
-        let statusSegments: [String] = {
-            if waitingInputCount > 0 && runningCount > 0 {
-                return [
-                    "\(waitingInputCount) waiting input",
-                    "\(runningCount) running",
-                ]
-            }
-            if waitingInputCount > 0 {
-                return ["\(waitingInputCount) waiting input"]
-            }
-            if runningCount > 0 {
-                return ["\(runningCount) running"]
-            }
-            return ["\(idleCount) idle"]
-        }()
-        let statusText = statusSegments.joined(separator: ", ")
-
-        var agentSegments: [String] = []
-        if claudeCount > 0 {
-            agentSegments.append("\(claudeCount) \(claudeCodeActivityLabel)")
-        }
-        if codexCount > 0 {
-            agentSegments.append("\(codexCount) Codex")
-        }
-
-        if totalAgentCount == 1,
-           let mostRecentActivity = activities.max(by: { $0.updatedAt < $1.updatedAt }),
-           now.timeIntervalSince(mostRecentActivity.updatedAt) <= activityCommandFreshnessInterval,
-           let runningCommand = mostRecentActivity.runningCommand {
-            let singleAgent = agentActivityLabel(for: mostRecentActivity.agent)
-            switch mostRecentActivity.phase {
-            case .running:
-                return "\(runningCommand) · \(singleAgent) running"
-            case .waitingInput:
-                return "\(runningCommand) · \(singleAgent) waiting input"
-            case .idle:
-                // Idle state should fall back to aggregate status formatting.
-                break
-            }
-        }
-
-        return "\(agentSegments.joined(separator: ", ")) · \(statusText)"
+    private static func workspaceActivitySubtext(forBusyPanelCount busyPanelCount: Int) -> String? {
+        guard busyPanelCount > 0 else { return nil }
+        return busyPanelCount == 1 ? "1 busy" : "\(busyPanelCount) busy"
     }
 
     private static func agentKind(forPromptToken token: String) -> AgentKindInference? {
@@ -523,15 +388,6 @@ final class TerminalActivityInferenceService {
             return .claudeCode
         }
         return nil
-    }
-
-    private static func agentActivityLabel(for agent: AgentKindInference) -> String {
-        switch agent {
-        case .codex:
-            return "1 Codex"
-        case .claudeCode:
-            return "1 \(claudeCodeActivityLabel)"
-        }
     }
 
     private static func canonicalCWDForComparison(_ value: String) -> String {
@@ -551,8 +407,6 @@ final class TerminalActivityInferenceService {
     private static let inferredAgentTitleCandidates: [String] = ["Codex", "Claude Code"]
     private static let codexPromptTokens: Set<String> = ["codex", "cdx"]
     private static let claudePromptTokens: Set<String> = ["claude"]
-    private static let activityCommandFreshnessInterval: TimeInterval = 60
-    private static let claudeCodeActivityLabel = "CC"
     private static let activityRetentionInterval: TimeInterval = 240
     private static let agentTitleDetectionLineWindow = 16
     private static let sessionAutoStopShellPromptGraceInterval: TimeInterval = 2
