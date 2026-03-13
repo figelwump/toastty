@@ -13,7 +13,7 @@ final class WindowCommandController: NSObject {
 
     @discardableResult
     func closeWindow() -> Bool {
-        // Toastty intentionally maps File > Close Window and Cmd+W to panel close.
+        // Toastty intentionally maps File > Close Panel and Cmd+W to panel close.
         focusedPanelCommandController.closeFocusedPanel().consumesShortcut
     }
 
@@ -24,6 +24,7 @@ final class WindowCommandController: NSObject {
 
 @MainActor
 final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
+    private static let closePanelMenuItemTitle = "Close Panel"
     private let windowCommandController: WindowCommandController
 
     init(windowCommandController: WindowCommandController) {
@@ -34,6 +35,9 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
         guard let mainMenu = NSApp.mainMenu,
               let closeWindowItem = Self.findCloseWindowMenuItem(in: mainMenu.items) else {
             return
+        }
+        if closeWindowItem.title != Self.closePanelMenuItemTitle {
+            closeWindowItem.title = Self.closePanelMenuItemTitle
         }
         guard closeWindowItem.target !== self || closeWindowItem.action != #selector(performCloseWindow(_:)) else {
             return
@@ -47,7 +51,7 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
     func performCloseWindow(_: Any?) {
         guard windowCommandController.closeWindow() == true else {
             ToasttyLog.warning(
-                "Close Window menu action could not resolve a focused panel",
+                "Close Panel menu action could not resolve a focused panel",
                 category: .store
             )
             return
