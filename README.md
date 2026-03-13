@@ -1,16 +1,18 @@
 # Toastty
 
-A native macOS terminal multiplexer built with SwiftUI and powered by the [Ghostty](https://ghostty.org) rendering engine.
+A native macOS terminal multiplexer built with SwiftUI and powered by the [libghostty](https://ghostty.org) rendering engine.
 
-Toastty is built for working with coding agents: workspaces, real-time agent status, and a native macOS UI with a lot of small touches.
+Toastty builds on the the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, notifications and unread badges when agents are done working, and the full performance and layout flexibility you're used to with Ghostty.
+
+There are also little features throughout. For example, keyboard shortcuts to jump directly to a panel and global font control (resize the font of all terminals at once, useful when switching between external monitors and your laptop for example).
 
 ## Features
 
-- **Vertical tabs** — Organize terminals into named workspaces as vertical tabs, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
+- **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
-- **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them, or zoom a single pane to full view (`Cmd+Shift+F`)
+- **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, persisted in `~/.toastty/config`
-- **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine via XCFramework, with Ghostty config compatibility
+- **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))

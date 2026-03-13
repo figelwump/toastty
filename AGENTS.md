@@ -1,7 +1,4 @@
-# Toastty — Agent Workflow Guide
-
-## Reference Architecture
-- When solving tricky problems, improving architecture, or looking for good patterns/best practices, consult the Ghostty source tree when available. It's a well-architected Swift/macOS codebase and a good source of inspiration for terminal, split-pane, keyboard bridging, and config patterns.
+# Toastty
 
 ## Build & Generate
 - **Source of truth:** `Project.swift` — never hand-edit generated Xcode project/workspace files.
