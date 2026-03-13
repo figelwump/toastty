@@ -80,8 +80,8 @@ ensure_ghostty_release_artifact() {
 
   while IFS= read -r candidate; do
     if \
-      lipo -verify_arch arm64 "$candidate" >/dev/null 2>&1 \
-      && lipo -verify_arch x86_64 "$candidate" >/dev/null 2>&1
+      lipo "$candidate" -verify_arch arm64 >/dev/null 2>&1 \
+      && lipo "$candidate" -verify_arch x86_64 >/dev/null 2>&1
     then
       library_path="$candidate"
       break
@@ -199,7 +199,7 @@ staple_dmg() {
 verify_final_artifacts() {
   log "Running final verification checks"
   codesign --verify --strict --verbose=2 "$DMG_PATH"
-  spctl --assess --verbose=4 --type open "$DMG_PATH"
+  spctl --assess --verbose=4 --type open --context context:primary-signature "$DMG_PATH"
   xcrun stapler validate "$DMG_PATH"
 }
 
