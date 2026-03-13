@@ -8,6 +8,11 @@ APP_NAME="Toastty"
 APP_BUNDLE_NAME="${APP_NAME}.app"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 SIGNING_IDENTITY=""
+ATTACHED_DEVICE=""
+MOUNT_POINT=""
+MOUNTED_VOLUME_NAME=""
+DS_STORE_PATH=""
+RW_DMG_PATH=""
 
 usage() {
   cat <<'EOF'
@@ -34,6 +39,24 @@ fail() {
   printf 'error: %s\n' "$*" >&2
   exit 1
 }
+
+cleanup() {
+  local exit_code=$?
+
+  if [[ -n "$ATTACHED_DEVICE" ]]; then
+    hdiutil detach "$ATTACHED_DEVICE" -quiet >/dev/null 2>&1 \
+      || hdiutil detach "$ATTACHED_DEVICE" -force -quiet >/dev/null 2>&1 \
+      || true
+  fi
+
+  if [[ -n "$RW_DMG_PATH" && -f "$RW_DMG_PATH" ]]; then
+    rm -f "$RW_DMG_PATH"
+  fi
+
+  return "$exit_code"
+}
+
+trap cleanup EXIT
 
 require_command() {
   local command_name="$1"
@@ -165,15 +188,131 @@ stage_dmg_contents() {
   ln -s /Applications "$DMG_STAGING_PATH/Applications"
 }
 
-create_dmg() {
-  log "Creating DMG"
+create_writable_dmg() {
+  log "Creating writable DMG"
   hdiutil create \
     -quiet \
-    -format UDZO \
+    -format UDRW \
     -ov \
+    -fs HFS+ \
     -volname "$APP_NAME" \
     -srcfolder "$DMG_STAGING_PATH" \
-    "$DMG_PATH"
+    "$RW_DMG_PATH"
+}
+
+mount_writable_dmg() {
+  local attach_output=""
+
+  log "Mounting writable DMG"
+  attach_output="$(hdiutil attach -readwrite -noautoopen "$RW_DMG_PATH")"
+  ATTACHED_DEVICE="$(printf '%s\n' "$attach_output" | awk 'NR == 1 { print $1; exit }')"
+  MOUNT_POINT="$(printf '%s\n' "$attach_output" | awk 'match($0, /\/Volumes\/.*/) { print substr($0, RSTART); exit }')"
+  MOUNTED_VOLUME_NAME="$(basename "$MOUNT_POINT")"
+  DS_STORE_PATH="$MOUNT_POINT/.DS_Store"
+
+  [[ -n "$ATTACHED_DEVICE" ]] || fail "failed to determine mounted DMG device"
+  [[ -n "$MOUNT_POINT" ]] || fail "failed to determine mounted DMG path"
+  [[ -n "$MOUNTED_VOLUME_NAME" ]] || fail "failed to determine mounted DMG volume name"
+}
+
+customize_dmg_layout() {
+  log "Customizing DMG Finder layout"
+  if ! osascript - "$MOUNTED_VOLUME_NAME" "$APP_BUNDLE_NAME" <<'EOF'
+on run argv
+  set volumeName to item 1 of argv
+  set appBundleName to item 2 of argv
+
+  tell application "Finder"
+    tell disk volumeName
+      open
+      delay 1
+
+      set current view of container window to icon view
+      set toolbar visible of container window to false
+      set statusbar visible of container window to false
+      set the bounds of container window to {200, 120, 660, 360}
+
+      set theViewOptions to the icon view options of container window
+      set arrangement of theViewOptions to not arranged
+      set icon size of theViewOptions to 128
+      set text size of theViewOptions to 16
+
+      set position of item appBundleName of container window to {135, 125}
+      set position of item "Applications" of container window to {365, 125}
+
+      update without registering applications
+      delay 2
+      close container window
+    end tell
+  end tell
+end run
+EOF
+  then
+    fail "failed to customize DMG Finder layout; allow Terminal to control Finder and rerun"
+  fi
+
+  sync
+}
+
+wait_for_finder_layout_persistence() {
+  local attempts=0
+  local previous_snapshot=""
+  local stable_snapshot_count=0
+  local current_snapshot=""
+
+  log "Waiting for Finder layout metadata to persist"
+
+  while (( attempts < 15 )); do
+    if [[ -f "$DS_STORE_PATH" ]]; then
+      current_snapshot="$(stat -f '%m:%z' "$DS_STORE_PATH")"
+      if [[ "$current_snapshot" == "$previous_snapshot" ]]; then
+        stable_snapshot_count=$((stable_snapshot_count + 1))
+      else
+        previous_snapshot="$current_snapshot"
+        stable_snapshot_count=0
+      fi
+
+      if (( stable_snapshot_count >= 2 )); then
+        return 0
+      fi
+    fi
+
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+
+  fail "Finder did not persist DMG layout metadata before detach"
+}
+
+detach_writable_dmg() {
+  [[ -n "$ATTACHED_DEVICE" ]] || return 0
+
+  log "Detaching writable DMG"
+  hdiutil detach "$ATTACHED_DEVICE" -quiet \
+    || hdiutil detach "$ATTACHED_DEVICE" -force -quiet \
+    || fail "failed to detach writable DMG"
+
+  ATTACHED_DEVICE=""
+  MOUNT_POINT=""
+  MOUNTED_VOLUME_NAME=""
+  DS_STORE_PATH=""
+}
+
+create_dmg() {
+  create_writable_dmg
+  mount_writable_dmg
+  customize_dmg_layout
+  wait_for_finder_layout_persistence
+  detach_writable_dmg
+
+  log "Compressing DMG"
+  hdiutil convert \
+    -quiet \
+    -format UDZO \
+    -imagekey zlib-level=9 \
+    -ov \
+    "$RW_DMG_PATH" \
+    -o "$DMG_PATH"
 }
 
 sign_dmg() {
@@ -217,6 +356,7 @@ require_command xcrun
 require_command lipo
 require_command security
 require_command ditto
+require_command osascript
 
 require_env TOASTTY_VERSION
 require_env TOASTTY_BUILD_NUMBER
@@ -239,6 +379,7 @@ EXPORT_PATH="$RELEASE_DIR/export"
 EXPORTED_APP_PATH="$EXPORT_PATH/$APP_BUNDLE_NAME"
 DMG_STAGING_PATH="$RELEASE_DIR/dmg"
 DMG_PATH="$RELEASE_DIR/${APP_NAME}-${RELEASE_LABEL}.dmg"
+RW_DMG_PATH="$RELEASE_DIR/${APP_NAME}-${RELEASE_LABEL}.rw.dmg"
 EXPORT_OPTIONS_PLIST_PATH="$RELEASE_DIR/export-options.plist"
 NOTARIZATION_RESULT_PATH="$RELEASE_DIR/notarization-result.json"
 
