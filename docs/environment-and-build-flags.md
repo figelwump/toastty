@@ -18,8 +18,10 @@ These flags affect `tuist generate`, project configuration, or Ghostty artifact 
 | `TOASTTY_DISABLE_GHOSTTY` | `Project.swift`, automation scripts | unset | Compatibility alias for `TUIST_DISABLE_GHOSTTY`. Prefer `TUIST_DISABLE_GHOSTTY` for new usage. |
 | `TUIST_DEVELOPMENT_TEAM` | `Project.swift` during `tuist generate` | unset | Sets the Apple Development team used for app signing. If unset, the app target falls back to ad-hoc signing. |
 | `TUIST_DISTRIBUTION_SIGNING` | `Project.swift` during `tuist generate` | unset | When set to `1`, the Release configuration uses manual `Developer ID Application` signing and enables hardened runtime. Requires `TUIST_DEVELOPMENT_TEAM`. |
-| `TOASTTY_VERSION` | `Project.swift` during `tuist generate`, `scripts/release/release.sh` | `0.1.0` | Sets the marketing version (`CFBundleShortVersionString`) that is baked into generated project settings. |
-| `TOASTTY_BUILD_NUMBER` | `Project.swift` during `tuist generate`, `scripts/release/release.sh` | `1` | Sets the build number (`CFBundleVersion`) baked into generated project settings. Use a monotonically increasing integer for releases. |
+| `TUIST_TOASTTY_VERSION` | `Project.swift` during `tuist generate` | `0.1.0` | Preferred manifest-visible marketing version input for direct `tuist generate` workflows. Tuist reliably exposes `TUIST_*` variables during manifest evaluation. |
+| `TUIST_TOASTTY_BUILD_NUMBER` | `Project.swift` during `tuist generate` | `1` | Preferred manifest-visible build number input for direct `tuist generate` workflows. Use a monotonically increasing integer for releases. |
+| `TOASTTY_VERSION` | `Project.swift` compatibility fallback, `scripts/release/release.sh` | `0.1.0` | Compatibility alias for the marketing version. `scripts/release/release.sh` forwards this to `TUIST_TOASTTY_VERSION` before calling `tuist generate`. |
+| `TOASTTY_BUILD_NUMBER` | `Project.swift` compatibility fallback, `scripts/release/release.sh` | `1` | Compatibility alias for the build number. `scripts/release/release.sh` forwards this to `TUIST_TOASTTY_BUILD_NUMBER` before calling `tuist generate`. |
 | `GHOSTTY_XCFRAMEWORK_SOURCE` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Source path for a built `GhosttyKit.xcframework` to install into Toastty's local `Dependencies/` directory. |
 | `GHOSTTY_XCFRAMEWORK_VARIANT` | `scripts/ghostty/install-local-xcframework.sh` | `debug` | Chooses the install destination. Supported values: `debug`, `release`. |
 

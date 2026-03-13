@@ -4,14 +4,45 @@ import Foundation
 let ghosttyDebugXCFrameworkRelativePath = "Dependencies/GhosttyKit.Debug.xcframework"
 let ghosttyReleaseXCFrameworkRelativePath = "Dependencies/GhosttyKit.Release.xcframework"
 let environment = ProcessInfo.processInfo.environment
-if let configuredMarketingVersion = environment["TOASTTY_VERSION"], configuredMarketingVersion.isEmpty {
-    fatalError("TOASTTY_VERSION must not be empty when set at `tuist generate` time.")
+// Fail fast if both the manifest-visible and compatibility env names are set
+// but disagree, so release metadata cannot silently drift during generation.
+func resolvedManifestEnvironmentValue(
+    manifestKey: String,
+    compatibilityKey: String,
+    defaultValue: String
+) -> String {
+    let manifestValue = environment[manifestKey]
+    let compatibilityValue = environment[compatibilityKey]
+
+    if let manifestValue, manifestValue.isEmpty {
+        fatalError("\(manifestKey) must not be empty when set at `tuist generate` time.")
+    }
+    if let compatibilityValue, compatibilityValue.isEmpty {
+        fatalError("\(compatibilityKey) must not be empty when set at `tuist generate` time.")
+    }
+    if
+        let manifestValue,
+        let compatibilityValue,
+        manifestValue != compatibilityValue
+    {
+        fatalError("\(manifestKey) and \(compatibilityKey) must match when both are set at `tuist generate` time.")
+    }
+
+    return manifestValue ?? compatibilityValue ?? defaultValue
 }
-if let configuredBuildNumber = environment["TOASTTY_BUILD_NUMBER"], configuredBuildNumber.isEmpty {
-    fatalError("TOASTTY_BUILD_NUMBER must not be empty when set at `tuist generate` time.")
-}
-let marketingVersion = environment["TOASTTY_VERSION"] ?? "0.1.0"
-let buildNumber = environment["TOASTTY_BUILD_NUMBER"] ?? "1"
+
+// Tuist manifest evaluation reliably exposes TUIST_* variables. Keep the plain
+// TOASTTY_* names as a compatibility fallback for contexts where they still pass through.
+let marketingVersion = resolvedManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_VERSION",
+    compatibilityKey: "TOASTTY_VERSION",
+    defaultValue: "0.1.0"
+)
+let buildNumber = resolvedManifestEnvironmentValue(
+    manifestKey: "TUIST_TOASTTY_BUILD_NUMBER",
+    compatibilityKey: "TOASTTY_BUILD_NUMBER",
+    defaultValue: "1"
+)
 // Repo-local toggle consumed by Project.swift, not a Tuist built-in.
 let distributionSigning = environment["TUIST_DISTRIBUTION_SIGNING"] == "1"
 let ghosttyMacOSSliceDirectoryCandidates = [
