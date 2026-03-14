@@ -1,5 +1,9 @@
 # Toastty
 
+<p align="center">
+  <img src="docs/assets/toastty-hero.png" alt="Toastty — multiple workspaces with split panes, Claude Code, and live logs" width="1840">
+</p>
+
 A native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
 
 Toastty builds on the the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, notifications and unread badges when agents are done working, and the performance and layout flexibility you're used to with Ghostty.
