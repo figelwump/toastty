@@ -28,7 +28,6 @@ These flags affect `tuist generate`, project configuration, or Ghostty artifact 
 | `GHOSTTY_SOURCE_REPO` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty repo root used when inferring commit and cleanliness metadata. |
 | `GHOSTTY_SOURCE_DIRTY` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty source cleanliness marker written to the installed metadata sidecar. Release DMG builds require `0`. |
 | `GHOSTTY_BUILD_FLAGS` | `scripts/ghostty/install-local-xcframework.sh`, `scripts/release/release.sh` | unset | Build flags recorded for the installed Ghostty artifact. Release DMG builds require this metadata so notes can include the shipped Ghostty build configuration. |
-| `TOASTTY_RELEASE_NOTES_MODEL` | `scripts/release/generate-release-notes.mjs` via `scripts/release/release.sh` | `gpt-5-mini` | Optional OpenAI model override for the LLM-generated release-notes `Changes` section. Used only when `OPENAI_API_KEY` is available. |
 
 ## Runtime Environment
 
@@ -140,8 +139,6 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_APPLE_ID` | none | Required Apple ID email passed to `xcrun notarytool submit`. |
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
-| `TOASTTY_RELEASE_NOTES_MODEL` | `gpt-5-mini` | Optional OpenAI model override for the generated `Changes` summary when `OPENAI_API_KEY` is present. |
-
 Additional release behavior:
 
 - the git working tree must be clean before the build starts
@@ -152,9 +149,7 @@ Additional release behavior:
 - the script writes:
   - `artifacts/release/<version>-<build>/release-metadata.env`
   - `artifacts/release/<version>-<build>/ghostty-metadata.env`
-  - `artifacts/release/<version>-<build>/release-notes.md`
-- if `release-notes.md` already exists for the same recorded release commit, the script preserves that edited draft on re-run instead of overwriting it
-- if `OPENAI_API_KEY` is present, the generated notes use the OpenAI Responses API to draft a `Changes` section from commits since the previous tagged release; otherwise the script falls back to a deterministic commit-subject summary
+- the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is authored later by an agent or human using the recorded release diff and Ghostty metadata
 
 The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
 

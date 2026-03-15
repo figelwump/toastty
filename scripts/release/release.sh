@@ -31,7 +31,6 @@ GHOSTTY_INSTALLED_AT=""
 GHOSTTY_METADATA_SNAPSHOT_PATH=""
 RELEASE_NOTES_PATH=""
 RELEASE_METADATA_PATH=""
-PRESERVED_RELEASE_NOTES_PATH=""
 
 usage() {
   cat <<'EOF'
@@ -52,7 +51,6 @@ Additional requirements:
 Outputs:
   artifacts/release/<version>-<build>/release-metadata.env
   artifacts/release/<version>-<build>/ghostty-metadata.env
-  artifacts/release/<version>-<build>/release-notes.md
   artifacts/release/<version>-<build>/Toastty-<version>.dmg
 
 Recommended invocation:
@@ -88,10 +86,6 @@ cleanup() {
 
   if [[ -n "$RW_DMG_PATH" && -f "$RW_DMG_PATH" ]]; then
     rm -f "$RW_DMG_PATH"
-  fi
-
-  if [[ -n "$PRESERVED_RELEASE_NOTES_PATH" && -f "$PRESERVED_RELEASE_NOTES_PATH" ]]; then
-    rm -f "$PRESERVED_RELEASE_NOTES_PATH"
   fi
 
   return "$exit_code"
@@ -231,38 +225,6 @@ snapshot_ghostty_metadata() {
   write_env_assignment "$GHOSTTY_METADATA_SNAPSHOT_PATH" "GHOSTTY_INSTALLED_AT" "$GHOSTTY_INSTALLED_AT"
 }
 
-preserve_existing_release_notes() {
-  local existing_notes_path="$RELEASE_DIR/release-notes.md"
-  local existing_metadata_path="$RELEASE_DIR/release-metadata.env"
-  local existing_source_commit=""
-
-  [[ -s "$existing_notes_path" ]] || return 0
-  [[ -f "$existing_metadata_path" ]] || return 0
-
-  existing_source_commit="$(
-    (
-      # shellcheck disable=SC1090
-      source "$existing_metadata_path"
-      printf '%s' "${RELEASE_SOURCE_COMMIT:-}"
-    )
-  )"
-
-  if [[ "$existing_source_commit" == "$SOURCE_COMMIT" ]]; then
-    PRESERVED_RELEASE_NOTES_PATH="$(mktemp -t toastty-release-notes.XXXXXX.md)"
-    cp "$existing_notes_path" "$PRESERVED_RELEASE_NOTES_PATH"
-  fi
-}
-
-finalize_release_notes() {
-  if [[ -n "$PRESERVED_RELEASE_NOTES_PATH" && -s "$PRESERVED_RELEASE_NOTES_PATH" ]]; then
-    cp "$PRESERVED_RELEASE_NOTES_PATH" "$RELEASE_NOTES_PATH"
-    log "Preserved existing release notes draft: $RELEASE_NOTES_PATH"
-    return 0
-  fi
-
-  generate_release_notes
-}
-
 write_release_metadata() {
   : >"$RELEASE_METADATA_PATH"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_VERSION" "$TOASTTY_VERSION"
@@ -285,21 +247,6 @@ write_release_metadata() {
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_GHOSTTY_SOURCE_REPO" "$GHOSTTY_SOURCE_REPO"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_GHOSTTY_SOURCE_DIRTY" "$GHOSTTY_SOURCE_DIRTY"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_GHOSTTY_BUILD_FLAGS" "$GHOSTTY_BUILD_FLAGS"
-}
-
-generate_release_notes() {
-  log "Generating release notes draft"
-  node "$ROOT_DIR/scripts/release/generate-release-notes.mjs" \
-    --output "$RELEASE_NOTES_PATH" \
-    --repo-root "$ROOT_DIR" \
-    --version "$TOASTTY_VERSION" \
-    --source-commit "$SOURCE_COMMIT" \
-    --source-commit-short "$SOURCE_COMMIT_SHORT" \
-    --previous-tag "$PREVIOUS_RELEASE_TAG" \
-    --previous-commit "$PREVIOUS_RELEASE_COMMIT" \
-    --previous-commit-short "$PREVIOUS_RELEASE_COMMIT_SHORT" \
-    --ghostty-commit "$GHOSTTY_COMMIT_SHORT" \
-    --ghostty-build-flags "$GHOSTTY_BUILD_FLAGS"
 }
 
 write_export_options_plist() {
@@ -545,7 +492,6 @@ require_command security
 require_command ditto
 require_command osascript
 require_command git
-require_command node
 
 require_env TOASTTY_VERSION
 require_env TOASTTY_BUILD_NUMBER
@@ -579,7 +525,6 @@ GHOSTTY_METADATA_SNAPSHOT_PATH="$RELEASE_DIR/ghostty-metadata.env"
 RELEASE_NOTES_PATH="$RELEASE_DIR/release-notes.md"
 RELEASE_METADATA_PATH="$RELEASE_DIR/release-metadata.env"
 
-preserve_existing_release_notes
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
@@ -598,8 +543,7 @@ staple_dmg
 verify_final_artifacts
 snapshot_ghostty_metadata
 write_release_metadata
-finalize_release_notes
 
 log "Release DMG ready: $DMG_PATH"
 log "Release metadata snapshot: $RELEASE_METADATA_PATH"
-log "Release notes draft: $RELEASE_NOTES_PATH"
+log "Author release notes before publish: $RELEASE_NOTES_PATH"

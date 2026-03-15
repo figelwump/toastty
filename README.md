@@ -128,10 +128,8 @@ The script archives the app, exports a signed bundle, creates a plain drag-to-in
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags
-- `release-notes.md` as a draft notes template
 
-When `OPENAI_API_KEY` is available, the notes draft includes an LLM-generated `Changes` section summarizing commits since the previous tagged release. Without that key, the script falls back to a commit-subject summary.
-If you re-run `release.sh` for the same release commit, it preserves an existing edited `release-notes.md` draft instead of overwriting it.
+The script also records the canonical `artifacts/release/<version>-<build>/release-notes.md` path in `release-metadata.env`, but it does not generate the file for you. Use the recorded `RELEASE_PREVIOUS_TAG`, `RELEASE_SOURCE_COMMIT`, and Ghostty metadata to draft it before publishing. The repo-local `toastty-release` skill documents that workflow for agents.
 
 ### 7. Publish a draft GitHub Release
 
@@ -141,7 +139,7 @@ Prerequisites:
 - `gh` is installed and authenticated for the target repo
 - the recorded release commit is available in the current checkout
 
-Edit the generated `artifacts/release/<version>-<build>/release-notes.md` draft before publishing. It already includes the recorded Toastty commit plus the embedded Ghostty commit and build flags.
+Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags.
 
 ```bash
 sv exec -- env \
@@ -151,7 +149,7 @@ sv exec -- env \
   --create-tag
 ```
 
-Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create ...` commands without creating anything. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly. Pass `--notes-file` only when you want to override the generated draft notes path.
+Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create ...` commands without creating anything. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly. Pass `--notes-file` only when you want to override the default notes path.
 
 ## Configuration
 

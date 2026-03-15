@@ -199,8 +199,14 @@ load_release_metadata() {
 }
 
 verify_inputs() {
-  [[ -f "$NOTES_FILE" ]] || fail "release notes file not found: $NOTES_FILE"
-  [[ -s "$NOTES_FILE" ]] || fail "release notes file is empty: $NOTES_FILE"
+  if [[ ! -f "$NOTES_FILE" ]]; then
+    fail "release notes file not found: $NOTES_FILE (author it before publishing; see .agents/skills/toastty-release/SKILL.md for the default workflow)"
+  fi
+
+  if [[ ! -s "$NOTES_FILE" ]]; then
+    fail "release notes file is empty: $NOTES_FILE (author it before publishing; see .agents/skills/toastty-release/SKILL.md for the default workflow)"
+  fi
+
   [[ -s "$DMG_PATH" ]] || fail "release DMG not found or empty: $DMG_PATH"
   [[ "$RELEASE_VERSION" == "$TOASTTY_VERSION" ]] || fail "release metadata version mismatch: expected $TOASTTY_VERSION, got ${RELEASE_VERSION:-<unset>}"
   [[ "$RELEASE_BUILD_NUMBER" == "$TOASTTY_BUILD_NUMBER" ]] || fail "release metadata build number mismatch: expected $TOASTTY_BUILD_NUMBER, got ${RELEASE_BUILD_NUMBER:-<unset>}"
