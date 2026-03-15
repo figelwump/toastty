@@ -129,7 +129,7 @@ It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags
 
-The script also records the canonical `artifacts/release/<version>-<build>/release-notes.md` path in `release-metadata.env`, but it does not generate the file for you. Use the recorded `RELEASE_PREVIOUS_TAG`, `RELEASE_SOURCE_COMMIT`, and Ghostty metadata to draft it before publishing. The repo-local `toastty-release` skill documents that workflow for agents.
+The script also records the canonical `artifacts/release/<version>-<build>/release-notes.md` path in `release-metadata.env`, but it does not generate the file for you. The repo-local `toastty-release` skill covers the build step; the repo-local `toastty-publish` skill covers drafting `release-notes.md` from the recorded release diff and publishing later.
 
 ### 7. Publish a draft GitHub Release
 

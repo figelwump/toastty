@@ -149,7 +149,7 @@ Additional release behavior:
 - the script writes:
   - `artifacts/release/<version>-<build>/release-metadata.env`
   - `artifacts/release/<version>-<build>/ghostty-metadata.env`
-- the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is authored later by an agent or human using the recorded release diff and Ghostty metadata
+- the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is authored later by an agent or human using the recorded release diff and Ghostty metadata; the repo-local `toastty-publish` skill documents that handoff
 
 The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
 
@@ -187,7 +187,7 @@ CLI options:
 
 | Option | Default | Effect |
 |---|---|---|
-| `--notes-file <path>` | generated release notes path | Overrides the release notes file passed through to `gh release create`. |
+| `--notes-file <path>` | `RELEASE_NOTES_PATH` from release metadata | Overrides the release notes file passed through to `gh release create`. |
 | `--create-tag` | off | Creates and pushes an annotated tag at the recorded release commit before publishing. |
 | `--publish` | draft mode | Publishes immediately instead of creating a draft release. |
 | `--dry-run` | off | Prints the derived `git tag`, `git push`, and `gh release create ...` commands without creating anything. |
