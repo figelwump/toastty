@@ -149,7 +149,7 @@ Additional release behavior:
 - the script writes:
   - `artifacts/release/<version>-<build>/release-metadata.env`
   - `artifacts/release/<version>-<build>/ghostty-metadata.env`
-- the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is authored later by an agent or human using the recorded release diff and Ghostty metadata; the repo-local `toastty-publish` skill documents that handoff
+- the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is drafted later by an agent or human using the recorded release diff and Ghostty metadata; the repo-local `toastty-release` skill documents that workflow and the repo-local `toastty-publish` skill handles later publication
 
 The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
 

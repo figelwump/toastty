@@ -9,8 +9,8 @@
 
 ## Release Workflow
 - **Ghostty release provenance:** install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
-- **Build release DMG:** use `.agents/skills/toastty-release/SKILL.md`. `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot, then writes `release-metadata.env` and `ghostty-metadata.env` into `artifacts/release/<version>-<build>/`.
-- **Write release notes and publish later:** use `.agents/skills/toastty-publish/SKILL.md`. It authors `artifacts/release/<version>-<build>/release-notes.md` from the recorded release diff, then runs `scripts/release/publish-github-release.sh --create-tag` to tag the recorded release commit and create the GitHub release.
+- **Build release DMG and draft notes:** use `.agents/skills/toastty-release/SKILL.md`. `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot, then writes `release-metadata.env` and `ghostty-metadata.env` into `artifacts/release/<version>-<build>/`; the release skill drafts `release-notes.md` in that same directory for review before publish.
+- **Publish later:** use `.agents/skills/toastty-publish/SKILL.md`. It verifies the existing drafted notes and runs `scripts/release/publish-github-release.sh --create-tag` to tag the recorded release commit and create the GitHub release.
 
 ## Validation
 For any UI/runtime change, validate beyond unit tests — run automation and inspect visually.
