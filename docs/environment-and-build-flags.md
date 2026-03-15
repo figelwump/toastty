@@ -24,6 +24,11 @@ These flags affect `tuist generate`, project configuration, or Ghostty artifact 
 | `TOASTTY_BUILD_NUMBER` | `Project.swift` compatibility fallback, `scripts/release/release.sh` | `1` | Compatibility alias for the build number. `scripts/release/release.sh` forwards this to `TUIST_TOASTTY_BUILD_NUMBER` before calling `tuist generate`. |
 | `GHOSTTY_XCFRAMEWORK_SOURCE` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Source path for a built `GhosttyKit.xcframework` to install into Toastty's local `Dependencies/` directory. |
 | `GHOSTTY_XCFRAMEWORK_VARIANT` | `scripts/ghostty/install-local-xcframework.sh` | `debug` | Chooses the install destination. Supported values: `debug`, `release`. |
+| `GHOSTTY_COMMIT` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty commit recorded in the installed metadata sidecar. If unset, the installer tries to infer it from the source path's git checkout. |
+| `GHOSTTY_SOURCE_REPO` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty repo root used when inferring commit and cleanliness metadata. |
+| `GHOSTTY_SOURCE_DIRTY` | `scripts/ghostty/install-local-xcframework.sh` | auto-detect | Optional override for the Ghostty source cleanliness marker written to the installed metadata sidecar. Release DMG builds require `0`. |
+| `GHOSTTY_BUILD_FLAGS` | `scripts/ghostty/install-local-xcframework.sh`, `scripts/release/release.sh` | unset | Build flags recorded for the installed Ghostty artifact. Release DMG builds require this metadata so notes can include the shipped Ghostty build configuration. |
+| `TOASTTY_RELEASE_NOTES_MODEL` | `scripts/release/generate-release-notes.mjs` via `scripts/release/release.sh` | `gpt-5-mini` | Optional OpenAI model override for the LLM-generated release-notes `Changes` section. Used only when `OPENAI_API_KEY` is available. |
 
 ## Runtime Environment
 
@@ -135,8 +140,22 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_APPLE_ID` | none | Required Apple ID email passed to `xcrun notarytool submit`. |
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
+| `TOASTTY_RELEASE_NOTES_MODEL` | `gpt-5-mini` | Optional OpenAI model override for the generated `Changes` summary when `OPENAI_API_KEY` is present. |
 
-The DMG packaging behavior is otherwise fixed in the script. There are no additional DMG-specific environment toggles today.
+Additional release behavior:
+
+- the git working tree must be clean before the build starts
+- `Dependencies/GhosttyKit.Release.metadata.env` must exist and record:
+  - `GHOSTTY_COMMIT`
+  - `GHOSTTY_BUILD_FLAGS`
+  - `GHOSTTY_SOURCE_DIRTY=0`
+- the script writes:
+  - `artifacts/release/<version>-<build>/release-metadata.env`
+  - `artifacts/release/<version>-<build>/ghostty-metadata.env`
+  - `artifacts/release/<version>-<build>/release-notes.md`
+- if `release-notes.md` already exists for the same recorded release commit, the script preserves that edited draft on re-run instead of overwriting it
+- if `OPENAI_API_KEY` is present, the generated notes use the OpenAI Responses API to draft a `Changes` section from commits since the previous tagged release; otherwise the script falls back to a deterministic commit-subject summary
+
 The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
 
 ### `scripts/release/publish-github-release.sh`
@@ -159,19 +178,26 @@ sv exec -- env \
 Prerequisites:
 
 - `gh` must be installed and authenticated
-- the release tag must already exist locally and on `origin`
+- the release metadata file must exist at `artifacts/release/<version>-<build>/release-metadata.env`
+- the recorded release commit must exist in the current checkout
+- the tag must already exist locally and on `origin`, unless `--create-tag` is used
 
-The publisher expects the DMG at `artifacts/release/<version>-<build>/Toastty-<version>.dmg`.
+The publisher expects:
+
+- the DMG at `artifacts/release/<version>-<build>/Toastty-<version>.dmg`
+- release notes at `artifacts/release/<version>-<build>/release-notes.md` unless overridden
+- release metadata at `artifacts/release/<version>-<build>/release-metadata.env`
 
 CLI options:
 
 | Option | Default | Effect |
 |---|---|---|
-| `--notes-file <path>` | none | Required release notes file passed through to `gh release create`. |
+| `--notes-file <path>` | generated release notes path | Overrides the release notes file passed through to `gh release create`. |
+| `--create-tag` | off | Creates and pushes an annotated tag at the recorded release commit before publishing. |
 | `--publish` | draft mode | Publishes immediately instead of creating a draft release. |
-| `--dry-run` | off | Prints the derived `gh release create ...` command without creating a release. |
+| `--dry-run` | off | Prints the derived `git tag`, `git push`, and `gh release create ...` commands without creating anything. |
 | `--repo <owner/repo>` | inferred from `origin` | Overrides the target GitHub repository. Required when `origin` is not a parseable GitHub remote. |
-| `--tag <tag>` | `v<TOASTTY_VERSION>` | Overrides the Git tag used for the release. The tag must already exist locally and on `origin`. |
+| `--tag <tag>` | `v<TOASTTY_VERSION>` | Overrides the Git tag used for the release. The tag must already exist locally and on `origin`, unless `--create-tag` is used. |
 | `--title <title>` | `v<TOASTTY_VERSION>` | Overrides the release title shown on GitHub. |
 
 ## Internal or Derived Flags

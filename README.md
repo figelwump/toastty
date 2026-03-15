@@ -58,11 +58,13 @@ sv exec -- <command>
 ### 3. Install Ghostty XCFramework (optional)
 
 ```bash
+GHOSTTY_BUILD_FLAGS="-Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal -Dsentry=false" \
 GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
   ./scripts/ghostty/install-local-xcframework.sh
 ```
 
 Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
+When the source path lives inside a Ghostty git checkout, the installer also records the Ghostty commit and source cleanliness in an ignored sidecar metadata file next to the installed xcframework.
 
 For the recommended upstream Ghostty build command, release note guidance, see [docs/ghostty-integration.md](docs/ghostty-integration.md).
 
@@ -105,7 +107,12 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 
 ### 6. Build a signed release DMG
 
-The release script expects a release Ghostty artifact at `Dependencies/GhosttyKit.Release.xcframework`, a local `Developer ID Application` certificate, and notarization credentials injected at runtime.
+The release script expects:
+- a clean Toastty git working tree
+- a release Ghostty artifact at `Dependencies/GhosttyKit.Release.xcframework`
+- Ghostty provenance metadata at `Dependencies/GhosttyKit.Release.metadata.env`
+- a local `Developer ID Application` certificate
+- notarization credentials injected at runtime
 
 Use an explicit marketing version plus a monotonically increasing build number:
 
@@ -118,6 +125,13 @@ sv exec -- env \
 ```
 
 The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
+It also snapshots release provenance into the release directory:
+- `release-metadata.env` with the exact Toastty commit that was built
+- `ghostty-metadata.env` with the embedded Ghostty commit and build flags
+- `release-notes.md` as a draft notes template
+
+When `OPENAI_API_KEY` is available, the notes draft includes an LLM-generated `Changes` section summarizing commits since the previous tagged release. Without that key, the script falls back to a commit-subject summary.
+If you re-run `release.sh` for the same release commit, it preserves an existing edited `release-notes.md` draft instead of overwriting it.
 
 ### 7. Publish a draft GitHub Release
 
@@ -125,19 +139,19 @@ After the DMG exists locally, publish it to GitHub Releases with the helper scri
 
 Prerequisites:
 - `gh` is installed and authenticated for the target repo
-- the matching Git tag already exists locally and on `origin`
+- the recorded release commit is available in the current checkout
 
-Create release notes first. For public releases, include the embedded Ghostty commit and build flags you used for the shipped xcframework.
+Edit the generated `artifacts/release/<version>-<build>/release-notes.md` draft before publishing. It already includes the recorded Toastty commit plus the embedded Ghostty commit and build flags.
 
 ```bash
 sv exec -- env \
   TOASTTY_VERSION=0.1.0 \
   TOASTTY_BUILD_NUMBER=1 \
   ./scripts/release/publish-github-release.sh \
-  --notes-file /path/to/release-notes.md
+  --create-tag
 ```
 
-Add `--dry-run` to print the exact `gh release create ...` command without creating a release. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly.
+Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create ...` commands without creating anything. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly. Pass `--notes-file` only when you want to override the generated draft notes path.
 
 ## Configuration
 

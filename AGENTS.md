@@ -7,6 +7,11 @@
 - **Full gate:** `./scripts/automation/check.sh` (generate + build + test)
 - If Rosetta is active, set `ARCH` explicitly. Prefer invocation-scoped overrides (`ARCHS`, `ONLY_ACTIVE_ARCH=YES`) over mutating project settings.
 
+## Release Workflow
+- **Ghostty release provenance:** install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
+- **Build release DMG:** `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot. It writes `release-metadata.env`, `ghostty-metadata.env`, and `release-notes.md` into `artifacts/release/<version>-<build>/`.
+- **Publish release:** `scripts/release/publish-github-release.sh --create-tag` tags the recorded release commit from `release-metadata.env`, pushes the tag, and creates the GitHub release. It uses the generated `release-notes.md` by default.
+
 ## Validation
 For any UI/runtime change, validate beyond unit tests — run automation and inspect visually.
 
