@@ -34,7 +34,10 @@ struct SidebarView: View {
             // New workspace button — full-width, matches workspace item sizing
             Button {
                 cancelWorkspaceRename()
-                store.send(.createWorkspace(windowID: windowID, title: nil))
+                if store.send(.createWorkspace(windowID: windowID, title: nil)),
+                   let newWorkspaceID = store.selectedWorkspaceID(in: windowID) {
+                    store.pendingRenameWorkspaceID = newWorkspaceID
+                }
             } label: {
                 HStack(spacing: 6) {
                     // Plus icon matching 11×11 stroke icon language
@@ -88,6 +91,14 @@ struct SidebarView: View {
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
+        }
+        .onChange(of: store.pendingRenameWorkspaceID) { _, newValue in
+            guard let workspaceID = newValue,
+                  let window = store.window(id: windowID),
+                  window.workspaceIDs.contains(workspaceID),
+                  let workspace = store.state.workspacesByID[workspaceID] else { return }
+            store.pendingRenameWorkspaceID = nil
+            beginWorkspaceRename(workspace)
         }
     }
 

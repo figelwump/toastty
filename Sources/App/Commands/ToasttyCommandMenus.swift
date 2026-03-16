@@ -56,6 +56,12 @@ struct ToasttyCommandMenus: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: focusedWindowID) == false)
 
+            Button("Rename Workspace") {
+                store.renameSelectedWorkspaceFromCommand(preferredWindowID: focusedWindowID)
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(commandWorkspace == nil)
+
             Button("Close Panel") {
                 closeFocusedPanelFromCommandSelection()
             }

@@ -20,6 +20,10 @@ final class AppStore: ObservableObject {
 
     @Published private(set) var state: AppState
 
+    /// Set by workspace creation or rename commands; the sidebar observes this
+    /// to enter inline-rename mode for the target workspace.
+    @Published var pendingRenameWorkspaceID: UUID?
+
     private let reducer = AppReducer()
     private let persistTerminalFontPreference: Bool
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
@@ -131,15 +135,26 @@ final class AppStore: ObservableObject {
 
         switch target {
         case .existingWindow(let windowID):
-            return send(.createWorkspace(windowID: windowID, title: nil))
+            guard send(.createWorkspace(windowID: windowID, title: nil)) else { return false }
+            pendingRenameWorkspaceID = selectedWorkspaceID(in: windowID)
+            return true
         case .newWindow:
-            return send(
+            guard send(
                 .createWindow(
                     initialWorkspaceTitle: nil,
                     initialFrame: commandCreateWindowFrameProvider()
                 )
-            )
+            ) else { return false }
+            if let newWindowID = state.selectedWindowID {
+                pendingRenameWorkspaceID = selectedWorkspaceID(in: newWindowID)
+            }
+            return true
         }
+    }
+
+    func renameSelectedWorkspaceFromCommand(preferredWindowID: UUID?) {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return }
+        pendingRenameWorkspaceID = selection.workspace.id
     }
 
     var selectedWindow: WindowState? {
