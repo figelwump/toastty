@@ -54,6 +54,10 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     public var cwd: String
     public var launchWorkingDirectory: String?
     public var profileBinding: TerminalProfileBinding?
+    /// Semantic title persisted from the previous session for profiled terminals.
+    /// Used as a display fallback until the runtime provides a new semantic title.
+    /// Cleared once a non-path, non-default title arrives from the runtime.
+    public var restoredSemanticTitle: String?
     private static let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
 
     public init(
@@ -61,13 +65,15 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         shell: String,
         cwd: String,
         launchWorkingDirectory: String? = nil,
-        profileBinding: TerminalProfileBinding? = nil
+        profileBinding: TerminalProfileBinding? = nil,
+        restoredSemanticTitle: String? = nil
     ) {
         self.title = title
         self.shell = shell
         self.cwd = cwd
         self.launchWorkingDirectory = Self.normalizedWorkingDirectoryValue(launchWorkingDirectory)
         self.profileBinding = profileBinding
+        self.restoredSemanticTitle = restoredSemanticTitle
     }
 
     /// The cwd we should use when launching or re-launching a shell surface.
@@ -89,6 +95,10 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     public var displayPanelLabel: String {
         if let customTitle = normalizedCustomTitle {
             return customTitle
+        }
+
+        if let restored = restoredSemanticTitle {
+            return restored
         }
 
         if let directory = directoryLabel {
@@ -150,7 +160,7 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         return trimmed
     }
 
-    private static func looksLikePathContextTitle(_ title: String) -> Bool {
+    static func looksLikePathContextTitle(_ title: String) -> Bool {
         if title.hasPrefix("/") || title.hasPrefix("~") || title.hasPrefix("file://") {
             return true
         }
@@ -161,7 +171,7 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
         return false
     }
 
-    private static func isDefaultTerminalTitle(_ title: String) -> Bool {
+    static func isDefaultTerminalTitle(_ title: String) -> Bool {
         let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized == "terminal" {
             return true

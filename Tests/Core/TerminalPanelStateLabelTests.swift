@@ -216,4 +216,57 @@ struct TerminalPanelStateLabelTests {
 
         #expect(state.workingDirectorySeed == (NSHomeDirectory() as NSString).standardizingPath)
     }
+
+    @Test
+    func restoredSemanticTitleTakesPriorityOverDirectoryLabel() {
+        let state = TerminalPanelState(
+            title: "/tmp/project",
+            shell: "/bin/zsh",
+            cwd: "/tmp/project",
+            profileBinding: TerminalProfileBinding(profileID: "zmx"),
+            restoredSemanticTitle: "bundle exec rspec"
+        )
+
+        #expect(state.displayPanelLabel == "bundle exec rspec")
+    }
+
+    @Test
+    func restoredSemanticTitleIgnoredWhenCurrentTitleIsSemantic() {
+        let state = TerminalPanelState(
+            title: "vim",
+            shell: "/bin/zsh",
+            cwd: "/tmp/project",
+            profileBinding: TerminalProfileBinding(profileID: "zmx"),
+            restoredSemanticTitle: "bundle exec rspec"
+        )
+
+        // Current runtime title "vim" is semantic and takes precedence.
+        #expect(state.displayPanelLabel == "vim")
+    }
+
+    @Test
+    func restoredSemanticTitleShownBeforeCWDIsAvailable() {
+        let state = TerminalPanelState(
+            title: "Terminal 1",
+            shell: "/bin/zsh",
+            cwd: "",
+            profileBinding: TerminalProfileBinding(profileID: "zmx"),
+            restoredSemanticTitle: "htop"
+        )
+
+        #expect(state.displayPanelLabel == "htop")
+    }
+
+    @Test
+    func restoredSemanticTitleNilDoesNotAffectDisplay() {
+        let state = TerminalPanelState(
+            title: "Terminal 1",
+            shell: "/bin/zsh",
+            cwd: "/tmp/project",
+            profileBinding: TerminalProfileBinding(profileID: "zmx"),
+            restoredSemanticTitle: nil
+        )
+
+        #expect(state.displayPanelLabel == "tmp/project")
+    }
 }

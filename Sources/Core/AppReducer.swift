@@ -475,6 +475,15 @@ public struct AppReducer {
             if let normalizedTitle = normalizedMetadataValue(title),
                terminalState.title != normalizedTitle {
                 terminalState.title = normalizedTitle
+                // Clear the restored semantic title once a semantic runtime title
+                // arrives. Path-like titles don't clear it — they represent CWD
+                // context, not the running process identity the restored title was
+                // preserving.
+                if terminalState.restoredSemanticTitle != nil,
+                   !TerminalPanelState.looksLikePathContextTitle(normalizedTitle),
+                   !TerminalPanelState.isDefaultTerminalTitle(normalizedTitle) {
+                    terminalState.restoredSemanticTitle = nil
+                }
                 didMutate = true
             }
 

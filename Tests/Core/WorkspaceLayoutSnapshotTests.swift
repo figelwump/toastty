@@ -294,6 +294,168 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func snapshotPersistsSemanticTitleForProfiledTerminal() {
+        let workspace = WorkspaceState.bootstrap(title: "Dev")
+        let panelID = workspace.layoutTree.allSlotInfos[0].panelID
+
+        var terminalState = TerminalPanelState(
+            title: "bundle exec rspec",
+            shell: "/bin/zsh",
+            cwd: "/tmp/project",
+            profileBinding: TerminalProfileBinding(profileID: "zmx")
+        )
+
+        var modifiedWorkspace = workspace
+        modifiedWorkspace.panels[panelID] = .terminal(terminalState)
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: UUID(),
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: modifiedWorkspace],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        guard case .terminal(let terminalSnapshot) = snapshot.workspacesByID[workspace.id]?.panels[panelID] else {
+            Issue.record("Expected terminal snapshot")
+            return
+        }
+
+        #expect(terminalSnapshot.restoredSemanticTitle == "bundle exec rspec")
+    }
+
+    @Test
+    func snapshotDoesNotPersistPathLikeTitleForProfiledTerminal() {
+        let workspace = WorkspaceState.bootstrap(title: "Dev")
+        let panelID = workspace.layoutTree.allSlotInfos[0].panelID
+
+        var modifiedWorkspace = workspace
+        modifiedWorkspace.panels[panelID] = .terminal(
+            TerminalPanelState(
+                title: "/Users/vishal/project",
+                shell: "/bin/zsh",
+                cwd: "/Users/vishal/project",
+                profileBinding: TerminalProfileBinding(profileID: "zmx")
+            )
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: UUID(),
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: modifiedWorkspace],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        guard case .terminal(let terminalSnapshot) = snapshot.workspacesByID[workspace.id]?.panels[panelID] else {
+            Issue.record("Expected terminal snapshot")
+            return
+        }
+
+        #expect(terminalSnapshot.restoredSemanticTitle == nil)
+    }
+
+    @Test
+    func snapshotDoesNotPersistTitleForUnprofiledTerminal() {
+        let workspace = WorkspaceState.bootstrap(title: "Dev")
+        let panelID = workspace.layoutTree.allSlotInfos[0].panelID
+
+        var modifiedWorkspace = workspace
+        modifiedWorkspace.panels[panelID] = .terminal(
+            TerminalPanelState(title: "vim", shell: "/bin/zsh", cwd: "/tmp/project")
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: UUID(),
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: modifiedWorkspace],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        guard case .terminal(let terminalSnapshot) = snapshot.workspacesByID[workspace.id]?.panels[panelID] else {
+            Issue.record("Expected terminal snapshot")
+            return
+        }
+
+        #expect(terminalSnapshot.restoredSemanticTitle == nil)
+    }
+
+    @Test
+    func makeAppStateRestoresSemanticTitleForProfiledTerminal() throws {
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Dev",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "bundle exec rspec",
+                        shell: "/bin/zsh",
+                        cwd: "/tmp/project",
+                        profileBinding: TerminalProfileBinding(profileID: "zmx")
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+
+        guard case .terminal(let restoredTerminalState) = restoredWorkspace.panels[panelID] else {
+            Issue.record("Expected terminal panel")
+            return
+        }
+
+        #expect(restoredTerminalState.restoredSemanticTitle == "bundle exec rspec")
+        #expect(restoredTerminalState.displayPanelLabel == "bundle exec rspec")
+        #expect(restoredTerminalState.cwd.isEmpty)
+    }
+
+    @Test
     func makeAppStatePreservesMultipleWindowsAndSelectedWindow() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
