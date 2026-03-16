@@ -363,6 +363,143 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testRestoredProfiledPaneUsesRestoredLaunchWorkingDirectoryWhenStartupNativeCWDDiffers() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let profileProvider = TestTerminalProfileProvider(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(
+            profileProvider,
+            restoredTerminalPanelIDs: [panelID]
+        )
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/bootstrap-shell" },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/bootstrap-shell"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        let terminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(terminalState.cwd, "/tmp/restored")
+        XCTAssertEqual(terminalState.displayPanelLabel, "tmp/restored")
+        XCTAssertTrue(service.prefersNativeCWDSignal(panelID: panelID))
+        XCTAssertNil(
+            service.refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: panelID,
+                source: "process_poll"
+            )
+        )
+        try StateValidator.validate(store.state)
+    }
+
+    func testRestoredProfiledPaneAcceptsMatchingStartupNativeCWDWithoutSubstitution() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let profileProvider = TestTerminalProfileProvider(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(
+            profileProvider,
+            restoredTerminalPanelIDs: [panelID]
+        )
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/process-fallback" },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/restored"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        let terminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(terminalState.cwd, "/tmp/restored")
+        XCTAssertTrue(service.prefersNativeCWDSignal(panelID: panelID))
+        XCTAssertNil(
+            service.refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: panelID,
+                source: "process_poll"
+            )
+        )
+        try StateValidator.validate(store.state)
+    }
+
+    func testRestoredUnprofiledPaneAcceptsNativeCWDWithoutSubstitution() async throws {
+        let state = makeRestoredUnprofiledPanelState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/process-fallback" },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/bootstrap-shell"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        let terminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(terminalState.cwd, "/tmp/bootstrap-shell")
+        XCTAssertTrue(service.prefersNativeCWDSignal(panelID: panelID))
+        XCTAssertNil(
+            service.refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: panelID,
+                source: "process_poll"
+            )
+        )
+        try StateValidator.validate(store.state)
+    }
+
     func testNativeGhosttyCWDDisablesProcessFallbackUpdates() async throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -531,6 +668,22 @@ private func makeRestoredProfiledPanelState(profileID: String) -> AppState {
     terminalState.cwd = ""
     terminalState.launchWorkingDirectory = "/tmp/restored"
     terminalState.profileBinding = TerminalProfileBinding(profileID: profileID)
+    workspace.panels[panelID] = .terminal(terminalState)
+    state.workspacesByID[workspaceID] = workspace
+    return state
+}
+
+private func makeRestoredUnprofiledPanelState() -> AppState {
+    var state = AppState.bootstrap()
+    guard let workspaceID = state.windows.first?.selectedWorkspaceID,
+          var workspace = state.workspacesByID[workspaceID],
+          let panelID = workspace.focusedPanelID,
+          case .terminal(var terminalState)? = workspace.panels[panelID] else {
+        fatalError("expected bootstrap terminal panel")
+    }
+
+    terminalState.cwd = ""
+    terminalState.launchWorkingDirectory = "/tmp/restored"
     workspace.panels[panelID] = .terminal(terminalState)
     state.workspacesByID[workspaceID] = workspace
     return state

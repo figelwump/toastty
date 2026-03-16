@@ -123,12 +123,22 @@ final class TerminalMetadataService {
             )
 
         case .setTerminalCWD(let cwd):
-            if TerminalRuntimeRegistry.normalizedCWDValue(cwd) != nil {
+            let effectiveCWD = effectiveNativeGhosttyCWD(
+                for: cwd,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: state
+            )
+            if TerminalRuntimeRegistry.normalizedCWDValue(effectiveCWD) != nil {
+                // Profile attach wrappers surface the bootstrap shell process to
+                // both Ghostty and process polling first. Once we choose the
+                // restored launch cwd as the placeholder, suppress process
+                // fallback as well so that provisional shell cannot overwrite it.
                 recordNativeCWDSignal(panelID: panelID)
             }
             return handleTerminalMetadataUpdate(
                 title: nil,
-                cwd: cwd,
+                cwd: effectiveCWD,
                 allowLegacyCWDInference: false,
                 workspaceID: workspaceID,
                 panelID: panelID,
@@ -331,6 +341,42 @@ final class TerminalMetadataService {
                 metadata: ["panel_id": panelID.uuidString]
             )
         }
+    }
+
+    private func effectiveNativeGhosttyCWD(
+        for cwd: String?,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState
+    ) -> String? {
+        guard let incomingCWD = TerminalRuntimeRegistry.normalizedCWDValue(cwd) else {
+            return cwd
+        }
+        guard let workspace = state.workspacesByID[workspaceID],
+              case .terminal(let terminalState)? = workspace.panels[panelID],
+              normalizedProfileStartupCommandAwaitingTitleCleanup(
+                  panelID: panelID,
+                  terminalState: terminalState
+              ) != nil,
+              TerminalRuntimeRegistry.normalizedCWDValue(terminalState.cwd) == nil,
+              let restoredLaunchWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(
+                  terminalState.launchWorkingDirectory
+              ),
+              restoredLaunchWorkingDirectory != incomingCWD else {
+            return incomingCWD
+        }
+
+        ToasttyLog.debug(
+            "Replacing provisional profile startup cwd with restored launch working directory",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "incoming_cwd_sample": String(incomingCWD.prefix(120)),
+                "launch_cwd_sample": String(restoredLaunchWorkingDirectory.prefix(120)),
+            ]
+        )
+        return restoredLaunchWorkingDirectory
     }
 
     private func resolveDesktopNotificationRoute(
