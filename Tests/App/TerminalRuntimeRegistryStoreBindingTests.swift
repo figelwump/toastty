@@ -156,6 +156,59 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
     }
 }
 
+final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
+    func testDeferredRegistrationCandidateIndexAssignsByPendingOrderWhenCountsMatch() {
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+        let thirdPanelID = UUID()
+
+        XCTAssertEqual(
+            TerminalProcessWorkingDirectoryResolver.deferredRegistrationCandidateIndex(
+                panelID: firstPanelID,
+                pendingPanelIDsByOrder: [firstPanelID, secondPanelID, thirdPanelID],
+                candidateCount: 3
+            ),
+            0
+        )
+        XCTAssertEqual(
+            TerminalProcessWorkingDirectoryResolver.deferredRegistrationCandidateIndex(
+                panelID: secondPanelID,
+                pendingPanelIDsByOrder: [firstPanelID, secondPanelID, thirdPanelID],
+                candidateCount: 3
+            ),
+            1
+        )
+        XCTAssertEqual(
+            TerminalProcessWorkingDirectoryResolver.deferredRegistrationCandidateIndex(
+                panelID: thirdPanelID,
+                pendingPanelIDsByOrder: [firstPanelID, secondPanelID, thirdPanelID],
+                candidateCount: 3
+            ),
+            2
+        )
+    }
+
+    func testDeferredRegistrationCandidateIndexReturnsNilWhenCandidateCountDoesNotMatchPendingPanels() {
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+
+        XCTAssertNil(
+            TerminalProcessWorkingDirectoryResolver.deferredRegistrationCandidateIndex(
+                panelID: firstPanelID,
+                pendingPanelIDsByOrder: [firstPanelID, secondPanelID],
+                candidateCount: 1
+            )
+        )
+        XCTAssertNil(
+            TerminalProcessWorkingDirectoryResolver.deferredRegistrationCandidateIndex(
+                panelID: firstPanelID,
+                pendingPanelIDsByOrder: [firstPanelID],
+                candidateCount: 2
+            )
+        )
+    }
+}
+
 @MainActor
 private final class TestTerminalProfileProvider: TerminalProfileProviding {
     let catalog: TerminalProfileCatalog
