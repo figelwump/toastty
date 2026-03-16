@@ -24,11 +24,35 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testBindArmsCloseTransitionViewportDeferralWhenPanelCloses() throws {
+        var armedWorkspaceIDs: [UUID] = []
+        var armedPanelIDSets: [Set<UUID>] = []
+        let fixture = try makeStoreActionFixture(
+            armCloseTransitionViewportDeferral: { workspaceID, panelIDs in
+                armedWorkspaceIDs.append(workspaceID)
+                armedPanelIDSets.append(panelIDs)
+            }
+        )
+
+        XCTAssertTrue(
+            fixture.store.send(.splitFocusedSlot(workspaceID: fixture.workspaceID, orientation: .horizontal))
+        )
+        let panelToClose = try XCTUnwrap(fixture.store.selectedWorkspace?.focusedPanelID)
+
+        XCTAssertTrue(fixture.store.send(.closePanel(panelID: panelToClose)))
+
+        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
+        XCTAssertEqual(armedWorkspaceIDs, [fixture.workspaceID])
+        XCTAssertEqual(armedPanelIDSets, [liveTerminalPanelIDs(in: workspace)])
+    }
+
     func testBindRequestsFocusRestoreWhenSelectedWorkspaceFocusedModeToggles() throws {
         var restoredWorkspaceIDs: [UUID] = []
-        let fixture = try makeStoreActionFixture { workspaceID in
-            restoredWorkspaceIDs.append(workspaceID)
-        }
+        let fixture = try makeStoreActionFixture(
+            requestWorkspaceFocusRestore: { workspaceID in
+                restoredWorkspaceIDs.append(workspaceID)
+            }
+        )
 
         XCTAssertTrue(fixture.store.send(.toggleFocusedPanelMode(workspaceID: fixture.workspaceID)))
         XCTAssertEqual(restoredWorkspaceIDs, [fixture.workspaceID])
@@ -50,6 +74,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
                     nextState: nextState
                 )
             },
+            armCloseTransitionViewportDeferral: { _, _ in },
             requestWorkspaceFocusRestore: { workspaceID in
                 restoredWorkspaceIDs.append(workspaceID)
             }
@@ -63,9 +88,11 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 
     func testBindReplacesPreviousObserverRegistration() throws {
         var restoredWorkspaceIDs: [UUID] = []
-        let fixture = try makeStoreActionFixture { workspaceID in
-            restoredWorkspaceIDs.append(workspaceID)
-        }
+        let fixture = try makeStoreActionFixture(
+            requestWorkspaceFocusRestore: { workspaceID in
+                restoredWorkspaceIDs.append(workspaceID)
+            }
+        )
 
         fixture.coordinator.bind(store: fixture.store)
 
@@ -75,9 +102,11 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 
     func testUnbindStopsObservingStoreActions() throws {
         var restoredWorkspaceIDs: [UUID] = []
-        let fixture = try makeStoreActionFixture { workspaceID in
-            restoredWorkspaceIDs.append(workspaceID)
-        }
+        let fixture = try makeStoreActionFixture(
+            requestWorkspaceFocusRestore: { workspaceID in
+                restoredWorkspaceIDs.append(workspaceID)
+            }
+        )
 
         fixture.coordinator.unbind()
 
@@ -88,6 +117,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 
 @MainActor
 private func makeStoreActionFixture(
+    armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void = { _, _ in },
     requestWorkspaceFocusRestore: @escaping (UUID) -> Void = { _ in }
 ) throws -> (
     store: AppStore,
@@ -110,6 +140,7 @@ private func makeStoreActionFixture(
                 nextState: nextState
             )
         },
+        armCloseTransitionViewportDeferral: armCloseTransitionViewportDeferral,
         requestWorkspaceFocusRestore: requestWorkspaceFocusRestore
     )
     coordinator.bind(store: store)
@@ -126,5 +157,16 @@ private func stateWithNilFocusedPanelID() throws -> AppState {
     workspace.focusedPanelID = nil
     state.workspacesByID[workspaceID] = workspace
     return state
+}
+
+private func liveTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
+    workspace.layoutTree.allSlotInfos.reduce(into: Set<UUID>()) { panelIDs, slot in
+        let panelID = slot.panelID
+        guard let panelState = workspace.panels[panelID],
+              case .terminal = panelState else {
+            return
+        }
+        panelIDs.insert(panelID)
+    }
 }
 #endif

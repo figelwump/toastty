@@ -670,6 +670,68 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
       echo "last terminal_state response: ${PROFILE_STATE_RESPONSE}" >&2
       exit 1
     fi
+
+    PROFILE_CLOSE_SLOT_COUNT="$(extract_int_field "$PROFILE_SPLIT_RESPONSE" "slotCount")"
+    if [[ -z "$PROFILE_CLOSE_SLOT_COUNT" || "$PROFILE_CLOSE_SLOT_COUNT" -lt 2 ]]; then
+      echo "error: profiled split did not leave enough slots for close-focused-panel validation" >&2
+      echo "snapshot response: ${PROFILE_SPLIT_RESPONSE}" >&2
+      exit 1
+    fi
+
+    send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}' >/dev/null
+    EXPECTED_PROFILE_CLOSE_SLOT_COUNT=$((PROFILE_CLOSE_SLOT_COUNT - 1))
+    PROFILE_CLOSE_RESPONSE=""
+    PROFILE_CLOSE_RENDER_RESPONSE=""
+    PROFILE_CLOSE_FOCUSED_PANEL_ID=""
+    PROFILE_CLOSE_TERMINAL_READY="false"
+    PROFILE_CLOSE_PROBE_RESPONSE=""
+    for _ in $(seq 1 40); do
+      PROFILE_CLOSE_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+      PROFILE_CLOSE_SLOT_COUNT="$(extract_int_field "$PROFILE_CLOSE_RESPONSE" "slotCount")"
+      PROFILE_CLOSE_FOCUSED_PANEL_ID="$(extract_string_field "$PROFILE_CLOSE_RESPONSE" "focusedPanelID")"
+      PROFILE_CLOSE_RENDER_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
+      PROFILE_CLOSE_ALL_RENDERABLE="$(extract_bool_field "$PROFILE_CLOSE_RENDER_RESPONSE" "allRenderable")"
+      PROFILE_CLOSE_TERMINAL_READY="true"
+      PROFILE_CLOSE_PROBE_RESPONSE=""
+      if [[ "$GHOSTTY_INPUT_READINESS_REQUIRED" == "1" ]]; then
+        PROFILE_CLOSE_TERMINAL_READY="false"
+        if [[ "$PROFILE_CLOSE_ALL_RENDERABLE" == "true" && -n "$PROFILE_CLOSE_FOCUSED_PANEL_ID" ]]; then
+          PROFILE_CLOSE_PROBE_RESPONSE="$(probe_terminal_send_text_availability "$PROFILE_CLOSE_FOCUSED_PANEL_ID")"
+          if [[ "$(extract_bool_field "$PROFILE_CLOSE_PROBE_RESPONSE" "available")" == "true" ]]; then
+            PROFILE_CLOSE_TERMINAL_READY="true"
+          fi
+        fi
+      fi
+      if [[ "$PROFILE_CLOSE_SLOT_COUNT" == "$EXPECTED_PROFILE_CLOSE_SLOT_COUNT" && "$PROFILE_CLOSE_ALL_RENDERABLE" == "true" && -n "$PROFILE_CLOSE_FOCUSED_PANEL_ID" && "$PROFILE_CLOSE_TERMINAL_READY" == "true" ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$PROFILE_CLOSE_SLOT_COUNT" != "$EXPECTED_PROFILE_CLOSE_SLOT_COUNT" ]]; then
+      echo "error: profiled close-focused-panel did not reduce slot count as expected" >&2
+      echo "expected slot count: ${EXPECTED_PROFILE_CLOSE_SLOT_COUNT}" >&2
+      echo "actual slot count: ${PROFILE_CLOSE_SLOT_COUNT:-missing}" >&2
+      echo "snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      exit 1
+    fi
+    if [[ "$PROFILE_CLOSE_ALL_RENDERABLE" != "true" ]]; then
+      echo "error: profiled close-focused-panel left one or more surfaces non-renderable" >&2
+      echo "workspace snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      echo "render snapshot response: ${PROFILE_CLOSE_RENDER_RESPONSE}" >&2
+      exit 1
+    fi
+    if [[ -z "$PROFILE_CLOSE_FOCUSED_PANEL_ID" ]]; then
+      echo "error: profiled close-focused-panel did not resolve a focused survivor panel" >&2
+      echo "snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      exit 1
+    fi
+    if [[ "$GHOSTTY_INPUT_READINESS_REQUIRED" == "1" && "$PROFILE_CLOSE_TERMINAL_READY" != "true" ]]; then
+      echo "error: surviving terminal surface was not input-ready after profiled close-focused-panel" >&2
+      echo "workspace snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      echo "render snapshot response: ${PROFILE_CLOSE_RENDER_RESPONSE}" >&2
+      echo "last terminal probe response: ${PROFILE_CLOSE_PROBE_RESPONSE}" >&2
+      exit 1
+    fi
   fi
 
   TERMINAL_VIEWPORT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"terminal-viewport-smoke"}')"
