@@ -53,15 +53,15 @@ struct AppWindowView: View {
             store.send(.toggleSidebar(windowID: windowID))
         } label: {
             SidebarToggleIconView(
-                color: sidebarVisible ? ToastyTheme.accent : ToastyTheme.inactiveText,
+                color: sidebarVisible ? ToastyTheme.inactiveText : ToastyTheme.accent,
                 sidebarVisible: sidebarVisible
             )
         }
         .buttonStyle(.plain)
         .frame(width: 22, height: 22)
         .contentShape(Rectangle())
-        .padding(.leading, 68)
-        .padding(.top, 3)
+        .padding(.leading, 76)
+        .padding(.top, 4)
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 

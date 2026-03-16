@@ -543,22 +543,22 @@ struct SidebarToggleIconView: View {
     var body: some View {
         Canvas { context, _ in
             // Outer rectangle
-            let rect = Path(roundedRect: CGRect(x: 1, y: 1.5, width: 9, height: 8), cornerRadius: 1)
-            context.stroke(rect, with: .color(color), style: StrokeStyle(lineWidth: 1.1))
+            let rect = Path(roundedRect: CGRect(x: 1, y: 1, width: 12, height: 12), cornerRadius: 1.5)
+            context.stroke(rect, with: .color(color), style: StrokeStyle(lineWidth: 1.2))
 
             // Vertical divider separating sidebar panel from main area
             var divider = Path()
-            divider.move(to: CGPoint(x: 4.2, y: 1.5))
-            divider.addLine(to: CGPoint(x: 4.2, y: 9.5))
-            context.stroke(divider, with: .color(color), style: StrokeStyle(lineWidth: 1.1))
+            divider.move(to: CGPoint(x: 5.2, y: 1))
+            divider.addLine(to: CGPoint(x: 5.2, y: 13))
+            context.stroke(divider, with: .color(color), style: StrokeStyle(lineWidth: 1.2))
 
             // Fill the left panel area when sidebar is visible
             if sidebarVisible {
-                let fill = Path(CGRect(x: 1.6, y: 2.1, width: 2.6, height: 6.8))
-                context.fill(fill, with: .color(color.opacity(0.35)))
+                let fill = Path(CGRect(x: 1.7, y: 1.7, width: 3.5, height: 10.6))
+                context.fill(fill, with: .color(color.opacity(0.3)))
             }
         }
-        .frame(width: 11, height: 11)
+        .frame(width: 14, height: 14)
     }
 }
 
