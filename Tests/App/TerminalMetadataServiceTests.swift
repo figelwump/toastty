@@ -414,6 +414,140 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testRestoredProfiledPaneInfersCWDFromTitleAfterBootstrapNativeCWDSignal() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let profileProvider = TestTerminalProfileProvider(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(
+            profileProvider,
+            restoredTerminalPanelIDs: [panelID]
+        )
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        // Bootstrap shell emits its CWD → gets substituted with restored launch CWD.
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/bootstrap-shell"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/restored")
+        XCTAssertTrue(service.prefersNativeCWDSignal(panelID: panelID))
+
+        // Multiplexer takes over. It forwards title-setting sequences (OSC 0/2)
+        // but not CWD sequences (OSC 7). The user changes directory inside the
+        // multiplexer session, so the shell sets the title to the new path.
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("/tmp/new-directory"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        // CWD should be inferred from the path-like title, even though native
+        // CWD was "confirmed" during the bootstrap phase.
+        let ts = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(ts.cwd, "/tmp/new-directory")
+        try StateValidator.validate(store.state)
+    }
+
+    func testRestoredProfiledPaneUpdatesCWDFromTitleOnDirectoryChange() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let profileProvider = TestTerminalProfileProvider(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(
+            profileProvider,
+            restoredTerminalPanelIDs: [panelID]
+        )
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        // Bootstrap CWD → substituted with restored launch CWD.
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/bootstrap-shell"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        // User navigates through multiple directories inside the multiplexer.
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("/tmp/first-dir"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/first-dir")
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("/tmp/second-dir"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/second-dir")
+
+        // Non-path title (e.g., running a command) should NOT update CWD.
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("vim"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/second-dir")
+
+        try StateValidator.validate(store.state)
+    }
+
     func testRestoredProfiledPaneAcceptsMatchingStartupNativeCWDWithoutSubstitution() async throws {
         let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
