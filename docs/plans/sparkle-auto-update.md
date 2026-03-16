@@ -4,7 +4,7 @@
 
 Add Sparkle after the DMG release pipeline is already working.
 
-This is a follow-up release plan, not part of the first DMG ship. It should reuse the release foundation from `docs/plans/dmg-installer.md` instead of rebuilding it.
+This is a follow-up release plan, not part of the first DMG ship. It should reuse the existing release foundation in `Project.swift`, `scripts/release/release.sh`, and `docs/environment-and-build-flags.md` instead of rebuilding it.
 
 Target shape:
 - one stable update channel
@@ -18,7 +18,7 @@ Target shape:
 ## Preconditions
 
 Do not start this work until all of these are true:
-- the DMG release plan is implemented
+- the current DMG release workflow is working end-to-end
 - `scripts/release/release.sh` can already produce a signed, notarized DMG
 - versioning is already driven by `TOASTTY_VERSION` and `TOASTTY_BUILD_NUMBER`
 - a real hosting location is chosen for:
@@ -108,7 +108,7 @@ Notes:
 - `SUFeedURL` must be real before release. Do not ship a placeholder.
 - the public key is not secret and can live in source control.
 - keep bundle versioning aligned with the DMG plan; Sparkle depends on stable version comparison.
-- reuse the DMG plan's generated Info.plist setup rather than introducing a second plist strategy here.
+- reuse the existing `Project.swift`-driven Info.plist setup rather than introducing a second plist strategy here.
 
 **Files:** `Project.swift`
 

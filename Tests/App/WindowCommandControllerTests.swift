@@ -81,6 +81,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
         bridge.installIfNeeded()
 
+        XCTAssertEqual(closeItem.title, "Close Panel")
         XCTAssertTrue(closeItem.target === bridge)
         XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
@@ -96,6 +97,35 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertNotNil(workspace.focusedPanelID)
         XCTAssertEqual(store.state.selectedWindowID, fixture.windowID)
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
+    }
+
+    func testHelpMenuBridgeRetargetsToasttyHelpItemAndOpensGitHub() {
+        var openedURL: URL?
+        let bridge = HelpMenuBridge { url in
+            openedURL = url
+        }
+
+        let mainMenu = NSMenu(title: "Main")
+        let helpRootItem = NSMenuItem(title: "Help", action: nil, keyEquivalent: "")
+        let helpMenu = NSMenu(title: "Help")
+        let projectHelpItem = NSMenuItem(title: "Toastty Help", action: nil, keyEquivalent: "")
+        helpMenu.addItem(projectHelpItem)
+        helpRootItem.submenu = helpMenu
+        mainMenu.addItem(helpRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(projectHelpItem.target === bridge)
+        XCTAssertEqual(projectHelpItem.action, #selector(HelpMenuBridge.openProjectHelp(_:)))
+
+        bridge.openProjectHelp(nil)
+
+        XCTAssertEqual(openedURL, URL(string: "https://github.com/figelwump/toastty"))
     }
 
     func testHiddenSystemMenuItemsBridgeHidesRequestedItemsByAction() {

@@ -2,6 +2,8 @@
 
 Toastty embeds Ghostty through a locally provided `GhosttyKit.xcframework`.
 
+For the broader build, launch, and automation flag reference, see [Environment and Launch Flags](environment-and-build-flags.md).
+
 The repository intentionally does not commit Ghostty binaries. Contributors can:
 
 - build their own Ghostty xcframework from an upstream Ghostty checkout, or
@@ -42,6 +44,7 @@ macos/GhosttyKit.xcframework
 Install a built artifact into Toastty's local `Dependencies/` directory:
 
 ```bash
+GHOSTTY_BUILD_FLAGS="-Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal -Dsentry=false" \
 GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
   ./scripts/ghostty/install-local-xcframework.sh
 ```
@@ -52,6 +55,20 @@ Variant options:
 - `GHOSTTY_XCFRAMEWORK_VARIANT=release`
 
 The installer also auto-detects a sibling checkout at `../ghostty/macos/GhosttyKit.xcframework` when present. If your Ghostty checkout lives elsewhere, set `GHOSTTY_XCFRAMEWORK_SOURCE` explicitly.
+
+When the source path lives inside a Ghostty git checkout, the installer records:
+
+- `GHOSTTY_COMMIT`
+- `GHOSTTY_COMMIT_SHORT`
+- `GHOSTTY_SOURCE_DIRTY`
+- `GHOSTTY_BUILD_FLAGS`
+
+in an ignored sidecar metadata file next to the installed xcframework:
+
+- `Dependencies/GhosttyKit.Debug.metadata.env`
+- `Dependencies/GhosttyKit.Release.metadata.env`
+
+Release DMG builds require a complete release sidecar with a clean Ghostty source snapshot (`GHOSTTY_SOURCE_DIRTY=0`) plus non-empty commit and build-flags metadata.
 
 After installing an artifact, regenerate the workspace:
 

@@ -6,6 +6,7 @@ import SwiftUI
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
     private var closeWindowMenuBridge: CloseWindowMenuBridge?
+    private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
     private var menuBridgeInstallationTask: Task<Void, Never>?
 
@@ -20,6 +21,11 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func setCloseWindowMenuBridge(_ bridge: CloseWindowMenuBridge) {
         closeWindowMenuBridge = bridge
+        scheduleMenuBridgeInstallations()
+    }
+
+    func setHelpMenuBridge(_ bridge: HelpMenuBridge) {
+        helpMenuBridge = bridge
         scheduleMenuBridgeInstallations()
     }
 
@@ -70,6 +76,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     private func installMenuBridges() {
         closeWindowMenuBridge?.installIfNeeded()
+        helpMenuBridge?.installIfNeeded()
         hiddenSystemMenuItemsBridge?.installIfNeeded()
     }
 
@@ -195,6 +202,7 @@ struct ToasttyApp: App {
     private let agentLaunchService: AgentLaunchService
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let closeWindowMenuBridge: CloseWindowMenuBridge
+    private let helpMenuBridge: HelpMenuBridge
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
@@ -234,6 +242,7 @@ struct ToasttyApp: App {
                 focusedPanelCommandController: focusedPanelCommandController
             )
         )
+        helpMenuBridge = HelpMenuBridge()
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
@@ -310,6 +319,7 @@ struct ToasttyApp: App {
             .frame(minWidth: 980, minHeight: 620)
             .onAppear {
                 appLifecycleDelegate.setCloseWindowMenuBridge(closeWindowMenuBridge)
+                appLifecycleDelegate.setHelpMenuBridge(helpMenuBridge)
                 appLifecycleDelegate.setHiddenSystemMenuItemsBridge(hiddenSystemMenuItemsBridge)
             }
         }

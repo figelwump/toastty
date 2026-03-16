@@ -1,7 +1,4 @@
-# Toastty — Agent Workflow Guide
-
-## Reference Architecture
-- When solving tricky problems, improving architecture, or looking for good patterns/best practices, consult the Ghostty source tree when available. It's a well-architected Swift/macOS codebase and a good source of inspiration for terminal, split-pane, keyboard bridging, and config patterns.
+# Toastty
 
 ## Build & Generate
 - **Source of truth:** `Project.swift` — never hand-edit generated Xcode project/workspace files.
@@ -9,6 +6,11 @@
 - **Build:** `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
 - **Full gate:** `./scripts/automation/check.sh` (generate + build + test)
 - If Rosetta is active, set `ARCH` explicitly. Prefer invocation-scoped overrides (`ARCHS`, `ONLY_ACTIVE_ARCH=YES`) over mutating project settings.
+
+## Release Workflow
+- **Ghostty release provenance:** install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
+- **Build release DMG and draft notes:** use `.agents/skills/toastty-release/SKILL.md`. `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot, then writes `release-metadata.env` and `ghostty-metadata.env` into `artifacts/release/<version>-<build>/`; the release skill drafts `release-notes.md` in that same directory for review before publish.
+- **Publish later:** use `.agents/skills/toastty-publish/SKILL.md`. It verifies the existing drafted notes and runs `scripts/release/publish-github-release.sh --create-tag` to tag the recorded release commit and create the GitHub release.
 
 ## Validation
 For any UI/runtime change, validate beyond unit tests — run automation and inspect visually.

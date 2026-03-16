@@ -115,6 +115,27 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(scrollView.ghosttyCursorVisible)
     }
 
+    func testSurfaceScrollViewUsesLinkCursorForMouseOverLinkFallback() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
+        hostView.setGhosttyMouseOverLink("https://example.com")
+
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.pointingHand)
+    }
+
+    func testSurfaceScrollViewRestoresBaseCursorWhenMouseOverLinkClears() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
+        hostView.setGhosttyMouseOverLink("https://example.com")
+        hostView.setGhosttyMouseOverLink(nil)
+
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
+    }
+
     func testSurfaceScrollViewDisablesNativeScrollbars() {
         let scrollView = TerminalSurfaceScrollView()
 

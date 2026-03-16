@@ -146,7 +146,7 @@ struct EmptyStateView: View {
     // MARK: - Text
 
     private var headline: some View {
-        Text("Nothing's cooking yet")
+        Text("The toast with the most")
             .font(.system(size: 22, weight: .bold))
             .foregroundStyle(ToastyTheme.primaryText)
     }

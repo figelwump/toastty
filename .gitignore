@@ -8,5 +8,6 @@ DerivedData
 /Derived-*/
 /artifacts/
 /Dependencies/GhosttyKit*.xcframework/
+/Dependencies/GhosttyKit*.metadata.env
 *.xcodeproj
 *.xcworkspace

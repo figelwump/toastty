@@ -1,20 +1,24 @@
 # Toastty
 
-A native macOS terminal multiplexer built with SwiftUI and powered by the [Ghostty](https://ghostty.org) rendering engine.
+<p align="center">
+  <img src="docs/assets/toastty-hero.png" alt="Toastty — multiple workspaces with split panes, Claude Code, and live logs" width="1840">
+</p>
 
-Toastty gives you split panes, workspaces, and a native macOS UI while reusing your existing Ghostty configuration.
+A native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
+
+Toastty builds on the the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, notifications and unread badges when agents are done working, and the performance and layout flexibility you're used to with Ghostty.
+
+There are also little features throughout. For example, keyboard shortcuts to jump directly to a panel and global font control (resize the font of all terminals at once, useful when switching between external monitors and your laptop for example).
 
 ## Features
 
-- **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them, or zoom a single pane to full view (`Cmd+Shift+F`)
-- **Workspaces** — Organize terminals into named workspaces, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
-- **Multiple windows** — Detach panels into separate windows, each with independent workspace management
-- **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine via XCFramework, with Ghostty config compatibility
-- **Hot-reload configuration** — Change your Ghostty config and reload it live from the menu bar
-- **Font control** — Increase, decrease, or reset terminal font size globally, persisted in `~/.toastty/config`
-- **Recently closed panels** — Reopen the last 10 closed panels per workspace
-- **Session tracking** — Records terminal metadata including working directory, shell type, and file activity
-- **Desktop notifications** — Workspace-scoped notification routing
+- **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
+- **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
+- **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
+- **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, persisted in `~/.toastty/config`
+- **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
+- **Hot-reload configuration** — Change your config and reload it live from the menu bar
+- **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
 ## Requirements
@@ -22,6 +26,7 @@ Toastty gives you split panes, workspaces, and a native macOS UI while reusing y
 - macOS 14.0+
 - [Tuist](https://tuist.io) (build system)
 - Xcode 16+ with Swift 6.0
+- [sv](https://github.com/figelwump/sv) (secret vault for development credentials)
 - Ghostty XCFramework (optional — Toastty can build in fallback mode without it)
 
 ## Getting Started
@@ -36,16 +41,32 @@ tuist generate
 
 `Project.swift` is the source of truth. The generated `toastty.xcworkspace` is not committed, so re-run `tuist generate` after manifest or file-layout changes.
 
-### 2. Install Ghostty XCFramework (optional)
+### 2. Install sv
+
+[sv](https://github.com/figelwump/sv) is a lightweight macOS secret vault that stores API keys and credentials in the native Keychain and injects them into processes at runtime. Automation scripts in this repo use `sv exec --` to run commands that need secrets without exposing values in shell history or environment dumps.
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/figelwump/sv/main/install.sh | bash
+```
+
+After installing, store any required secrets with `sv set <KEY>`. To run a command with secrets injected:
+
+```bash
+sv exec -- <command>
+```
+
+### 3. Install Ghostty XCFramework (optional)
+
+```bash
+GHOSTTY_BUILD_FLAGS="-Demit-macos-app=false -Demit-xcframework=true -Dxcframework-target=universal -Dsentry=false" \
 GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
   ./scripts/ghostty/install-local-xcframework.sh
 ```
 
-Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug|legacy` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
+Set `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to control the destination artifact path. The installer also auto-detects a sibling `../ghostty/macos/GhosttyKit.xcframework` checkout when present.
+When the source path lives inside a Ghostty git checkout, the installer also records the Ghostty commit and source cleanliness in an ignored sidecar metadata file next to the installed xcframework.
 
-For the recommended upstream Ghostty build command, release note guidance, and the `-Dsentry=false` recommendation, see [docs/ghostty-integration.md](docs/ghostty-integration.md).
+For the recommended upstream Ghostty build command, release note guidance, see [docs/ghostty-integration.md](docs/ghostty-integration.md).
 
 After installing, regenerate:
 
@@ -59,7 +80,7 @@ To build without Ghostty:
 TUIST_DISABLE_GHOSTTY=1 tuist generate
 ```
 
-### 3. Build
+### 4. Build
 
 ```bash
 ARCH="$(uname -m)"
@@ -71,7 +92,7 @@ xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp \
 
 Or open `toastty.xcworkspace` in Xcode and hit Run.
 
-### 4. Validate
+### 5. Validate
 
 ```bash
 # Full gate: generate + build + test
@@ -83,6 +104,52 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
 ```
+
+### 6. Build a signed release DMG
+
+The release script expects:
+- a clean Toastty git working tree
+- a release Ghostty artifact at `Dependencies/GhosttyKit.Release.xcframework`
+- Ghostty provenance metadata at `Dependencies/GhosttyKit.Release.metadata.env`
+- a local `Developer ID Application` certificate
+- notarization credentials injected at runtime
+
+Use an explicit marketing version plus a monotonically increasing build number:
+
+```bash
+sv exec -- env \
+  TOASTTY_VERSION=0.1.0 \
+  TOASTTY_BUILD_NUMBER=1 \
+  TUIST_DEVELOPMENT_TEAM=<TEAM_ID> \
+  ./scripts/release/release.sh
+```
+
+The script archives the app, exports a signed bundle, creates a plain drag-to-install DMG, notarizes it, staples it, and writes outputs under `artifacts/release/`.
+It also snapshots release provenance into the release directory:
+- `release-metadata.env` with the exact Toastty commit that was built
+- `ghostty-metadata.env` with the embedded Ghostty commit and build flags
+
+The script also records the canonical `artifacts/release/<version>-<build>/release-notes.md` path in `release-metadata.env`, but it does not generate the file for you. The repo-local `toastty-release` skill covers the build step and drafting `release-notes.md` from the recorded release diff so it can be reviewed before publish; the repo-local `toastty-publish` skill covers publishing those drafted notes later.
+
+### 7. Publish a draft GitHub Release
+
+After the DMG exists locally, publish it to GitHub Releases with the helper script. The script defaults to a draft release; pass `--publish` only when you want the release to go live immediately.
+
+Prerequisites:
+- `gh` is installed and authenticated for the target repo
+- the recorded release commit is available in the current checkout
+
+Author `artifacts/release/<version>-<build>/release-notes.md` before publishing. Ground it in the recorded Toastty release diff and include the embedded Ghostty commit plus build flags.
+
+```bash
+sv exec -- env \
+  TOASTTY_VERSION=0.1.0 \
+  TOASTTY_BUILD_NUMBER=1 \
+  ./scripts/release/publish-github-release.sh \
+  --create-tag
+```
+
+Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create ...` commands without creating anything. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly. Pass `--notes-file` only when you want to override the default notes path.
 
 ## Configuration
 
@@ -122,12 +189,13 @@ Sources/
 
 The `CoreState` framework contains all business logic and state transitions, with no UI dependencies. The `App` layer handles SwiftUI views, Ghostty surface hosting, and system integration.
 
-State flows through a single `AppStore` using a reducer pattern: views dispatch `AppAction`s, the `AppReducer` produces new `AppState`, and SwiftUI re-renders.
+State flows through a single `AppStore` using a reducer pattern: views dispatch `AppAction`, the `AppReducer` produces new `AppState`, and SwiftUI re-renders.
 
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
 |---|---|
+| `Cmd+Shift+N` | New workspace |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
@@ -136,6 +204,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 | `Cmd+Ctrl+Arrow` | Resize split |
 | `Cmd+Ctrl+=` | Equalize splits |
 | `Cmd+1`–`Cmd+9` | Switch workspace |
+| `Option+1`–`Option+9` | Focus pane by position |
 
 ## Privacy and Local State
 
@@ -145,8 +214,6 @@ Toastty is local-first. The app itself does not send usage analytics or cloud te
 - Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`.
 - By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`.
 - Toastty requests macOS notification permission the first time it tries to deliver a desktop notification.
-- Toastty only opens its local Unix socket when automation mode is enabled.
-- The embedded Ghostty runtime is an external artifact. For public releases, build Ghostty with `-Dsentry=false` so Toastty does not initialize Ghostty crash reporting.
 
 More detail is in [docs/privacy-and-local-data.md](docs/privacy-and-local-data.md).
 
@@ -170,6 +237,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 ## Documentation
 
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
+- [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
 - [Privacy and Local Data](docs/privacy-and-local-data.md) — local files, permissions, sockets, logging, and Ghostty crash-reporting notes
 - [Socket Protocol](docs/socket-protocol.md) — v1.0 JSON-RPC automation protocol
 - [State Invariants](docs/state-invariants.md) — AppState correctness rules and validation

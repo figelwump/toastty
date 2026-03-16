@@ -21,7 +21,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 ## Permissions and platform integrations
 
 - Toastty requests macOS notification permission the first time it attempts to deliver a desktop notification.
-- The `shortcut-trace.sh` automation script requires Accessibility and Automation permissions because it drives real keyboard shortcuts through `osascript`.
+- The `shortcut-trace.sh` automation script requires Accessibility and Automation permissions because it drives keyboard shortcuts through `osascript`.
 - Toastty does not request camera, microphone, contacts, calendars, photos, or location access.
 
 ## Logging behavior
