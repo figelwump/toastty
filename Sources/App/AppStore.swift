@@ -135,20 +135,14 @@ final class AppStore: ObservableObject {
 
         switch target {
         case .existingWindow(let windowID):
-            guard send(.createWorkspace(windowID: windowID, title: nil)) else { return false }
-            pendingRenameWorkspaceID = selectedWorkspaceID(in: windowID)
-            return true
+            return send(.createWorkspace(windowID: windowID, title: nil))
         case .newWindow:
-            guard send(
+            return send(
                 .createWindow(
                     initialWorkspaceTitle: nil,
                     initialFrame: commandCreateWindowFrameProvider()
                 )
-            ) else { return false }
-            if let newWindowID = state.selectedWindowID {
-                pendingRenameWorkspaceID = selectedWorkspaceID(in: newWindowID)
-            }
-            return true
+            )
         }
     }
 

@@ -257,48 +257,6 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.globalTerminalFontPoints, 15)
     }
 
-    func testCreateWorkspaceFromCommandSetsPendingRenameForNewWorkspace() throws {
-        let windowID = UUID()
-        let existingWorkspace = WorkspaceState.bootstrap(title: "One")
-        let state = AppState(
-            windows: [
-                WindowState(
-                    id: windowID,
-                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
-                    workspaceIDs: [existingWorkspace.id],
-                    selectedWorkspaceID: existingWorkspace.id
-                )
-            ],
-            workspacesByID: [existingWorkspace.id: existingWorkspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
-        )
-        let store = AppStore(state: state, persistTerminalFontPreference: false)
-
-        XCTAssertNil(store.pendingRenameWorkspaceID)
-        XCTAssertTrue(store.createWorkspaceFromCommand(preferredWindowID: windowID))
-
-        let newWorkspaceID = try XCTUnwrap(store.selectedWorkspaceID(in: windowID))
-        XCTAssertNotEqual(newWorkspaceID, existingWorkspace.id)
-        XCTAssertEqual(store.pendingRenameWorkspaceID, newWorkspaceID)
-    }
-
-    func testCreateWorkspaceFromCommandSetsPendingRenameForNewWindow() throws {
-        let state = AppState(
-            windows: [],
-            workspacesByID: [:],
-            selectedWindowID: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
-        )
-        let store = AppStore(state: state, persistTerminalFontPreference: false)
-
-        XCTAssertTrue(store.createWorkspaceFromCommand(preferredWindowID: nil))
-
-        let newWindowID = try XCTUnwrap(store.state.selectedWindowID)
-        let newWorkspaceID = try XCTUnwrap(store.selectedWorkspaceID(in: newWindowID))
-        XCTAssertEqual(store.pendingRenameWorkspaceID, newWorkspaceID)
-    }
-
     func testRenameSelectedWorkspaceFromCommandSetsPendingRename() throws {
         let workspace = WorkspaceState.bootstrap(title: "Dev")
         let windowID = UUID()

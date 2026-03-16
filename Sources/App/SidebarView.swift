@@ -34,10 +34,7 @@ struct SidebarView: View {
             // New workspace button — full-width, matches workspace item sizing
             Button {
                 cancelWorkspaceRename()
-                if store.send(.createWorkspace(windowID: windowID, title: nil)),
-                   let newWorkspaceID = store.selectedWorkspaceID(in: windowID) {
-                    store.pendingRenameWorkspaceID = newWorkspaceID
-                }
+                store.send(.createWorkspace(windowID: windowID, title: nil))
             } label: {
                 HStack(spacing: 6) {
                     // Plus icon matching 11×11 stroke icon language
