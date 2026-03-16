@@ -61,7 +61,7 @@ struct AppWindowView: View {
         .frame(width: 22, height: 22)
         .contentShape(Rectangle())
         .padding(.leading, 76)
-        .padding(.top, 4)
+        .padding(.top, 1)
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 
