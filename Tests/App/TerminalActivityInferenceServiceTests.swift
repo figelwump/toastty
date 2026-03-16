@@ -113,7 +113,7 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
         }
     }
 
-    func testRefreshVisibleTextInferencePublishesRunningCommandOverrideForPathTitle() async throws {
+    func testRefreshVisibleTextInferenceDoesNotPublishGenericRunningCommandOverride() async throws {
         try await MainActor.run {
             let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
             let repoPath = "/tmp/restored-running-command"
@@ -139,123 +139,8 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
                 backgroundPanelWorkspaceIDs: [:]
             )
 
-            XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "emptyos dev --port 3913")
+            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
             XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, repoPath)
-            try StateValidator.validate(store.state)
-        }
-    }
-
-    func testRefreshVisibleTextInferenceClearsRunningCommandOverrideAtIdlePrompt() async throws {
-        try await MainActor.run {
-            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
-            let repoPath = "/tmp/restored-running-command"
-
-            XCTAssertTrue(
-                store.send(
-                    .updateTerminalPanelMetadata(
-                        panelID: panelID,
-                        title: repoPath,
-                        cwd: repoPath
-                    )
-                )
-            )
-
-            visibleTextStore.textByPanelID[panelID] = """
-            dev@host ~/repo % emptyos dev --port 3913
-            Status: running
-            """
-            service.refreshVisibleTextInference(
-                state: store.state,
-                selectedPanelWorkspaceIDs: [panelID: workspaceID],
-                backgroundPanelWorkspaceIDs: [:]
-            )
-            XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "emptyos dev --port 3913")
-
-            visibleTextStore.textByPanelID[panelID] = "dev@host ~/repo %"
-            service.refreshVisibleTextInference(
-                state: store.state,
-                selectedPanelWorkspaceIDs: [panelID: workspaceID],
-                backgroundPanelWorkspaceIDs: [:]
-            )
-
-            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
-            try StateValidator.validate(store.state)
-        }
-    }
-
-    func testRefreshVisibleTextInferenceDoesNotOverrideCustomTitleWithRunningCommand() async throws {
-        try await MainActor.run {
-            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
-
-            XCTAssertTrue(
-                store.send(
-                    .updateTerminalPanelMetadata(
-                        panelID: panelID,
-                        title: "Dev Server",
-                        cwd: "/Users/dev/repo"
-                    )
-                )
-            )
-
-            visibleTextStore.textByPanelID[panelID] = """
-            dev@host ~/repo % emptyos dev --port 3913
-            Status: running
-            """
-            service.refreshVisibleTextInference(
-                state: store.state,
-                selectedPanelWorkspaceIDs: [panelID: workspaceID],
-                backgroundPanelWorkspaceIDs: [:]
-            )
-
-            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
-            XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "Dev Server")
-            try StateValidator.validate(store.state)
-        }
-    }
-
-    func testRefreshVisibleTextInferenceClearsRunningCommandOverrideWhenSemanticTitleArrives() async throws {
-        try await MainActor.run {
-            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
-            let repoPath = "/tmp/restored-running-command"
-
-            XCTAssertTrue(
-                store.send(
-                    .updateTerminalPanelMetadata(
-                        panelID: panelID,
-                        title: repoPath,
-                        cwd: repoPath
-                    )
-                )
-            )
-
-            visibleTextStore.textByPanelID[panelID] = """
-            dev@host ~/repo % emptyos dev --port 3913
-            Status: running
-            """
-            service.refreshVisibleTextInference(
-                state: store.state,
-                selectedPanelWorkspaceIDs: [panelID: workspaceID],
-                backgroundPanelWorkspaceIDs: [:]
-            )
-            XCTAssertEqual(service.panelDisplayTitleOverride(for: panelID), "emptyos dev --port 3913")
-
-            XCTAssertTrue(
-                store.send(
-                    .updateTerminalPanelMetadata(
-                        panelID: panelID,
-                        title: "emptyos dev --port 3913",
-                        cwd: nil
-                    )
-                )
-            )
-            service.refreshVisibleTextInference(
-                state: store.state,
-                selectedPanelWorkspaceIDs: [panelID: workspaceID],
-                backgroundPanelWorkspaceIDs: [:]
-            )
-
-            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
-            XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, "emptyos dev --port 3913")
             try StateValidator.validate(store.state)
         }
     }

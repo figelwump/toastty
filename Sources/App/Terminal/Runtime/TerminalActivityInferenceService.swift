@@ -147,17 +147,6 @@ final class TerminalActivityInferenceService {
             return
         }
 
-        if titleEligibleForInference,
-           let inferredRunningCommand = TerminalVisibleTextInspector.inferredRunningCommand(visibleText) {
-            publishPanelDisplayTitleOverride(
-                inferredRunningCommand,
-                panelID: panelID,
-                workspaceID: workspaceID,
-                inferenceSource: "running_command"
-            )
-            return
-        }
-
         // Visible-text inspection can miss banner text or the original prompt
         // command transiently while output continues to stream. Keep any
         // existing override until the shell returns to an idle prompt or a
