@@ -39,6 +39,61 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(hooks["PostToolUseFailure"])
         XCTAssertNotNil(hooks["PermissionRequest"])
     }
+
+    func testPrepareCodexLaunchFormatsNotifyOverrideAsTomlArray() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: ["codex", "--yolo"],
+            cliExecutablePath: "/bin/sh",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(preparedLaunch.argv.first, "codex")
+        let configIndex = try XCTUnwrap(preparedLaunch.argv.firstIndex(of: "-c"))
+        let configValue = try XCTUnwrap(preparedLaunch.argv[safe: configIndex + 1])
+        let notifyScriptPath = try XCTUnwrap(preparedLaunch.artifacts?.directoryURL.appendingPathComponent("codex-notify.sh").path)
+
+        XCTAssertEqual(
+            configValue,
+            "notify=[\"/bin/sh\",\"\(notifyScriptPath)\"]"
+        )
+        XCTAssertFalse(configValue.contains("\\/"))
+        XCTAssertEqual(preparedLaunch.argv.last, "--yolo")
+        XCTAssertEqual(preparedLaunch.environment["CODEX_TUI_RECORD_SESSION"], "1")
+        XCTAssertEqual(
+            preparedLaunch.environment["CODEX_TUI_SESSION_LOG_PATH"],
+            preparedLaunch.artifacts?.codexSessionLogURL?.path
+        )
+    }
+
+    func testTomlBasicStringLiteralEscapesSpecialCharacters() {
+        let literal = AgentLaunchInstrumentation.tomlBasicStringLiteralForTesting("line\n\t\"\\\u{7F}\u{0001}")
+
+        XCTAssertEqual(literal, "\"line\\n\\t\\\"\\\\\\u007f\\u0001\"")
+    }
+
+    func testTomlStringArrayLiteralEscapesEmbeddedSpecialCharacters() {
+        let literal = AgentLaunchInstrumentation.tomlStringArrayLiteralForTesting([
+            "/bin/sh",
+            "path with quote \" and slash \\ and newline \n",
+        ])
+
+        XCTAssertEqual(
+            literal,
+            "[\"/bin/sh\",\"path with quote \\\" and slash \\\\ and newline \\n\"]"
+        )
+    }
 }
 
 private extension Array {

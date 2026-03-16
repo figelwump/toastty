@@ -141,7 +141,7 @@ enum AgentLaunchInstrumentation {
             )
 
             let logURL = artifactsDirectoryURL.appendingPathComponent("codex-session.jsonl", isDirectory: false)
-            let notifyArray = try jsonArrayLiteral(["/bin/sh", notifyScriptURL.path])
+            let notifyArray = tomlStringArrayLiteral(["/bin/sh", notifyScriptURL.path])
 
             return PreparedAgentLaunchCommand(
                 argv: insertingArguments(
@@ -300,12 +300,36 @@ private extension AgentLaunchInstrumentation {
         try data.write(to: url, options: .atomic)
     }
 
-    static func jsonArrayLiteral(_ values: [String]) throws -> String {
-        let data = try JSONSerialization.data(withJSONObject: values, options: [])
-        guard let string = String(data: data, encoding: .utf8) else {
-            throw CocoaError(.fileWriteUnknown)
+    static func tomlStringArrayLiteral(_ values: [String]) -> String {
+        "[\(values.map(tomlBasicStringLiteral(_:)).joined(separator: ","))]"
+    }
+
+    static func tomlBasicStringLiteral(_ value: String) -> String {
+        var escaped = ""
+        escaped.reserveCapacity(value.count)
+
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\\":
+                escaped.append("\\\\")
+            case "\"":
+                escaped.append("\\\"")
+            case "\n":
+                escaped.append("\\n")
+            case "\r":
+                escaped.append("\\r")
+            case "\t":
+                escaped.append("\\t")
+            default:
+                if scalar.value < 0x20 || scalar.value == 0x7F {
+                    escaped.append(String(format: "\\u%04x", Int(scalar.value)))
+                } else {
+                    escaped.append(String(scalar))
+                }
+            }
         }
-        return string
+
+        return "\"\(escaped)\""
     }
 
     static func shellQuote(_ value: String) -> String {
@@ -327,5 +351,17 @@ private extension AgentLaunchInstrumentation {
             return nil
         }
         return trimmed
+    }
+}
+
+extension AgentLaunchInstrumentation {
+    // Internal test seam for validating Codex config escaping behavior directly.
+    static func tomlStringArrayLiteralForTesting(_ values: [String]) -> String {
+        tomlStringArrayLiteral(values)
+    }
+
+    // Internal test seam for validating TOML basic string escaping directly.
+    static func tomlBasicStringLiteralForTesting(_ value: String) -> String {
+        tomlBasicStringLiteral(value)
     }
 }
