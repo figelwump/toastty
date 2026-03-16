@@ -58,8 +58,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private let focusCoordinator = TerminalFocusCoordinator()
     private let runtimeStore = TerminalWindowRuntimeStore()
     private weak var store: AppStore?
+    private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private var stateObservation: AnyCancellable?
     private var observedGlobalFontPoints: Double?
+    private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
+    private var launchedProfiledPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -136,6 +139,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         bindStateObservation(to: store)
     }
 
+    func setTerminalProfileProvider(
+        _ terminalProfileProvider: any TerminalProfileProviding,
+        restoredTerminalPanelIDs: Set<UUID>
+    ) {
+        self.terminalProfileProvider = terminalProfileProvider
+        restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDs
+    }
+
     @discardableResult
     func splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation) -> Bool {
         sendSplitAction(
@@ -168,10 +179,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func synchronize(with state: AppState) {
         let removedPanelIDs = runtimeStore.synchronize(with: state)
+        let livePanelIDs = liveTerminalPanelIDs(in: state)
+        launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
+        restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
             state: state,
-            livePanelIDs: liveTerminalPanelIDs(in: state),
+            livePanelIDs: livePanelIDs,
             removedPanelIDs: removedPanelIDs
         )
         #endif
@@ -502,6 +516,55 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     func consumeSplitSource(forNewPanelID panelID: UUID) {
         consumeSplitSource(for: panelID)
+    }
+
+    func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
+        guard launchedProfiledPanelIDs.contains(panelID) == false else {
+            return .empty
+        }
+        guard let store,
+              let workspaceID = workspaceID(containing: panelID, state: store.state),
+              let workspace = store.state.workspacesByID[workspaceID],
+              case .terminal(let terminalState)? = workspace.panels[panelID] else {
+            return .empty
+        }
+
+        let catalog = terminalProfileProvider?.catalog ?? .empty
+        switch TerminalProfileLaunchResolver.resolve(
+            panelID: panelID,
+            terminalState: terminalState,
+            catalog: catalog,
+            restoredTerminalPanelIDsAwaitingLaunch: restoredTerminalPanelIDsAwaitingLaunch,
+            launchedProfiledPanelIDs: launchedProfiledPanelIDs
+        ) {
+        case .none:
+            return .empty
+        case .missingProfile(let profileID, let reason):
+            ToasttyLog.warning(
+                "Launching profiled pane without startup command because the profile is unavailable",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "profile_id": profileID,
+                    "launch_reason": reason.rawValue,
+                ]
+            )
+            return .empty
+        case .launch(let configuration):
+            return configuration
+        }
+    }
+
+    func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
+        restoredTerminalPanelIDsAwaitingLaunch.remove(panelID)
+        guard let store,
+              let workspaceID = workspaceID(containing: panelID, state: store.state),
+              let workspace = store.state.workspacesByID[workspaceID],
+              case .terminal(let terminalState)? = workspace.panels[panelID],
+              terminalState.profileBinding != nil else {
+            return
+        }
+        launchedProfiledPanelIDs.insert(panelID)
     }
 
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {

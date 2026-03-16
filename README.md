@@ -15,6 +15,7 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
+- **Terminal profiles** — Launch named terminal setups such as `zmx`, SSH, or other scripted environments from the menu, with a pill badge in each panel header
 - **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, persisted in `~/.toastty/config`
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
@@ -161,6 +162,37 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 4. Ghostty defaults
 
 Toastty-specific overrides (like font size) are stored in `~/.toastty/config`.
+
+### Terminal profiles
+
+Toastty can launch named terminal profiles from:
+
+- `Terminal > Split Right With Profile`
+- `Terminal > Split Down With Profile`
+
+Profiles live in `~/.toastty/terminal-profiles.toml`. Each profile defines the
+menu label, the panel-header badge label, and a startup command that Toastty sends
+to the pane's login shell when the pane is created or restored.
+
+```toml
+[zmx]
+displayName = "ZMX"
+badge = "ZMX"
+startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+```
+
+Toastty sets these environment variables for profiled panes:
+
+- `TOASTTY_PANEL_ID`
+- `TOASTTY_TERMINAL_PROFILE_ID`
+- `TOASTTY_LAUNCH_REASON` (`create` or `restore`)
+
+Profile bindings are persisted with the workspace layout, so profiled panes reopen
+with the same profile after restart. An example `zmx` profile is included at
+[`examples/terminal-profiles/zmx.toml`](examples/terminal-profiles/zmx.toml).
+When a profile still exists, the panel-header badge resolves from the live
+profile definition. If the profile is missing, Toastty falls back to a degraded
+badge using the stored profile ID.
 
 ### Host-side split styling
 

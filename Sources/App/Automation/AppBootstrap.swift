@@ -3,6 +3,7 @@ import Foundation
 
 struct AppBootstrapResult {
     let state: AppState
+    let restoredTerminalPanelIDs: Set<UUID>
     let automationConfig: AutomationConfig?
     let automationLifecycle: AutomationLifecycle?
     let disableAnimations: Bool
@@ -22,8 +23,10 @@ enum AppBootstrap {
         ) else {
             let layoutPersistenceContext = WorkspaceLayoutPersistenceContext.resolve(processInfo: processInfo)
             let state: AppState
+            let restoredTerminalPanelIDs: Set<UUID>
             if let restored = layoutPersistenceContext.loadState() {
                 state = restored.state
+                restoredTerminalPanelIDs = Self.restoredTerminalPanelIDs(in: state)
                 ToasttyLog.info(
                     "Restored workspace layout state",
                     category: .bootstrap,
@@ -35,6 +38,7 @@ enum AppBootstrap {
                 )
             } else {
                 state = .bootstrap()
+                restoredTerminalPanelIDs = []
                 ToasttyLog.info(
                     "Launching without persisted layout state",
                     category: .bootstrap,
@@ -46,6 +50,7 @@ enum AppBootstrap {
             }
             return AppBootstrapResult(
                 state: state,
+                restoredTerminalPanelIDs: restoredTerminalPanelIDs,
                 automationConfig: nil,
                 automationLifecycle: nil,
                 disableAnimations: false,
@@ -93,6 +98,7 @@ enum AppBootstrap {
         )
         return AppBootstrapResult(
             state: state,
+            restoredTerminalPanelIDs: [],
             automationConfig: automationConfig,
             automationLifecycle: AutomationLifecycle(config: automationConfig, startupError: startupError),
             disableAnimations: automationConfig.disableAnimations,
@@ -100,5 +106,15 @@ enum AppBootstrap {
             // intentionally bypass user layout persistence in this mode.
             layoutPersistenceContext: nil
         )
+    }
+
+    private static func restoredTerminalPanelIDs(in state: AppState) -> Set<UUID> {
+        state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
+            for (panelID, panelState) in workspace.panels {
+                if case .terminal = panelState {
+                    result.insert(panelID)
+                }
+            }
+        }
     }
 }

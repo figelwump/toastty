@@ -1,0 +1,10 @@
+# Toastty terminal profile example for zmx
+#
+# Each profiled pane gets a stable Toastty panel ID that persists across
+# workspace restore. This example uses that ID as the zmx session name, so
+# restarting Toastty reconnects the pane to the same persistent session.
+
+[zmx]
+displayName = "ZMX"
+badge = "ZMX"
+startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"

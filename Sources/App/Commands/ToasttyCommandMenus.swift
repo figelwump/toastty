@@ -6,6 +6,7 @@ struct ToasttyCommandMenus: Commands {
     private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     let focusedPanelCommandController: FocusedPanelCommandController
     let supportsConfigurationReload: Bool
     let reloadConfiguration: () -> Void
@@ -47,6 +48,16 @@ struct ToasttyCommandMenus: Commands {
                 store.send(.resetGlobalTerminalFont)
             }
             .keyboardShortcut("0", modifiers: [.command])
+
+            Divider()
+
+            Menu("Split Right With Profile") {
+                profileMenuItems(direction: .right)
+            }
+
+            Menu("Split Down With Profile") {
+                profileMenuItems(direction: .down)
+            }
         }
 
         CommandMenu("Workspace") {
@@ -126,5 +137,27 @@ struct ToasttyCommandMenus: Commands {
 
     private func closeFocusedPanelFromCommandSelection() {
         _ = focusedPanelCommandController.closeFocusedPanel(in: commandWorkspace?.id)
+    }
+
+    @ViewBuilder
+    private func profileMenuItems(direction: SlotSplitDirection) -> some View {
+        if terminalProfileStore.catalog.profiles.isEmpty {
+            Button("No Terminal Profiles Configured") {}
+                .disabled(true)
+        } else {
+            ForEach(terminalProfileStore.catalog.profiles, id: \.id) { profile in
+                Button(profile.displayName) {
+                    guard let workspaceID = commandWorkspace?.id else { return }
+                    store.send(
+                        .splitFocusedSlotInDirectionWithTerminalProfile(
+                            workspaceID: workspaceID,
+                            direction: direction,
+                            profileBinding: TerminalProfileBinding(profileID: profile.id)
+                        )
+                    )
+                }
+                .disabled(commandWorkspace == nil)
+            }
+        }
     }
 }

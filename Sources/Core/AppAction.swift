@@ -47,6 +47,11 @@ public enum AppAction: Equatable, Sendable {
     case resetGlobalTerminalFont
     case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
+    case splitFocusedSlotInDirectionWithTerminalProfile(
+        workspaceID: UUID,
+        direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding
+    )
     case focusSlot(workspaceID: UUID, direction: SlotFocusDirection)
     case resizeFocusedSlotSplit(workspaceID: UUID, direction: SplitResizeDirection, amount: Int)
     case equalizeLayoutSplits(workspaceID: UUID)
@@ -105,6 +110,8 @@ public extension AppAction {
             return "splitFocusedSlot"
         case .splitFocusedSlotInDirection:
             return "splitFocusedSlotInDirection"
+        case .splitFocusedSlotInDirectionWithTerminalProfile:
+            return "splitFocusedSlotInDirectionWithTerminalProfile"
         case .focusSlot:
             return "focusSlot"
         case .resizeFocusedSlotSplit:

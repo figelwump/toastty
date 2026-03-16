@@ -850,13 +850,15 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.
         let previousChildPIDs = delegate.surfaceCreationChildPIDSnapshot()
+        let launchConfiguration = delegate.surfaceLaunchConfiguration(for: panelID)
 
         diagnostics.surfaceAttemptCount += 1
         guard let createdSurface = ghosttyManager.makeSurface(
             hostView: hostView,
             workingDirectory: requestedWorkingDirectory,
             fontPoints: fontPoints,
-            inheritFrom: inheritedSourceSurface
+            inheritFrom: inheritedSourceSurface,
+            launchConfiguration: launchConfiguration
         ) else {
             diagnostics.surfaceFailureCount += 1
             if diagnostics.surfaceFailureCount <= 5 || diagnostics.surfaceFailureCount.isMultiple(of: 20) {
@@ -905,6 +907,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             panelID: panelID,
             source: "surface_create_process"
         )
+        delegate.markInitialSurfaceLaunchCompleted(for: panelID)
     }
 
     private enum SurfaceCreationReadiness {

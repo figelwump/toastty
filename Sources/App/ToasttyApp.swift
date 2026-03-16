@@ -188,6 +188,7 @@ struct ToasttyApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self)
     private var appLifecycleDelegate
     @StateObject private var store: AppStore
+    @StateObject private var terminalProfileStore: TerminalProfileStore
     private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let automationLifecycle: AutomationLifecycle?
@@ -206,6 +207,7 @@ struct ToasttyApp: App {
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
     init() {
+        Self.ensureTerminalProfilesTemplateExists()
         Self.configureWindowPersistenceDefaults()
         let bootstrap = AppBootstrap.make()
         let persistTerminalFontPreference = bootstrap.automationConfig == nil
@@ -213,7 +215,12 @@ struct ToasttyApp: App {
             state: bootstrap.state,
             persistTerminalFontPreference: persistTerminalFontPreference
         )
+        let terminalProfileStore = TerminalProfileStore()
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        terminalRuntimeRegistry.setTerminalProfileProvider(
+            terminalProfileStore,
+            restoredTerminalPanelIDs: bootstrap.restoredTerminalPanelIDs
+        )
         terminalRuntimeRegistry.bind(store: store)
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
@@ -240,6 +247,7 @@ struct ToasttyApp: App {
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
+        _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
         appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         automationLifecycle = bootstrap.automationLifecycle
@@ -294,6 +302,7 @@ struct ToasttyApp: App {
         WindowGroup(id: AppWindowSceneID.value) {
             AppWindowSceneHostView(
                 store: store,
+                terminalProfileStore: terminalProfileStore,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
@@ -313,6 +322,7 @@ struct ToasttyApp: App {
         .commands {
             ToasttyCommandMenus(
                 store: store,
+                terminalProfileStore: terminalProfileStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 supportsConfigurationReload: supportsConfigurationReload,
                 reloadConfiguration: reloadConfiguration
@@ -321,24 +331,41 @@ struct ToasttyApp: App {
     }
 
     private var supportsConfigurationReload: Bool {
-        #if TOASTTY_HAS_GHOSTTY_KIT
         true
-        #else
-        false
-        #endif
     }
 
     @MainActor
     private func reloadConfiguration() {
+        var failureMessages: [String] = []
+
+        switch terminalProfileStore.reload() {
+        case .success:
+            break
+        case .failure(let error):
+            failureMessages.append(error.localizedDescription)
+        }
+
         #if TOASTTY_HAS_GHOSTTY_KIT
         let runtimeManager = GhosttyRuntimeManager.shared
-        guard runtimeManager.reloadConfiguration() else { return }
-        let toasttyConfig = ToasttyConfigStore.load()
-        _ = store.send(.setConfiguredTerminalFont(points: runtimeManager.configuredTerminalFontPoints))
-        if toasttyConfig.terminalFontSizePoints == nil {
-            _ = store.send(.resetGlobalTerminalFont)
+        if runtimeManager.reloadConfiguration() {
+            let toasttyConfig = ToasttyConfigStore.load()
+            _ = store.send(.setConfiguredTerminalFont(points: runtimeManager.configuredTerminalFontPoints))
+            if toasttyConfig.terminalFontSizePoints == nil {
+                _ = store.send(.resetGlobalTerminalFont)
+            }
+        } else {
+            failureMessages.append("Failed to reload embedded Ghostty configuration.")
         }
         #endif
+
+        guard failureMessages.isEmpty == false else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Unable to Reload Configuration"
+        alert.informativeText = failureMessages.joined(separator: "\n")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     @MainActor
@@ -364,5 +391,20 @@ struct ToasttyApp: App {
         let defaults = UserDefaults.standard
         defaults.set(true, forKey: "ApplePersistenceIgnoreState")
         defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+    }
+
+    private static func ensureTerminalProfilesTemplateExists() {
+        do {
+            try TerminalProfilesFile.ensureTemplateExists()
+        } catch {
+            ToasttyLog.warning(
+                "Failed to ensure terminal profiles template exists",
+                category: .bootstrap,
+                metadata: [
+                    "path": TerminalProfilesFile.fileURL().path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
     }
 }

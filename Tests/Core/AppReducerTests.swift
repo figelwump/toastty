@@ -111,6 +111,73 @@ struct AppReducerTests {
     }
 
     @Test
+    func splitFocusedSlotInDirectionWithTerminalProfileBindsNewPanelOnly() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let sourcePanelID = try #require(workspaceBefore.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .splitFocusedSlotInDirectionWithTerminalProfile(
+                    workspaceID: workspaceID,
+                    direction: .right,
+                    profileBinding: TerminalProfileBinding(profileID: "zmx")
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let newPanelID = try #require(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[newPanelID] else {
+            Issue.record("Expected new focused panel to be terminal")
+            return
+        }
+        #expect(newPanelID != sourcePanelID)
+        #expect(newTerminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+
+        guard case .terminal(let sourceTerminalState) = workspaceAfter.panels[sourcePanelID] else {
+            Issue.record("Expected source panel to remain terminal")
+            return
+        }
+        #expect(sourceTerminalState.profileBinding == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func ordinarySplitDoesNotInheritProfileBindingFromFocusedPane() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[focusedPanelID] else {
+            Issue.record("Expected focused panel to be terminal before split")
+            return
+        }
+        terminalState.profileBinding = TerminalProfileBinding(profileID: "zmx")
+        workspace.panels[focusedPanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let newPanelID = try #require(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[newPanelID] else {
+            Issue.record("Expected split-created panel to be terminal")
+            return
+        }
+
+        #expect(newPanelID != focusedPanelID)
+        #expect(newTerminalState.profileBinding == nil)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func focusSlotMovesToNextAndPreviousLeaf() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()

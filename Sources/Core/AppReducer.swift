@@ -416,6 +416,14 @@ public struct AppReducer {
         case .splitFocusedSlotInDirection(let workspaceID, let direction):
             return splitFocusedSlot(workspaceID: workspaceID, direction: direction, state: &state)
 
+        case .splitFocusedSlotInDirectionWithTerminalProfile(let workspaceID, let direction, let profileBinding):
+            return splitFocusedSlot(
+                workspaceID: workspaceID,
+                direction: direction,
+                profileBinding: profileBinding,
+                state: &state
+            )
+
         case .focusSlot(let workspaceID, let direction):
             return focusSlot(workspaceID: workspaceID, direction: direction, state: &state)
 
@@ -506,6 +514,7 @@ public struct AppReducer {
     private static func splitFocusedSlot(
         workspaceID: UUID,
         direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding? = nil,
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -528,7 +537,8 @@ public struct AppReducer {
             TerminalPanelState(
                 title: nextTerminalTitle(in: workspace),
                 shell: "zsh",
-                cwd: inheritedCWD
+                cwd: inheritedCWD,
+                profileBinding: profileBinding
             )
         )
 
