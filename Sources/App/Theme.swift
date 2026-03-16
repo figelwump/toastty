@@ -39,6 +39,9 @@ enum ToastyTheme {
     /// Used only to keep sidebar content clear of the traffic lights.
     static let titlebarHeight: CGFloat = 28
     static let sidebarTopPadding: CGFloat = titlebarHeight + 4
+    /// Leading padding for the top bar content when the sidebar is hidden,
+    /// leaving room for the traffic lights and sidebar toggle button.
+    static let topBarLeadingPaddingWithoutSidebar: CGFloat = 100
 
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)

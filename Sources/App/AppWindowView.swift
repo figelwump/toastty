@@ -6,25 +6,38 @@ struct AppWindowView: View {
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext
 
+    private var sidebarVisible: Bool {
+        store.window(id: windowID)?.sidebarVisible ?? true
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            SidebarView(
-                windowID: windowID,
-                store: store,
-                terminalRuntimeContext: terminalRuntimeContext
-            )
-                .frame(width: ToastyTheme.sidebarWidth)
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                if sidebarVisible {
+                    SidebarView(
+                        windowID: windowID,
+                        store: store,
+                        terminalRuntimeContext: terminalRuntimeContext
+                    )
+                        .frame(width: ToastyTheme.sidebarWidth)
 
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(width: 1)
+                    Rectangle()
+                        .fill(ToastyTheme.hairline)
+                        .frame(width: 1)
+                }
 
-            WorkspaceView(
-                windowID: windowID,
-                store: store,
-                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                terminalRuntimeContext: terminalRuntimeContext
-            )
+                WorkspaceView(
+                    windowID: windowID,
+                    store: store,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    terminalRuntimeContext: terminalRuntimeContext,
+                    sidebarVisible: sidebarVisible
+                )
+            }
+            .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
+
+            // Sidebar toggle button in the title bar area, right of traffic lights
+            sidebarToggleButton
         }
         .onAppear {
             scheduleWindowFocusRestore()
@@ -33,6 +46,23 @@ struct AppWindowView: View {
             scheduleWindowFocusRestore()
         }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
+    }
+
+    private var sidebarToggleButton: some View {
+        Button {
+            store.send(.toggleSidebar(windowID: windowID))
+        } label: {
+            SidebarToggleIconView(
+                color: sidebarVisible ? ToastyTheme.accent : ToastyTheme.inactiveText,
+                sidebarVisible: sidebarVisible
+            )
+        }
+        .buttonStyle(.plain)
+        .frame(width: 22, height: 22)
+        .contentShape(Rectangle())
+        .padding(.leading, 68)
+        .padding(.top, 3)
+        .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 
     private var slotFocusSignature: WindowSlotFocusSignature? {

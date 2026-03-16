@@ -49,6 +49,14 @@ struct ToasttyCommandMenus: Commands {
             .keyboardShortcut("0", modifiers: [.command])
         }
 
+        CommandMenu("View") {
+            Button(sidebarVisibleForCommand ? "Hide Sidebar" : "Show Sidebar") {
+                toggleSidebarFromCommandSelection()
+            }
+            .keyboardShortcut("w", modifiers: [.command, .shift])
+            .disabled(commandSelection == nil)
+        }
+
         CommandMenu("Workspace") {
             Button("New Workspace") {
                 store.createWorkspaceFromCommand(preferredWindowID: focusedWindowID)
@@ -132,5 +140,14 @@ struct ToasttyCommandMenus: Commands {
 
     private func closeFocusedPanelFromCommandSelection() {
         _ = focusedPanelCommandController.closeFocusedPanel(in: commandWorkspace?.id)
+    }
+
+    private var sidebarVisibleForCommand: Bool {
+        commandSelection?.window.sidebarVisible ?? true
+    }
+
+    private func toggleSidebarFromCommandSelection() {
+        guard let windowID = commandSelection?.windowID else { return }
+        store.send(.toggleSidebar(windowID: windowID))
     }
 }

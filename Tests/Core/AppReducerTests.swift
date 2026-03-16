@@ -1915,4 +1915,31 @@ struct AppReducerTests {
         )
         #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 0)
     }
+
+    // MARK: - Toggle Sidebar
+
+    @Test
+    func toggleSidebarHidesAndShowsSidebar() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+
+        #expect(state.windows.first?.sidebarVisible == true)
+
+        #expect(reducer.send(.toggleSidebar(windowID: windowID), state: &state))
+        #expect(state.windows.first?.sidebarVisible == false)
+
+        #expect(reducer.send(.toggleSidebar(windowID: windowID), state: &state))
+        #expect(state.windows.first?.sidebarVisible == true)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func toggleSidebarRejectsInvalidWindowID() {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.toggleSidebar(windowID: UUID()), state: &state) == false)
+    }
 }
