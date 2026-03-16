@@ -338,10 +338,10 @@ struct ToasttyApp: App {
     @MainActor
     private func installShellIntegration() {
         let installer = ProfileShellIntegrationInstaller()
-        let plan: ProfileShellIntegrationInstallPlan
+        let status: ProfileShellIntegrationInstallStatus
 
         do {
-            plan = try installer.installationPlan()
+            status = try installer.installationStatus()
         } catch {
             let alert = NSAlert()
             alert.messageText = "Unable to Install Shell Integration"
@@ -352,10 +352,38 @@ struct ToasttyApp: App {
             return
         }
 
+        if status.isInstalled {
+            let alert = NSAlert()
+            alert.messageText = "Shell Integration Already Installed"
+            alert.informativeText = """
+            Toastty shell integration is already installed for \(status.plan.shell.displayName).
+
+            Init file: \(status.plan.initFileURL.path)
+            Managed snippet: \(status.plan.managedSnippetURL.path)
+            """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Install Shell Integration?"
+        let snippetAction = status.needsManagedSnippetWrite
+            ? "write the managed snippet to \(status.plan.managedSnippetURL.path)"
+            : "use the existing managed snippet at \(status.plan.managedSnippetURL.path)"
+        let initFileAction: String
+        if status.needsInitFileUpdate {
+            initFileAction = status.createsInitFile
+                ? "create \(status.plan.initFileURL.path) and add one source line to it"
+                : "add one source line to \(status.plan.initFileURL.path)"
+        } else {
+            initFileAction = "\(status.plan.initFileURL.path) already references that snippet"
+        }
         confirmationAlert.informativeText = """
-        Toastty detected \(plan.shell.displayName). It will create \(plan.managedSnippetURL.path) and add one source line to \(plan.initFileURL.path).
+        Toastty detected \(status.plan.shell.displayName). It will \(snippetAction).
+
+        It will \(initFileAction).
 
         New profiled shells will pick it up automatically. Existing zmx or tmux sessions need to restart or re-source that init file before titles start updating.
         """
@@ -368,11 +396,13 @@ struct ToasttyApp: App {
         }
 
         do {
-            let result = try installer.install(plan: plan)
+            let result = try installer.install(plan: status.plan)
             let alert = NSAlert()
-            alert.messageText = result.updatedInitFile
-                ? "Shell Integration Installed"
-                : "Shell Integration Already Installed"
+            alert.messageText = "Shell Integration Installed"
+
+            let snippetMessage = result.updatedManagedSnippet
+                ? "Wrote \(result.plan.managedSnippetURL.path)."
+                : "\(result.plan.managedSnippetURL.path) was already up to date."
 
             let initFileMessage: String
             if result.updatedInitFile {
@@ -384,7 +414,7 @@ struct ToasttyApp: App {
             }
 
             alert.informativeText = """
-            Wrote \(result.plan.managedSnippetURL.path).
+            \(snippetMessage)
             \(initFileMessage)
 
             New shells will pick it up automatically. Existing profiled sessions need to restart or re-source that init file.

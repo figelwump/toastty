@@ -83,10 +83,16 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
 
         let firstResult = try installer.install()
+        let installedStatus = try installer.installationStatus()
         let secondResult = try installer.install()
 
+        XCTAssertTrue(installedStatus.isInstalled)
+        XCTAssertFalse(installedStatus.needsManagedSnippetWrite)
+        XCTAssertFalse(installedStatus.needsInitFileUpdate)
+        XCTAssertTrue(firstResult.updatedManagedSnippet)
         XCTAssertTrue(firstResult.updatedInitFile)
         XCTAssertFalse(secondResult.updatedInitFile)
+        XCTAssertFalse(secondResult.updatedManagedSnippet)
 
         let zshrcContents = try String(
             contentsOf: homeDirectoryURL.appendingPathComponent(".zshrc"),
@@ -96,6 +102,35 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             zshrcContents.components(separatedBy: "toastty-profile-shell-integration.zsh").count - 1,
             1
         )
+    }
+
+    func testInstallationStatusRequiresSnippetRewriteWhenManagedSnippetIsOutdated() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            shellPathProvider: { "/bin/zsh" }
+        )
+        let plan = try installer.installationPlan()
+        try writeFile(
+            """
+            # Added by Toastty terminal profile shell integration
+            source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
+            """,
+            to: plan.initFileURL
+        )
+        try writeFile(
+            """
+            # stale snippet
+            """,
+            to: plan.managedSnippetURL
+        )
+
+        let status = try installer.installationStatus(plan: plan)
+
+        XCTAssertFalse(status.isInstalled)
+        XCTAssertTrue(status.needsManagedSnippetWrite)
+        XCTAssertFalse(status.needsInitFileUpdate)
+        XCTAssertFalse(status.createsInitFile)
     }
 
     func testBashInstallationUsesProfileWhenBashProfileIsMissing() throws {

@@ -137,8 +137,20 @@ struct ProfileShellIntegrationInstallPlan: Equatable {
     }
 }
 
+struct ProfileShellIntegrationInstallStatus: Equatable {
+    let plan: ProfileShellIntegrationInstallPlan
+    let needsManagedSnippetWrite: Bool
+    let needsInitFileUpdate: Bool
+    let createsInitFile: Bool
+
+    var isInstalled: Bool {
+        needsManagedSnippetWrite == false && needsInitFileUpdate == false
+    }
+}
+
 struct ProfileShellIntegrationInstallResult: Equatable {
     let plan: ProfileShellIntegrationInstallPlan
+    let updatedManagedSnippet: Bool
     let updatedInitFile: Bool
     let createdInitFile: Bool
 }
@@ -203,13 +215,33 @@ final class ProfileShellIntegrationInstaller {
         try install(plan: installationPlan())
     }
 
+    func installationStatus() throws -> ProfileShellIntegrationInstallStatus {
+        try installationStatus(plan: installationPlan())
+    }
+
+    func installationStatus(
+        plan: ProfileShellIntegrationInstallPlan
+    ) throws -> ProfileShellIntegrationInstallStatus {
+        let initFileExists = fileManager.fileExists(atPath: plan.initFileURL.path)
+        let initFileContents = try readFileIfPresent(at: plan.initFileURL)
+        let managedSnippetContents = try readFileIfPresent(at: plan.managedSnippetURL)
+
+        return ProfileShellIntegrationInstallStatus(
+            plan: plan,
+            needsManagedSnippetWrite: managedSnippetContents != expectedManagedSnippetContents(for: plan),
+            needsInitFileUpdate: contents(initFileContents, referencesManagedSnippetFor: plan) == false,
+            createsInitFile: initFileExists == false
+        )
+    }
+
     func install(plan: ProfileShellIntegrationInstallPlan) throws -> ProfileShellIntegrationInstallResult {
         try ensureDirectoryExists(at: plan.managedSnippetURL.deletingLastPathComponent())
-        try writeManagedSnippet(for: plan)
+        let updatedManagedSnippet = try writeManagedSnippet(for: plan)
         let initFileUpdate = try installSourceLine(for: plan)
 
         return ProfileShellIntegrationInstallResult(
             plan: plan,
+            updatedManagedSnippet: updatedManagedSnippet,
             updatedInitFile: initFileUpdate.updated,
             createdInitFile: initFileUpdate.created
         )
@@ -272,24 +304,28 @@ final class ProfileShellIntegrationInstaller {
         }
     }
 
-    private func writeManagedSnippet(for plan: ProfileShellIntegrationInstallPlan) throws {
-        let managedContents = plan.shell.managedSnippetContents.appending("\n")
-
+    private func writeManagedSnippet(for plan: ProfileShellIntegrationInstallPlan) throws -> Bool {
+        let managedContents = expectedManagedSnippetContents(for: plan)
         do {
             if fileManager.fileExists(atPath: plan.managedSnippetURL.path) {
                 let existingContents = try String(contentsOf: plan.managedSnippetURL, encoding: .utf8)
                 if existingContents == managedContents {
-                    return
+                    return false
                 }
             }
 
             try managedContents.write(to: plan.managedSnippetURL, atomically: true, encoding: .utf8)
+            return true
         } catch {
             throw ProfileShellIntegrationInstallerError.unableToWriteFile(
                 path: plan.managedSnippetURL.path,
                 reason: error.localizedDescription
             )
         }
+    }
+
+    private func expectedManagedSnippetContents(for plan: ProfileShellIntegrationInstallPlan) -> String {
+        plan.shell.managedSnippetContents.appending("\n")
     }
 
     private func installSourceLine(
@@ -357,5 +393,20 @@ final class ProfileShellIntegrationInstaller {
         ]
 
         return markers.contains(where: contents.contains)
+    }
+
+    private func readFileIfPresent(at fileURL: URL) throws -> String {
+        guard fileManager.fileExists(atPath: fileURL.path) else {
+            return ""
+        }
+
+        do {
+            return try String(contentsOf: fileURL, encoding: .utf8)
+        } catch {
+            throw ProfileShellIntegrationInstallerError.unableToReadFile(
+                path: fileURL.path,
+                reason: error.localizedDescription
+            )
+        }
     }
 }
