@@ -539,8 +539,32 @@ final class TerminalMetadataService {
             return false
         }
 
-        let normalizedTitle = TerminalRuntimeRegistry.normalizedMetadataValue(title)
+        var normalizedTitle = TerminalRuntimeRegistry.normalizedMetadataValue(title)
         var normalizedCWD = TerminalRuntimeRegistry.normalizedCWDValue(cwd)
+        let normalizedRestoreStartupCommand = normalizedRestoredStartupCommand(
+            panelID: panelID,
+            terminalState: terminalState
+        )
+        if shouldSuppressRestoredStartupCommandTitleUpdate(
+            normalizedTitle: normalizedTitle,
+            normalizedCWD: normalizedCWD,
+            normalizedRestoreStartupCommand: normalizedRestoreStartupCommand
+        ) {
+            ToasttyLog.debug(
+                "Suppressing restored profile startup-command title until authoritative runtime metadata arrives",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "profile_id": terminalState.profileBinding?.profileID ?? "nil",
+                ]
+            )
+            normalizedTitle = nil
+        } else if normalizedCWD == nil,
+                  normalizedTitle != nil,
+                  normalizedRestoreStartupCommand != nil {
+            registry.markRestoredPanelReceivedAuthoritativeMetadata(panelID: panelID)
+        }
         var cwdSource = "explicit"
         if allowLegacyCWDInference,
            normalizedCWD == nil,
@@ -580,6 +604,9 @@ final class TerminalMetadataService {
         }
 
         guard hasChanges else {
+            if normalizedCWD != nil {
+                registry.markRestoredPanelReceivedAuthoritativeMetadata(panelID: panelID)
+            }
             if normalizedTitle != nil || normalizedCWD != nil {
                 ToasttyLog.debug(
                     "Ignoring terminal metadata update because values are unchanged",
@@ -604,6 +631,9 @@ final class TerminalMetadataService {
             )
         )
         if handled {
+            if normalizedCWD != nil {
+                registry.markRestoredPanelReceivedAuthoritativeMetadata(panelID: panelID)
+            }
             let titleSample = normalizedTitle.map { String($0.prefix(80)) } ?? "nil"
             let cwdSample = normalizedCWD.map { String($0.prefix(80)) } ?? "nil"
             ToasttyLog.debug(
@@ -632,6 +662,30 @@ final class TerminalMetadataService {
             )
         }
         return handled
+    }
+
+    private func shouldSuppressRestoredStartupCommandTitleUpdate(
+        normalizedTitle: String?,
+        normalizedCWD: String?,
+        normalizedRestoreStartupCommand: String?
+    ) -> Bool {
+        guard let normalizedTitle else { return false }
+        guard normalizedCWD == nil else { return false }
+        guard let normalizedRestoreStartupCommand else { return false }
+        return normalizedTitle == normalizedRestoreStartupCommand
+    }
+
+    private func normalizedRestoredStartupCommand(
+        panelID: UUID,
+        terminalState: TerminalPanelState
+    ) -> String? {
+        guard let startupCommand = registry.restoredProfileStartupCommand(
+            panelID: panelID,
+            terminalState: terminalState
+        ) else {
+            return nil
+        }
+        return TerminalRuntimeRegistry.normalizedMetadataValue(startupCommand)
     }
 
     private func handleCommandFinishedMetadataUpdate(

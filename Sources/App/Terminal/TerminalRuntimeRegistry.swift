@@ -62,6 +62,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var stateObservation: AnyCancellable?
     private var observedGlobalFontPoints: Double?
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
+    private var restoredTerminalPanelIDsAwaitingAuthoritativeMetadata: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
@@ -145,6 +146,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     ) {
         self.terminalProfileProvider = terminalProfileProvider
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDs
+        restoredTerminalPanelIDsAwaitingAuthoritativeMetadata = restoredTerminalPanelIDs
     }
 
     @discardableResult
@@ -182,6 +184,8 @@ final class TerminalRuntimeRegistry: ObservableObject {
         let livePanelIDs = liveTerminalPanelIDs(in: state)
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
+        restoredTerminalPanelIDsAwaitingAuthoritativeMetadata = restoredTerminalPanelIDsAwaitingAuthoritativeMetadata
+            .intersection(livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
             state: state,
@@ -553,6 +557,22 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         case .launch(let configuration):
             return configuration
         }
+    }
+
+    func restoredProfileStartupCommand(
+        panelID: UUID,
+        terminalState: TerminalPanelState
+    ) -> String? {
+        guard restoredTerminalPanelIDsAwaitingAuthoritativeMetadata.contains(panelID),
+              let profileBinding = terminalState.profileBinding,
+              let profile = terminalProfileProvider?.catalog.profile(id: profileBinding.profileID) else {
+            return nil
+        }
+        return profile.startupCommand
+    }
+
+    func markRestoredPanelReceivedAuthoritativeMetadata(panelID: UUID) {
+        restoredTerminalPanelIDsAwaitingAuthoritativeMetadata.remove(panelID)
     }
 
     func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
