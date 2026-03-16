@@ -93,6 +93,8 @@ public enum TerminalProfilesFile {
         # Toastty uses `displayName`.
         # `startupCommand` is sent to the pane's login shell when the pane is
         # created or restored.
+        # `shortcutKey` (optional) is a single letter or digit that registers
+        # ⌘⌃<key> to split right and ⌘⌃⇧<key> to split down with this profile.
         #
         # Toastty sets these environment variables for profiled panes:
         # - TOASTTY_PANEL_ID
@@ -105,6 +107,7 @@ public enum TerminalProfilesFile {
         # displayName = "ZMX"
         # badge = "ZMX"
         # startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+        # shortcutKey = "z"
         """
             + "\n"
     }
@@ -116,6 +119,7 @@ private enum TerminalProfilesParser {
         var displayName: String?
         var badge: String?
         var startupCommand: String?
+        var shortcutKey: String?
     }
 
     static func parse(contents: String) throws -> TerminalProfileCatalog {
@@ -124,6 +128,7 @@ private enum TerminalProfilesParser {
         var currentID: String?
         var currentProfile: PartialProfile?
         var seenProfileIDs = Set<String>()
+        var seenShortcutKeys = [Character: String]()
 
         func finalizeCurrentProfile() throws {
             guard let currentID, let currentProfile else { return }
@@ -140,12 +145,18 @@ private enum TerminalProfilesParser {
                 )
             }
             let badgeLabel = normalizedNonEmpty(currentProfile.badge) ?? displayName
+            let shortcutKey: Character? = if let raw = normalizedNonEmpty(currentProfile.shortcutKey) {
+                try validateShortcutKey(raw, line: currentProfile.line, profileID: currentID, seen: &seenShortcutKeys)
+            } else {
+                nil
+            }
             profiles.append(
                 TerminalProfile(
                     id: currentID,
                     displayName: displayName,
                     badgeLabel: badgeLabel,
-                    startupCommand: startupCommand
+                    startupCommand: startupCommand,
+                    shortcutKey: shortcutKey
                 )
             )
         }
@@ -226,6 +237,15 @@ private enum TerminalProfilesParser {
                 }
                 currentProfile?.startupCommand = try decodeString(rawValue, line: index + 1, profileID: currentID, key: key)
 
+            case "shortcutKey":
+                guard currentProfile?.shortcutKey == nil else {
+                    throw TerminalProfilesParseError(
+                        line: index + 1,
+                        message: "[\(currentID)] has duplicate shortcutKey"
+                    )
+                }
+                currentProfile?.shortcutKey = try decodeString(rawValue, line: index + 1, profileID: currentID, key: key)
+
             default:
                 throw TerminalProfilesParseError(
                     line: index + 1,
@@ -263,6 +283,30 @@ private enum TerminalProfilesParser {
             return nil
         }
         return trimmed
+    }
+
+    private static func validateShortcutKey(
+        _ raw: String,
+        line: Int,
+        profileID: String,
+        seen: inout [Character: String]
+    ) throws -> Character {
+        let lowered = raw.lowercased()
+        guard lowered.count == 1, let char = lowered.first,
+              char.isASCII && (char.isLetter || char.isNumber) else {
+            throw TerminalProfilesParseError(
+                line: line,
+                message: "[\(profileID)] shortcutKey must be a single letter or digit"
+            )
+        }
+        if let existingID = seen[char] {
+            throw TerminalProfilesParseError(
+                line: line,
+                message: "[\(profileID)] shortcutKey '\(char)' is already used by [\(existingID)]"
+            )
+        }
+        seen[char] = profileID
+        return char
     }
 
     private static func stripComment(from line: String) -> String {

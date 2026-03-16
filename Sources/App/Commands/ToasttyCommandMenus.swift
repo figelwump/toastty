@@ -146,7 +146,7 @@ struct ToasttyCommandMenus: Commands {
                 .disabled(true)
         } else {
             ForEach(terminalProfileStore.catalog.profiles, id: \.id) { profile in
-                Button(profile.displayName) {
+                let button = Button(profile.displayName) {
                     guard let workspaceID = commandWorkspace?.id else { return }
                     store.send(
                         .splitFocusedSlotInDirectionWithTerminalProfile(
@@ -157,6 +157,15 @@ struct ToasttyCommandMenus: Commands {
                     )
                 }
                 .disabled(commandWorkspace == nil)
+
+                if let shortcutKey = profile.shortcutKey {
+                    let modifiers: EventModifiers = direction == .down
+                        ? [.command, .control, .shift]
+                        : [.command, .control]
+                    button.keyboardShortcut(KeyEquivalent(shortcutKey), modifiers: modifiers)
+                } else {
+                    button
+                }
             }
         }
     }

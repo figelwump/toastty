@@ -153,6 +153,118 @@ struct TerminalProfilesFileTests {
     }
 
     @Test
+    func loadParsesShortcutKeyAndNormalizesToLowercase() throws {
+        let contents = """
+        [zmx]
+        displayName = "ZMX"
+        startupCommand = "zmx attach"
+        shortcutKey = "Z"
+
+        [ssh-prod]
+        displayName = "SSH Prod"
+        startupCommand = "ssh prod"
+        shortcutKey = "s"
+        """
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
+        let catalog = try TerminalProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path
+        )
+
+        #expect(catalog.profiles.map(\.shortcutKey) == [Character("z"), Character("s")])
+    }
+
+    @Test
+    func loadAllowsProfilesWithoutShortcutKey() throws {
+        let contents = """
+        [zmx]
+        displayName = "ZMX"
+        startupCommand = "zmx attach"
+        shortcutKey = "z"
+
+        [ssh-prod]
+        displayName = "SSH Prod"
+        startupCommand = "ssh prod"
+        """
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
+        let catalog = try TerminalProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path
+        )
+
+        #expect(catalog.profiles[0].shortcutKey == Character("z"))
+        #expect(catalog.profiles[1].shortcutKey == nil)
+    }
+
+    @Test
+    func loadRejectsShortcutKeyLongerThanOneCharacter() throws {
+        let contents = """
+        [zmx]
+        displayName = "ZMX"
+        startupCommand = "zmx attach"
+        shortcutKey = "zz"
+        """
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
+
+        #expect(throws: TerminalProfilesParseError(
+            line: 1,
+            message: "[zmx] shortcutKey must be a single letter or digit"
+        )) {
+            _ = try TerminalProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsDuplicateShortcutKeysAcrossProfiles() throws {
+        let contents = """
+        [zmx]
+        displayName = "ZMX"
+        startupCommand = "zmx attach"
+        shortcutKey = "z"
+
+        [other]
+        displayName = "Other"
+        startupCommand = "other cmd"
+        shortcutKey = "z"
+        """
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
+
+        #expect(throws: TerminalProfilesParseError(
+            line: 6,
+            message: "[other] shortcutKey 'z' is already used by [zmx]"
+        )) {
+            _ = try TerminalProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsNonAlphanumericShortcutKey() throws {
+        let contents = """
+        [zmx]
+        displayName = "ZMX"
+        startupCommand = "zmx attach"
+        shortcutKey = "!"
+        """
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
+
+        #expect(throws: TerminalProfilesParseError(
+            line: 1,
+            message: "[zmx] shortcutKey must be a single letter or digit"
+        )) {
+            _ = try TerminalProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
     func loadReturnsEmptyCatalogWhenOverridePathDoesNotExist() throws {
         let fileManager = InMemoryTerminalProfilesFileManager(templateContents: nil)
         let overrideURL = fileManager.rootURL

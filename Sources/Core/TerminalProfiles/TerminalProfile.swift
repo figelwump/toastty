@@ -5,17 +5,22 @@ public struct TerminalProfile: Equatable, Sendable {
     public let displayName: String
     public let badgeLabel: String
     public let startupCommand: String
+    /// Single lowercase alphanumeric character used as a keyboard shortcut.
+    /// Split right: ⌘⌃<key>, split down: ⌘⌃⇧<key>.
+    public let shortcutKey: Character?
 
     public init(
         id: String,
         displayName: String,
         badgeLabel: String,
-        startupCommand: String
+        startupCommand: String,
+        shortcutKey: Character? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.badgeLabel = badgeLabel
         self.startupCommand = startupCommand
+        self.shortcutKey = shortcutKey
     }
 }
 
