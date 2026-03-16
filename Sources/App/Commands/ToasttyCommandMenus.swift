@@ -10,6 +10,7 @@ struct ToasttyCommandMenus: Commands {
     let focusedPanelCommandController: FocusedPanelCommandController
     let supportsConfigurationReload: Bool
     let reloadConfiguration: () -> Void
+    let installShellIntegration: () -> Void
 
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
 
@@ -58,6 +59,10 @@ struct ToasttyCommandMenus: Commands {
             Menu("Split Down With Profile") {
                 profileMenuItems(direction: .down)
             }
+
+            Divider()
+
+            Button("Install Shell Integration…", action: installShellIntegration)
         }
 
         CommandMenu("Workspace") {

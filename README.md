@@ -187,12 +187,128 @@ Toastty sets these environment variables for profiled panes:
 - `TOASTTY_TERMINAL_PROFILE_ID`
 - `TOASTTY_LAUNCH_REASON` (`create` or `restore`)
 
+Some profiles attach to long-lived shell sessions such as `zmx` or `tmux`.
+In that setup, Toastty only sees live pane-title updates if the shell inside
+the multiplexer emits title sequences on prompt redraws. The profile startup
+command alone is not enough once the multiplexer session takes over.
+
 Profile bindings are persisted with the workspace layout, so profiled panes reopen
 with the same profile after restart. An example `zmx` profile is included at
 [`examples/terminal-profiles/zmx.toml`](examples/terminal-profiles/zmx.toml).
 When a profile still exists, the panel-header badge resolves from the live
 profile definition. If the profile is missing, Toastty falls back to a degraded
 badge using the stored profile ID.
+
+#### Install shell integration from Toastty
+
+Use `Terminal > Install Shell Integration…`.
+
+Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
+`source` line to the shell init file it detects:
+
+- `zsh` → `~/.zshrc`
+- `bash` → `~/.bash_profile` by default, or an existing `~/.profile`
+
+After installing, new profiled panes pick it up automatically. Existing `zmx`
+or `tmux` sessions need to restart, or you need to re-source the init file
+inside that session, before panel titles start updating.
+
+#### Manual shell setup
+
+If you want to manage dotfiles yourself, or you want to point another agent at
+this README and say "set this up", install the same hooks manually.
+
+##### Zsh
+
+Create `~/.toastty/shell/toastty-profile-shell-integration.zsh`:
+
+```zsh
+# Toastty terminal profile shell integration.
+# - idle prompt: cwd
+# - running command: command
+_toastty_emit_title() {
+	[[ -t 1 ]] || return
+	[[ -w /dev/tty ]] || return
+
+	local title="$1"
+	title="${title//$'\e'/}"
+	title="${title//$'\a'/}"
+	title="${title//$'\r'/}"
+	title="${title//$'\n'/ }"
+
+	printf '\033]2;%s\a' "$title" > /dev/tty
+}
+
+_toastty_precmd() {
+	local cwd="${PWD/#$HOME/~}"
+	_toastty_emit_title "$cwd"
+}
+
+_toastty_preexec() {
+	local cmd="${1%%$'\n'*}"
+	_toastty_emit_title "$cmd"
+}
+
+if [[ -o interactive && -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
+	autoload -Uz add-zsh-hook
+	add-zsh-hook precmd _toastty_precmd
+	add-zsh-hook preexec _toastty_preexec
+	typeset -g _TOASTTY_TITLE_HOOKS_INSTALLED=1
+fi
+```
+
+Then add this to `~/.zshrc`:
+
+```zsh
+source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
+```
+
+##### Bash
+
+Create `~/.toastty/shell/toastty-profile-shell-integration.bash`:
+
+```bash
+# Toastty terminal profile shell integration.
+# Updates the pane title to the current directory whenever the prompt returns.
+_toastty_emit_title() {
+	[[ $- == *i* ]] || return
+	[[ -t 1 ]] || return
+	[[ -w /dev/tty ]] || return
+
+	local title="$1"
+	title="${title//$'\e'/}"
+	title="${title//$'\a'/}"
+	title="${title//$'\r'/}"
+	title="${title//$'\n'/ }"
+
+	printf '\033]2;%s\a' "$title" > /dev/tty
+}
+
+_toastty_prompt_command() {
+	local cwd="${PWD/#$HOME/~}"
+	_toastty_emit_title "$cwd"
+}
+
+if [[ $- == *i* && -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
+	PROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+	_TOASTTY_TITLE_HOOKS_INSTALLED=1
+fi
+```
+
+Then add this to `~/.bash_profile` on macOS, or `~/.bashrc` if that is the
+interactive file your Bash sessions already load:
+
+```bash
+source "$HOME/.toastty/shell/toastty-profile-shell-integration.bash"
+```
+
+##### Other shells
+
+Install an equivalent interactive hook that writes `OSC 2` (`\033]2;...\a`) to
+`/dev/tty` with the current working directory whenever the prompt returns. If
+your shell also has a pre-exec hook, emitting the current command there is
+useful too, but the prompt-time directory title is the important part for
+profiled multiplexer sessions.
 
 ### Host-side split styling
 

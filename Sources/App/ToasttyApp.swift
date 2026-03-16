@@ -325,13 +325,81 @@ struct ToasttyApp: App {
                 terminalProfileStore: terminalProfileStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 supportsConfigurationReload: supportsConfigurationReload,
-                reloadConfiguration: reloadConfiguration
+                reloadConfiguration: reloadConfiguration,
+                installShellIntegration: installShellIntegration
             )
         }
     }
 
     private var supportsConfigurationReload: Bool {
         true
+    }
+
+    @MainActor
+    private func installShellIntegration() {
+        let installer = ProfileShellIntegrationInstaller()
+        let plan: ProfileShellIntegrationInstallPlan
+
+        do {
+            plan = try installer.installationPlan()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Install Shell Integration"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let confirmationAlert = NSAlert()
+        confirmationAlert.messageText = "Install Shell Integration?"
+        confirmationAlert.informativeText = """
+        Toastty detected \(plan.shell.displayName). It will create \(plan.managedSnippetURL.path) and add one source line to \(plan.initFileURL.path).
+
+        New profiled shells will pick it up automatically. Existing zmx or tmux sessions need to restart or re-source that init file before titles start updating.
+        """
+        confirmationAlert.alertStyle = .informational
+        confirmationAlert.addButton(withTitle: "Install")
+        confirmationAlert.addButton(withTitle: "Cancel")
+
+        guard confirmationAlert.runModal() == .alertFirstButtonReturn else {
+            return
+        }
+
+        do {
+            let result = try installer.install(plan: plan)
+            let alert = NSAlert()
+            alert.messageText = result.updatedInitFile
+                ? "Shell Integration Installed"
+                : "Shell Integration Already Installed"
+
+            let initFileMessage: String
+            if result.updatedInitFile {
+                initFileMessage = result.createdInitFile
+                    ? "Created \(result.plan.initFileURL.path)."
+                    : "Updated \(result.plan.initFileURL.path)."
+            } else {
+                initFileMessage = "\(result.plan.initFileURL.path) already referenced the managed snippet."
+            }
+
+            alert.informativeText = """
+            Wrote \(result.plan.managedSnippetURL.path).
+            \(initFileMessage)
+
+            New shells will pick it up automatically. Existing profiled sessions need to restart or re-source that init file.
+            """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Install Shell Integration"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
     }
 
     @MainActor
