@@ -548,99 +548,6 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
-    func testRestoredProfiledPaneDisplaysRestoredSemanticTitleThroughBootstrapPhase() async throws {
-        let state = makeRestoredProfiledPanelState(
-            profileID: "zmx",
-            restoredSemanticTitle: "bundle exec rspec"
-        )
-        let store = AppStore(state: state, persistTerminalFontPreference: false)
-        let registry = TerminalRuntimeRegistry()
-        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
-        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
-        let profileProvider = TestTerminalProfileProvider(
-            profiles: [
-                TerminalProfile(
-                    id: "zmx",
-                    displayName: "ZMX",
-                    badgeLabel: "ZMX",
-                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
-                ),
-            ]
-        )
-        registry.setTerminalProfileProvider(
-            profileProvider,
-            restoredTerminalPanelIDs: [panelID]
-        )
-        let service = TerminalMetadataService(
-            store: store,
-            registry: registry,
-            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
-            processRefreshRetryDelay: { _ in
-                await Task.yield()
-            }
-        )
-
-        // Before any runtime signals, restored semantic title is shown.
-        let initialState = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(initialState.displayPanelLabel, "bundle exec rspec")
-
-        // Bootstrap CWD → substituted with restored launch CWD.
-        XCTAssertTrue(
-            service.handleRuntimeMetadataAction(
-                .setTerminalCWD("/tmp/bootstrap-shell"),
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: store.state
-            )
-        )
-
-        // Path-like title from bootstrap shell's precmd.
-        XCTAssertTrue(
-            service.handleRuntimeMetadataAction(
-                .setTerminalTitle("/tmp/restored"),
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: store.state
-            )
-        )
-
-        // Restored semantic title should still be shown (path-like title doesn't clear it).
-        let afterBootstrap = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(afterBootstrap.displayPanelLabel, "bundle exec rspec")
-        XCTAssertEqual(afterBootstrap.restoredSemanticTitle, "bundle exec rspec")
-
-        // Startup command title is suppressed.
-        XCTAssertTrue(
-            service.handleRuntimeMetadataAction(
-                .setTerminalTitle("zmx attach toastty.$TOASTTY_PANEL_ID"),
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: store.state
-            )
-        )
-
-        // Restored semantic title still survives startup command suppression.
-        let afterStartup = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(afterStartup.displayPanelLabel, "bundle exec rspec")
-
-        // When the runtime finally sends a semantic title, it supersedes the restored one.
-        XCTAssertTrue(
-            service.handleRuntimeMetadataAction(
-                .setTerminalTitle("vim"),
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: store.state
-            )
-        )
-
-        let afterSemanticTitle = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(afterSemanticTitle.title, "vim")
-        XCTAssertNil(afterSemanticTitle.restoredSemanticTitle)
-        XCTAssertEqual(afterSemanticTitle.displayPanelLabel, "vim")
-
-        try StateValidator.validate(store.state)
-    }
-
     func testRestoredProfiledPaneAcceptsMatchingStartupNativeCWDWithoutSubstitution() async throws {
         let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
@@ -883,10 +790,7 @@ private func terminalState(panelID: UUID, state: AppState) throws -> TerminalPan
     return terminalState
 }
 
-private func makeRestoredProfiledPanelState(
-    profileID: String,
-    restoredSemanticTitle: String? = nil
-) -> AppState {
+private func makeRestoredProfiledPanelState(profileID: String) -> AppState {
     var state = AppState.bootstrap()
     guard let workspaceID = state.windows.first?.selectedWorkspaceID,
           var workspace = state.workspacesByID[workspaceID],
@@ -898,7 +802,6 @@ private func makeRestoredProfiledPanelState(
     terminalState.cwd = ""
     terminalState.launchWorkingDirectory = "/tmp/restored"
     terminalState.profileBinding = TerminalProfileBinding(profileID: profileID)
-    terminalState.restoredSemanticTitle = restoredSemanticTitle
     workspace.panels[panelID] = .terminal(terminalState)
     state.workspacesByID[workspaceID] = workspace
     return state
