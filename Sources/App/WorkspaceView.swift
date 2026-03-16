@@ -397,10 +397,6 @@ private struct PanelCardView: View {
                         .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
                 }
 
-                if let terminalProfileBadge {
-                    profileBadge(terminalProfileBadge)
-                }
-
                 Text(panelLabel)
                     .font(panelTitleFont)
                     .foregroundStyle(panelTitleTextColor)
@@ -408,6 +404,10 @@ private struct PanelCardView: View {
                     .truncationMode(.tail)
 
                 Spacer(minLength: 0)
+
+                if let terminalProfileBadge {
+                    profileBadge(terminalProfileBadge)
+                }
 
                 if let shortcutLabel {
                     shortcutBadge(shortcutLabel)
