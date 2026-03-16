@@ -59,6 +59,7 @@ public enum AppAction: Equatable, Sendable {
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
+    case toggleSidebar(windowID: UUID)
 }
 
 public extension AppAction {
@@ -126,6 +127,8 @@ public extension AppAction {
             return "recordDesktopNotification"
         case .markPanelNotificationsRead:
             return "markPanelNotificationsRead"
+        case .toggleSidebar:
+            return "toggleSidebar"
         }
     }
 }

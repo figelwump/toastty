@@ -397,6 +397,22 @@ private func ghosttyPasteboard(for location: ghostty_clipboard_e) -> NSPasteboar
     }
 }
 
+private func ghosttyShellEscape(_ path: String) -> String {
+    guard !path.isEmpty else { return "''" }
+    return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+private func ghosttyClipboardStringContents(from pasteboard: NSPasteboard) -> String? {
+    if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+       !urls.isEmpty {
+        return urls
+            .map { $0.isFileURL ? ghosttyShellEscape($0.path) : $0.absoluteString }
+            .joined(separator: " ")
+    }
+
+    return pasteboard.string(forType: .string)
+}
+
 private func ghosttyClipboardLocationName(_ location: ghostty_clipboard_e) -> String {
     switch location {
     case GHOSTTY_CLIPBOARD_STANDARD:
@@ -495,25 +511,32 @@ private func ghosttyReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
     location: ghostty_clipboard_e,
     state: UnsafeMutableRawPointer?
-) {
+) -> Bool {
     guard let userdata else {
         ToasttyLog.warning("Ghostty read clipboard callback missing userdata", category: .ghostty)
-        return
+        return false
     }
+    guard let state else { return false }
 
     let hostViewHandle = UInt(bitPattern: userdata)
+    // This helper runs inline on main and synchronously hops to main otherwise,
+    // so the callback result is determined before returning to Ghostty.
+    var didStartRequest = false
     ghosttyRunClipboardWorkOnMainThread {
         let surfaceHandle = ghosttyResolveClipboardSurfaceHandle(hostViewHandle: hostViewHandle)
-        let surface = surfaceHandle.flatMap { ghostty_surface_t(bitPattern: $0) }
-        let pasteboard = ghosttyPasteboard(for: location)
-        let clipboardValue = pasteboard?.string(forType: .string) ?? ""
+        guard let surfaceHandle else { return }
+        guard let surface = ghostty_surface_t(bitPattern: surfaceHandle) else { return }
+        guard let pasteboard = ghosttyPasteboard(for: location) else { return }
+        guard let clipboardValue = ghosttyClipboardStringContents(from: pasteboard) else { return }
         ghosttyCompleteClipboardRead(
             surface: surface,
             state: state,
             data: clipboardValue,
             confirmed: false
         )
+        didStartRequest = true
     }
+    return didStartRequest
 }
 
 private func ghosttyConfirmReadClipboardCallback(

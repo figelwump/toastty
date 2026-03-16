@@ -65,12 +65,26 @@ struct ToasttyCommandMenus: Commands {
             Button("Install Shell Integration…", action: installShellIntegration)
         }
 
+        CommandMenu("View") {
+            Button(sidebarVisibleForCommand ? "Hide Sidebar" : "Show Sidebar") {
+                toggleSidebarFromCommandSelection()
+            }
+            .keyboardShortcut("w", modifiers: [.command, .shift])
+            .disabled(commandSelection == nil)
+        }
+
         CommandMenu("Workspace") {
             Button("New Workspace") {
                 store.createWorkspaceFromCommand(preferredWindowID: focusedWindowID)
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: focusedWindowID) == false)
+
+            Button("Rename Workspace") {
+                store.renameSelectedWorkspaceFromCommand(preferredWindowID: focusedWindowID)
+            }
+            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .disabled(commandWorkspace == nil)
 
             Button("Close Panel") {
                 closeFocusedPanelFromCommandSelection()
@@ -173,5 +187,14 @@ struct ToasttyCommandMenus: Commands {
                 }
             }
         }
+    }
+
+    private var sidebarVisibleForCommand: Bool {
+        commandSelection?.window.sidebarVisible ?? true
+    }
+
+    private func toggleSidebarFromCommandSelection() {
+        guard let windowID = commandSelection?.windowID else { return }
+        store.send(.toggleSidebar(windowID: windowID))
     }
 }

@@ -257,6 +257,44 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.globalTerminalFontPoints, 15)
     }
 
+    func testRenameSelectedWorkspaceFromCommandSetsPendingRename() throws {
+        let workspace = WorkspaceState.bootstrap(title: "Dev")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertNil(store.pendingRenameWorkspaceID)
+        store.renameSelectedWorkspaceFromCommand(preferredWindowID: windowID)
+        XCTAssertEqual(store.pendingRenameWorkspaceID, workspace.id)
+    }
+
+    func testRenameSelectedWorkspaceFromCommandDoesNothingWithoutWorkspace() {
+        let store = AppStore(
+            state: AppState(
+                windows: [],
+                workspacesByID: [:],
+                selectedWindowID: nil,
+                globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            ),
+            persistTerminalFontPreference: false
+        )
+
+        store.renameSelectedWorkspaceFromCommand(preferredWindowID: nil)
+        XCTAssertNil(store.pendingRenameWorkspaceID)
+    }
+
     func testCreateWorkspaceFromCommandDoesNotRerouteMissingFocusedWindow() {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = store.state.windows[0].id

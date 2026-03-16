@@ -8,6 +8,7 @@ struct WorkspaceView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
+    let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -74,7 +75,8 @@ struct WorkspaceView: View {
             .disabled(isFocusedPanelModeActive)
             .accessibilityIdentifier("workspace.split.vertical")
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+        .padding(.trailing, 12)
         .padding(.top, ToastyTheme.topBarContentTopPadding)
         .frame(height: ToastyTheme.topBarHeight)
         .background(ToastyTheme.chromeBackground)
@@ -579,6 +581,34 @@ private struct TerminalProfileBadge {
 }
 
 // MARK: - Top Bar Icons
+
+/// Sidebar panel icon — rectangle with left panel section.
+/// When `sidebarVisible` is true the left panel is filled to indicate the sidebar is shown.
+struct SidebarToggleIconView: View {
+    let color: Color
+    let sidebarVisible: Bool
+
+    var body: some View {
+        Canvas { context, _ in
+            // Outer rectangle
+            let rect = Path(roundedRect: CGRect(x: 1, y: 1, width: 12, height: 12), cornerRadius: 1.5)
+            context.stroke(rect, with: .color(color), style: StrokeStyle(lineWidth: 1.2))
+
+            // Vertical divider separating sidebar panel from main area
+            var divider = Path()
+            divider.move(to: CGPoint(x: 5.2, y: 1))
+            divider.addLine(to: CGPoint(x: 5.2, y: 13))
+            context.stroke(divider, with: .color(color), style: StrokeStyle(lineWidth: 1.2))
+
+            // Fill the left panel area when sidebar is visible
+            if sidebarVisible {
+                let fill = Path(CGRect(x: 1.7, y: 1.7, width: 3.5, height: 10.6))
+                context.fill(fill, with: .color(color.opacity(0.3)))
+            }
+        }
+        .frame(width: 14, height: 14)
+    }
+}
 
 /// Viewfinder bracket corners with center dot — Focus/Zoom toggle icon.
 /// Matches the 11×11 stroke-based icon language used across the top nav bar.

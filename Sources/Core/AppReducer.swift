@@ -507,6 +507,11 @@ public struct AppReducer {
                 state.workspacesByID[workspaceID] = workspace
             }
             return true
+
+        case .toggleSidebar(let windowID):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            state.windows[windowIndex].sidebarVisible.toggle()
+            return true
         }
     }
 
