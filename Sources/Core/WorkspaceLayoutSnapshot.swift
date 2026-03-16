@@ -40,29 +40,23 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
 
 public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable {
     public var shell: String
-    // Persist the launch seed for restore only; runtime metadata resolution
-    // must not treat this as an authoritative cwd/process matching hint.
     public var launchWorkingDirectory: String
     public var profileBinding: TerminalProfileBinding?
-    public var restoredTitle: String?
 
     public init(
         shell: String,
         launchWorkingDirectory: String,
-        profileBinding: TerminalProfileBinding? = nil,
-        restoredTitle: String? = nil
+        profileBinding: TerminalProfileBinding? = nil
     ) {
         self.shell = shell
         self.launchWorkingDirectory = launchWorkingDirectory
         self.profileBinding = profileBinding
-        self.restoredTitle = restoredTitle
     }
 
     init(terminalState: TerminalPanelState) {
         shell = terminalState.shell
         launchWorkingDirectory = terminalState.workingDirectorySeed
         profileBinding = terminalState.profileBinding
-        restoredTitle = Self.restoredTitleCandidate(for: terminalState)
     }
 }
 
@@ -71,7 +65,6 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         case shell
         case launchWorkingDirectory
         case profileBinding
-        case restoredTitle
         case cwd
     }
 
@@ -84,7 +77,6 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
             self.launchWorkingDirectory = try container.decode(String.self, forKey: .cwd)
         }
         profileBinding = try container.decodeIfPresent(TerminalProfileBinding.self, forKey: .profileBinding)
-        restoredTitle = try container.decodeIfPresent(String.self, forKey: .restoredTitle)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -92,59 +84,9 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         try container.encode(shell, forKey: .shell)
         try container.encode(launchWorkingDirectory, forKey: .launchWorkingDirectory)
         try container.encodeIfPresent(profileBinding, forKey: .profileBinding)
-        try container.encodeIfPresent(restoredTitle, forKey: .restoredTitle)
         // Preserve downgrade compatibility while older builds still decode the
         // legacy terminal snapshot schema from `cwd`.
         try container.encode(launchWorkingDirectory, forKey: .cwd)
-    }
-
-    private static func restoredTitleCandidate(for terminalState: TerminalPanelState) -> String? {
-        guard terminalState.profileBinding != nil else {
-            return nil
-        }
-
-        let normalizedTitle = terminalState.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard normalizedTitle.isEmpty == false else {
-            return nil
-        }
-        guard Self.isDefaultTerminalTitle(normalizedTitle) == false else {
-            return nil
-        }
-        guard Self.looksLikePathContextTitle(normalizedTitle) == false else {
-            return nil
-        }
-        guard Self.looksLikeTransientProfileStartupTitle(normalizedTitle) == false else {
-            return nil
-        }
-
-        let shellName = URL(fileURLWithPath: terminalState.shell).lastPathComponent
-        if shellName.isEmpty == false && normalizedTitle == shellName {
-            return nil
-        }
-
-        return normalizedTitle
-    }
-
-    private static func isDefaultTerminalTitle(_ title: String) -> Bool {
-        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized == "terminal" {
-            return true
-        }
-        let components = normalized.split(separator: " ", omittingEmptySubsequences: true)
-        guard components.count == 2 else { return false }
-        guard components[0] == "terminal" else { return false }
-        return Int(components[1]) != nil
-    }
-
-    private static func looksLikePathContextTitle(_ title: String) -> Bool {
-        if title.hasPrefix("/") || title.hasPrefix("~") || title.hasPrefix("file://") {
-            return true
-        }
-        return title.hasPrefix(".../") || title.hasPrefix("…/")
-    }
-
-    private static func looksLikeTransientProfileStartupTitle(_ title: String) -> Bool {
-        title.contains("$TOASTTY_") || title.contains("${TOASTTY_")
     }
 }
 
@@ -300,12 +242,6 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
 
         func assignTitleIfNeeded(_ panelID: UUID) {
             guard titleByPanelID[panelID] == nil else { return }
-            if case .terminal(let terminalSnapshot)? = panels[panelID],
-               let restoredTitle = terminalSnapshot.restoredTitle {
-                titleByPanelID[panelID] = restoredTitle
-                return
-            }
-
             titleByPanelID[panelID] = "\(Self.restoredTerminalTitlePrefix)\(nextTerminalNumber)"
             nextTerminalNumber += 1
         }

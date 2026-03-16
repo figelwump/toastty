@@ -134,23 +134,35 @@ final class TerminalActivityInferenceService {
             return
         }
 
+        if let promptToken = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText),
+           Self.agentKind(forPromptToken: promptToken) == nil {
+            panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
+            return
+        }
+
         if let inferredAgentTitle = Self.inferredAgentDisplayTitle(
             visibleText: visibleText,
             legacyAgentTitle: legacyAgentTitle
         ) {
-            publishPanelDisplayTitleOverride(
-                inferredAgentTitle,
-                panelID: panelID,
-                workspaceID: workspaceID,
-                inferenceSource: "agent"
-            )
+            if panelDisplayTitleOverrideByID[panelID] != inferredAgentTitle {
+                panelDisplayTitleOverrideByID[panelID] = inferredAgentTitle
+                ToasttyLog.debug(
+                    "Updated transient inferred agent display title from visible terminal text",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "inferred_title": inferredAgentTitle,
+                    ]
+                )
+            }
             return
         }
 
-        // Visible-text inspection can miss banner text or the original prompt
-        // command transiently while output continues to stream. Keep any
-        // existing override until the shell returns to an idle prompt or a
-        // semantic terminal title arrives and suppresses title inference.
+        // Visible-text inspection can miss banner text transiently while the
+        // agent is still streaming output. Keep any existing override until the
+        // shell returns to an idle prompt or a new non-agent prompt command
+        // becomes visible.
     }
 
     private func refreshPanelActivityFromVisibleTextIfNeeded(
@@ -200,28 +212,6 @@ final class TerminalActivityInferenceService {
         panelActivityByPanelID = panelActivityByPanelID.filter { _, activity in
             now.timeIntervalSince(activity.updatedAt) <= Self.activityRetentionInterval
         }
-    }
-
-    private func publishPanelDisplayTitleOverride(
-        _ inferredTitle: String,
-        panelID: UUID,
-        workspaceID: UUID,
-        inferenceSource: String
-    ) {
-        guard panelDisplayTitleOverrideByID[panelID] != inferredTitle else {
-            return
-        }
-        panelDisplayTitleOverrideByID[panelID] = inferredTitle
-        ToasttyLog.debug(
-            "Updated transient inferred display title from visible terminal text",
-            category: .terminal,
-            metadata: [
-                "workspace_id": workspaceID.uuidString,
-                "panel_id": panelID.uuidString,
-                "inferred_title": inferredTitle,
-                "inference_source": inferenceSource,
-            ]
-        )
     }
 
     private func updateWorkspaceActivitySubtext(state: AppState, now: Date) {

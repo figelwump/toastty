@@ -113,38 +113,6 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
         }
     }
 
-    func testRefreshVisibleTextInferenceDoesNotPublishGenericRunningCommandOverride() async throws {
-        try await MainActor.run {
-            let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
-            let repoPath = "/tmp/restored-running-command"
-
-            XCTAssertTrue(
-                store.send(
-                    .updateTerminalPanelMetadata(
-                        panelID: panelID,
-                        title: repoPath,
-                        cwd: repoPath
-                    )
-                )
-            )
-
-            visibleTextStore.textByPanelID[panelID] = """
-            dev@host ~/repo % emptyos dev --port 3913
-            Status: running
-            PID: 52375
-            """
-            service.refreshVisibleTextInference(
-                state: store.state,
-                selectedPanelWorkspaceIDs: [panelID: workspaceID],
-                backgroundPanelWorkspaceIDs: [:]
-            )
-
-            XCTAssertNil(service.panelDisplayTitleOverride(for: panelID))
-            XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).title, repoPath)
-            try StateValidator.validate(store.state)
-        }
-    }
-
     func testRefreshVisibleTextInferencePublishesWorkspaceSubtextForRunningAgent() async throws {
         try await MainActor.run {
             let (store, service, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()

@@ -6,8 +6,7 @@ import XCTest
 @MainActor
 final class TerminalMetadataServiceTests: XCTestCase {
     func testRestoredProfiledPaneSuppressesTransientTitleUntilLiveCWDArrives() async throws {
-        let restoredTitle = "emptyos dev --port 3913"
-        let state = makeRestoredProfiledPanelState(profileID: "zmx", title: restoredTitle)
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
@@ -45,16 +44,13 @@ final class TerminalMetadataServiceTests: XCTestCase {
         )
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(terminalState.title, restoredTitle)
+        XCTAssertEqual(terminalState.title, "Terminal 1")
         XCTAssertEqual(terminalState.cwd, "")
         try StateValidator.validate(store.state)
     }
 
     func testRestoredProfiledPaneAcceptsTitleUpdatesAfterLiveCWDArrives() async throws {
-        let state = makeRestoredProfiledPanelState(
-            profileID: "zmx",
-            title: "emptyos dev --port 3913"
-        )
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
@@ -114,8 +110,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
     }
 
     func testRestoredProfiledPaneSuppressesStartupCommandTitleAfterLiveCWDArrives() async throws {
-        let restoredTitle = "emptyos dev --port 3913"
-        let state = makeRestoredProfiledPanelState(profileID: "zmx", title: restoredTitle)
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
@@ -170,60 +165,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
 
         let terminalState = try terminalState(panelID: panelID, state: store.state)
         XCTAssertEqual(terminalState.cwd, "/tmp/restored")
-        XCTAssertEqual(terminalState.title, restoredTitle)
-        try StateValidator.validate(store.state)
-    }
-
-    func testRestoredProfiledPaneSuppressesPathTitleWhilePreservingRestoredSemanticTitle() async throws {
-        let restoredTitle = "emptyos dev --port 3913"
-        let state = makeRestoredProfiledPanelState(profileID: "zmx", title: restoredTitle)
-        let store = AppStore(state: state, persistTerminalFontPreference: false)
-        let registry = TerminalRuntimeRegistry()
-        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
-        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
-        let profileProvider = TestTerminalProfileProvider(
-            profiles: [
-                TerminalProfile(
-                    id: "zmx",
-                    displayName: "ZMX",
-                    badgeLabel: "ZMX",
-                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
-                ),
-            ]
-        )
-        registry.setTerminalProfileProvider(
-            profileProvider,
-            restoredTerminalPanelIDs: [panelID]
-        )
-        let service = TerminalMetadataService(
-            store: store,
-            registry: registry,
-            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
-            processRefreshRetryDelay: { _ in
-                await Task.yield()
-            }
-        )
-
-        XCTAssertTrue(
-            service.handleRuntimeMetadataAction(
-                .setTerminalTitle(".../GiantThings/repos/toastty-terminal-profiles"),
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: store.state
-            )
-        )
-        XCTAssertTrue(
-            service.handleRuntimeMetadataAction(
-                .setTerminalCWD("/Users/vishal/GiantThings/repos/toastty-terminal-profiles"),
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: store.state
-            )
-        )
-
-        let terminalState = try terminalState(panelID: panelID, state: store.state)
-        XCTAssertEqual(terminalState.title, restoredTitle)
-        XCTAssertEqual(terminalState.cwd, "/Users/vishal/GiantThings/repos/toastty-terminal-profiles")
+        XCTAssertEqual(terminalState.title, "/tmp/restored")
         try StateValidator.validate(store.state)
     }
 
@@ -370,10 +312,7 @@ final class TerminalMetadataServiceTests: XCTestCase {
     }
 
     func testRestoredProfiledPaneStopsSuppressingAfterDifferentRuntimeTitleArrives() async throws {
-        let state = makeRestoredProfiledPanelState(
-            profileID: "zmx",
-            title: "emptyos dev --port 3913"
-        )
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
@@ -580,10 +519,7 @@ private func terminalState(panelID: UUID, state: AppState) throws -> TerminalPan
     return terminalState
 }
 
-private func makeRestoredProfiledPanelState(
-    profileID: String,
-    title: String = "Terminal 1"
-) -> AppState {
+private func makeRestoredProfiledPanelState(profileID: String) -> AppState {
     var state = AppState.bootstrap()
     guard let workspaceID = state.windows.first?.selectedWorkspaceID,
           var workspace = state.workspacesByID[workspaceID],
@@ -592,7 +528,6 @@ private func makeRestoredProfiledPanelState(
         fatalError("expected bootstrap terminal panel")
     }
 
-    terminalState.title = title
     terminalState.cwd = ""
     terminalState.launchWorkingDirectory = "/tmp/restored"
     terminalState.profileBinding = TerminalProfileBinding(profileID: profileID)

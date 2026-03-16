@@ -559,21 +559,6 @@ final class TerminalMetadataService {
                 ]
             )
             normalizedTitle = nil
-        } else if shouldSuppressPathContextTitleUpdateWhilePreservingExistingProfileTitle(
-            normalizedTitle: normalizedTitle,
-            normalizedProfileStartupCommand: normalizedProfileStartupCommand,
-            terminalState: terminalState
-        ) {
-            ToasttyLog.debug(
-                "Suppressing transient path title while preserving restored profiled pane title",
-                category: .terminal,
-                metadata: [
-                    "workspace_id": workspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "profile_id": terminalState.profileBinding?.profileID ?? "nil",
-                ]
-            )
-            normalizedTitle = nil
         } else if shouldClearStartupTitleCleanup(
             normalizedTitle: normalizedTitle,
             normalizedProfileStartupCommand: normalizedProfileStartupCommand
@@ -692,17 +677,6 @@ final class TerminalMetadataService {
         return Self.titleLooksSemantic(normalizedTitle)
     }
 
-    private func shouldSuppressPathContextTitleUpdateWhilePreservingExistingProfileTitle(
-        normalizedTitle: String?,
-        normalizedProfileStartupCommand: String?,
-        terminalState: TerminalPanelState
-    ) -> Bool {
-        guard let normalizedTitle else { return false }
-        guard normalizedProfileStartupCommand != nil else { return false }
-        guard Self.titleLooksPathContext(normalizedTitle) else { return false }
-        return Self.shouldPreserveExistingProfileTitle(terminalState)
-    }
-
     private func normalizedProfileStartupCommandAwaitingTitleCleanup(
         panelID: UUID,
         terminalState: TerminalPanelState
@@ -717,57 +691,12 @@ final class TerminalMetadataService {
     }
 
     private static func titleLooksSemantic(_ title: String) -> Bool {
-        if isDefaultTerminalTitle(title) {
-            return false
-        }
         if title.hasPrefix("/") || title.hasPrefix("~") || title.hasPrefix("file://") {
             return false
         }
         if title.hasPrefix(".../") || title.hasPrefix("…/") {
             return false
         }
-        return true
-    }
-
-    private static func titleLooksPathContext(_ title: String) -> Bool {
-        if title.hasPrefix("/") || title.hasPrefix("~") || title.hasPrefix("file://") {
-            return true
-        }
-        return title.hasPrefix(".../") || title.hasPrefix("…/")
-    }
-
-    private static func titleLooksTransientProfileStartupTitle(_ title: String) -> Bool {
-        title.contains("$TOASTTY_") || title.contains("${TOASTTY_")
-    }
-
-    private static func isDefaultTerminalTitle(_ title: String) -> Bool {
-        let normalized = title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if normalized == "terminal" {
-            return true
-        }
-        let components = normalized.split(separator: " ", omittingEmptySubsequences: true)
-        guard components.count == 2 else { return false }
-        guard components[0] == "terminal" else { return false }
-        return Int(components[1]) != nil
-    }
-
-    private static func shouldPreserveExistingProfileTitle(_ terminalState: TerminalPanelState) -> Bool {
-        guard terminalState.profileBinding != nil else {
-            return false
-        }
-        let currentTitle = terminalState.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard titleLooksSemantic(currentTitle) else {
-            return false
-        }
-        guard titleLooksTransientProfileStartupTitle(currentTitle) == false else {
-            return false
-        }
-
-        let shellName = URL(fileURLWithPath: terminalState.shell).lastPathComponent
-        if shellName.isEmpty == false && currentTitle == shellName {
-            return false
-        }
-
         return true
     }
 
