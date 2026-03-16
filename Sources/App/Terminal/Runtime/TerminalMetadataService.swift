@@ -113,26 +113,10 @@ final class TerminalMetadataService {
     ) -> Bool {
         switch intent {
         case .setTerminalTitle(let title):
-            // Profiled terminals may run inside multiplexers (tmux, zmx, etc.)
-            // that forward title-setting sequences (OSC 0/2) but not CWD
-            // sequences (OSC 7). The bootstrap shell's CWD signal confirms
-            // native CWD support, but once the multiplexer takes over, CWD
-            // signals may stop arriving. Keep title-based CWD inference enabled
-            // as a fallback for profiled terminals.
-            let allowCWDInference: Bool
-            if prefersNativeCWDSignal(panelID: panelID) == false {
-                allowCWDInference = true
-            } else if let workspace = state.workspacesByID[workspaceID],
-                      case .terminal(let terminalState) = workspace.panels[panelID],
-                      terminalState.profileBinding != nil {
-                allowCWDInference = true
-            } else {
-                allowCWDInference = false
-            }
             return handleTerminalMetadataUpdate(
                 title: title,
                 cwd: nil,
-                allowLegacyCWDInference: allowCWDInference,
+                allowLegacyCWDInference: prefersNativeCWDSignal(panelID: panelID) == false,
                 workspaceID: workspaceID,
                 panelID: panelID,
                 state: state
@@ -651,6 +635,24 @@ final class TerminalMetadataService {
            ) {
             normalizedCWD = inferredCWD
             cwdSource = "visible_text_inference"
+        }
+        // Profiled terminals may run inside multiplexers (tmux, zmx, etc.)
+        // that forward title-setting sequences (OSC 0/2) but not CWD
+        // sequences (OSC 7). The bootstrap shell's CWD signal confirms
+        // native CWD support, but once the multiplexer takes over, CWD
+        // signals stop arriving. Use path-like title inference as a
+        // targeted fallback — but not the heavier visible-text heuristic,
+        // which could produce false positives from stale prompt lines.
+        if normalizedCWD == nil,
+           let normalizedTitle,
+           terminalState.profileBinding != nil {
+            normalizedCWD = TerminalRuntimeRegistry.inferredCWDFromTitle(
+                normalizedTitle,
+                currentCWD: terminalState.cwd
+            )
+            if normalizedCWD != nil {
+                cwdSource = "profiled_title_inference"
+            }
         }
         if normalizedCWD == nil {
             cwdSource = "none"
