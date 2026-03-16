@@ -85,6 +85,28 @@ struct ToasttyCLITests {
     }
 
     @Test
+    func sessionStatusAcceptsIdleKind() throws {
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "status",
+                "--session", "sess-123",
+                "--kind", "idle",
+                "--summary", "Waiting",
+            ],
+            environment: [:]
+        )
+
+        guard case .sessionStatus(_, _, let kind, let summary, let detail) = invocation.command else {
+            Issue.record("expected session status command")
+            return
+        }
+
+        #expect(kind == .idle)
+        #expect(summary == "Waiting")
+        #expect(detail == nil)
+    }
+
+    @Test
     func sessionStatusFallsBackToLaunchContextEnvironment() throws {
         let panelID = UUID()
         let invocation = try ToasttyCLI.parse(
@@ -151,6 +173,30 @@ struct ToasttyCLITests {
         #expect(sessionID == "sess-env")
         #expect(panelID == nil)
         #expect(reason == nil)
+    }
+
+    @Test
+    func sessionIngestAgentEventFallsBackToLaunchContextEnvironment() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "session", "ingest-agent-event",
+                "--source", "claude-hooks",
+            ],
+            environment: [
+                "TOASTTY_SESSION_ID": "sess-env",
+                "TOASTTY_PANEL_ID": panelID.uuidString,
+            ]
+        )
+
+        guard case .sessionIngestAgentEvent(let sessionID, let parsedPanelID, let source) = invocation.command else {
+            Issue.record("expected session ingest command")
+            return
+        }
+
+        #expect(sessionID == "sess-env")
+        #expect(parsedPanelID == panelID)
+        #expect(source == .claudeHooks)
     }
 
     @Test

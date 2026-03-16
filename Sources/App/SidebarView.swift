@@ -339,36 +339,41 @@ struct SidebarView: View {
         showsUnreadIndicator: Bool,
         isHovered: Bool
     ) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                if showsUnreadIndicator {
-                    sessionStatusIndicator(for: workspaceSessionStatus.status.kind)
+        HStack(alignment: .top, spacing: 8) {
+            SessionActivityRail(kind: status.kind, width: 4, height: 34, cornerRadius: 2)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    if showsUnreadIndicator {
+                        sessionStatusIndicator(for: workspaceSessionStatus.status.kind)
+                    }
+
+                    Text(workspaceSessionStatus.agent.displayName)
+                        .font(ToastyTheme.fontWorkspaceSessionAgent)
+                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                        .lineLimit(1)
+
+                    sessionStatusChip(status)
+
+                    Spacer(minLength: 0)
                 }
 
-                Text(workspaceSessionStatus.agent.rawValue)
-                    .font(ToastyTheme.fontWorkspaceSessionAgent)
-                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                    .lineLimit(1)
+                if let detail = status.detail {
+                    Text(detail)
+                        .font(ToastyTheme.fontWorkspaceSessionDetail)
+                        .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
 
-                sessionStatusChip(status)
-
-                Spacer(minLength: 0)
-            }
-
-            if let detail = status.detail {
-                Text(detail)
-                    .font(ToastyTheme.fontWorkspaceSessionDetail)
-                    .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-            }
-
-            if let cwd = abbreviatedPathLabel(workspaceSessionStatus.cwd) {
-                Text(cwd)
-                    .font(ToastyTheme.fontWorkspaceSessionPath)
-                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if let cwd = abbreviatedPathLabel(workspaceSessionStatus.cwd) {
+                    Text(cwd)
+                        .font(ToastyTheme.fontWorkspaceSessionPath)
+                        .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
             }
         }
         .padding(.vertical, 4)

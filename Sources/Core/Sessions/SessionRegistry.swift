@@ -144,7 +144,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
 
         return sessionsByID.values
             .filter { record in
-                record.panelID == panelID && record.status != nil
+                record.panelID == panelID && Self.shouldPresentStoppedPanelStatus(for: record)
             }
             .sorted(by: stoppedWorkspaceStatusSort)
             .compactMap(Self.workspaceSessionStatus(from:))
@@ -212,5 +212,13 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             preconditionFailure("workspace status sort requires a record with status")
         }
         return status
+    }
+
+    private static func shouldPresentStoppedPanelStatus(for record: SessionRecord) -> Bool {
+        guard record.isActive == false,
+              let status = record.status else {
+            return false
+        }
+        return status.kind != .idle
     }
 }

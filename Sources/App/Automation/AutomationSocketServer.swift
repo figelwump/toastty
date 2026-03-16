@@ -724,7 +724,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let kindRaw = event.payload.string("kind"),
                   let kind = SessionStatusKind(rawValue: kindRaw) else {
                 throw AutomationSocketError.invalidPayload(
-                    "kind must be one of: working, needs_approval, ready, error"
+                    "kind must be one of: idle, working, needs_approval, ready, error"
                 )
             }
             guard let summary = normalizedOptionalText(event.payload.string("summary")) else {

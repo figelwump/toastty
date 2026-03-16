@@ -557,4 +557,60 @@ struct SessionRegistryTests {
 
         #expect(registry.panelStatus(for: panelID) == nil)
     }
+
+    @Test
+    func workspaceStatusesIncludeIdleSessionsAfterLaunch() throws {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 1400)
+
+        registry.startSession(
+            sessionID: "idle",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "idle",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            at: now.addingTimeInterval(1)
+        )
+
+        let workspaceStatus = try #require(registry.workspaceStatuses(for: workspaceID).first)
+        #expect(workspaceStatus.sessionID == "idle")
+        #expect(workspaceStatus.status.kind == .idle)
+        #expect(workspaceStatus.isActive)
+    }
+
+    @Test
+    func panelStatusHidesStoppedIdleSessions() {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1450)
+
+        registry.startSession(
+            sessionID: "idle",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "idle",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "idle", at: now.addingTimeInterval(2))
+
+        #expect(registry.panelStatus(for: panelID) == nil)
+    }
 }

@@ -1,6 +1,7 @@
 import Foundation
 
 public enum SessionStatusKind: String, Codable, Equatable, Sendable {
+    case idle
     case working
     case needsApproval = "needs_approval"
     case ready
@@ -16,6 +17,8 @@ public enum SessionStatusKind: String, Codable, Equatable, Sendable {
             return 2
         case .ready:
             return 1
+        case .idle:
+            return 0
         }
     }
 }

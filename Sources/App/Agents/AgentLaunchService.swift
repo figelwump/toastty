@@ -1,3 +1,4 @@
+import Combine
 import CoreState
 import Foundation
 
@@ -82,6 +83,8 @@ final class AgentLaunchService {
     private let nowProvider: @Sendable () -> Date
     private let cliExecutablePathProvider: @Sendable () -> String?
     private let socketPathProvider: @Sendable () -> String
+    private var sessionRegistryObservation: AnyCancellable?
+    private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
 
     init(
         store: AppStore,
@@ -101,6 +104,11 @@ final class AgentLaunchService {
         self.nowProvider = nowProvider
         self.cliExecutablePathProvider = cliExecutablePathProvider
         self.socketPathProvider = socketPathProvider
+        sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
+            Task { @MainActor in
+                self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
+            }
+        }
     }
 
     func canLaunchAgent(profileID: String? = nil, workspaceID: UUID? = nil, panelID: UUID? = nil) -> Bool {
@@ -139,15 +147,23 @@ final class AgentLaunchService {
         let repoRoot = RepositoryRootLocator.inferRepoRoot(from: target.cwd, fileManager: fileManager)
         let cliExecutablePath = try resolveCLIExecutablePath()
         let socketPath = socketPathProvider()
+        let preparedLaunch = prepareLaunch(
+            agent: agent,
+            argv: launchProfile.argv,
+            cliExecutablePath: cliExecutablePath,
+            sessionID: sessionID,
+            workingDirectory: target.cwd
+        )
         let commandLine = ShellCommandRenderer.render(
             agentID: launchProfile.id,
-            argv: launchProfile.argv,
+            argv: preparedLaunch.argv,
             cliExecutablePath: cliExecutablePath,
             socketPath: socketPath,
             sessionID: sessionID,
             panelID: target.panelID,
             cwd: target.cwd,
-            repoRoot: repoRoot
+            repoRoot: repoRoot,
+            additionalEnvironment: preparedLaunch.environment
         )
         let now = nowProvider()
 
@@ -161,11 +177,18 @@ final class AgentLaunchService {
             repoRoot: repoRoot,
             at: now
         )
+        sessionRuntimeStore.updateStatus(
+            sessionID: sessionID,
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            at: now
+        )
 
         guard terminalCommandRouter.sendText(commandLine, submit: true, panelID: target.panelID) else {
+            cleanup(preparedLaunch.artifacts)
             sessionRuntimeStore.stopSession(sessionID: sessionID, at: now)
             throw AgentLaunchError.terminalUnavailable(panelID: target.panelID)
         }
+        registerManagedArtifacts(preparedLaunch.artifacts, sessionID: sessionID)
 
         return AgentLaunchResult(
             agent: agent,
@@ -277,6 +300,110 @@ final class AgentLaunchService {
         return candidatePath
     }
 
+    private func prepareLaunch(
+        agent: AgentKind,
+        argv: [String],
+        cliExecutablePath: String,
+        sessionID: String,
+        workingDirectory: String?
+    ) -> PreparedAgentLaunchCommand {
+        do {
+            return try AgentLaunchInstrumentation.prepare(
+                agent: agent,
+                argv: argv,
+                cliExecutablePath: cliExecutablePath,
+                sessionID: sessionID,
+                workingDirectory: workingDirectory,
+                fileManager: fileManager
+            )
+        } catch {
+            ToasttyLog.warning(
+                "Launching agent without instrumentation after launch preparation failed",
+                category: .automation,
+                metadata: [
+                    "agent": agent.rawValue,
+                    "session_id": sessionID,
+                    "error": error.localizedDescription,
+                ]
+            )
+            return PreparedAgentLaunchCommand(argv: argv, environment: [:], artifacts: nil)
+        }
+    }
+
+    private func registerManagedArtifacts(_ preparedArtifacts: PreparedAgentLaunchArtifacts?, sessionID: String) {
+        guard let preparedArtifacts else { return }
+
+        let watcher: CodexSessionLogWatcher?
+        if let logURL = preparedArtifacts.codexSessionLogURL {
+            watcher = makeCodexSessionLogWatcher(sessionID: sessionID, logURL: logURL)
+        } else {
+            watcher = nil
+        }
+
+        let managedArtifacts = ManagedLaunchArtifacts(
+            directoryURL: preparedArtifacts.directoryURL,
+            codexSessionLogWatcher: watcher
+        )
+        watcher?.start()
+        managedArtifactsBySessionID[sessionID] = managedArtifacts
+    }
+
+    private func makeCodexSessionLogWatcher(sessionID: String, logURL: URL) -> CodexSessionLogWatcher {
+        // TODO: Remove this watcher once Codex exposes stable start/approval hooks.
+        CodexSessionLogWatcher(logURL: logURL) { [weak self] event in
+            await MainActor.run {
+                guard let self, let sessionRuntimeStore = self.sessionRuntimeStore else {
+                    return
+                }
+
+                let status: SessionStatus
+                switch event.kind {
+                case .turnStarted:
+                    status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
+                case .approvalNeeded:
+                    status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
+                }
+
+                sessionRuntimeStore.updateStatus(
+                    sessionID: sessionID,
+                    status: status,
+                    at: self.nowProvider()
+                )
+            }
+        }
+    }
+
+    private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) {
+        let inactiveSessionIDs = managedArtifactsBySessionID.keys.filter { sessionID in
+            registry.activeSession(sessionID: sessionID) == nil
+        }
+        for sessionID in inactiveSessionIDs {
+            cleanupManagedArtifacts(for: sessionID)
+        }
+    }
+
+    private func cleanupManagedArtifacts(for sessionID: String) {
+        guard let managedArtifacts = managedArtifactsBySessionID.removeValue(forKey: sessionID) else {
+            return
+        }
+        cleanup(managedArtifacts)
+    }
+
+    private func cleanup(_ preparedArtifacts: PreparedAgentLaunchArtifacts?) {
+        guard let preparedArtifacts else { return }
+        cleanup(
+            ManagedLaunchArtifacts(
+                directoryURL: preparedArtifacts.directoryURL,
+                codexSessionLogWatcher: nil
+            )
+        )
+    }
+
+    private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts) {
+        managedArtifacts.codexSessionLogWatcher?.stop()
+        try? fileManager.removeItem(at: managedArtifacts.directoryURL)
+    }
+
     private static func locatePanel(
         _ panelID: UUID,
         in state: AppState
@@ -315,6 +442,11 @@ private struct LaunchTarget {
     let cwd: String?
 }
 
+private struct ManagedLaunchArtifacts {
+    let directoryURL: URL
+    let codexSessionLogWatcher: CodexSessionLogWatcher?
+}
+
 private enum ShellCommandRenderer {
     static func render(
         agentID: String,
@@ -324,7 +456,8 @@ private enum ShellCommandRenderer {
         sessionID: String,
         panelID: UUID,
         cwd: String?,
-        repoRoot: String?
+        repoRoot: String?,
+        additionalEnvironment: [String: String]
     ) -> String {
         var command = [
             assignment(ToasttyLaunchContextEnvironment.agentKey, agentID),
@@ -340,6 +473,11 @@ private enum ShellCommandRenderer {
         if let repoRoot {
             command.append(assignment(ToasttyLaunchContextEnvironment.repoRootKey, repoRoot))
         }
+        command.append(
+            contentsOf: additionalEnvironment
+                .sorted(by: { $0.key < $1.key })
+                .map { assignment($0.key, $0.value) }
+        )
 
         command.append(contentsOf: argv.map(quote))
         return command.joined(separator: " ")

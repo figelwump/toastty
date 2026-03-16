@@ -17,6 +17,7 @@ enum CLICommand: Equatable {
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
     case sessionUpdateFiles(sessionID: String, panelID: UUID?, files: [String], cwd: String?, repoRoot: String?)
+    case sessionIngestAgentEvent(sessionID: String, panelID: UUID?, source: AgentEventSource)
     case sessionStop(sessionID: String, panelID: UUID?, reason: String?)
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
@@ -90,6 +91,9 @@ enum CLICommand: Equatable {
                 payload: payload
             )
 
+        case .sessionIngestAgentEvent:
+            preconditionFailure("session ingest agent events are handled locally")
+
         case .sessionStop(let sessionID, let panelID, let reason):
             var payload: [String: AutomationJSONValue] = [:]
             if let reason {
@@ -117,6 +121,8 @@ enum CLICommand: Equatable {
         case .sessionUpdateFiles(let sessionID, _, let files, _, _):
             let queuedFiles = response.result?.int("queuedFiles") ?? files.count
             return "queued \(queuedFiles) files for \(sessionID)"
+        case .sessionIngestAgentEvent(_, _, let source):
+            return "processed \(source.rawValue) event"
         case .sessionStop(let sessionID, _, _):
             return "stopped \(sessionID)"
         }
@@ -139,20 +145,31 @@ public enum ToasttyCLI {
     public static func run(arguments: [String], environment: [String: String]) -> Int32 {
         do {
             let invocation = try parse(arguments: arguments, environment: environment)
-            let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
-            let response = try client.send(invocation.command.makeEventEnvelope())
+            switch invocation.command {
+            case .sessionIngestAgentEvent(let sessionID, let panelID, let source):
+                return try runSessionIngestAgentEvent(
+                    options: invocation.options,
+                    source: source,
+                    sessionID: sessionID,
+                    panelID: panelID
+                )
 
-            if invocation.options.jsonOutput {
-                try writeStdout(jsonString(for: response))
-            } else if response.ok {
-                try writeStdout(invocation.command.successMessage(using: response))
-            } else if let error = response.error {
-                throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
-            } else {
-                throw ToasttyCLIError.runtime("request failed")
+            default:
+                let client = ToasttySocketClient(socketPath: invocation.options.socketPath)
+                let response = try client.send(invocation.command.makeEventEnvelope())
+
+                if invocation.options.jsonOutput {
+                    try writeStdout(jsonString(for: response))
+                } else if response.ok {
+                    try writeStdout(invocation.command.successMessage(using: response))
+                } else if let error = response.error {
+                    throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+                } else {
+                    throw ToasttyCLIError.runtime("request failed")
+                }
+
+                return response.ok ? 0 : 1
             }
-
-            return response.ok ? 0 : 1
         } catch let error as ToasttyCLIError {
             fputs((error.localizedDescription + "\n").applyingNewline(), stderr)
             if case .usage = error {
@@ -197,8 +214,9 @@ public enum ToasttyCLI {
     Usage:
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
-      toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind working|needs_approval|ready|error --summary <text> [--detail <text>]
+      toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
       toastty [--json] [--socket-path <path>] session update-files --session <id> [--panel <id>] --file <path> [--file <path> ...] [--cwd <path>] [--repo-root <path>]
+      toastty [--json] [--socket-path <path>] session ingest-agent-event --source claude-hooks|codex-notify [--session <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session stop --session <id> [--panel <id>] [--reason <text>]
     """
 
@@ -325,7 +343,7 @@ public enum ToasttyCLI {
 
             let kindValue = try requireValue("--kind", in: parsed)
             guard let kind = SessionStatusKind(rawValue: kindValue) else {
-                throw ToasttyCLIError.usage("kind must be one of: working, needs_approval, ready, error")
+                throw ToasttyCLIError.usage("kind must be one of: idle, working, needs_approval, ready, error")
             }
 
             return .sessionStatus(
@@ -390,6 +408,37 @@ public enum ToasttyCLI {
                     in: parsed,
                     environment: environment
                 )?.nonEmptyValue
+            )
+
+        case "ingest-agent-event":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--source", "--session", "--panel"]
+            )
+
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("session ingest-agent-event does not accept positional arguments\n\n\(usage)")
+            }
+
+            let sourceValue = try requireValue("--source", in: parsed)
+            guard let source = AgentEventSource(rawValue: sourceValue) else {
+                throw ToasttyCLIError.usage("source must be one of: claude-hooks, codex-notify")
+            }
+
+            return .sessionIngestAgentEvent(
+                sessionID: try requireValue(
+                    "--session",
+                    environmentKey: ToasttyLaunchContextEnvironment.sessionIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
+                panelID: try parseOptionalUUID(
+                    flag: "--panel",
+                    environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
+                    in: parsed,
+                    environment: environment
+                ),
+                source: source
             )
 
         case "stop":
@@ -582,6 +631,49 @@ public enum ToasttyCLI {
         FileHandle.standardOutput.write((string.applyingNewline()).data(using: .utf8) ?? Data())
     }
 
+    private static func runSessionIngestAgentEvent(
+        options: CLIOptions,
+        source: AgentEventSource,
+        sessionID: String,
+        panelID: UUID?
+    ) throws -> Int32 {
+        let payload = FileHandle.standardInput.readDataToEndOfFile()
+        let commands = try AgentEventIngestor.commands(
+            for: source,
+            sessionID: sessionID,
+            panelID: panelID,
+            payload: payload
+        )
+
+        let client = ToasttySocketClient(socketPath: options.socketPath)
+        for command in commands {
+            let response = try client.send(command.makeEventEnvelope())
+            if response.ok == false {
+                if let error = response.error {
+                    throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+                }
+                throw ToasttyCLIError.runtime("request failed")
+            }
+        }
+
+        let result = SessionIngestResult(processedCount: commands.count)
+        if options.jsonOutput {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            guard let string = String(data: try encoder.encode(result), encoding: .utf8) else {
+                throw ToasttyCLIError.runtime("failed to encode response")
+            }
+            try writeStdout(string)
+        } else {
+            try writeStdout("processed \(result.processedCount) updates")
+        }
+
+        return 0
+    }
+}
+
+private struct SessionIngestResult: Codable, Equatable {
+    let processedCount: Int
 }
 
 private struct ParsedCommandArguments {

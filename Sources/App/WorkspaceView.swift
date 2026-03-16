@@ -402,6 +402,15 @@ private struct PanelCardView: View {
                     unreadIndicatorDot
                 }
 
+                if let panelSessionStatus {
+                    SessionActivityRail(
+                        kind: panelSessionStatus.status.kind,
+                        width: 16,
+                        height: 6,
+                        cornerRadius: 3
+                    )
+                }
+
                 Text(panelLabel)
                     .font(panelTitleFont)
                     .foregroundStyle(panelTitleTextColor)
@@ -478,6 +487,9 @@ private struct PanelCardView: View {
     private var panelLabel: String {
         switch panelState {
         case .terminal(let terminal):
+            if let panelSessionStatus, panelSessionStatus.isActive {
+                return panelSessionStatus.agent.displayName
+            }
             return terminalDisplayTitleOverride ?? terminal.displayPanelLabel
         case .diff:
             return "Diff Panel"

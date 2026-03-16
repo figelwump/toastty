@@ -277,7 +277,9 @@ struct AutomationSocketServerTests {
         #expect(response.result?.string("workspaceID") == server.workspaceID.uuidString)
         #expect(command.contains("TOASTTY_SESSION_ID=\(sessionID)"))
         #expect(command.contains("TOASTTY_PANEL_ID=\(server.panelID.uuidString)"))
-        #expect(command.contains(" codex") || command.hasPrefix("codex"))
+        #expect(command.contains("codex -c "))
+        #expect(command.contains("notify=["))
+        #expect(command.contains("codex-notify.sh"))
         #expect(didInjectCodex)
         let activeAgent = await MainActor.run {
             server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.agent

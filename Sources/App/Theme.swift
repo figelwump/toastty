@@ -24,6 +24,8 @@ enum ToastyTheme {
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
     static let badgeBlue = Color(hex: 0x3B82F6)
+    static let sessionIdleText = Color(hex: 0xC1AA8A)
+    static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)
     static let sessionWorkingText = Color(hex: 0x8B5E34)
     static let sessionWorkingBackground = Color(hex: 0x8B5E34, alpha: 0.12)
     static let sessionNeedsApprovalText = Color(hex: 0xE8A849)
@@ -73,6 +75,8 @@ enum ToastyTheme {
 
     static func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {
         switch kind {
+        case .idle:
+            return sessionIdleText
         case .working:
             return sessionWorkingText
         case .needsApproval:
@@ -86,6 +90,8 @@ enum ToastyTheme {
 
     static func sessionStatusBackgroundColor(for kind: SessionStatusKind) -> Color {
         switch kind {
+        case .idle:
+            return sessionIdleBackground
         case .working:
             return sessionWorkingBackground
         case .needsApproval:
@@ -99,6 +105,53 @@ enum ToastyTheme {
 
     static func sessionStatusIndicatorColor(for kind: SessionStatusKind) -> Color {
         sessionStatusTextColor(for: kind)
+    }
+
+    static func sessionActivityRailGradient(for kind: SessionStatusKind) -> LinearGradient {
+        let colors: [Color]
+        switch kind {
+        case .idle:
+            colors = [Color(hex: 0x6A5645), Color(hex: 0xA98963)]
+        case .working:
+            colors = [Color(hex: 0x7D4927), Color(hex: 0xF5A623)]
+        case .needsApproval:
+            colors = [Color(hex: 0xA16216), Color(hex: 0xF4C35A)]
+        case .ready:
+            colors = [Color(hex: 0x8B7F72), Color(hex: 0xF4EBDD)]
+        case .error:
+            colors = [Color(hex: 0x7F2F1F), Color(hex: 0xD4553A)]
+        }
+        return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    static func sessionActivityRailShadowColor(for kind: SessionStatusKind) -> Color {
+        switch kind {
+        case .idle:
+            return Color(hex: 0xA98963, alpha: 0.18)
+        case .working:
+            return Color(hex: 0xF5A623, alpha: 0.28)
+        case .needsApproval:
+            return Color(hex: 0xF4C35A, alpha: 0.3)
+        case .ready:
+            return Color(hex: 0xF4EBDD, alpha: 0.16)
+        case .error:
+            return Color(hex: 0xD4553A, alpha: 0.24)
+        }
+    }
+
+    static func sessionActivityRailHighlightColor(for kind: SessionStatusKind) -> Color {
+        switch kind {
+        case .idle:
+            return Color(hex: 0xF5D9B8, alpha: 0.55)
+        case .working:
+            return Color(hex: 0xFFF4D6, alpha: 0.78)
+        case .needsApproval:
+            return Color(hex: 0xFFF4D6, alpha: 0.72)
+        case .ready:
+            return Color(hex: 0xFFFFFF, alpha: 0.44)
+        case .error:
+            return Color(hex: 0xFFD8D0, alpha: 0.48)
+        }
     }
 }
 

@@ -38,4 +38,20 @@ public struct AgentKind: RawRepresentable, Codable, Hashable, Equatable, Sendabl
 
     public static let claude = Self(rawValue: "claude")!
     public static let codex = Self(rawValue: "codex")!
+
+    public var displayName: String {
+        switch self {
+        case .claude:
+            return "Claude Code"
+        case .codex:
+            return "Codex"
+        default:
+            return rawValue
+                .split(separator: "-")
+                .map { component in
+                    component.prefix(1).uppercased() + component.dropFirst()
+                }
+                .joined(separator: " ")
+        }
+    }
 }

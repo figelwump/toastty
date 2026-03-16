@@ -40,9 +40,9 @@ struct AgentLaunchServiceTests {
         #expect(activeSession.panelID == panelID)
         #expect(activeSession.cwd == cwd)
         #expect(activeSession.repoRoot == projectRoot.path)
+        #expect(activeSession.status == SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
-        let trimmedCommand = injectedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(injectedCommand.contains("TOASTTY_AGENT=codex"))
         #expect(injectedCommand.contains("TOASTTY_SESSION_ID=\(result.sessionID)"))
         #expect(injectedCommand.contains("TOASTTY_PANEL_ID=\(panelID.uuidString)"))
@@ -50,7 +50,11 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("TOASTTY_CLI_PATH=/bin/sh"))
         #expect(injectedCommand.contains("TOASTTY_CWD=\(cwd)"))
         #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=\(projectRoot.path)"))
-        #expect(trimmedCommand.hasSuffix(" codex"))
+        #expect(injectedCommand.contains("CODEX_TUI_RECORD_SESSION=1"))
+        #expect(injectedCommand.contains("CODEX_TUI_SESSION_LOG_PATH="))
+        #expect(injectedCommand.contains("codex -c "))
+        #expect(injectedCommand.contains("notify=["))
+        #expect(injectedCommand.contains("codex-notify.sh"))
         #expect(injectedCommand.contains(" agent run ") == false)
         #expect(injectedCommand.hasPrefix("exec ") == false)
         #expect(injectedCommand.hasSuffix("\n"))
@@ -119,11 +123,11 @@ struct AgentLaunchServiceTests {
         _ = try service.launch(profileID: "claude")
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
-        let trimmedCommand = injectedCommand.trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(injectedCommand.contains("TOASTTY_SOCKET_PATH='/tmp/toastty sockets/test.sock'"))
         #expect(injectedCommand.contains("TOASTTY_CWD='/tmp/toastty project/src'"))
         #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=") == false)
-        #expect(trimmedCommand.hasSuffix("'/Applications/Claude Code.app/Contents/MacOS/cc' '--append-system-prompt=review only'"))
+        #expect(injectedCommand.contains("'/Applications/Claude Code.app/Contents/MacOS/cc' --settings "))
+        #expect(injectedCommand.contains("'--append-system-prompt=review only'"))
     }
 
     private func makeProjectRoot() throws -> URL {
