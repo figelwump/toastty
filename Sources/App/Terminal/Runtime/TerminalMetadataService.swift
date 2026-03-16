@@ -541,17 +541,16 @@ final class TerminalMetadataService {
 
         var normalizedTitle = TerminalRuntimeRegistry.normalizedMetadataValue(title)
         var normalizedCWD = TerminalRuntimeRegistry.normalizedCWDValue(cwd)
-        let normalizedRestoreStartupCommand = normalizedRestoredStartupCommand(
+        let normalizedProfileStartupCommand = normalizedProfileStartupCommandAwaitingTitleCleanup(
             panelID: panelID,
             terminalState: terminalState
         )
-        if shouldSuppressRestoredStartupCommandTitleUpdate(
+        if shouldSuppressProfileStartupCommandTitleUpdate(
             normalizedTitle: normalizedTitle,
-            normalizedCWD: normalizedCWD,
-            normalizedRestoreStartupCommand: normalizedRestoreStartupCommand
+            normalizedProfileStartupCommand: normalizedProfileStartupCommand
         ) {
             ToasttyLog.debug(
-                "Suppressing restored profile startup-command title until authoritative runtime metadata arrives",
+                "Suppressing transient profile startup-command title from pane metadata",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
@@ -560,10 +559,11 @@ final class TerminalMetadataService {
                 ]
             )
             normalizedTitle = nil
-        } else if normalizedCWD == nil,
-                  normalizedTitle != nil,
-                  normalizedRestoreStartupCommand != nil {
-            registry.markRestoredPanelReceivedAuthoritativeMetadata(panelID: panelID)
+        } else if shouldClearStartupTitleCleanup(
+            normalizedTitle: normalizedTitle,
+            normalizedProfileStartupCommand: normalizedProfileStartupCommand
+        ) {
+            registry.markProfileLaunchTitleCleanupCompleted(panelID: panelID)
         }
         var cwdSource = "explicit"
         if allowLegacyCWDInference,
@@ -604,9 +604,6 @@ final class TerminalMetadataService {
         }
 
         guard hasChanges else {
-            if normalizedCWD != nil {
-                registry.markRestoredPanelReceivedAuthoritativeMetadata(panelID: panelID)
-            }
             if normalizedTitle != nil || normalizedCWD != nil {
                 ToasttyLog.debug(
                     "Ignoring terminal metadata update because values are unchanged",
@@ -631,9 +628,6 @@ final class TerminalMetadataService {
             )
         )
         if handled {
-            if normalizedCWD != nil {
-                registry.markRestoredPanelReceivedAuthoritativeMetadata(panelID: panelID)
-            }
             let titleSample = normalizedTitle.map { String($0.prefix(80)) } ?? "nil"
             let cwdSample = normalizedCWD.map { String($0.prefix(80)) } ?? "nil"
             ToasttyLog.debug(
@@ -664,28 +658,46 @@ final class TerminalMetadataService {
         return handled
     }
 
-    private func shouldSuppressRestoredStartupCommandTitleUpdate(
+    private func shouldSuppressProfileStartupCommandTitleUpdate(
         normalizedTitle: String?,
-        normalizedCWD: String?,
-        normalizedRestoreStartupCommand: String?
+        normalizedProfileStartupCommand: String?
     ) -> Bool {
         guard let normalizedTitle else { return false }
-        guard normalizedCWD == nil else { return false }
-        guard let normalizedRestoreStartupCommand else { return false }
-        return normalizedTitle == normalizedRestoreStartupCommand
+        guard let normalizedProfileStartupCommand else { return false }
+        return normalizedTitle == normalizedProfileStartupCommand
     }
 
-    private func normalizedRestoredStartupCommand(
+    private func shouldClearStartupTitleCleanup(
+        normalizedTitle: String?,
+        normalizedProfileStartupCommand: String?
+    ) -> Bool {
+        guard let normalizedTitle else { return false }
+        guard let normalizedProfileStartupCommand else { return false }
+        guard normalizedTitle != normalizedProfileStartupCommand else { return false }
+        return Self.titleLooksSemantic(normalizedTitle)
+    }
+
+    private func normalizedProfileStartupCommandAwaitingTitleCleanup(
         panelID: UUID,
         terminalState: TerminalPanelState
     ) -> String? {
-        guard let startupCommand = registry.restoredProfileStartupCommand(
+        guard let startupCommand = registry.profileStartupCommandAwaitingTitleCleanup(
             panelID: panelID,
             terminalState: terminalState
         ) else {
             return nil
         }
         return TerminalRuntimeRegistry.normalizedMetadataValue(startupCommand)
+    }
+
+    private static func titleLooksSemantic(_ title: String) -> Bool {
+        if title.hasPrefix("/") || title.hasPrefix("~") || title.hasPrefix("file://") {
+            return false
+        }
+        if title.hasPrefix(".../") || title.hasPrefix("…/") {
+            return false
+        }
+        return true
     }
 
     private func handleCommandFinishedMetadataUpdate(

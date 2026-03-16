@@ -62,7 +62,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var stateObservation: AnyCancellable?
     private var observedGlobalFontPoints: Double?
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
-    private var restoredTerminalPanelIDsAwaitingAuthoritativeMetadata: Set<UUID> = []
+    private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
@@ -146,7 +146,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     ) {
         self.terminalProfileProvider = terminalProfileProvider
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDs
-        restoredTerminalPanelIDsAwaitingAuthoritativeMetadata = restoredTerminalPanelIDs
+        profiledTerminalPanelIDsAwaitingStartupTitleCleanup = restoredTerminalPanelIDs
     }
 
     @discardableResult
@@ -184,7 +184,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         let livePanelIDs = liveTerminalPanelIDs(in: state)
         launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
-        restoredTerminalPanelIDsAwaitingAuthoritativeMetadata = restoredTerminalPanelIDsAwaitingAuthoritativeMetadata
+        profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
             .intersection(livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
@@ -555,24 +555,30 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
             return .empty
         case .launch(let configuration):
+            if Self.shouldSuppressProfileStartupCommandTitle(configuration.initialInput) {
+                // Seed cleanup before the surface starts emitting title callbacks so the
+                // literal launch wrapper title cannot win the first race on fresh panes.
+                profiledTerminalPanelIDsAwaitingStartupTitleCleanup.insert(panelID)
+            }
             return configuration
         }
     }
 
-    func restoredProfileStartupCommand(
+    func profileStartupCommandAwaitingTitleCleanup(
         panelID: UUID,
         terminalState: TerminalPanelState
     ) -> String? {
-        guard restoredTerminalPanelIDsAwaitingAuthoritativeMetadata.contains(panelID),
+        guard profiledTerminalPanelIDsAwaitingStartupTitleCleanup.contains(panelID),
               let profileBinding = terminalState.profileBinding,
-              let profile = terminalProfileProvider?.catalog.profile(id: profileBinding.profileID) else {
+              let profile = terminalProfileProvider?.catalog.profile(id: profileBinding.profileID),
+              Self.shouldSuppressProfileStartupCommandTitle(profile.startupCommand) else {
             return nil
         }
         return profile.startupCommand
     }
 
-    func markRestoredPanelReceivedAuthoritativeMetadata(panelID: UUID) {
-        restoredTerminalPanelIDsAwaitingAuthoritativeMetadata.remove(panelID)
+    func markProfileLaunchTitleCleanupCompleted(panelID: UUID) {
+        profiledTerminalPanelIDsAwaitingStartupTitleCleanup.remove(panelID)
     }
 
     func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
@@ -835,6 +841,11 @@ extension TerminalRuntimeRegistry {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         return trimmed
+    }
+
+    static func shouldSuppressProfileStartupCommandTitle(_ startupCommand: String?) -> Bool {
+        guard let normalizedCommand = normalizedMetadataValue(startupCommand) else { return false }
+        return normalizedCommand.contains("$TOASTTY_") || normalizedCommand.contains("${TOASTTY_")
     }
 
     static func normalizedCWDValue(_ value: String?) -> String? {

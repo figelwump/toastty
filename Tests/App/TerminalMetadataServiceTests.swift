@@ -109,6 +109,164 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testRestoredProfiledPaneSuppressesStartupCommandTitleAfterLiveCWDArrives() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let profileProvider = TestTerminalProfileProvider(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(
+            profileProvider,
+            restoredTerminalPanelIDs: [panelID]
+        )
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/restored"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("/tmp/restored"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("zmx attach toastty.$TOASTTY_PANEL_ID"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        let terminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(terminalState.cwd, "/tmp/restored")
+        XCTAssertEqual(terminalState.title, "/tmp/restored")
+        try StateValidator.validate(store.state)
+    }
+
+    func testLaunchedProfiledPaneSuppressesMatchingStartupCommandTitleBeforeInitialLaunchCompletion() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "zmx")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let profileProvider = TestTerminalProfileProvider(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach toastty.$TOASTTY_PANEL_ID"
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(
+            profileProvider,
+            restoredTerminalPanelIDs: []
+        )
+        registry.bind(store: store)
+        XCTAssertEqual(
+            registry.surfaceLaunchConfiguration(for: panelID).initialInput,
+            "zmx attach toastty.$TOASTTY_PANEL_ID"
+        )
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("zmx attach toastty.$TOASTTY_PANEL_ID"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        let terminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(terminalState.title, "Terminal 1")
+        XCTAssertEqual(terminalState.cwd, "")
+        try StateValidator.validate(store.state)
+    }
+
+    func testLaunchedProfiledPaneDoesNotSuppressMeaningfulStartupCommandTitle() async throws {
+        let state = makeRestoredProfiledPanelState(profileID: "dev")
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let profileProvider = TestTerminalProfileProvider(
+            profiles: [
+                TerminalProfile(
+                    id: "dev",
+                    displayName: "Dev",
+                    badgeLabel: "DEV",
+                    startupCommand: "npm run dev"
+                ),
+            ]
+        )
+        registry.setTerminalProfileProvider(
+            profileProvider,
+            restoredTerminalPanelIDs: []
+        )
+        registry.bind(store: store)
+        XCTAssertEqual(
+            registry.surfaceLaunchConfiguration(for: panelID).initialInput,
+            "npm run dev"
+        )
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("npm run dev"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        let terminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(terminalState.title, "npm run dev")
+        XCTAssertEqual(terminalState.cwd, "")
+        try StateValidator.validate(store.state)
+    }
+
     func testNonRestoredProfiledPaneDoesNotSuppressMatchingStartupCommandTitle() async throws {
         let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
