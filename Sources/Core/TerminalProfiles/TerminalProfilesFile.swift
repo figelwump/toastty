@@ -17,18 +17,46 @@ public struct TerminalProfilesParseError: LocalizedError, Equatable, Sendable {
 public enum TerminalProfilesFile {
     private static let configDirectoryName = ".toastty"
     private static let fileName = "terminal-profiles.toml"
+    public static let environmentOverrideKey = "TOASTTY_TERMINAL_PROFILES_PATH"
 
-    public static func fileURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {
+    public static func fileURL(
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let overrideURL = overrideFileURL(environment: environment) {
+            return overrideURL
+        }
+        return defaultFileURL(homeDirectoryPath: homeDirectoryPath)
+    }
+
+    private static func defaultFileURL(homeDirectoryPath: String) -> URL {
         URL(filePath: homeDirectoryPath)
             .appending(path: configDirectoryName, directoryHint: .isDirectory)
             .appending(path: fileName, directoryHint: .notDirectory)
     }
 
+    private static func overrideFileURL(environment: [String: String]) -> URL? {
+        guard let rawOverridePath = environment[environmentOverrideKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawOverridePath.isEmpty == false else {
+            return nil
+        }
+
+        let expandedPath = (rawOverridePath as NSString).expandingTildeInPath
+        return URL(filePath: expandedPath)
+    }
+
     public static func ensureTemplateExists(
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws {
-        let url = fileURL(homeDirectoryPath: homeDirectoryPath)
+        // External override paths are intended for tests/automation; don't
+        // silently create files outside the standard Toastty config location.
+        if overrideFileURL(environment: environment) != nil {
+            return
+        }
+        let url = fileURL(homeDirectoryPath: homeDirectoryPath, environment: environment)
         try fileManager.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -43,9 +71,10 @@ public enum TerminalProfilesFile {
 
     public static func load(
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws -> TerminalProfileCatalog {
-        let url = fileURL(homeDirectoryPath: homeDirectoryPath)
+        let url = fileURL(homeDirectoryPath: homeDirectoryPath, environment: environment)
         guard fileManager.fileExists(atPath: url.path) else {
             return .empty
         }

@@ -63,6 +63,22 @@ struct TerminalProfilesFileTests {
     }
 
     @Test
+    func ensureTemplateExistsSkipsWritingWhenOverridePathIsSet() throws {
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: nil)
+        let overrideURL = fileManager.rootURL
+            .appendingPathComponent("profiles", isDirectory: true)
+            .appendingPathComponent("custom-profiles.toml", isDirectory: false)
+
+        try TerminalProfilesFile.ensureTemplateExists(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [TerminalProfilesFile.environmentOverrideKey: overrideURL.path]
+        )
+
+        #expect(fileManager.fileManager.fileExists(atPath: overrideURL.path) == false)
+    }
+
+    @Test
     func loadRejectsMissingStartupCommand() throws {
         let contents = """
         [zmx]
@@ -109,6 +125,47 @@ struct TerminalProfilesFileTests {
 
         #expect(catalog.profiles.map(\.displayName) == ["SSH # Prod"])
         #expect(catalog.profiles.map(\.startupCommand) == ["printf '# keep me'"])
+    }
+
+    @Test
+    func loadUsesOverridePathWhenEnvironmentProvidesCustomFileLocation() throws {
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: nil)
+        let overrideURL = fileManager.rootURL
+            .appendingPathComponent("profiles", isDirectory: true)
+            .appendingPathComponent("custom-profiles.toml", isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: overrideURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        [smoke]
+        displayName = "Smoke"
+        startupCommand = "printf 'ok'"
+        """.write(to: overrideURL, atomically: true, encoding: .utf8)
+
+        let catalog = try TerminalProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [TerminalProfilesFile.environmentOverrideKey: overrideURL.path]
+        )
+
+        #expect(catalog.profiles.map(\.id) == ["smoke"])
+    }
+
+    @Test
+    func loadReturnsEmptyCatalogWhenOverridePathDoesNotExist() throws {
+        let fileManager = InMemoryTerminalProfilesFileManager(templateContents: nil)
+        let overrideURL = fileManager.rootURL
+            .appendingPathComponent("profiles", isDirectory: true)
+            .appendingPathComponent("missing-profiles.toml", isDirectory: false)
+
+        let catalog = try TerminalProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [TerminalProfilesFile.environmentOverrideKey: overrideURL.path]
+        )
+
+        #expect(catalog.profiles.isEmpty)
     }
 }
 

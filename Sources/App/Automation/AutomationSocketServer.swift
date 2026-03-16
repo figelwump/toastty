@@ -804,6 +804,14 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return workspaceID
         }
 
+        func profileBinding() throws -> TerminalProfileBinding {
+            guard let profileID = args.string("profileID")?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  profileID.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("profileID is required")
+            }
+            return TerminalProfileBinding(profileID: profileID)
+        }
+
         let didMutate: Bool
         switch actionID {
         case "workspace.split.horizontal":
@@ -823,6 +831,24 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "workspace.split.up":
             didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .up))
+
+        case "workspace.split.right.with-profile":
+            didMutate = store.send(
+                .splitFocusedSlotInDirectionWithTerminalProfile(
+                    workspaceID: try workspaceID(),
+                    direction: .right,
+                    profileBinding: try profileBinding()
+                )
+            )
+
+        case "workspace.split.down.with-profile":
+            didMutate = store.send(
+                .splitFocusedSlotInDirectionWithTerminalProfile(
+                    workspaceID: try workspaceID(),
+                    direction: .down,
+                    profileBinding: try profileBinding()
+                )
+            )
 
         case "workspace.close-focused-panel":
             didMutate = focusedPanelCommandController.closeFocusedPanel(in: try workspaceID()).didMutateState
@@ -1068,6 +1094,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             "title": .string(terminalState.title),
             "cwd": .string(terminalState.cwd),
             "shell": .string(terminalState.shell),
+            "profileID": terminalState.profileBinding.map { .string($0.profileID) } ?? .null,
         ]
     }
 
