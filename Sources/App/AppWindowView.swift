@@ -60,8 +60,9 @@ struct AppWindowView: View {
         .buttonStyle(.plain)
         .frame(width: 22, height: 22)
         .contentShape(Rectangle())
+        .help(sidebarVisible ? "Hide Workspaces (⇧⌘W)" : "Show Workspaces (⇧⌘W)")
         .padding(.leading, 76)
-        .padding(.top, 7)
+        .padding(.top, 5)
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 
