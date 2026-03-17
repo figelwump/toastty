@@ -88,15 +88,16 @@ enum ToasttyConfigStore {
     private static func render(config: ToasttyConfig) -> String {
         var lines: [String] = [
             "# Toastty config",
+            "",
             "# terminal-font-size sets the default font size baseline for Toastty.",
             "# UI font adjustments are persisted separately and override this value",
             "# until you choose Reset Terminal Font.",
-            "# Set default-terminal-profile to a profile ID from",
-            "# ~/.toastty/terminal-profiles.toml to use that profile for new terminals,",
+            "# terminal-font-size = 13",
+            "",
+            "# default-terminal-profile uses a profile ID from",
+            "# ~/.toastty/terminal-profiles.toml for new terminals only,",
             "# including ordinary split shortcuts like Cmd+D and Cmd+Shift+D.",
             "# Existing terminals keep their current profiles.",
-            "# Example:",
-            "# terminal-font-size = 13",
             "# default-terminal-profile = \"zmx\"",
         ]
 

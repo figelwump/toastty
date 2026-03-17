@@ -48,9 +48,24 @@ final class ToasttyConfigStoreTests: XCTestCase {
             contentsOf: ToasttyConfigStore.configFileURL(homeDirectoryPath: homeDirectoryURL.path),
             encoding: .utf8
         )
-        XCTAssertTrue(contents.contains("# terminal-font-size = 13"))
-        XCTAssertTrue(contents.contains("# default-terminal-profile = \"zmx\""))
-        XCTAssertTrue(contents.contains("including ordinary split shortcuts like Cmd+D and Cmd+Shift+D."))
+        XCTAssertEqual(
+            contents,
+            """
+            # Toastty config
+
+            # terminal-font-size sets the default font size baseline for Toastty.
+            # UI font adjustments are persisted separately and override this value
+            # until you choose Reset Terminal Font.
+            # terminal-font-size = 13
+
+            # default-terminal-profile uses a profile ID from
+            # ~/.toastty/terminal-profiles.toml for new terminals only,
+            # including ordinary split shortcuts like Cmd+D and Cmd+Shift+D.
+            # Existing terminals keep their current profiles.
+            # default-terminal-profile = "zmx"
+
+            """
+        )
     }
 
     func testEnsureTemplateExistsSkipsWhenLegacyConfigExists() throws {
