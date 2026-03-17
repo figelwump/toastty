@@ -496,7 +496,17 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastPresentationSignature = presentationSignature
 
         if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
-            requestImmediateSurfaceRefresh(ghosttySurface)
+            requestImmediateSurfaceRefresh(
+                ghosttySurface,
+                reason: resumedFromViewportDeferral ? "viewport_resume" : "presentation_change",
+                extra: [
+                    "focused": effectiveFocused ? "true" : "false",
+                    "logical_width": String(logicalWidth),
+                    "logical_height": String(logicalHeight),
+                    "pixel_width": String(pixelWidth),
+                    "pixel_height": String(pixelHeight),
+                ]
+            )
         }
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
@@ -1073,7 +1083,17 @@ extension TerminalSurfaceController {
     private func refreshSurfaceAfterContainerMove(sourceContainer: NSView) {
         guard let ghosttySurface else { return }
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
-        requestImmediateSurfaceRefresh(ghosttySurface)
+        requestImmediateSurfaceRefresh(
+            ghosttySurface,
+            reason: "container_move",
+            extra: [
+                "container_has_window": sourceContainer.window == nil ? "false" : "true",
+                "container_hidden": sourceContainer.isHidden ? "true" : "false",
+                "container_hidden_ancestor": sourceContainer.hasHiddenAncestor ? "true" : "false",
+                "container_width": String(format: "%.1f", sourceContainer.bounds.width),
+                "container_height": String(format: "%.1f", sourceContainer.bounds.height),
+            ]
+        )
     }
 
     private func updateDisplayIDIfNeeded(surface: ghostty_surface_t, sourceContainer: NSView) {
@@ -1186,7 +1206,14 @@ extension TerminalSurfaceController {
 
     func pulseVisibilityRefresh() {
         guard let ghosttySurface else { return }
-        requestImmediateSurfaceRefresh(ghosttySurface)
+        requestImmediateSurfaceRefresh(
+            ghosttySurface,
+            reason: "visibility_pulse",
+            extra: [
+                "host_effectively_visible": terminalHostView.isEffectivelyVisible ? "true" : "false",
+                "lifecycle_state": lifecycleState.automationLabel,
+            ]
+        )
     }
 
     // Closing a split can briefly produce an intermediate resize before the
@@ -1214,7 +1241,24 @@ extension TerminalSurfaceController {
         closeTransitionViewportDeferralArmed
     }
 
-    private func requestImmediateSurfaceRefresh(_ surface: ghostty_surface_t) {
+    private func requestImmediateSurfaceRefresh(
+        _ surface: ghostty_surface_t,
+        reason: String,
+        extra: [String: String] = [:]
+    ) {
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "reason": reason,
+            "host_effectively_visible": terminalHostView.isEffectivelyVisible ? "true" : "false",
+        ]
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        ToasttyLog.debug(
+            "Requesting immediate Ghostty surface refresh",
+            category: .ghostty,
+            metadata: metadata
+        )
         ghosttyManager.requestImmediateTick()
         ghostty_surface_refresh(surface)
     }

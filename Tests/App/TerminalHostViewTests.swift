@@ -166,9 +166,49 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertEqual(requestCount, 1)
     }
+
+    func testVisibilityTraceSnapshotReportsTransparentAncestorWhileWindowAttached() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let outer = NSView(frame: contentView.bounds)
+        let inner = NSView(frame: outer.bounds)
+        let hostView = TerminalHostView()
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        outer.alphaValue = 0.4
+        inner.alphaValue = 0
+
+        contentView.addSubview(outer)
+        outer.addSubview(inner)
+        inner.addSubview(hostView)
+
+        let snapshot = hostView.visibilityTraceSnapshot()
+
+        XCTAssertTrue(snapshot.hasWindow)
+        XCTAssertTrue(snapshot.windowVisible)
+        XCTAssertEqual(snapshot.selfAlphaThousandths, 1_000)
+        XCTAssertEqual(snapshot.minAncestorAlphaThousandths, 0)
+        XCTAssertEqual(snapshot.minChainAlphaThousandths, 0)
+        XCTAssertTrue(snapshot.visuallyTransparent)
+        XCTAssertTrue(snapshot.resolvedVisible)
+    }
+
+    func testVisibilityTraceSnapshotTreatsDetachedHostAsOpaqueChain() {
+        let hostView = TerminalHostView()
+
+        let snapshot = hostView.visibilityTraceSnapshot()
+
+        XCTAssertEqual(snapshot.selfAlphaThousandths, 1_000)
+        XCTAssertEqual(snapshot.minAncestorAlphaThousandths, 1_000)
+        XCTAssertEqual(snapshot.minChainAlphaThousandths, 1_000)
+        XCTAssertFalse(snapshot.visuallyTransparent)
+        XCTAssertFalse(snapshot.resolvedVisible)
+    }
 }
 
 private final class TestWindow: NSWindow {
+    var forcedOcclusionState: NSWindow.OcclusionState = []
+
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 320, height: 240),
@@ -176,6 +216,10 @@ private final class TestWindow: NSWindow {
             backing: .buffered,
             defer: false
         )
+    }
+
+    override var occlusionState: NSWindow.OcclusionState {
+        forcedOcclusionState
     }
 }
 #endif
