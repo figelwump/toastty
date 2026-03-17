@@ -261,6 +261,7 @@ verify_inputs() {
   [[ "$RELEASE_SOURCE_DIRTY" == "0" ]] || fail "release metadata reports a non-clean source snapshot (RELEASE_SOURCE_DIRTY=$RELEASE_SOURCE_DIRTY)"
   [[ "$DMG_PATH" == "$RELEASE_DMG_PATH" ]] || fail "release metadata DMG path mismatch: expected $RELEASE_DMG_PATH, got $DMG_PATH"
   [[ -n "$SPARKLE_FEED_URL" ]] || fail "Sparkle metadata is missing SPARKLE_FEED_URL"
+  [[ "$SPARKLE_FEED_URL" == */appcast.xml ]] || fail "Sparkle feed URL must point to appcast.xml: $SPARKLE_FEED_URL"
   [[ -n "$SPARKLE_PUBLIC_ED_KEY" ]] || fail "Sparkle metadata is missing SPARKLE_PUBLIC_ED_KEY"
   [[ -n "$SPARKLE_MINIMUM_SYSTEM_VERSION" ]] || fail "Sparkle metadata is missing SPARKLE_MINIMUM_SYSTEM_VERSION"
   [[ -n "$SPARKLE_DMG_PATH" ]] || fail "Sparkle metadata is missing SPARKLE_DMG_PATH"
@@ -274,6 +275,19 @@ verify_inputs() {
 
   git -C "$ROOT_DIR" cat-file -e "${RELEASE_SOURCE_COMMIT}^{commit}" 2>/dev/null \
     || fail "recorded release commit is not available in the current checkout: $RELEASE_SOURCE_COMMIT"
+}
+
+validate_appcast_file() {
+  local appcast_path="$1"
+
+  /usr/bin/python3 - "$appcast_path" <<'PY'
+import pathlib
+import sys
+import xml.etree.ElementTree as ET
+
+appcast_path = pathlib.Path(sys.argv[1])
+ET.parse(appcast_path)
+PY
 }
 
 local_tag_commit() {
@@ -555,6 +569,7 @@ publish_sparkle_appcast() {
     fetch_existing_appcast "$current_appcast_path"
     published_at="$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')"
     generate_updated_appcast "$current_appcast_path" "$updated_appcast_path" "$release_page_url" "$download_url" "$published_at"
+    validate_appcast_file "$updated_appcast_path"
 
     if [[ "$DRY_RUN" == "1" ]]; then
       printf '%s\n' "Dry run appcast update:"

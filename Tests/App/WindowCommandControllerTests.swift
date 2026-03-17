@@ -172,6 +172,9 @@ final class WindowCommandControllerTests: XCTestCase {
         canCheckForUpdates = false
         XCTAssertFalse(bridge.validateMenuItem(updaterItem))
 
+        bridge.installIfNeeded()
+        XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
+
         appMenu.removeItem(updaterItem)
         bridge.installIfNeeded()
         XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
