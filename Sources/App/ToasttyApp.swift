@@ -105,6 +105,7 @@ private enum ToasttyMenuActions {
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
     private var closeWindowMenuBridge: CloseWindowMenuBridge?
+    private var closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge?
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
     private var sparkleMenuBridge: SparkleMenuBridge?
@@ -132,12 +133,17 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func configureMenuBridges(
         closeWindowMenuBridge: CloseWindowMenuBridge,
+        closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge,
         helpMenuBridge: HelpMenuBridge,
         hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     ) {
         self.closeWindowMenuBridge = closeWindowMenuBridge
+        self.closeWorkspaceMenuBridge = closeWorkspaceMenuBridge
         self.helpMenuBridge = helpMenuBridge
         self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
+        hiddenSystemMenuItemsBridge.setOnMenuTreeRefresh { [weak self] in
+            self?.installDynamicMenuBridges()
+        }
 
         if sparkleMenuBridge == nil {
             sparkleMenuBridge = SparkleMenuBridge(sparkleUpdaterBridge: sparkleUpdaterBridge)
@@ -189,9 +195,17 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installMenuBridges() {
+        if let hiddenSystemMenuItemsBridge {
+            hiddenSystemMenuItemsBridge.installIfNeeded()
+        } else {
+            installDynamicMenuBridges()
+        }
+    }
+
+    private func installDynamicMenuBridges() {
         closeWindowMenuBridge?.installIfNeeded()
+        closeWorkspaceMenuBridge?.installIfNeeded()
         helpMenuBridge?.installIfNeeded()
-        hiddenSystemMenuItemsBridge?.installIfNeeded()
         sparkleMenuBridge?.installIfNeeded()
     }
 
@@ -316,6 +330,7 @@ struct ToasttyApp: App {
     private let appResignActiveObserver: AppResignActiveObserver
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let closeWindowMenuBridge: CloseWindowMenuBridge
+    private let closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge
     private let helpMenuBridge: HelpMenuBridge
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
@@ -381,6 +396,9 @@ struct ToasttyApp: App {
             windowCommandController: WindowCommandController(
                 focusedPanelCommandController: focusedPanelCommandController
             )
+        )
+        closeWorkspaceMenuBridge = CloseWorkspaceMenuBridge(
+            closeWorkspaceCommandController: CloseWorkspaceCommandController(store: store)
         )
         helpMenuBridge = HelpMenuBridge()
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
@@ -457,6 +475,7 @@ struct ToasttyApp: App {
             .onAppear {
                 appLifecycleDelegate.configureMenuBridges(
                     closeWindowMenuBridge: closeWindowMenuBridge,
+                    closeWorkspaceMenuBridge: closeWorkspaceMenuBridge,
                     helpMenuBridge: helpMenuBridge,
                     hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
                 )

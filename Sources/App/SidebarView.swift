@@ -7,7 +7,6 @@ struct SidebarView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
-    @State private var pendingWorkspaceClose: PendingWorkspaceClose?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -72,20 +71,6 @@ struct SidebarView: View {
         .padding(.bottom, 10)
         .padding(.horizontal, 8)
         .background(ToastyTheme.chromeBackground)
-        .alert(
-            "Close this workspace?",
-            isPresented: pendingWorkspaceCloseBinding,
-            presenting: pendingWorkspaceClose
-        ) { closeTarget in
-            Button("Cancel", role: .cancel) {
-                pendingWorkspaceClose = nil
-            }
-            Button("Close", role: .destructive) {
-                confirmWorkspaceClose(closeTarget.workspaceID)
-            }
-        } message: { _ in
-            Text("Closing this workspace will close all terminals and panels within it.")
-        }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
         }
@@ -129,7 +114,7 @@ struct SidebarView: View {
                 beginWorkspaceRename(workspace)
             }
 
-            Button("Close workspace", role: .destructive) {
+            Button(ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"), role: .destructive) {
                 requestWorkspaceClose(workspaceID: workspaceID)
             }
         }
@@ -237,17 +222,6 @@ struct SidebarView: View {
         .contentShape(Rectangle())
     }
 
-    private var pendingWorkspaceCloseBinding: Binding<Bool> {
-        Binding(
-            get: { pendingWorkspaceClose != nil },
-            set: { isPresented in
-                if !isPresented {
-                    pendingWorkspaceClose = nil
-                }
-            }
-        )
-    }
-
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
         if let currentEvent = NSApp.currentEvent,
            currentEvent.type == .leftMouseUp,
@@ -305,16 +279,7 @@ struct SidebarView: View {
     }
 
     private func requestWorkspaceClose(workspaceID: UUID) {
-        guard store.state.workspacesByID[workspaceID] != nil else { return }
-        pendingWorkspaceClose = PendingWorkspaceClose(workspaceID: workspaceID)
-    }
-
-    private func confirmWorkspaceClose(_ workspaceID: UUID) {
-        pendingWorkspaceClose = nil
-        if renamingWorkspaceID == workspaceID {
-            cancelWorkspaceRename()
-        }
-        _ = store.send(.closeWorkspace(workspaceID: workspaceID))
+        _ = store.requestWorkspaceClose(workspaceID: workspaceID)
     }
 
     private func pruneTransientSidebarState() {
@@ -322,17 +287,6 @@ struct SidebarView: View {
            store.state.workspacesByID[renamingWorkspaceID] == nil {
             cancelWorkspaceRename()
         }
-
-        if let pendingWorkspaceClose,
-           store.state.workspacesByID[pendingWorkspaceClose.workspaceID] == nil {
-            self.pendingWorkspaceClose = nil
-        }
-    }
-
-    private struct PendingWorkspaceClose: Identifiable {
-        let workspaceID: UUID
-
-        var id: UUID { workspaceID }
     }
 
     /// Build a subtitle string like "3 panes · dev server running" or "1 pane"

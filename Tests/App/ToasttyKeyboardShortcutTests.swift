@@ -20,12 +20,17 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.renameWorkspace.menuTitle("Rename Workspace"),
             "Rename Workspace\t⇧⌘E"
         )
+        XCTAssertEqual(
+            ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"),
+            "Close workspace\t⇧⌘W"
+        )
     }
 
     func testShortcutDefinitionsMatchExpectedGlyphs() {
-        XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⇧⌘W")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⌘B")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.closeWorkspace.symbolLabel, "⇧⌘W")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusPreviousPane.symbolLabel, "⌘[")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusNextPane.symbolLabel, "⌘]")
     }
@@ -35,6 +40,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.toggleSidebar,
             ToasttyKeyboardShortcuts.newWorkspace,
             ToasttyKeyboardShortcuts.renameWorkspace,
+            ToasttyKeyboardShortcuts.closeWorkspace,
             ToasttyKeyboardShortcuts.toggleFocusedPanel,
             ToasttyKeyboardShortcuts.splitHorizontal,
             ToasttyKeyboardShortcuts.splitVertical,

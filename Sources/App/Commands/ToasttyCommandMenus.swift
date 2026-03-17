@@ -185,6 +185,11 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(commandWorkspace == nil)
 
+            Button("Close Workspace") {
+                store.closeSelectedWorkspaceFromCommand(preferredWindowID: focusedWindowID)
+            }
+            .disabled(commandWorkspace == nil)
+
             Button("Close Panel") {
                 closeFocusedPanelFromCommandSelection()
             }

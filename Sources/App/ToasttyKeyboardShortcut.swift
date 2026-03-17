@@ -48,8 +48,8 @@ private extension EventModifiers {
 
 enum ToasttyKeyboardShortcuts {
     static let toggleSidebar = ToasttyKeyboardShortcut(
-        "w",
-        modifiers: [.command, .shift]
+        "b",
+        modifiers: [.command]
     )
 
     static let newWorkspace = ToasttyKeyboardShortcut(
@@ -59,6 +59,11 @@ enum ToasttyKeyboardShortcuts {
 
     static let renameWorkspace = ToasttyKeyboardShortcut(
         "e",
+        modifiers: [.command, .shift]
+    )
+
+    static let closeWorkspace = ToasttyKeyboardShortcut(
+        "w",
         modifiers: [.command, .shift]
     )
 

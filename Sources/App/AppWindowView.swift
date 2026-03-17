@@ -6,6 +6,7 @@ struct AppWindowView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext
+    @State private var pendingWorkspaceClose: PendingWorkspaceClose?
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
@@ -41,11 +42,41 @@ struct AppWindowView: View {
             // Sidebar toggle button in the title bar area, right of traffic lights
             sidebarToggleButton
         }
+        .alert(
+            "Close this workspace?",
+            isPresented: pendingWorkspaceCloseBinding,
+            presenting: pendingWorkspaceClose
+        ) { closeTarget in
+            Button("Cancel", role: .cancel) {
+                pendingWorkspaceClose = nil
+            }
+            Button("Close", role: .destructive) {
+                confirmWorkspaceClose(closeTarget)
+            }
+        } message: { _ in
+            Text("Closing this workspace will close all terminals and panels within it.")
+        }
         .onAppear {
             scheduleWindowFocusRestore()
         }
         .onChange(of: slotFocusSignature) { _, _ in
             scheduleWindowFocusRestore()
+        }
+        .onChange(of: store.state.workspacesByID) { _, _ in
+            if let pendingWorkspaceClose,
+               store.state.workspacesByID[pendingWorkspaceClose.workspaceID] == nil {
+                self.pendingWorkspaceClose = nil
+            }
+        }
+        .onChange(of: store.pendingCloseWorkspaceRequest) { _, newValue in
+            guard let request = newValue,
+                  request.windowID == windowID,
+                  store.state.workspacesByID[request.workspaceID] != nil,
+                  store.consumePendingWorkspaceCloseRequest(windowID: windowID) != nil else { return }
+            pendingWorkspaceClose = PendingWorkspaceClose(
+                windowID: request.windowID,
+                workspaceID: request.workspaceID
+            )
         }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
     }
@@ -88,10 +119,36 @@ struct AppWindowView: View {
             avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         )
     }
+
+    private var pendingWorkspaceCloseBinding: Binding<Bool> {
+        Binding(
+            get: { pendingWorkspaceClose != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingWorkspaceClose = nil
+                }
+            }
+        )
+    }
+
+    private func confirmWorkspaceClose(_ closeTarget: PendingWorkspaceClose) {
+        pendingWorkspaceClose = nil
+        _ = store.confirmWorkspaceClose(
+            windowID: closeTarget.windowID,
+            workspaceID: closeTarget.workspaceID
+        )
+    }
 }
 
 private struct WindowSlotFocusSignature: Equatable {
     let windowID: UUID
     let workspaceID: UUID?
     let focusedPanelID: UUID?
+}
+
+private struct PendingWorkspaceClose: Identifiable {
+    let windowID: UUID
+    let workspaceID: UUID
+
+    var id: UUID { workspaceID }
 }
