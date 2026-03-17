@@ -139,11 +139,10 @@ Toastty reads these additional keys from Ghostty config:
 ## Toastty-owned config and settings
 
 - Ghostty `font-size` is the fallback baseline when `~/.toastty/config` does not set `terminal-font-size`
-- `~/.toastty/config` can set:
+- `~/.toastty/config` is user-authored and can set:
   - `terminal-font-size` as Toastty's preferred baseline
   - `default-terminal-profile` for newly created terminals and ordinary splits only
-- Toastty rewrites `~/.toastty/config` into the current template format on launch and `Reload Configuration`, preserving recognized keys while refreshing the comments and discarding unsupported comments or unknown keys in this release
-- UI-driven terminal font changes are stored in macOS `UserDefaults`, not by directly editing `~/.toastty/config`
+- UI-driven terminal font changes are stored in macOS `UserDefaults`, not by rewriting `~/.toastty/config`
 - `Reset Terminal Font` clears the UI override and returns to the configured baseline
 
 ## Action parity

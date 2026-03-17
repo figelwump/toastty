@@ -5,7 +5,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 ## What Toastty writes locally
 
 - `~/.toastty/config`
-  - Toastty defaults such as `terminal-font-size` and `default-terminal-profile`. Toastty rewrites this file into the current template format on launch and `Reload Configuration`, preserving recognized keys while refreshing comments and discarding unsupported comments or unknown keys in this release.
+  - User-authored Toastty defaults such as `terminal-font-size` and `default-terminal-profile`.
 - macOS `UserDefaults` for Toastty
   - UI-managed settings that Toastty remembers locally, currently the terminal font-size override changed from the menu.
 - `~/.toastty/workspace-layout-profiles.json`

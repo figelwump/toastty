@@ -331,7 +331,7 @@ struct ToasttyApp: App {
             environment: processInfo.environment
         ) == nil
         let terminalProfileStore = TerminalProfileStore()
-        let initialToasttyConfig = usesPersistentPreferences ? Self.loadToasttyConfig() : ToasttyConfig()
+        let initialToasttyConfig = usesPersistentPreferences ? ToasttyConfigStore.load() : ToasttyConfig()
         let initialToasttySettings = usesPersistentPreferences ? ToasttySettingsStore.load() : ToasttySettings()
         let initialDefaultTerminalProfileID = usesPersistentPreferences
             ? Self.resolvedDefaultTerminalProfileID(
@@ -368,6 +368,7 @@ struct ToasttyApp: App {
                 toasttyConfig: initialToasttyConfig,
                 toasttySettings: initialToasttySettings
             )
+            Self.ensureToasttyConfigTemplateExists()
         }
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
         let focusedPanelCommandController = FocusedPanelCommandController(
@@ -491,7 +492,7 @@ struct ToasttyApp: App {
             failureMessages.append(error.localizedDescription)
         }
 
-        let toasttyConfig = Self.loadToasttyConfig()
+        let toasttyConfig = ToasttyConfigStore.load()
         let toasttySettings = ToasttySettingsStore.load()
         Self.applyConfiguredDefaultTerminalProfile(
             to: store,
@@ -647,13 +648,12 @@ struct ToasttyApp: App {
         }
     }
 
-    private static func loadToasttyConfig() -> ToasttyConfig {
-        let config = ToasttyConfigStore.load()
+    private static func ensureToasttyConfigTemplateExists() {
         do {
-            try ToasttyConfigStore.writeCurrentTemplate(config)
+            try ToasttyConfigStore.ensureTemplateExists()
         } catch {
             ToasttyLog.warning(
-                "Failed to rewrite Toastty config using the current template",
+                "Failed to ensure Toastty config template exists",
                 category: .bootstrap,
                 metadata: [
                     "path": ToasttyConfigStore.configFileURL().path,
@@ -661,6 +661,5 @@ struct ToasttyApp: App {
                 ]
             )
         }
-        return config
     }
 }

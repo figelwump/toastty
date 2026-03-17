@@ -165,14 +165,13 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 3. `~/.config/ghostty/config`
 4. Ghostty defaults
 
-Toastty uses `~/.toastty/config` for user defaults and rewrites that file into the current template format on launch or `Reload Configuration`. In this release, Toastty preserves only the keys it recognizes, refreshes the bundled comments/examples, and discards custom comments or unknown keys. Toastty uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
+Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
 
 Today that means:
 
-- `~/.toastty/config` is normalized to the current Toastty template on launch and `Reload Configuration`
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
-- `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` update a local `UserDefaults` override instead of directly editing `~/.toastty/config`
+- `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` update a local `UserDefaults` override instead of rewriting your config file
 
 Example:
 
@@ -380,7 +379,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 
 Toastty is local-first. The app itself does not send usage analytics or cloud telemetry.
 
-- Toastty writes its current config template and recognized defaults to `~/.toastty/config`.
+- Toastty writes user-authored config to `~/.toastty/config`.
 - Toastty stores UI-managed font overrides in the app's `UserDefaults` domain.
 - Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`.
 - By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`.
