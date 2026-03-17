@@ -352,6 +352,7 @@ struct SidebarView: View {
         let borderColor = unreadOutlineKind
             .map { ToastyTheme.sessionStatusOutlineColor(for: $0) }
             ?? (isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear)
+        let borderLineWidth = Self.sessionStatusBorderLineWidth(for: unreadOutlineKind)
 
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -393,7 +394,7 @@ struct SidebarView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .stroke(borderColor, lineWidth: 1)
+                .stroke(borderColor, lineWidth: borderLineWidth)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
     }
@@ -536,6 +537,10 @@ struct SidebarView: View {
         case .idle, .working:
             return nil
         }
+    }
+
+    static func sessionStatusBorderLineWidth(for unreadOutlineKind: SessionStatusKind?) -> CGFloat {
+        unreadOutlineKind == .ready ? 0.5 : 1
     }
 
     static func sessionIndicatorState(for kind: SessionStatusKind) -> SessionStatusIndicatorState {
