@@ -475,7 +475,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         if hostedView.isHidden { hostedView.isHidden = false }
         temporarilyHiddenForViewportDeferral = false
         resetViewportResumeStability()
-        let effectiveFocused = focused && hostView.isEffectivelyVisible
+        let hostVisible = hostView.synchronizePresentationVisibility(reason: "controller_update")
+        let effectiveFocused = focused && hostVisible
         ensureFirstResponderIfNeeded(focused: effectiveFocused)
         if focused {
             hostView.synchronizeGhosttySurfaceFocusFromApplicationState()
@@ -495,7 +496,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let presentationChanged = presentationSignature != lastPresentationSignature
         lastPresentationSignature = presentationSignature
 
-        if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
+        if hostVisible && (resumedFromViewportDeferral || presentationChanged) {
             requestImmediateSurfaceRefresh(
                 ghosttySurface,
                 reason: resumedFromViewportDeferral ? "viewport_resume" : "presentation_change",
@@ -1206,6 +1207,9 @@ extension TerminalSurfaceController {
 
     func pulseVisibilityRefresh() {
         guard let ghosttySurface else { return }
+        guard terminalHostView.synchronizePresentationVisibility(reason: "visibility_pulse") else {
+            return
+        }
         requestImmediateSurfaceRefresh(
             ghosttySurface,
             reason: "visibility_pulse",

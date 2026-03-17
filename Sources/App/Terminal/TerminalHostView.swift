@@ -131,12 +131,16 @@ final class TerminalHostView: NSView {
         let minAncestorAlphaThousandths: Int
         let minChainAlphaThousandths: Int
 
-        var resolvedVisible: Bool {
+        var logicallyVisibleIgnoringTransparency: Bool {
             hasWindow && isHidden == false && hasHiddenAncestor == false && windowVisible
         }
 
         var visuallyTransparent: Bool {
             minChainAlphaThousandths <= 10
+        }
+
+        var resolvedVisible: Bool {
+            logicallyVisibleIgnoringTransparency && visuallyTransparent == false
         }
     }
     #endif
@@ -336,6 +340,12 @@ final class TerminalHostView: NSView {
         visibilityTraceSnapshot().resolvedVisible
     }
 
+    @discardableResult
+    func synchronizePresentationVisibility(reason: String) -> Bool {
+        syncSurfaceVisibility(reason: reason)
+        return isEffectivelyVisible
+    }
+
     private func syncSurfaceVisibility(reason: String) {
         let traceSnapshot = visibilityTraceSnapshot()
         logVisibilityTraceIfNeeded(traceSnapshot, reason: reason)
@@ -467,8 +477,8 @@ final class TerminalHostView: NSView {
         lastLoggedVisibilityTraceSnapshot = traceSnapshot
 
         let message: String
-        if traceSnapshot.resolvedVisible && traceSnapshot.visuallyTransparent {
-            message = "Ghostty surface resolved visible while host alpha chain is effectively transparent"
+        if traceSnapshot.logicallyVisibleIgnoringTransparency && traceSnapshot.visuallyTransparent {
+            message = "Ghostty surface treated as hidden because host alpha chain is effectively transparent"
         } else {
             message = "Resolved Ghostty surface visibility state"
         }

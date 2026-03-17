@@ -190,7 +190,8 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(snapshot.minAncestorAlphaThousandths, 0)
         XCTAssertEqual(snapshot.minChainAlphaThousandths, 0)
         XCTAssertTrue(snapshot.visuallyTransparent)
-        XCTAssertTrue(snapshot.resolvedVisible)
+        XCTAssertTrue(snapshot.logicallyVisibleIgnoringTransparency)
+        XCTAssertFalse(snapshot.resolvedVisible)
     }
 
     func testVisibilityTraceSnapshotTreatsDetachedHostAsOpaqueChain() {
@@ -203,6 +204,50 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(snapshot.minChainAlphaThousandths, 1_000)
         XCTAssertFalse(snapshot.visuallyTransparent)
         XCTAssertFalse(snapshot.resolvedVisible)
+    }
+
+    func testSynchronizePresentationVisibilityTracksTransparentAncestorTransition() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let ancestor = NSView(frame: contentView.bounds)
+        let hostView = TerminalHostView()
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        ancestor.alphaValue = 0
+
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(hostView)
+
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_transparent"))
+        XCTAssertFalse(hostView.isEffectivelyVisible)
+
+        ancestor.alphaValue = 1
+
+        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_opaque"))
+        XCTAssertTrue(hostView.isEffectivelyVisible)
+    }
+
+    func testVisibilityTraceSnapshotTransparencyThresholdBoundary() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let ancestor = NSView(frame: contentView.bounds)
+        let hostView = TerminalHostView()
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(hostView)
+
+        ancestor.alphaValue = 0.01
+        var snapshot = hostView.visibilityTraceSnapshot()
+        XCTAssertEqual(snapshot.minChainAlphaThousandths, 10)
+        XCTAssertTrue(snapshot.visuallyTransparent)
+        XCTAssertFalse(snapshot.resolvedVisible)
+
+        ancestor.alphaValue = 0.011
+        snapshot = hostView.visibilityTraceSnapshot()
+        XCTAssertEqual(snapshot.minChainAlphaThousandths, 11)
+        XCTAssertFalse(snapshot.visuallyTransparent)
+        XCTAssertTrue(snapshot.resolvedVisible)
     }
 }
 
