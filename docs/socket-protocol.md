@@ -12,6 +12,17 @@ Important scope note:
   (`session.*`, `notification.emit`).
 - This is a narrow implementation doc, not an aspirational protocol design.
 
+CLI note:
+
+- The repo ships a thin `toastty` CLI wrapper for `notify` and the `session`
+  subcommands.
+- Toastty-managed Claude and Codex launches primarily use
+  `session ingest-agent-event` to translate provider events into `session.status`
+  updates. `session ingest-agent-event` is handled locally inside the CLI; it is
+  not a socket event type.
+- Manual wrappers should generally use `session start`, `session status`,
+  optional `session update-files`, and `session stop` directly.
+
 ## 1) transport and lifecycle
 
 - Transport: Unix domain socket only.
@@ -157,7 +168,7 @@ Behavior:
 
 - Replaces app state with `AppState.bootstrap()`
 - Resets current fixture name to `"default"`
-- Clears session registry, notification store, coalesced updates, progress, and errors
+- Clears session registry, notification store, and coalesced file updates
 
 ### `automation.load_fixture`
 
@@ -294,10 +305,23 @@ Result:
 ### `automation.launch_agent`
 
 Launches a configured agent profile into a resolved terminal panel. Toastty
-records the baseline `session.start` before injecting the provider command and
-passes `TOASTTY_*` launch context with the command. If the agent does not emit
-`session.stop`, Toastty falls back to stopping the session when the panel
-returns to an interactive shell prompt or the panel closes.
+records the baseline session in-app before injecting the provider command and
+passes `TOASTTY_*` launch context with the command. For first-party Claude and
+Codex launches, Toastty also generates helper scripts that call
+`toastty session ingest-agent-event` so provider events become `session.status`
+updates automatically. If the agent does not emit `session.stop`, Toastty falls
+back to stopping the session when the panel returns to an interactive shell
+prompt or the panel closes.
+
+Launch context environment:
+
+- `TOASTTY_AGENT`
+- `TOASTTY_SESSION_ID`
+- `TOASTTY_PANEL_ID`
+- `TOASTTY_SOCKET_PATH`
+- `TOASTTY_CLI_PATH`
+- `TOASTTY_CWD` when the target panel has a known working directory
+- `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from that directory
 
 Request payload:
 
@@ -427,10 +451,13 @@ Behavior:
   - `appState`
   - `sessionRegistry`
   - `notifications`
-  - `progressBySessionID`
-  - `errorsBySessionID`
 
 ## 6) implemented event types
+
+Legacy note:
+
+- `session.progress`, `session.needs_input`, and `session.error` are no longer
+  implemented. Use `session.status` and `notification.emit` instead.
 
 ### `session.start`
 
@@ -442,14 +469,44 @@ Required:
 
 Accepted payload keys:
 
-- `agent: "claude" | "codex"`
+- `agent: lowercase agent ID`
 - `cwd?: String`
 - `repoRoot?: String`
 
 Validation:
 
 - `panelID` must refer to a live panel
-- `agent` must be one of the supported values
+- `agent` must be a valid lowercase agent ID
+- Built-in examples include `claude` and `codex`
+
+Result:
+
+- `eventType`
+- `stateVersion`
+
+### `session.status`
+
+Required:
+
+- top-level `sessionID`
+- payload `kind`
+- payload `summary`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
+
+Accepted payload keys:
+
+- `kind: "idle" | "working" | "needs_approval" | "ready" | "error"`
+- `summary: String`
+- `detail?: String`
+
+Behavior:
+
+- `sessionID` must identify an active session
+- `panelID` is optional; when present it must match the active session
+- `summary` must be non-empty after trimming
 
 Result:
 
@@ -461,8 +518,11 @@ Result:
 Required:
 
 - top-level `sessionID`
-- top-level `panelID`
 - payload `files`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
 
 Accepted payload keys:
 
@@ -472,7 +532,8 @@ Accepted payload keys:
 
 Behavior:
 
-- `panelID` must refer to a live panel
+- `sessionID` must identify an active session
+- `panelID` is optional; when present it must match the active session
 - `files` must be a non-empty string array
 - Relative file paths require `cwd`
 - Updates are coalesced per session before being written into `SessionRegistry`
@@ -483,64 +544,25 @@ Result:
 - `queuedFiles`
 - `stateVersion`
 
-### `session.needs_input`
-
-Required:
-
-- top-level `sessionID`
-- top-level `panelID`
-- payload `title`
-- payload `body`
-
-Behavior:
-
-- `panelID` must refer to a live panel
-- Records a notification decision and may trigger a system notification
-
-Result:
-
-- `eventType`
-- `notificationStored: Bool`
-- `sendSystemNotification: Bool`
-- `stateVersion`
-
-### `session.progress`
-
-Required:
-
-- top-level `sessionID`
-- top-level `panelID`
-- payload `message`
-
-Result:
-
-- `eventType`
-- `stateVersion`
-
-### `session.error`
-
-Required:
-
-- top-level `sessionID`
-- top-level `panelID`
-- payload `message`
-
-Result:
-
-- `eventType`
-- `stateVersion`
-
 ### `session.stop`
 
 Required:
 
 - top-level `sessionID`
-- top-level `panelID`
+
+Optional top-level fields:
+
+- `panelID?: UUID string`
+
+Accepted payload keys:
+
+- `reason?: String`
 
 Behavior:
 
+- `sessionID` must identify an active session
+- `panelID` is optional; when present it must match the active session
 - Flushes all coalesced file updates before stopping the session
-- Clears stored progress and error state for that session
 
 Result:
 
@@ -592,5 +614,5 @@ Current response error codes:
 - `session.update_files` coalescing currently uses a 0.5 second window per session.
 - The protocol does not currently expose a standalone schema version beyond
   `protocolVersion`.
-- This repo does not currently include a `toastty notify` CLI implementation; the
-  live behavior for `notification.emit` is the socket event handler described above.
+- The repo ships a `toastty notify` CLI wrapper plus session-oriented CLI
+  commands; they are transport conveniences over the same socket protocol.

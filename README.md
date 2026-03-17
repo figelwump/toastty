@@ -21,6 +21,12 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
+## Agent Telemetry
+
+Toastty keeps first-party agent session state current automatically when a run is launched through Toastty. The launch path injects `TOASTTY_*` session context and generated Claude/Codex wrappers report follow-up events through the bundled `toastty` CLI, so built-in launches do not require a separate agent skill to keep the sidebar up to date.
+
+For custom wrappers and third-party agents, the manual integration surface remains available through `toastty session start`, `toastty session status`, `toastty session update-files`, `toastty session stop`, and `toastty notify`. Provider-specific `toastty session ingest-agent-event` is a CLI-local helper for Toastty-managed Claude/Codex instrumentation, not a general socket protocol entry point.
+
 ## Requirements
 
 - macOS 14.0+
