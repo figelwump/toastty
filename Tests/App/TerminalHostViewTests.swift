@@ -249,10 +249,52 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertFalse(snapshot.visuallyTransparent)
         XCTAssertTrue(snapshot.resolvedVisible)
     }
+
+    func testResolvedGhosttySurfaceFocusStateRequiresActiveKeyFocusedHost() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let hostView = TerminalHostView()
+        hostView.applicationIsActiveProvider = { true }
+        window.forcedOcclusionState = [.visible]
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+
+        contentView.addSubview(hostView)
+        _ = hostView.synchronizePresentationVisibility(reason: "test_focus_visible")
+        _ = window.makeFirstResponder(hostView)
+
+        XCTAssertTrue(hostView.resolvedGhosttySurfaceFocusState())
+    }
+
+    func testResolvedGhosttySurfaceFocusStateReturnsFalseWhenApplicationInactive() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let hostView = TerminalHostView()
+        hostView.applicationIsActiveProvider = { false }
+        window.forcedOcclusionState = [.visible]
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+
+        contentView.addSubview(hostView)
+        _ = hostView.synchronizePresentationVisibility(reason: "test_focus_inactive")
+        _ = window.makeFirstResponder(hostView)
+
+        XCTAssertFalse(hostView.resolvedGhosttySurfaceFocusState())
+    }
 }
 
 private final class TestWindow: NSWindow {
     var forcedOcclusionState: NSWindow.OcclusionState = []
+    var forcedIsKeyWindow = false
+    private var storedFirstResponder: NSResponder?
+
+    override var firstResponder: NSResponder? {
+        storedFirstResponder
+    }
+
+    override var isKeyWindow: Bool {
+        forcedIsKeyWindow
+    }
 
     init() {
         super.init(
@@ -265,6 +307,14 @@ private final class TestWindow: NSWindow {
 
     override var occlusionState: NSWindow.OcclusionState {
         forcedOcclusionState
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        if let responder, responder.acceptsFirstResponder == false {
+            return false
+        }
+        storedFirstResponder = responder
+        return true
     }
 }
 #endif

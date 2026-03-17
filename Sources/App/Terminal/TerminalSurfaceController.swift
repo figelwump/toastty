@@ -114,9 +114,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         hostedView = surfaceScrollView
         terminalHostView.requestFirstResponderIfNeeded = { [weak self] in
             guard let self else { return }
-            self.ensureFirstResponderIfNeeded(
-                focused: self.requestedFocus && self.terminalHostView.isEffectivelyVisible
-            )
+            guard self.requestedFocus && self.terminalHostView.isEffectivelyVisible else {
+                return
+            }
+            _ = self.focusHostViewIfNeeded()
         }
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
@@ -476,12 +477,23 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         temporarilyHiddenForViewportDeferral = false
         resetViewportResumeStability()
         let hostVisible = hostView.synchronizePresentationVisibility(reason: "controller_update")
-        let effectiveFocused = focused && hostVisible
-        ensureFirstResponderIfNeeded(focused: effectiveFocused)
-        if focused {
-            hostView.synchronizeGhosttySurfaceFocusFromApplicationState()
+        let requestedFocused = focused && hostVisible
+        ensureFirstResponderIfNeeded(focused: requestedFocused)
+        let resolvedFocused: Bool
+        if requestedFocused {
+            resolvedFocused = hostView.resolvedGhosttySurfaceFocusState()
+            hostView.syncSurfaceFocus(
+                resolvedFocused,
+                reason: "controller_update",
+                refreshOnChange: false
+            )
         } else {
-            hostView.syncSurfaceFocus(false)
+            resolvedFocused = false
+            hostView.syncSurfaceFocus(
+                false,
+                reason: "controller_update",
+                refreshOnChange: false
+            )
         }
 
         let presentationSignature = SurfacePresentationSignature(
@@ -490,7 +502,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             scaleThousandths: Int((xScale * 1000).rounded()),
-            focused: effectiveFocused,
+            focused: resolvedFocused,
             pixelSizingEnabled: usesBackingPixelSurfaceSizing
         )
         let presentationChanged = presentationSignature != lastPresentationSignature
@@ -501,7 +513,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 ghosttySurface,
                 reason: resumedFromViewportDeferral ? "viewport_resume" : "presentation_change",
                 extra: [
-                    "focused": effectiveFocused ? "true" : "false",
+                    "focused": resolvedFocused ? "true" : "false",
                     "logical_width": String(logicalWidth),
                     "logical_height": String(logicalHeight),
                     "pixel_width": String(pixelWidth),

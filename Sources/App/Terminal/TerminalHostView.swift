@@ -33,6 +33,7 @@ final class TerminalHostView: NSView {
     private var lastKnownSurfaceVisibility: Bool?
     private var lastLoggedVisibilityTraceSnapshot: VisibilityTraceSnapshot?
     private(set) var isEffectivelyVisible = false
+    var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
     private static let imageFileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
         .urlReadingFileURLsOnly: true,
@@ -115,7 +116,8 @@ final class TerminalHostView: NSView {
     /// Tracks the last focus value sent to Ghostty to avoid redundant calls.
     /// Each `ghostty_surface_set_focus` call restarts the internal cursor blink
     /// timer; calling it on every layout pass causes irregular blinking and
-    /// input jitter.
+    /// input jitter. `nil` means the live surface's current focus is unknown,
+    /// which can happen when a reused surface is remounted into a new host.
     private var lastAppliedSurfaceFocus: Bool?
     private var rightMousePressWasForwarded = false
     private var ghosttyMouseCursorStyle: GhosttyMouseCursorStyle = .horizontalText
@@ -175,7 +177,11 @@ final class TerminalHostView: NSView {
         let result = super.resignFirstResponder()
         #if TOASTTY_HAS_GHOSTTY_KIT
         if result {
-            syncSurfaceFocus(false)
+            syncSurfaceFocus(
+                false,
+                reason: "resign_first_responder",
+                refreshOnChange: true
+            )
         }
         #endif
         return result
@@ -274,7 +280,11 @@ final class TerminalHostView: NSView {
     /// Returns `true` if focus was applied (i.e. it changed), `false` if
     /// it was a no-op.
     @discardableResult
-    func syncSurfaceFocus(_ focused: Bool) -> Bool {
+    func syncSurfaceFocus(
+        _ focused: Bool,
+        reason: String,
+        refreshOnChange: Bool = false
+    ) -> Bool {
         guard let ghosttySurface else {
             lastAppliedSurfaceFocus = nil
             return false
@@ -284,6 +294,21 @@ final class TerminalHostView: NSView {
         }
         lastAppliedSurfaceFocus = focused
         ghostty_surface_set_focus(ghosttySurface, focused)
+        let shouldRefresh = refreshOnChange && isEffectivelyVisible
+        if shouldRefresh {
+            GhosttyRuntimeManager.shared.requestImmediateTick()
+            ghostty_surface_refresh(ghosttySurface)
+        }
+        ToasttyLog.debug(
+            "Updated Ghostty surface focus",
+            category: .ghostty,
+            metadata: [
+                "focused": focused ? "true" : "false",
+                "reason": reason,
+                "host_effectively_visible": isEffectivelyVisible ? "true" : "false",
+                "refresh_requested": shouldRefresh ? "true" : "false",
+            ]
+        )
         return true
     }
 
@@ -318,12 +343,22 @@ final class TerminalHostView: NSView {
         observedWindow = nil
     }
 
-    func synchronizeGhosttySurfaceFocusFromApplicationState() {
-        let focused = isEffectivelyVisible &&
-            NSApp.isActive &&
+    func resolvedGhosttySurfaceFocusState() -> Bool {
+        isEffectivelyVisible &&
+            applicationIsActiveProvider() &&
             window?.isKeyWindow == true &&
             window?.firstResponder === self
-        syncSurfaceFocus(focused)
+    }
+
+    @discardableResult
+    func synchronizeGhosttySurfaceFocusFromApplicationState() -> Bool {
+        let focused = resolvedGhosttySurfaceFocusState()
+        syncSurfaceFocus(
+            focused,
+            reason: "application_state",
+            refreshOnChange: true
+        )
+        return focused
     }
 
     func setGhosttyMouseShape(_ shape: ghostty_action_mouse_shape_e) {
@@ -407,14 +442,22 @@ final class TerminalHostView: NSView {
         lastKnownSurfaceVisibility = visible
         ghostty_surface_set_occlusion(ghosttySurface, visible)
         if visible {
-            let shouldRestoreFocus = NSApp.isActive &&
+            let shouldRestoreFocus = applicationIsActiveProvider() &&
                 window?.isKeyWindow == true &&
                 window?.firstResponder === self
-            syncSurfaceFocus(shouldRestoreFocus)
+            syncSurfaceFocus(
+                shouldRestoreFocus,
+                reason: "visibility_restoration",
+                refreshOnChange: false
+            )
             GhosttyRuntimeManager.shared.requestImmediateTick()
             ghostty_surface_refresh(ghosttySurface)
         } else {
-            syncSurfaceFocus(false)
+            syncSurfaceFocus(
+                false,
+                reason: "visibility_hidden",
+                refreshOnChange: false
+            )
         }
 
         ToasttyLog.debug(
@@ -425,7 +468,7 @@ final class TerminalHostView: NSView {
                 "visible": visible ? "true" : "false",
                 "reason": reason,
                 "restored_focus": visible &&
-                    NSApp.isActive &&
+                    applicationIsActiveProvider() &&
                     window?.isKeyWindow == true &&
                     window?.firstResponder === self ? "true" : "false",
                 "has_window": traceSnapshot.hasWindow ? "true" : "false",
