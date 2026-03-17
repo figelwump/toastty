@@ -35,27 +35,34 @@ enum ToasttyConfigStore {
         return parse(contents: contents)
     }
 
-    static func ensureTemplateExists(
+    @discardableResult
+    static func rewriteCurrentTemplate(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory()
+    ) throws -> ToasttyConfig {
+        let config = load(fileManager: fileManager, homeDirectoryPath: homeDirectoryPath)
+        try writeCurrentTemplate(
+            config,
+            fileManager: fileManager,
+            homeDirectoryPath: homeDirectoryPath
+        )
+        return config
+    }
+
+    static func writeCurrentTemplate(
+        _ config: ToasttyConfig,
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory()
     ) throws {
         let configURL = configFileURL(homeDirectoryPath: homeDirectoryPath)
-        let legacyURL = legacyConfigFileURL(homeDirectoryPath: homeDirectoryPath)
-        guard fileManager.fileExists(atPath: configURL.path) == false,
-              fileManager.fileExists(atPath: legacyURL.path) == false else {
-            return
-        }
-
         try fileManager.createDirectory(
             at: configURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let contents = Data(render(config: ToasttyConfig()).utf8)
-        do {
-            try contents.write(to: configURL, options: .withoutOverwriting)
-        } catch let error as CocoaError where error.code == .fileWriteFileExists {
-            return
-        }
+        // Re-render the file from the keys Toastty currently understands so the
+        // shipped template, examples, and live values stay in sync.
+        let contents = Data(render(config: config).utf8)
+        try contents.write(to: configURL, options: .atomic)
     }
 
     private static func parse(contents: String) -> ToasttyConfig {
@@ -105,12 +112,12 @@ enum ToasttyConfigStore {
             lines.append("")
         }
 
-        if let defaultTerminalProfileID = config.defaultTerminalProfileID {
-            lines.append("\(defaultTerminalProfileKey) = \(encodeString(defaultTerminalProfileID))")
-        }
-
         if let points = config.terminalFontSizePoints {
             lines.append("\(terminalFontSizeKey) = \(format(points: points))")
+        }
+
+        if let defaultTerminalProfileID = config.defaultTerminalProfileID {
+            lines.append("\(defaultTerminalProfileKey) = \(encodeString(defaultTerminalProfileID))")
         }
 
         return lines.joined(separator: "\n") + "\n"
