@@ -295,7 +295,7 @@ struct SidebarView: View {
         isHovered: Bool
     ) -> some View {
         let status = workspaceSessionStatus.status
-        let showsUnreadIndicator = showsSessionAttentionIndicator(
+        let showsUnreadSessionAccent = showsUnreadSessionAccent(
             for: workspaceSessionStatus.panelID,
             in: workspace
         )
@@ -312,7 +312,7 @@ struct SidebarView: View {
                     sessionStatusLabel(
                         workspaceSessionStatus,
                         status: status,
-                        showsUnreadIndicator: showsUnreadIndicator,
+                        showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isHovered: isHovered
                     )
                 }
@@ -329,7 +329,7 @@ struct SidebarView: View {
                 sessionStatusLabel(
                     workspaceSessionStatus,
                     status: status,
-                    showsUnreadIndicator: showsUnreadIndicator,
+                    showsUnreadSessionAccent: showsUnreadSessionAccent,
                     isHovered: false
                 )
             }
@@ -339,13 +339,19 @@ struct SidebarView: View {
     private func sessionStatusLabel(
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         status: SessionStatus,
-        showsUnreadIndicator: Bool,
+        showsUnreadSessionAccent: Bool,
         isHovered: Bool
     ) -> some View {
-        let indicatorState = sessionIndicatorState(
+        let indicatorState = Self.sessionIndicatorState(for: status.kind)
+        let unreadOutlineKind = Self.unreadSessionOutlineKind(
             for: status,
-            showsUnreadIndicator: showsUnreadIndicator
+            showsUnreadSessionAccent: showsUnreadSessionAccent
         )
+        // Preserve the status outline until the session is read; hover still
+        // gets feedback from the row background fill.
+        let borderColor = unreadOutlineKind
+            .map { ToastyTheme.sessionStatusOutlineColor(for: $0) }
+            ?? (isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear)
 
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -358,8 +364,8 @@ struct SidebarView: View {
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     .lineLimit(1)
 
-                if status.kind != .idle {
-                    sessionStatusChip(status)
+                if Self.showsSessionStatusChip(for: status.kind) {
+                    workingSessionStatusChip()
                 }
 
                 Spacer(minLength: 0)
@@ -391,7 +397,7 @@ struct SidebarView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .stroke(isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear, lineWidth: 1)
+                .stroke(borderColor, lineWidth: 1)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
     }
@@ -504,20 +510,20 @@ struct SidebarView: View {
         return paneLabel
     }
 
-    private func sessionStatusChip(_ status: SessionStatus) -> some View {
-        Text(sessionStatusBadgeLabel(for: status.kind))
+    private func workingSessionStatusChip() -> some View {
+        Text("working")
             .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: status.kind))
+            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: .working))
             .padding(.horizontal, 4)
             .background(
-                ToastyTheme.sessionStatusBackgroundColor(for: status.kind),
+                ToastyTheme.sessionStatusBackgroundColor(for: .working),
                 in: RoundedRectangle(cornerRadius: 2)
             )
             .lineLimit(1)
             .truncationMode(.tail)
     }
 
-    private func showsSessionAttentionIndicator(
+    private func showsUnreadSessionAccent(
         for panelID: UUID,
         in workspace: WorkspaceState
     ) -> Bool {
@@ -533,16 +539,31 @@ struct SidebarView: View {
         return true
     }
 
-    private func sessionIndicatorState(
+    static func showsSessionStatusChip(for kind: SessionStatusKind) -> Bool {
+        kind == .working
+    }
+
+    static func unreadSessionOutlineKind(
         for status: SessionStatus,
-        showsUnreadIndicator: Bool
-    ) -> SessionStatusIndicatorState {
+        showsUnreadSessionAccent: Bool
+    ) -> SessionStatusKind? {
+        guard showsUnreadSessionAccent else {
+            return nil
+        }
+
         switch status.kind {
+        case .needsApproval, .ready, .error:
+            return status.kind
+        case .idle, .working:
+            return nil
+        }
+    }
+
+    static func sessionIndicatorState(for kind: SessionStatusKind) -> SessionStatusIndicatorState {
+        switch kind {
         case .working:
             return .spinner
-        case .needsApproval, .ready, .error:
-            return showsUnreadIndicator ? .dot : .hidden
-        case .idle:
+        case .needsApproval, .ready, .error, .idle:
             return .hidden
         }
     }
@@ -558,21 +579,6 @@ struct SidebarView: View {
             return ".../\(lastComponent)"
         }
         return pathString.abbreviatingWithTildeInPath
-    }
-
-    private func sessionStatusBadgeLabel(for kind: SessionStatusKind) -> String {
-        switch kind {
-        case .idle:
-            return "idle"
-        case .working:
-            return "working"
-        case .needsApproval:
-            return "needs approval"
-        case .ready:
-            return "ready"
-        case .error:
-            return "error"
-        }
     }
 
     private func shortcutBadge(_ label: String) -> some View {

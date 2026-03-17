@@ -12,6 +12,91 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(SidebarView.abbreviatedPathLabel("relative"), "relative")
     }
 
+    func testSessionStatusChipOnlyShowsForWorking() {
+        XCTAssertTrue(SidebarView.showsSessionStatusChip(for: .working))
+        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .idle))
+        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .needsApproval))
+        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .ready))
+        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .error))
+    }
+
+    func testUnreadSessionOutlineOnlyShowsForUnreadAttentionStates() {
+        XCTAssertNil(
+            SidebarView.unreadSessionOutlineKind(
+                for: SessionStatus(kind: .idle, summary: "Idle"),
+                showsUnreadSessionAccent: true
+            )
+        )
+        XCTAssertNil(
+            SidebarView.unreadSessionOutlineKind(
+                for: SessionStatus(kind: .working, summary: "Working"),
+                showsUnreadSessionAccent: true
+            )
+        )
+        XCTAssertNil(
+            SidebarView.unreadSessionOutlineKind(
+                for: SessionStatus(kind: .ready, summary: "Ready"),
+                showsUnreadSessionAccent: false
+            )
+        )
+        XCTAssertEqual(
+            SidebarView.unreadSessionOutlineKind(
+                for: SessionStatus(kind: .needsApproval, summary: "Needs approval"),
+                showsUnreadSessionAccent: true
+            ),
+            .needsApproval
+        )
+        XCTAssertEqual(
+            SidebarView.unreadSessionOutlineKind(
+                for: SessionStatus(kind: .ready, summary: "Ready"),
+                showsUnreadSessionAccent: true
+            ),
+            .ready
+        )
+        XCTAssertEqual(
+            SidebarView.unreadSessionOutlineKind(
+                for: SessionStatus(kind: .error, summary: "Error"),
+                showsUnreadSessionAccent: true
+            ),
+            .error
+        )
+    }
+
+    func testSessionIndicatorStateShowsSpinnerOnlyForWorking() {
+        XCTAssertEqual(SidebarView.sessionIndicatorState(for: .working), .spinner)
+        XCTAssertEqual(SidebarView.sessionIndicatorState(for: .idle), .hidden)
+        XCTAssertEqual(SidebarView.sessionIndicatorState(for: .needsApproval), .hidden)
+        XCTAssertEqual(SidebarView.sessionIndicatorState(for: .ready), .hidden)
+        XCTAssertEqual(SidebarView.sessionIndicatorState(for: .error), .hidden)
+    }
+
+    func testReadySessionDoesNotRenderStatusChipLabel() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "sess-ready",
+            sessionStatus: SessionStatus(kind: .ready, summary: "Ready", detail: "Completed response")
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains("Completed response"))
+        XCTAssertFalse(
+            textValues.contains("ready"),
+            "Sidebar text values should not include a ready chip label: \(textValues)"
+        )
+    }
+
+    func testWorkingSessionStillRendersStatusChipLabel() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "sess-working",
+            sessionStatus: SessionStatus(kind: .working, summary: "Working", detail: "Streaming changes")
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(textValues.contains("working"))
+        XCTAssertFalse(textValues.contains("ready"))
+        XCTAssertFalse(textValues.contains("needs approval"))
+        XCTAssertFalse(textValues.contains("error"))
+    }
+
     func testBusySubtitleUpdatesWhenRuntimeRegistryPublishesChange() throws {
         let state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
@@ -59,6 +144,56 @@ final class SidebarViewTests: XCTestCase {
             expectation.fulfill()
         }
         wait(for: [expectation], timeout: 1)
+    }
+
+    private func makeSidebarHostingView(
+        sessionID: String,
+        sessionStatus: SessionStatus
+    ) throws -> NSView {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.workspaceIDs.first)
+        let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        sessionRuntimeStore.startSession(
+            sessionID: sessionID,
+            agent: .codex,
+            panelID: panelID,
+            windowID: windowID,
+            workspaceID: workspaceID,
+            cwd: "/repo/sidebar",
+            repoRoot: "/repo",
+            at: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        sessionRuntimeStore.updateStatus(
+            sessionID: sessionID,
+            status: sessionStatus,
+            at: Date(timeIntervalSince1970: 1_700_000_001)
+        )
+
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+        return hostingView
     }
 
     private func renderedTextValues(in rootView: NSView) -> [String] {

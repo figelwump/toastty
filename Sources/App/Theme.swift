@@ -31,8 +31,8 @@ enum ToastyTheme {
     static let sessionWorkingBackground = Color(hex: 0x8B5E34, alpha: 0.12)
     static let sessionNeedsApprovalText = Color(hex: 0xE8A849)
     static let sessionNeedsApprovalBackground = Color(hex: 0xE8A849, alpha: 0.12)
-    static let sessionReadyText = Color(hex: 0xFDF8EC)
-    static let sessionReadyBackground = Color(hex: 0xFDF8EC, alpha: 0.1)
+    static let sessionReadyText = Color(hex: 0x5DBB63)
+    static let sessionReadyBackground = Color(hex: 0x5DBB63, alpha: 0.12)
     static let sessionErrorText = Color(hex: 0xD4553A)
     static let sessionErrorBackground = Color(hex: 0xD4553A, alpha: 0.12)
 
@@ -105,6 +105,10 @@ enum ToastyTheme {
     }
 
     static func sessionStatusIndicatorColor(for kind: SessionStatusKind) -> Color {
+        sessionStatusTextColor(for: kind)
+    }
+
+    static func sessionStatusOutlineColor(for kind: SessionStatusKind) -> Color {
         sessionStatusTextColor(for: kind)
     }
 
