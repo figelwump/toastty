@@ -40,7 +40,7 @@ These flags are read by the app itself when Toastty launches normally.
 | Flag | Default | Effect |
 |---|---|---|
 | `TOASTTY_RUNTIME_HOME` | unset | Enables an isolated runtime sandbox for dev/test runs. When set, Toastty stores config, workspace layouts, terminal profiles, the default log path, `instance.json`, and UI-managed defaults under this directory instead of the shared user locations. The default automation socket path is also derived from this sandbox identity, but lives under the system temp directory to stay within Unix socket path-length limits. Explicit overrides such as `TOASTTY_TERMINAL_PROFILES_PATH`, `TOASTTY_LOG_FILE`, and `TOASTTY_SOCKET_PATH` still win. |
-| `TOASTTY_DEV_WORKTREE_ROOT` | unset | Enables a stable worktree-derived runtime sandbox for manual dev/debug/test runs when `TOASTTY_RUNTIME_HOME` is not set. Toastty derives `artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` under this worktree root, then uses that runtime home for config, workspace layouts, terminal profiles, logs, `instance.json`, and UI-managed defaults. Use this for Xcode Run actions or repeated manual launches from one worktree. |
+| `TOASTTY_DEV_WORKTREE_ROOT` | unset | Enables a stable worktree-derived runtime sandbox for manual dev/debug/test runs when `TOASTTY_RUNTIME_HOME` is not set. Toastty derives `artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` under this worktree root, then uses that runtime home for config, workspace layouts, terminal profiles, logs, `instance.json`, and UI-managed defaults. Use this for repeated manual launches from one worktree. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set it to `$(SRCROOT)`. |
 | `TOASTTY_GHOSTTY_CONFIG_PATH` | unset | Overrides Ghostty config loading with a specific config file. Must be an absolute path or use a `~/` prefix. Toastty loads that file and then Ghostty recursive includes. |
 | `TOASTTY_GHOSTTY_PARSE_CLI_ARGS` | unset | If enabled, lets Ghostty parse Toastty's process arguments as Ghostty CLI args before config finalization. Off by default. |
 | `GHOSTTY_RESOURCES_DIR` | auto-detected | Advanced override for Ghostty shell-integration resources. If unset or invalid, Toastty tries to auto-detect a usable resources directory. |
@@ -255,7 +255,7 @@ TOASTTY_LOG_STDERR=1 \
 /path/to/Toastty.app/Contents/MacOS/Toastty
 ```
 
-For Xcode Run actions, set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` once in the scheme environment to give each worktree a stable runtime home without hand-editing labels.
+For Tuist-generated Xcode Run actions, `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` is already present in the `ToasttyApp` and `ToasttyApp-Release` schemes.
 
 Launch Toastty in automation mode:
 

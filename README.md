@@ -167,7 +167,7 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 
 Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
 
-For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, the default automation socket, and UI-managed defaults inside that runtime home instead of using the shared user locations. For Xcode Run actions, set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` once in the scheme environment.
+For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, the default automation socket, and UI-managed defaults inside that runtime home instead of using the shared user locations. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`.
 
 Today that means:
 

@@ -16,7 +16,7 @@ final class TerminalProfileStoreTests: XCTestCase {
             homeDirectoryURL: homeDirectoryURL
         )
 
-        let store = TerminalProfileStore(homeDirectoryPath: homeDirectoryURL.path)
+        let store = TerminalProfileStore(homeDirectoryPath: homeDirectoryURL.path, environment: [:])
 
         XCTAssertEqual(store.catalog.profiles.map(\.id), ["zmx"])
         XCTAssertEqual(store.catalog.profiles.map(\.badgeLabel), ["ZMX"])
@@ -32,7 +32,7 @@ final class TerminalProfileStoreTests: XCTestCase {
             """,
             homeDirectoryURL: homeDirectoryURL
         )
-        let store = TerminalProfileStore(homeDirectoryPath: homeDirectoryURL.path)
+        let store = TerminalProfileStore(homeDirectoryPath: homeDirectoryURL.path, environment: [:])
 
         try writeProfiles(
             """
@@ -65,7 +65,7 @@ final class TerminalProfileStoreTests: XCTestCase {
             """,
             homeDirectoryURL: homeDirectoryURL
         )
-        let store = TerminalProfileStore(homeDirectoryPath: homeDirectoryURL.path)
+        let store = TerminalProfileStore(homeDirectoryPath: homeDirectoryURL.path, environment: [:])
 
         try writeProfiles(
             """
@@ -98,7 +98,7 @@ private func makeTemporaryHomeDirectory() throws -> URL {
 }
 
 private func writeProfiles(_ contents: String, homeDirectoryURL: URL) throws {
-    let fileURL = TerminalProfilesFile.fileURL(homeDirectoryPath: homeDirectoryURL.path)
+    let fileURL = TerminalProfilesFile.fileURL(homeDirectoryPath: homeDirectoryURL.path, environment: [:])
     try FileManager.default.createDirectory(
         at: fileURL.deletingLastPathComponent(),
         withIntermediateDirectories: true

@@ -8,7 +8,8 @@ struct TerminalProfilesFileTests {
         let fileManager = InMemoryTerminalProfilesFileManager(templateContents: TerminalProfilesFile.templateContents())
         let catalog = try TerminalProfilesFile.load(
             fileManager: fileManager.fileManager,
-            homeDirectoryPath: fileManager.rootURL.path
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
         )
 
         #expect(catalog.profiles.isEmpty)
@@ -30,7 +31,8 @@ struct TerminalProfilesFileTests {
         let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
         let catalog = try TerminalProfilesFile.load(
             fileManager: fileManager.fileManager,
-            homeDirectoryPath: fileManager.rootURL.path
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
         )
 
         #expect(catalog.profiles.map(\.id) == ["zmx", "ssh-prod"])
@@ -44,18 +46,20 @@ struct TerminalProfilesFileTests {
 
         try TerminalProfilesFile.ensureTemplateExists(
             fileManager: fileManager.fileManager,
-            homeDirectoryPath: fileManager.rootURL.path
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
         )
         let createdContents = try #require(
-            fileManager.contents(at: TerminalProfilesFile.fileURL(homeDirectoryPath: fileManager.rootURL.path).path)
+            fileManager.contents(at: TerminalProfilesFile.fileURL(homeDirectoryPath: fileManager.rootURL.path, environment: [:]).path)
         )
 
         try TerminalProfilesFile.ensureTemplateExists(
             fileManager: fileManager.fileManager,
-            homeDirectoryPath: fileManager.rootURL.path
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
         )
         let secondContents = try #require(
-            fileManager.contents(at: TerminalProfilesFile.fileURL(homeDirectoryPath: fileManager.rootURL.path).path)
+            fileManager.contents(at: TerminalProfilesFile.fileURL(homeDirectoryPath: fileManager.rootURL.path, environment: [:]).path)
         )
 
         #expect(createdContents == TerminalProfilesFile.templateContents())
@@ -89,7 +93,8 @@ struct TerminalProfilesFileTests {
         #expect(throws: TerminalProfilesParseError(line: 1, message: "[zmx] is missing startupCommand")) {
             _ = try TerminalProfilesFile.load(
                 fileManager: fileManager.fileManager,
-                homeDirectoryPath: fileManager.rootURL.path
+                homeDirectoryPath: fileManager.rootURL.path,
+                environment: [:]
             )
         }
     }
@@ -106,7 +111,8 @@ struct TerminalProfilesFileTests {
         #expect(throws: TerminalProfilesParseError(line: 1, message: "invalid profile ID '--ssh'")) {
             _ = try TerminalProfilesFile.load(
                 fileManager: fileManager.fileManager,
-                homeDirectoryPath: fileManager.rootURL.path
+                homeDirectoryPath: fileManager.rootURL.path,
+                environment: [:]
             )
         }
     }
@@ -120,7 +126,8 @@ struct TerminalProfilesFileTests {
 
         let catalog = try TerminalProfilesFile.load(
             fileManager: fileManager.fileManager,
-            homeDirectoryPath: fileManager.rootURL.path
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
         )
 
         #expect(catalog.profiles.map(\.displayName) == ["SSH # Prod"])
@@ -178,7 +185,8 @@ struct TerminalProfilesFileTests {
         let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
         let catalog = try TerminalProfilesFile.load(
             fileManager: fileManager.fileManager,
-            homeDirectoryPath: fileManager.rootURL.path
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
         )
 
         #expect(catalog.profiles.map(\.shortcutKey) == [Character("z"), Character("s")])
@@ -199,7 +207,8 @@ struct TerminalProfilesFileTests {
         let fileManager = InMemoryTerminalProfilesFileManager(templateContents: contents)
         let catalog = try TerminalProfilesFile.load(
             fileManager: fileManager.fileManager,
-            homeDirectoryPath: fileManager.rootURL.path
+            homeDirectoryPath: fileManager.rootURL.path,
+            environment: [:]
         )
 
         #expect(catalog.profiles[0].shortcutKey == Character("z"))
@@ -222,7 +231,8 @@ struct TerminalProfilesFileTests {
         )) {
             _ = try TerminalProfilesFile.load(
                 fileManager: fileManager.fileManager,
-                homeDirectoryPath: fileManager.rootURL.path
+                homeDirectoryPath: fileManager.rootURL.path,
+                environment: [:]
             )
         }
     }
@@ -248,7 +258,8 @@ struct TerminalProfilesFileTests {
         )) {
             _ = try TerminalProfilesFile.load(
                 fileManager: fileManager.fileManager,
-                homeDirectoryPath: fileManager.rootURL.path
+                homeDirectoryPath: fileManager.rootURL.path,
+                environment: [:]
             )
         }
     }
@@ -269,7 +280,8 @@ struct TerminalProfilesFileTests {
         )) {
             _ = try TerminalProfilesFile.load(
                 fileManager: fileManager.fileManager,
-                homeDirectoryPath: fileManager.rootURL.path
+                homeDirectoryPath: fileManager.rootURL.path,
+                environment: [:]
             )
         }
     }
@@ -302,7 +314,7 @@ private final class InMemoryTerminalProfilesFileManager {
         try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
 
         if let templateContents {
-            let fileURL = TerminalProfilesFile.fileURL(homeDirectoryPath: rootURL.path)
+            let fileURL = TerminalProfilesFile.fileURL(homeDirectoryPath: rootURL.path, environment: [:])
             try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? templateContents.write(to: fileURL, atomically: true, encoding: .utf8)
         }

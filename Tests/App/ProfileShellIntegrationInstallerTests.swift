@@ -7,6 +7,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/bin/zsh" }
         )
 
@@ -34,6 +35,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "-zsh" }
         )
 
@@ -52,6 +54,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/bin/zsh" }
         )
 
@@ -79,6 +82,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/bin/zsh" }
         )
 
@@ -108,6 +112,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/bin/zsh" }
         )
         let plan = try installer.installationPlan()
@@ -137,6 +142,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/bin/zsh" }
         )
         let plan = try installer.installationPlan()
@@ -166,6 +172,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/bin/bash" }
         )
 
@@ -197,6 +204,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/bin/bash" }
         )
 
@@ -216,6 +224,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
             shellPathProvider: { "/opt/homebrew/bin/fish" }
         )
 

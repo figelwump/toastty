@@ -5,7 +5,10 @@ import XCTest
 final class ToasttyConfigStoreTests: XCTestCase {
     func testLoadParsesTerminalFontSizeAndDefaultTerminalProfile() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
-        let configURL = ToasttyConfigStore.configFileURL(homeDirectoryPath: homeDirectoryURL.path)
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
         try FileManager.default.createDirectory(
             at: configURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -15,7 +18,10 @@ final class ToasttyConfigStoreTests: XCTestCase {
         default-terminal-profile = "zmx"
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
-        let config = ToasttyConfigStore.load(homeDirectoryPath: homeDirectoryURL.path)
+        let config = ToasttyConfigStore.load(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
 
         XCTAssertEqual(config.terminalFontSizePoints, 14)
         XCTAssertEqual(config.defaultTerminalProfileID, "zmx")
@@ -23,7 +29,10 @@ final class ToasttyConfigStoreTests: XCTestCase {
 
     func testLoadStripsInlineCommentsOutsideQuotedProfileIDs() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
-        let configURL = ToasttyConfigStore.configFileURL(homeDirectoryPath: homeDirectoryURL.path)
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
         try FileManager.default.createDirectory(
             at: configURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -33,7 +42,10 @@ final class ToasttyConfigStoreTests: XCTestCase {
         default-terminal-profile = "ssh#prod" # still valid
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
-        let config = ToasttyConfigStore.load(homeDirectoryPath: homeDirectoryURL.path)
+        let config = ToasttyConfigStore.load(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
 
         XCTAssertEqual(config.terminalFontSizePoints, 14)
         XCTAssertEqual(config.defaultTerminalProfileID, "ssh#prod")
@@ -42,10 +54,13 @@ final class ToasttyConfigStoreTests: XCTestCase {
     func testEnsureTemplateExistsWritesCommentedExamples() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
 
-        try ToasttyConfigStore.ensureTemplateExists(homeDirectoryPath: homeDirectoryURL.path)
+        try ToasttyConfigStore.ensureTemplateExists(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
 
         let contents = try String(
-            contentsOf: ToasttyConfigStore.configFileURL(homeDirectoryPath: homeDirectoryURL.path),
+            contentsOf: ToasttyConfigStore.configFileURL(homeDirectoryPath: homeDirectoryURL.path, environment: [:]),
             encoding: .utf8
         )
         XCTAssertEqual(
@@ -80,11 +95,17 @@ final class ToasttyConfigStoreTests: XCTestCase {
         )
         try "terminal-font-size = 15\n".write(to: legacyConfigURL, atomically: true, encoding: .utf8)
 
-        try ToasttyConfigStore.ensureTemplateExists(homeDirectoryPath: homeDirectoryURL.path)
+        try ToasttyConfigStore.ensureTemplateExists(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
 
         XCTAssertFalse(
             FileManager.default.fileExists(
-                atPath: ToasttyConfigStore.configFileURL(homeDirectoryPath: homeDirectoryURL.path).path
+                atPath: ToasttyConfigStore.configFileURL(
+                    homeDirectoryPath: homeDirectoryURL.path,
+                    environment: [:]
+                ).path
             )
         )
     }

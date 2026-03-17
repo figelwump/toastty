@@ -327,6 +327,7 @@ let project = Project(
                 executable: .project(path: .relativeToRoot("."), target: "ToasttyApp"),
                 arguments: .arguments(
                     environmentVariables: [
+                        "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
                         "TOASTTY_LOG_LEVEL": .environmentVariable(value: "debug", isEnabled: true),
                     ]
                 )
@@ -341,7 +342,12 @@ let project = Project(
             ),
             runAction: .runAction(
                 configuration: .release,
-                executable: .project(path: .relativeToRoot("."), target: "ToasttyApp")
+                executable: .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                arguments: .arguments(
+                    environmentVariables: [
+                        "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
+                    ]
+                )
             ),
             archiveAction: .archiveAction(
                 configuration: .release

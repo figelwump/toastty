@@ -21,7 +21,7 @@ Do not use this skill for release builds, pure unit-test work, or smoke/trace ca
 
 1. Treat the worktree as the isolation boundary for manual dev runs.
 2. Prefer `TOASTTY_RUNTIME_HOME` when a task needs a one-off sandbox. Otherwise set `TOASTTY_DEV_WORKTREE_ROOT` to the worktree root and let Toastty derive a stable runtime home under `artifacts/dev-runs/`.
-3. For Xcode Run actions, use `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` instead of hand-editing labels or run IDs.
+3. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Xcode Run schemes already use `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`. Preserve that behavior instead of hand-editing labels or run IDs.
 4. Launch the app, then read `instance.json` from the runtime home before using `peekaboo`.
 5. Use the PID from `instance.json` for `peekaboo ... --pid <pid>`. Do not target Toastty by app name if a PID is available.
 6. Before any `peekaboo` call, confirm the PID from `instance.json` is still alive. If it is stale, relaunch instead of guessing.
