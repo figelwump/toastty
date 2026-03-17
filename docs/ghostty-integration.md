@@ -73,11 +73,19 @@ Release DMG builds require a complete release sidecar with a clean Ghostty sourc
 After installing an artifact, regenerate the workspace:
 
 ```bash
-tuist install
-tuist generate
+./scripts/dev/bootstrap-worktree.sh
 ```
 
 Keeping `Dependencies/` gitignored is intentional. The source repository documents how to build Ghostty, but does not vendor the built binaries.
+
+For a fresh linked Toastty worktree that should reuse an already-installed Ghostty artifact from another Toastty checkout, run:
+
+```bash
+./scripts/dev/bootstrap-worktree.sh
+```
+
+The helper links ignored `Dependencies/GhosttyKit*` entries into the current worktree when needed, then runs `tuist install` and `tuist generate --no-open`.
+Those links are symlinks back to the source Toastty worktree, not copied xcframeworks.
 
 ## Toastty build behavior
 

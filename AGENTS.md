@@ -3,6 +3,7 @@
 ## Build & Generate
 - **Source of truth:** `Project.swift` — never hand-edit generated Xcode project/workspace files.
 - **Install packages:** `tuist install` after cloning and whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes. Repo scripts do this automatically where needed.
+- **Fresh worktree bootstrap:** `./scripts/dev/bootstrap-worktree.sh` links local Ghostty artifacts from another Toastty worktree when needed, then runs `tuist install` and `tuist generate --no-open`.
 - **Regenerate:** `tuist generate` after any project/dependency/build-setting change, or after source file adds/renames/deletes or branch switches. The generated `.xcodeproj`/`.xcworkspace` are gitignored and never updated by Git, leaving Xcode with stale references (symptom: `Build input file cannot be found`).
 - **Build:** `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
 - **Full gate:** `./scripts/automation/check.sh` (generate + build + test)
@@ -37,6 +38,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - For any local dev/debug/test Toastty run, use an isolated runtime home and per-run filesystem paths. Treat PID, bundle path, and per-run directories as required targeting data, not optional bookkeeping.
 - For terminal or agent-driven dev runs, either set `TOASTTY_RUNTIME_HOME` explicitly or set `TOASTTY_DEV_WORKTREE_ROOT` to the repo/worktree root and let Toastty derive a stable runtime home under `artifacts/dev-runs/`.
 - Tuist-generated Xcode Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` for `ToasttyApp` and `ToasttyApp-Release`. Keep that behavior when editing `Project.swift`.
+- Before a Ghostty-backed build from a fresh worktree, run `./scripts/dev/bootstrap-worktree.sh`. The smoke, shortcut-trace, and check helpers already do this for you.
 - The automation helpers now default to `artifacts/dev-runs/<RUN_ID>/...` and set unique `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, and `SOCKET_PATH` for each run. Follow the same pattern for any custom launch flow.
 - For `shortcut-trace.sh` or other trace-style runs, also use a unique `TRACE_LOG_PATH` per instance instead of a shared log path.
 - Capture the launched app PID and use PID-targeted tooling for validation whenever possible. Prefer `peekaboo ... --pid <pid>` and avoid generic `osascript` or app-name-only targeting when more than one Toastty instance may be running.
@@ -49,6 +51,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - **Default-on** when a local xcframework exists in `Dependencies/` and disable env is not set.
 - **Opt out:** `TUIST_DISABLE_GHOSTTY=1` (or alias `TOASTTY_DISABLE_GHOSTTY=1`)
 - **Install/update artifact:** `./scripts/ghostty/install-local-xcframework.sh`
+- **Bootstrap a fresh worktree:** `./scripts/dev/bootstrap-worktree.sh`
   - `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to pick variant
   - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework` to override source
 - **Config loading order:** `TOASTTY_GHOSTTY_CONFIG_PATH` > `$XDG_CONFIG_HOME/ghostty/config` > `~/.config/ghostty/config` > Ghostty defaults.

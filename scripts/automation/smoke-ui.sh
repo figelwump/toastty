@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-split-workspace}"
 DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
@@ -20,20 +21,9 @@ LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_XCFRAMEWORK_PATH=""
-if [[ -d "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH" ]]; then
-  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_DEBUG_XCFRAMEWORK_PATH"
-elif [[ -d "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH" ]]; then
-  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_RELEASE_XCFRAMEWORK_PATH"
-fi
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
 GHOSTTY_INPUT_READINESS_REQUIRED=0
-if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
-  GHOSTTY_INPUT_READINESS_REQUIRED=1
-fi
 RESTORE_GHOSTTY_ENABLED_WORKSPACE=0
-if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
-  RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
-fi
 DROP_IMAGE_PATH_TO_CLEANUP=""
 TERMINAL_PROFILES_PATH="$TOASTTY_RUNTIME_HOME/terminal-profiles.toml"
 PROFILE_SMOKE_PROFILE_ID="smoke-profile"
@@ -47,18 +37,6 @@ if ! command -v nc >/dev/null 2>&1; then
   echo "error: nc is required for socket requests" >&2
   exit 1
 fi
-
-run_tuist() {
-  if command -v sv >/dev/null 2>&1; then
-    sv exec -- tuist "$@"
-  else
-    tuist "$@"
-  fi
-}
-
-ensure_tuist_dependencies() {
-  run_tuist install >/dev/null
-}
 
 cleanup() {
   local exit_code=$?
@@ -75,7 +53,7 @@ cleanup() {
   if [[ "$RESTORE_GHOSTTY_ENABLED_WORKSPACE" == "1" ]]; then
     if ! (
       unset TUIST_DISABLE_GHOSTTY TOASTTY_DISABLE_GHOSTTY
-      run_tuist generate --no-open >/dev/null
+      "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null
     ); then
       echo "warning: failed to restore Ghostty-enabled workspace after fallback smoke run" >&2
     fi
@@ -94,8 +72,22 @@ badge = "SMOKE"
 startupCommand = "printf 'PROFILE:%s:%s\\\\n' \"\$TOASTTY_TERMINAL_PROFILE_ID\" \"\$TOASTTY_LAUNCH_REASON\"; printf '\\\\033]2;${PROFILE_SMOKE_TITLE}\\\\007'; sleep 2"
 EOF
 
-ensure_tuist_dependencies
-run_tuist generate --no-open >/dev/null
+if ! "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null; then
+  exit 1
+fi
+
+if [[ -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_DEBUG_XCFRAMEWORK_PATH"
+elif [[ -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_RELEASE_XCFRAMEWORK_PATH"
+fi
+if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
+  GHOSTTY_INPUT_READINESS_REQUIRED=1
+fi
+if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
+  RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
+fi
+
 xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \

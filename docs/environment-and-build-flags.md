@@ -227,8 +227,7 @@ These names appear in the repo but are not intended as public runtime knobs.
 Build without Ghostty:
 
 ```bash
-tuist install
-TUIST_DISABLE_GHOSTTY=1 tuist generate
+TUIST_DISABLE_GHOSTTY=1 ./scripts/dev/bootstrap-worktree.sh
 ```
 
 Install the local Debug Ghostty artifact:
@@ -237,6 +236,12 @@ Install the local Debug Ghostty artifact:
 GHOSTTY_XCFRAMEWORK_VARIANT=debug \
 GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
 ./scripts/ghostty/install-local-xcframework.sh
+```
+
+Bootstrap a fresh linked worktree so it can reuse Ghostty artifacts from another Toastty checkout:
+
+```bash
+./scripts/dev/bootstrap-worktree.sh
 ```
 
 Launch Toastty with a custom Ghostty config and stderr logging:

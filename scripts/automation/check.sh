@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 ARCH="$(uname -m)"
 if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   ARCH="arm64"
@@ -24,12 +26,8 @@ run_tuist() {
   fi
 }
 
-ensure_tuist_dependencies() {
-  run_tuist install >/dev/null
-}
-
 restore_default_workspace() {
-  run_tuist generate --no-open >/dev/null 2>&1 || true
+  "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null 2>&1 || true
 }
 
 validate_manifest_version_inputs() {
@@ -38,7 +36,7 @@ validate_manifest_version_inputs() {
 
   if ! TUIST_TOASTTY_VERSION="$MANIFEST_VALIDATION_VERSION" \
     TUIST_TOASTTY_BUILD_NUMBER="$MANIFEST_VALIDATION_BUILD_NUMBER" \
-    run_tuist generate --no-open >"$MANIFEST_VALIDATE_LOG" 2>&1; then
+    "$BOOTSTRAP_WORKTREE_SCRIPT" >"$MANIFEST_VALIDATE_LOG" 2>&1; then
     cat "$MANIFEST_VALIDATE_LOG" >&2
     return 1
   fi
@@ -54,7 +52,7 @@ validate_manifest_version_inputs() {
   fi
 
   if TUIST_TOASTTY_VERSION="" \
-    run_tuist generate --no-open >"$MANIFEST_EMPTY_VALUE_LOG" 2>&1; then
+    "$BOOTSTRAP_WORKTREE_SCRIPT" >"$MANIFEST_EMPTY_VALUE_LOG" 2>&1; then
     echo "expected empty manifest version input to fail generation" >&2
     return 1
   fi
@@ -65,14 +63,12 @@ validate_manifest_version_inputs() {
   fi
 }
 
-ensure_tuist_dependencies
-
 if ! validate_manifest_version_inputs; then
   restore_default_workspace
   exit 10
 fi
 
-if ! run_tuist generate --no-open; then
+if ! "$BOOTSTRAP_WORKTREE_SCRIPT"; then
   exit 10
 fi
 

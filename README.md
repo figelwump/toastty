@@ -37,11 +37,10 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 ```bash
 git clone https://github.com/figelwump/toastty.git
 cd toastty
-tuist install
-tuist generate
+./scripts/dev/bootstrap-worktree.sh
 ```
 
-`Project.swift` is the source of truth. The generated `toastty.xcworkspace` is not committed, so re-run `tuist generate` after manifest or file-layout changes. Re-run `tuist install` whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes.
+`Project.swift` is the source of truth. `./scripts/dev/bootstrap-worktree.sh` runs `tuist install` and `tuist generate --no-open`, and in a fresh linked worktree it also reuses local Ghostty xcframeworks from another Toastty worktree when available. The generated `toastty.xcworkspace` is not committed, so rerun the bootstrap script or `tuist generate` after manifest or file-layout changes. Re-run `tuist install` whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes.
 
 ### 2. Install sv
 
@@ -73,14 +72,13 @@ For the recommended upstream Ghostty build command, release note guidance, see [
 After installing, regenerate:
 
 ```bash
-tuist install
-tuist generate
+./scripts/dev/bootstrap-worktree.sh
 ```
 
 To build without Ghostty:
 
 ```bash
-TUIST_DISABLE_GHOSTTY=1 tuist generate
+TUIST_DISABLE_GHOSTTY=1 ./scripts/dev/bootstrap-worktree.sh
 ```
 
 ### 4. Build
@@ -168,6 +166,8 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
 
 For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, the default automation socket, and UI-managed defaults inside that runtime home instead of using the shared user locations. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`.
+
+For a fresh linked worktree that should reuse the Ghostty artifact from another Toastty checkout, run `./scripts/dev/bootstrap-worktree.sh` once before building. The helper creates symlinks back to the source worktree's `Dependencies/GhosttyKit*` artifacts, so rebuilding or replacing Ghostty there immediately affects linked worktrees. The smoke, shortcut-trace, and check helpers already do this automatically.
 
 Today that means:
 

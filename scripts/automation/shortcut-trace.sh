@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-shortcut-trace-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-split-workspace}"
 DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
@@ -38,11 +39,6 @@ if [[ "${TUIST_DISABLE_GHOSTTY:-0}" == "1" || "${TOASTTY_DISABLE_GHOSTTY:-0}" ==
   exit 1
 fi
 
-if [[ ! -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" && ! -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
-  echo "error: Ghostty xcframework missing or invalid: expected $GHOSTTY_DEBUG_XCFRAMEWORK_PATH or $GHOSTTY_RELEASE_XCFRAMEWORK_PATH" >&2
-  exit 1
-fi
-
 if ! command -v nc >/dev/null 2>&1; then
   echo "error: nc is required for socket requests" >&2
   exit 1
@@ -58,18 +54,6 @@ if ! command -v osascript >/dev/null 2>&1; then
   exit 1
 fi
 
-run_tuist() {
-  if command -v sv >/dev/null 2>&1; then
-    sv exec -- tuist "$@"
-  else
-    tuist "$@"
-  fi
-}
-
-ensure_tuist_dependencies() {
-  run_tuist install >/dev/null
-}
-
 cleanup() {
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" >/dev/null 2>&1 || true
@@ -77,6 +61,15 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+if ! "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null; then
+  exit 1
+fi
+
+if [[ ! -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" && ! -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  echo "error: Ghostty xcframework missing or invalid after bootstrap: expected $GHOSTTY_DEBUG_XCFRAMEWORK_PATH or $GHOSTTY_RELEASE_XCFRAMEWORK_PATH" >&2
+  exit 1
+fi
 
 send_request() {
   local command="$1"
@@ -322,8 +315,6 @@ capture_close_outcome() {
 
 cd "$ROOT_DIR"
 
-ensure_tuist_dependencies
-run_tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \
