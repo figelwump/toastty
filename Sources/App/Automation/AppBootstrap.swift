@@ -11,7 +11,10 @@ struct AppBootstrapResult {
 }
 
 enum AppBootstrap {
-    static func make(processInfo: ProcessInfo = .processInfo) -> AppBootstrapResult {
+    static func make(
+        processInfo: ProcessInfo = .processInfo,
+        defaultTerminalProfileID: String? = nil
+    ) -> AppBootstrapResult {
         ToasttyLog.info(
             "Bootstrapping app",
             category: .bootstrap,
@@ -22,10 +25,11 @@ enum AppBootstrap {
             environment: processInfo.environment
         ) else {
             let layoutPersistenceContext = WorkspaceLayoutPersistenceContext.resolve(processInfo: processInfo)
-            let state: AppState
+            var state: AppState
             let restoredTerminalPanelIDs: Set<UUID>
             if let restored = layoutPersistenceContext.loadState() {
                 state = restored.state
+                state.defaultTerminalProfileID = AppState.normalizedTerminalProfileID(defaultTerminalProfileID)
                 restoredTerminalPanelIDs = Self.restoredTerminalPanelIDs(in: state)
                 ToasttyLog.info(
                     "Restored workspace layout state",
@@ -37,7 +41,7 @@ enum AppBootstrap {
                     ]
                 )
             } else {
-                state = .bootstrap()
+                state = .bootstrap(defaultTerminalProfileID: defaultTerminalProfileID)
                 restoredTerminalPanelIDs = []
                 ToasttyLog.info(
                     "Launching without persisted layout state",

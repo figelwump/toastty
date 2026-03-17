@@ -5,7 +5,9 @@ Toastty is designed to run locally on your machine. The app itself does not send
 ## What Toastty writes locally
 
 - `~/.toastty/config`
-  - Toastty-specific preferences such as persisted terminal font overrides.
+  - User-authored Toastty defaults such as `terminal-font-size` and `default-terminal-profile`.
+- macOS `UserDefaults` for Toastty
+  - UI-managed settings that Toastty remembers locally, currently the terminal font-size override changed from the menu.
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots.
 - By default, `~/Library/Logs/Toastty/toastty.log`

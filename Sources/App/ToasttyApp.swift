@@ -207,15 +207,32 @@ struct ToasttyApp: App {
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
     init() {
+        let processInfo = ProcessInfo.processInfo
         Self.ensureTerminalProfilesTemplateExists()
         Self.configureWindowPersistenceDefaults()
-        let bootstrap = AppBootstrap.make()
+        let usesPersistentPreferences = AutomationConfig.parse(
+            arguments: processInfo.arguments,
+            environment: processInfo.environment
+        ) == nil
+        let terminalProfileStore = TerminalProfileStore()
+        let initialToasttyConfig = usesPersistentPreferences ? ToasttyConfigStore.load() : ToasttyConfig()
+        let initialToasttySettings = usesPersistentPreferences ? ToasttySettingsStore.load() : ToasttySettings()
+        let initialDefaultTerminalProfileID = usesPersistentPreferences
+            ? Self.resolvedDefaultTerminalProfileID(
+                configuredDefaultTerminalProfileID: initialToasttyConfig.defaultTerminalProfileID,
+                terminalProfileCatalog: terminalProfileStore.catalog,
+                source: "startup"
+            )
+            : nil
+        let bootstrap = AppBootstrap.make(
+            processInfo: processInfo,
+            defaultTerminalProfileID: initialDefaultTerminalProfileID
+        )
         let persistTerminalFontPreference = bootstrap.automationConfig == nil
         let store = AppStore(
             state: bootstrap.state,
             persistTerminalFontPreference: persistTerminalFontPreference
         )
-        let terminalProfileStore = TerminalProfileStore()
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         terminalRuntimeRegistry.setTerminalProfileProvider(
             terminalProfileStore,
@@ -229,7 +246,13 @@ struct ToasttyApp: App {
         systemNotificationResponseCoordinator.installDelegate()
         let slotFocusRestoreCoordinator = SlotFocusRestoreCoordinator()
         if persistTerminalFontPreference {
-            Self.applyInitialTerminalFontState(to: store)
+            Self.applyInitialToasttyConfigState(
+                to: store,
+                terminalProfileCatalog: terminalProfileStore.catalog,
+                toasttyConfig: initialToasttyConfig,
+                toasttySettings: initialToasttySettings
+            )
+            Self.ensureToasttyConfigTemplateExists()
         }
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
         let focusedPanelCommandController = FocusedPanelCommandController(
@@ -443,17 +466,40 @@ struct ToasttyApp: App {
             failureMessages.append(error.localizedDescription)
         }
 
+        let toasttyConfig = ToasttyConfigStore.load()
+        let toasttySettings = ToasttySettingsStore.load()
+        Self.applyConfiguredDefaultTerminalProfile(
+            to: store,
+            terminalProfileCatalog: terminalProfileStore.catalog,
+            configuredDefaultTerminalProfileID: toasttyConfig.defaultTerminalProfileID,
+            source: "reload"
+        )
+
         #if TOASTTY_HAS_GHOSTTY_KIT
         let runtimeManager = GhosttyRuntimeManager.shared
         if runtimeManager.reloadConfiguration() {
-            let toasttyConfig = ToasttyConfigStore.load()
-            _ = store.send(.setConfiguredTerminalFont(points: runtimeManager.configuredTerminalFontPoints))
-            if toasttyConfig.terminalFontSizePoints == nil {
-                _ = store.send(.resetGlobalTerminalFont)
-            }
+            Self.applyToasttyTerminalFontState(
+                to: store,
+                toasttyConfig: toasttyConfig,
+                toasttySettings: toasttySettings,
+                ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
+            )
         } else {
             failureMessages.append("Failed to reload embedded Ghostty configuration.")
+            Self.applyToasttyTerminalFontState(
+                to: store,
+                toasttyConfig: toasttyConfig,
+                toasttySettings: toasttySettings,
+                ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
+            )
         }
+        #else
+        Self.applyToasttyTerminalFontState(
+            to: store,
+            toasttyConfig: toasttyConfig,
+            toasttySettings: toasttySettings,
+            ghosttyConfiguredTerminalFontPoints: nil
+        )
         #endif
 
         guard failureMessages.isEmpty == false else { return }
@@ -467,13 +513,83 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private static func applyInitialTerminalFontState(to store: AppStore) {
+    private static func applyInitialToasttyConfigState(
+        to store: AppStore,
+        terminalProfileCatalog: TerminalProfileCatalog,
+        toasttyConfig: ToasttyConfig,
+        toasttySettings: ToasttySettings
+    ) {
+        applyConfiguredDefaultTerminalProfile(
+            to: store,
+            terminalProfileCatalog: terminalProfileCatalog,
+            configuredDefaultTerminalProfileID: toasttyConfig.defaultTerminalProfileID,
+            source: "startup"
+        )
+
         #if TOASTTY_HAS_GHOSTTY_KIT
-        _ = store.send(.setConfiguredTerminalFont(points: GhosttyRuntimeManager.shared.configuredTerminalFontPoints))
+        let ghosttyConfiguredTerminalFontPoints = GhosttyRuntimeManager.shared.configuredTerminalFontPoints
+        #else
+        let ghosttyConfiguredTerminalFontPoints: Double? = nil
         #endif
 
-        let toasttyConfig = ToasttyConfigStore.load()
-        if let persistedFontSizePoints = toasttyConfig.terminalFontSizePoints {
+        applyToasttyTerminalFontState(
+            to: store,
+            toasttyConfig: toasttyConfig,
+            toasttySettings: toasttySettings,
+            ghosttyConfiguredTerminalFontPoints: ghosttyConfiguredTerminalFontPoints
+        )
+    }
+
+    private static func resolvedDefaultTerminalProfileID(
+        configuredDefaultTerminalProfileID: String?,
+        terminalProfileCatalog: TerminalProfileCatalog,
+        source: String
+    ) -> String? {
+        guard let configuredDefaultTerminalProfileID = AppState.normalizedTerminalProfileID(
+            configuredDefaultTerminalProfileID
+        ) else {
+            return nil
+        }
+        guard terminalProfileCatalog.profile(id: configuredDefaultTerminalProfileID) != nil else {
+            ToasttyLog.warning(
+                "Configured default terminal profile is unavailable; new terminals will remain unprofiled",
+                category: .bootstrap,
+                metadata: [
+                    "profile_id": configuredDefaultTerminalProfileID,
+                    "source": source,
+                ]
+            )
+            return nil
+        }
+        return configuredDefaultTerminalProfileID
+    }
+
+    @MainActor
+    private static func applyConfiguredDefaultTerminalProfile(
+        to store: AppStore,
+        terminalProfileCatalog: TerminalProfileCatalog,
+        configuredDefaultTerminalProfileID: String?,
+        source: String
+    ) {
+        let resolvedDefaultTerminalProfileID = resolvedDefaultTerminalProfileID(
+            configuredDefaultTerminalProfileID: configuredDefaultTerminalProfileID,
+            terminalProfileCatalog: terminalProfileCatalog,
+            source: source
+        )
+        _ = store.send(.setDefaultTerminalProfile(profileID: resolvedDefaultTerminalProfileID))
+    }
+
+    @MainActor
+    private static func applyToasttyTerminalFontState(
+        to store: AppStore,
+        toasttyConfig: ToasttyConfig,
+        toasttySettings: ToasttySettings,
+        ghosttyConfiguredTerminalFontPoints: Double?
+    ) {
+        let configuredBaseline = toasttyConfig.terminalFontSizePoints ?? ghosttyConfiguredTerminalFontPoints
+        _ = store.send(.setConfiguredTerminalFont(points: configuredBaseline))
+
+        if let persistedFontSizePoints = toasttySettings.terminalFontSizePoints {
             _ = store.send(.setGlobalTerminalFont(points: persistedFontSizePoints))
         } else {
             _ = store.send(.resetGlobalTerminalFont)
@@ -500,6 +616,21 @@ struct ToasttyApp: App {
                 category: .bootstrap,
                 metadata: [
                     "path": TerminalProfilesFile.fileURL().path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+    }
+
+    private static func ensureToasttyConfigTemplateExists() {
+        do {
+            try ToasttyConfigStore.ensureTemplateExists()
+        } catch {
+            ToasttyLog.warning(
+                "Failed to ensure Toastty config template exists",
+                category: .bootstrap,
+                metadata: [
+                    "path": ToasttyConfigStore.configFileURL().path,
                     "error": error.localizedDescription,
                 ]
             )

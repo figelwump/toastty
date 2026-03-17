@@ -180,9 +180,9 @@ final class AppStore: ObservableObject {
 
         switch action {
         case .resetGlobalTerminalFont:
-            ToasttyConfigStore.persistTerminalFontSizePoints(nil)
+            ToasttySettingsStore.persistTerminalFontSizePoints(nil)
         case .increaseGlobalTerminalFont, .decreaseGlobalTerminalFont, .setGlobalTerminalFont:
-            ToasttyConfigStore.persistTerminalFontSizePoints(nextState.globalTerminalFontPoints)
+            ToasttySettingsStore.persistTerminalFontSizePoints(nextState.globalTerminalFontPoints)
         default:
             break
         }

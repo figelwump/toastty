@@ -12,6 +12,22 @@ struct AppStateCodableTests {
     }
 
     @Test
+    func bootstrapBindsInitialTerminalToConfiguredDefaultProfile() throws {
+        let state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+
+        guard case .terminal(let terminalState) = workspace.panels[panelID] else {
+            Issue.record("Expected bootstrap panel to be terminal")
+            return
+        }
+
+        #expect(state.defaultTerminalProfileID == "zmx")
+        #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+    }
+
+    @Test
     func focusedPanelModeFlagResetsWhenDecodingAppState() throws {
         var state = AppState.bootstrap()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
