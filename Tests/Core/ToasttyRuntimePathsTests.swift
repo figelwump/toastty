@@ -11,6 +11,9 @@ struct ToasttyRuntimePathsTests {
         )
 
         #expect(paths.isRuntimeHomeEnabled == false)
+        #expect(paths.runtimeHomeStrategy == .userHome)
+        #expect(paths.worktreeRootURL == nil)
+        #expect(paths.runtimeLabel == nil)
         #expect(paths.configFileURL.path == "/tmp/toastty-home/.toastty/config")
         #expect(paths.workspaceLayoutsFileURL.path == "/tmp/toastty-home/.toastty/workspace-layout-profiles.json")
         #expect(paths.terminalProfilesFileURL.path == "/tmp/toastty-home/.toastty/terminal-profiles.toml")
@@ -33,6 +36,8 @@ struct ToasttyRuntimePathsTests {
         )
 
         #expect(first.runtimeHomeURL?.path == runtimeHomePath)
+        #expect(first.runtimeHomeStrategy == .explicitRuntimeHome)
+        #expect(first.runtimeLabel == nil)
         #expect(first.configFileURL.path == "\(runtimeHomePath)/config")
         #expect(first.workspaceLayoutsFileURL.path == "\(runtimeHomePath)/workspace-layout-profiles.json")
         #expect(first.terminalProfilesFileURL.path == "\(runtimeHomePath)/terminal-profiles.toml")
@@ -42,6 +47,45 @@ struct ToasttyRuntimePathsTests {
         let firstSuiteName = try #require(first.userDefaultsSuiteName)
         let secondSuiteName = try #require(second.userDefaultsSuiteName)
         #expect(firstSuiteName == secondSuiteName)
+    }
+
+    @Test
+    func resolveWorktreeRootDerivesStableRuntimeHome() throws {
+        let worktreeRootPath = "/tmp/Toastty Runtime/main"
+        let environment = ["TOASTTY_DEV_WORKTREE_ROOT": worktreeRootPath]
+        let first = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: environment
+        )
+        let second = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: environment
+        )
+
+        #expect(first.runtimeHomeStrategy == .worktreeDerived)
+        #expect(first.worktreeRootURL?.path == worktreeRootPath)
+        let firstLabel = try #require(first.runtimeLabel)
+        let secondLabel = try #require(second.runtimeLabel)
+        #expect(firstLabel == secondLabel)
+        #expect(firstLabel.hasPrefix("main-"))
+        #expect(first.runtimeHomeURL?.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home")
+        #expect(first.configFileURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/config")
+    }
+
+    @Test
+    func explicitRuntimeHomeOverridesWorktreeFallback() {
+        let paths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: [
+                "TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/explicit",
+                "TOASTTY_DEV_WORKTREE_ROOT": "/tmp/toastty-runtime-home-tests/worktree",
+            ]
+        )
+
+        #expect(paths.runtimeHomeStrategy == .explicitRuntimeHome)
+        #expect(paths.runtimeHomeURL?.path == "/tmp/toastty-runtime-home-tests/explicit")
+        #expect(paths.worktreeRootURL?.path == "/tmp/toastty-runtime-home-tests/worktree")
+        #expect(paths.runtimeLabel == nil)
     }
 
     @Test

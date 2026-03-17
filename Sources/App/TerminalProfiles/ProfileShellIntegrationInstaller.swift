@@ -173,7 +173,7 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable {
             """
         case .runtimeHomeUnsupported(let path):
             return """
-            Shell integration is disabled while Toastty is running with TOASTTY_RUNTIME_HOME set to \(path).
+            Shell integration is disabled while Toastty is running with runtime isolation enabled at \(path).
 
             Sandboxed dev/test runs must not rewrite your login shell files.
             """

@@ -28,16 +28,21 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 - Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
+- For live UI validation of a running app instance, use `.agents/skills/toastty-dev-run/SKILL.md` together with the global `peekaboo` skill. Do not invent an ad-hoc launch flow when the skill applies.
+- Use `peekaboo` for menus, shortcuts, focus, window state, and visual inspection of a running Toastty instance. Do not use it for build verification, log inspection, or checks that automation/unit tests already cover.
 - For menu validation, target the exact built app instance by PID or full app bundle path. Multiple local `Toastty` builds may be running at once, and generic `osascript` checks can attach to the wrong process.
 - Prefer `peekaboo menu list --pid <pid> --json` for menu verification. It is more reliable than generic AppleScript enumeration for nested SwiftUI/AppKit menus.
 
 ## Dev/Test Runs
 - For any local dev/debug/test Toastty run, use an isolated runtime home and per-run filesystem paths. Treat PID, bundle path, and per-run directories as required targeting data, not optional bookkeeping.
+- For terminal or agent-driven dev runs, either set `TOASTTY_RUNTIME_HOME` explicitly or set `TOASTTY_DEV_WORKTREE_ROOT` to the repo/worktree root and let Toastty derive a stable runtime home under `artifacts/dev-runs/`.
+- For Xcode dev/debug runs, set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` in the scheme's Run environment once per scheme. That gives each worktree a stable sandbox without hand-editing run IDs.
 - The automation helpers now default to `artifacts/dev-runs/<RUN_ID>/...` and set unique `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, and `SOCKET_PATH` for each run. Follow the same pattern for any custom launch flow.
 - For `shortcut-trace.sh` or other trace-style runs, also use a unique `TRACE_LOG_PATH` per instance instead of a shared log path.
 - Capture the launched app PID and use PID-targeted tooling for validation whenever possible. Prefer `peekaboo ... --pid <pid>` and avoid generic `osascript` or app-name-only targeting when more than one Toastty instance may be running.
-- When `TOASTTY_RUNTIME_HOME` is set, Toastty writes `instance.json` inside that runtime home. Use it to find the exact sandbox, log path, socket path, and derived path for the running instance you launched.
-- Shell integration installation is intentionally disabled when `TOASTTY_RUNTIME_HOME` is set. Sandboxed dev/test runs must not rewrite the user's login shell files.
+- When runtime isolation is enabled, Toastty writes `instance.json` inside that runtime home. Use it to find the exact sandbox, log path, socket path, derived path, and worktree root for the running instance you launched.
+- Before any `peekaboo` call, get the PID from `instance.json` and confirm it is still alive. If the PID is stale, relaunch instead of guessing.
+- Shell integration installation is intentionally disabled when runtime isolation is enabled. Sandboxed dev/test runs must not rewrite the user's login shell files.
 - When a run is finished, clean up only its own per-run directories. Use `./scripts/automation/cleanup-dev-runs.sh` for stale run cleanup, and never delete paths for a still-running PID.
 
 ## Ghostty Integration
@@ -48,7 +53,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
   - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework` to override source
 - **Config loading order:** `TOASTTY_GHOSTTY_CONFIG_PATH` > `$XDG_CONFIG_HOME/ghostty/config` > `~/.config/ghostty/config` > Ghostty defaults.
 - **Toastty config:** `~/.toastty/config` stores user-authored defaults such as `terminal-font-size` and `default-terminal-profile`.
-- **UI font override:** Toastty remembers menu-driven terminal font changes in `UserDefaults`; `Reset Terminal Font` clears that override and falls back to config or Ghostty baseline. Dev/test runs with `TOASTTY_RUNTIME_HOME` use an isolated defaults suite instead of the shared app domain.
+- **UI font override:** Toastty remembers menu-driven terminal font changes in `UserDefaults`; `Reset Terminal Font` clears that override and falls back to config or Ghostty baseline. Runtime-isolated dev/test runs use an isolated defaults suite instead of the shared app domain.
 - **Host-side split styling:** `unfocused-split-opacity`, `unfocused-split-fill` (falls back to Ghostty `background`).
 - **Reload config at runtime:** `Toastty -> Reload Configuration` menu item.
 - When linked, `Project.swift` adds `TOASTTY_HAS_GHOSTTY_KIT` and linker flags (`-lc++`, `-framework Carbon`).
@@ -61,10 +66,11 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
   - Default focus coordinates: `CLICK_X=760`, `CLICK_Y=420` (override for your display layout).
 - **Smoke env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`
 - **Shortcut-trace env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`
+- **Manual/Xcode env:** `TOASTTY_RUNTIME_HOME` or `TOASTTY_DEV_WORKTREE_ROOT`, plus `TOASTTY_SOCKET_PATH` if you need a specific socket path
 
 ## Logging
-- Default log: `~/Library/Logs/Toastty/toastty.log` for ordinary runs, or `TOASTTY_RUNTIME_HOME/logs/toastty.log` when runtime isolation is enabled (rotates at 5 MB to `toastty.previous.log`)
-- Tail: `tail -f ~/Library/Logs/Toastty/toastty.log` or `tail -f "$TOASTTY_RUNTIME_HOME/logs/toastty.log"` (pipe to `jq` for pretty JSON)
+- Default log: `~/Library/Logs/Toastty/toastty.log` for ordinary runs, or `<runtime-home>/logs/toastty.log` when runtime isolation is enabled (rotates at 5 MB to `toastty.previous.log`)
+- Tail: `tail -f ~/Library/Logs/Toastty/toastty.log` or `tail -f "<runtime-home>/logs/toastty.log"` (pipe to `jq` for pretty JSON)
 - Env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` to disable), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`
 - Key instrumentation points: `TerminalHostView` (key events), `GhosttyRuntimeManager` (action routing), `TerminalRuntimeRegistry` (dispatch), `AppReducer` (split resize/equalize)
 

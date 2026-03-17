@@ -40,6 +40,7 @@ These flags are read by the app itself when Toastty launches normally.
 | Flag | Default | Effect |
 |---|---|---|
 | `TOASTTY_RUNTIME_HOME` | unset | Enables an isolated runtime sandbox for dev/test runs. When set, Toastty stores config, workspace layouts, terminal profiles, the default log path, `instance.json`, and UI-managed defaults under this directory instead of the shared user locations. The default automation socket path is also derived from this sandbox identity, but lives under the system temp directory to stay within Unix socket path-length limits. Explicit overrides such as `TOASTTY_TERMINAL_PROFILES_PATH`, `TOASTTY_LOG_FILE`, and `TOASTTY_SOCKET_PATH` still win. |
+| `TOASTTY_DEV_WORKTREE_ROOT` | unset | Enables a stable worktree-derived runtime sandbox for manual dev/debug/test runs when `TOASTTY_RUNTIME_HOME` is not set. Toastty derives `artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` under this worktree root, then uses that runtime home for config, workspace layouts, terminal profiles, logs, `instance.json`, and UI-managed defaults. Use this for Xcode Run actions or repeated manual launches from one worktree. |
 | `TOASTTY_GHOSTTY_CONFIG_PATH` | unset | Overrides Ghostty config loading with a specific config file. Must be an absolute path or use a `~/` prefix. Toastty loads that file and then Ghostty recursive includes. |
 | `TOASTTY_GHOSTTY_PARSE_CLI_ARGS` | unset | If enabled, lets Ghostty parse Toastty's process arguments as Ghostty CLI args before config finalization. Off by default. |
 | `GHOSTTY_RESOURCES_DIR` | auto-detected | Advanced override for Ghostty shell-integration resources. If unset or invalid, Toastty tries to auto-detect a usable resources directory. |
@@ -50,7 +51,7 @@ These flags are read by the app itself when Toastty launches normally.
 | Flag | Default | Effect |
 |---|---|---|
 | `TOASTTY_LOG_LEVEL` | `info` | Minimum log level. Supported values: `debug`, `info`, `warning`, `error`. |
-| `TOASTTY_LOG_FILE` | `~/Library/Logs/Toastty/toastty.log` or `TOASTTY_RUNTIME_HOME/logs/toastty.log` | Overrides the log file path. Set to `none` to disable the file sink entirely. |
+| `TOASTTY_LOG_FILE` | `~/Library/Logs/Toastty/toastty.log` or `<runtime-home>/logs/toastty.log` | Overrides the log file path. Set to `none` to disable the file sink entirely. |
 | `TOASTTY_LOG_STDERR` | unset | Mirrors logs to stderr in addition to the file sink. |
 | `TOASTTY_LOG_DISABLE` | unset | Disables Toastty logging entirely. |
 | `TOASTTY_LOG_TO_FILE` | unset | Legacy compatibility toggle that forces the default file sink when `TOASTTY_LOG_FILE` is otherwise unset. Prefer `TOASTTY_LOG_FILE`. |
@@ -60,7 +61,7 @@ These flags are read by the app itself when Toastty launches normally.
 | Variable | Effect |
 |---|---|
 | `XDG_CONFIG_HOME` | Used when looking for `ghostty/config` before falling back to `~/.config/ghostty/config`. |
-| `TMPDIR` | Used for the default automation socket location when `TOASTTY_SOCKET_PATH` is unset. With `TOASTTY_RUNTIME_HOME`, Toastty derives a short temp socket path from the sandbox identity. |
+| `TMPDIR` | Used for the default automation socket location when `TOASTTY_SOCKET_PATH` is unset. With runtime isolation enabled, Toastty derives a short temp socket path from the sandbox identity. |
 
 ## Launch Arguments
 
@@ -87,7 +88,7 @@ These flags are consumed by the app when it is launched in automation mode.
 | `TOASTTY_RUN_ID` | `default` | Automation run identifier when `--run-id` is not passed. |
 | `TOASTTY_FIXTURE` | unset | Automation fixture name when `--fixture` is not passed. |
 | `TOASTTY_ARTIFACTS_DIR` | temp directory derived from run ID | Directory for automation artifacts when `--artifacts-dir` is not passed. |
-| `TOASTTY_SOCKET_PATH` | temp socket path derived from `TOASTTY_RUNTIME_HOME`, otherwise `$TMPDIR/toastty-$UID/events-v1.sock` | Unix socket path for automation requests when `--socket-path` is not passed. |
+| `TOASTTY_SOCKET_PATH` | temp socket path derived from the active runtime home, otherwise `$TMPDIR/toastty-$UID/events-v1.sock` | Unix socket path for automation requests when `--socket-path` is not passed. |
 | `TOASTTY_DISABLE_ANIMATIONS` | unset | Disables animations in automation mode. |
 | `TOASTTY_FIXED_LOCALE` | unset | Forces a fixed locale identifier for automation determinism. |
 | `TOASTTY_FIXED_TIMEZONE` | unset | Forces a fixed time zone identifier for automation determinism. |
@@ -249,10 +250,12 @@ TOASTTY_LOG_STDERR=1 \
 Launch an isolated dev/test run:
 
 ```bash
-TOASTTY_RUNTIME_HOME="$PWD/artifacts/dev-runs/manual/runtime-home" \
+TOASTTY_DEV_WORKTREE_ROOT="$PWD" \
 TOASTTY_LOG_STDERR=1 \
 /path/to/Toastty.app/Contents/MacOS/Toastty
 ```
+
+For Xcode Run actions, set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` once in the scheme environment to give each worktree a stable runtime home without hand-editing labels.
 
 Launch Toastty in automation mode:
 

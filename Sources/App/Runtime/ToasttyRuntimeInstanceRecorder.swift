@@ -8,6 +8,9 @@ private struct ToasttyRuntimeInstanceManifest: Codable {
     let bundlePath: String
     let executablePath: String
     let runtimeHomePath: String
+    let runtimeHomeStrategy: String
+    let runtimeLabel: String?
+    let worktreeRootPath: String?
     let userDefaultsSuiteName: String?
     let logFilePath: String?
     let socketPath: String?
@@ -43,6 +46,9 @@ enum ToasttyRuntimeInstanceRecorder {
             bundlePath: Bundle.main.bundleURL.path,
             executablePath: Bundle.main.executableURL?.path ?? processInfo.arguments.first ?? "",
             runtimeHomePath: runtimeHomeURL.path,
+            runtimeHomeStrategy: runtimePaths.runtimeHomeStrategy.rawValue,
+            runtimeLabel: runtimePaths.runtimeLabel,
+            worktreeRootPath: runtimePaths.worktreeRootURL?.path,
             userDefaultsSuiteName: runtimePaths.userDefaultsSuiteName,
             logFilePath: logConfiguration.filePath,
             socketPath: automationConfig?.socketPath,

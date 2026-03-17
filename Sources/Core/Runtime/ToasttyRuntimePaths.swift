@@ -1,11 +1,21 @@
 import Foundation
 
+public enum ToasttyRuntimeHomeStrategy: String, Equatable, Sendable {
+    case userHome = "user-home"
+    case explicitRuntimeHome = "explicit-runtime-home"
+    case worktreeDerived = "worktree-derived"
+}
+
 public struct ToasttyRuntimePaths: Equatable, Sendable {
     public static let environmentKey = "TOASTTY_RUNTIME_HOME"
+    public static let worktreeRootEnvironmentKey = "TOASTTY_DEV_WORKTREE_ROOT"
 
     private static let configDirectoryName = ".toastty"
     private static let logDirectoryName = "logs"
     private static let runDirectoryName = "run"
+    private static let artifactsDirectoryName = "artifacts"
+    private static let devRunsDirectoryName = "dev-runs"
+    private static let worktreeRuntimePrefix = "worktree-"
     private static let configFileName = "config"
     private static let workspaceLayoutsFileName = "workspace-layout-profiles.json"
     private static let terminalProfilesFileName = "terminal-profiles.toml"
@@ -17,18 +27,31 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let defaultsSuitePrefix = "com.GiantThings.toastty.runtime."
 
     public let runtimeHomeURL: URL?
+    public let runtimeHomeStrategy: ToasttyRuntimeHomeStrategy
+    public let worktreeRootURL: URL?
+    public let runtimeLabel: String?
 
     private let homeDirectoryPath: String
     private let temporaryDirectoryPath: String
 
-    private init(runtimeHomeURL: URL?, homeDirectoryPath: String, temporaryDirectoryPath: String) {
+    private init(
+        runtimeHomeURL: URL?,
+        runtimeHomeStrategy: ToasttyRuntimeHomeStrategy,
+        worktreeRootURL: URL?,
+        runtimeLabel: String?,
+        homeDirectoryPath: String,
+        temporaryDirectoryPath: String
+    ) {
         self.runtimeHomeURL = runtimeHomeURL
+        self.runtimeHomeStrategy = runtimeHomeStrategy
+        self.worktreeRootURL = worktreeRootURL
+        self.runtimeLabel = runtimeLabel
         self.homeDirectoryPath = homeDirectoryPath
         self.temporaryDirectoryPath = temporaryDirectoryPath
     }
 
     public var isRuntimeHomeEnabled: Bool {
-        runtimeHomeURL != nil
+        runtimeHomeStrategy != .userHome
     }
 
     public var configDirectoryURL: URL {
@@ -82,8 +105,28 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         homeDirectoryPath: String = NSHomeDirectory(),
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> ToasttyRuntimePaths {
-        ToasttyRuntimePaths(
-            runtimeHomeURL: normalizedRuntimeHomeURL(environment: environment),
+        let explicitRuntimeHomeURL = normalizedRuntimeHomeURL(environment: environment)
+        let worktreeRootURL = normalizedWorktreeRootURL(environment: environment)
+        let runtimeLabel = worktreeRootURL.map(Self.runtimeLabel(for:))
+        let runtimeHomeStrategy: ToasttyRuntimeHomeStrategy
+        let runtimeHomeURL: URL?
+
+        if let explicitRuntimeHomeURL {
+            runtimeHomeStrategy = .explicitRuntimeHome
+            runtimeHomeURL = explicitRuntimeHomeURL
+        } else if let worktreeRootURL, let runtimeLabel {
+            runtimeHomeStrategy = .worktreeDerived
+            runtimeHomeURL = derivedRuntimeHomeURL(worktreeRootURL: worktreeRootURL, runtimeLabel: runtimeLabel)
+        } else {
+            runtimeHomeStrategy = .userHome
+            runtimeHomeURL = nil
+        }
+
+        return ToasttyRuntimePaths(
+            runtimeHomeURL: runtimeHomeURL,
+            runtimeHomeStrategy: runtimeHomeStrategy,
+            worktreeRootURL: worktreeRootURL,
+            runtimeLabel: runtimeHomeStrategy == .worktreeDerived ? runtimeLabel : nil,
             homeDirectoryPath: homeDirectoryPath,
             temporaryDirectoryPath: environment["TMPDIR"] ?? NSTemporaryDirectory()
         )
@@ -125,6 +168,42 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
 
         let expandedPath = (rawValue as NSString).expandingTildeInPath
         return URL(filePath: expandedPath).standardizedFileURL
+    }
+
+    private static func normalizedWorktreeRootURL(environment: [String: String]) -> URL? {
+        guard let rawValue = environment[worktreeRootEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              rawValue.isEmpty == false else {
+            return nil
+        }
+
+        let expandedPath = (rawValue as NSString).expandingTildeInPath
+        return URL(filePath: expandedPath).standardizedFileURL
+    }
+
+    private static func derivedRuntimeHomeURL(worktreeRootURL: URL, runtimeLabel: String) -> URL {
+        worktreeRootURL
+            .appending(path: artifactsDirectoryName, directoryHint: .isDirectory)
+            .appending(path: devRunsDirectoryName, directoryHint: .isDirectory)
+            .appending(path: worktreeRuntimePrefix + runtimeLabel, directoryHint: .isDirectory)
+            .appending(path: "runtime-home", directoryHint: .isDirectory)
+    }
+
+    private static func runtimeLabel(for worktreeRootURL: URL) -> String {
+        let basename = sanitizedLabelComponent(worktreeRootURL.lastPathComponent)
+        let shortHash = String(stableHashHex(for: worktreeRootURL.path).prefix(8))
+        return "\(basename)-\(shortHash)"
+    }
+
+    private static func sanitizedLabelComponent(_ value: String) -> String {
+        let folded = value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        let mapped = folded.lowercased().map { character -> Character in
+            character.isLetter || character.isNumber ? character : "-"
+        }
+        let collapsed = String(mapped)
+            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return collapsed.isEmpty ? "worktree" : collapsed
     }
 
     private static func stableHashHex(for value: String) -> String {

@@ -143,7 +143,7 @@ Toastty reads these additional keys from Ghostty config:
   - `terminal-font-size` as Toastty's preferred baseline
   - `default-terminal-profile` for newly created terminals and ordinary splits only
 - UI-driven terminal font changes are stored in macOS `UserDefaults`, not by rewriting `~/.toastty/config`
-- When `TOASTTY_RUNTIME_HOME` is set for an isolated dev/test run, Toastty uses `TOASTTY_RUNTIME_HOME/config`, `TOASTTY_RUNTIME_HOME/terminal-profiles.toml`, and an isolated defaults suite instead of the shared user locations
+- When runtime isolation is enabled for an isolated dev/test run, Toastty uses the active runtime home's `config`, `terminal-profiles.toml`, and isolated defaults suite instead of the shared user locations
 - `Reset Terminal Font` clears the UI override and returns to the configured baseline
 
 ## Action parity
