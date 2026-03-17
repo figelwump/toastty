@@ -93,7 +93,28 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
-        sessionRegistry.workspaceStatuses(for: workspaceID)
+        let statuses = sessionRegistry.workspaceStatuses(for: workspaceID)
+        guard let workspace = store?.state.workspacesByID[workspaceID] else {
+            return statuses
+        }
+
+        let displayOrder = Dictionary(
+            uniqueKeysWithValues: workspace.terminalPanelIDsInDisplayOrder.enumerated().map { offset, panelID in
+                (panelID, offset)
+            }
+        )
+
+        return statuses.sorted { lhs, rhs in
+            let lhsOrder = displayOrder[lhs.panelID] ?? Int.max
+            let rhsOrder = displayOrder[rhs.panelID] ?? Int.max
+            if lhsOrder != rhsOrder {
+                return lhsOrder < rhsOrder
+            }
+            if lhs.updatedAt != rhs.updatedAt {
+                return lhs.updatedAt > rhs.updatedAt
+            }
+            return lhs.sessionID < rhs.sessionID
+        }
     }
 
     func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {

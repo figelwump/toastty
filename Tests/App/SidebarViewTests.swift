@@ -6,6 +6,12 @@ import XCTest
 
 @MainActor
 final class SidebarViewTests: XCTestCase {
+    func testAbbreviatedPathLabelKeepsOnlyLastPathComponent() {
+        XCTAssertEqual(SidebarView.abbreviatedPathLabel("/Users/vishal/GiantThings/repos/toastty-session-status"), ".../toastty-session-status")
+        XCTAssertEqual(SidebarView.abbreviatedPathLabel("/"), "/")
+        XCTAssertEqual(SidebarView.abbreviatedPathLabel("relative"), "relative")
+    }
+
     func testBusySubtitleUpdatesWhenRuntimeRegistryPublishesChange() throws {
         let state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)

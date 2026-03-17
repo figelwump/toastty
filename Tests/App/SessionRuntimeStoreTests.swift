@@ -174,6 +174,54 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func workspaceStatusesFollowTerminalDisplayOrder() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let orderedPanelIDs = selection.workspace.terminalPanelIDsInDisplayOrder
+        let leftPanelID = try #require(orderedPanelIDs.first)
+        let rightPanelID = try #require(orderedPanelIDs.last)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-right",
+            agent: .codex,
+            panelID: rightPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo/right",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-right",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Right panel"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        sessionStore.startSession(
+            sessionID: "sess-left",
+            agent: .claude,
+            panelID: leftPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo/left",
+            repoRoot: "/repo",
+            at: startedAt.addingTimeInterval(1)
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-left",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Left panel"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let statuses = sessionStore.workspaceStatuses(for: selection.workspaceID)
+        #expect(statuses.map(\.panelID) == [leftPanelID, rightPanelID])
+    }
+
+    @Test
     func handleLocalInterruptResetsWorkingClaudeSession() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()

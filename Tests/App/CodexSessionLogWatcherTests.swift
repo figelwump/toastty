@@ -98,6 +98,68 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesUserPromptPreviewEvents() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let promptEvent = expectation(description: "Prompt preview event arrives")
+        promptEvent.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            promptEvent.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-3","msg":{"type":"user_message","message":"summarize skills in here"}}}"# + "\n",
+            to: logURL
+        )
+
+        await fulfillment(of: [promptEvent], timeout: 1)
+        watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "summarize skills in here")
+        ])
+    }
+
+    func testWatcherDeduplicatesRepeatedUserPromptPreviewEvents() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let promptEvent = expectation(description: "Prompt preview event arrives once")
+        promptEvent.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            promptEvent.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            """
+            {"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-3","msg":{"type":"user_message","message":"summarize skills in here"}}}
+            {"dir":"to_tui","kind":"codex_event","payload":{"id":"turn-3","msg":{"type":"user_message","message":"summarize skills in here"}}}
+            """,
+            to: logURL
+        )
+
+        await fulfillment(of: [promptEvent], timeout: 1)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "summarize skills in here")
+        ])
+    }
+
     private func makeLogURL() throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-watcher-tests-\(UUID().uuidString)", isDirectory: true)

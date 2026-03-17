@@ -9,6 +9,26 @@ struct AgentEventParsersTests {
             for: .claudeHooks,
             sessionID: "sess-123",
             panelID: nil,
+            payload: Data(#"{"hook_event_name":"UserPromptSubmit","prompt":"summarize skills in here"}"#.utf8)
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .working,
+                summary: "Working",
+                detail: "summarize skills in here"
+            )
+        ])
+    }
+
+    @Test
+    func claudeUserPromptSubmitFallsBackWithoutPromptText() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
             payload: Data(#"{"hook_event_name":"UserPromptSubmit"}"#.utf8)
         )
 

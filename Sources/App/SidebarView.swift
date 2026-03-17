@@ -365,15 +365,16 @@ struct SidebarView: View {
                 Spacer(minLength: 0)
             }
 
-            if let detail = status.detail {
+            if status.kind != .idle, let detail = status.detail {
                 Text(detail)
                     .font(ToastyTheme.fontWorkspaceSessionDetail)
                     .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
-                    .lineLimit(1)
+                    .lineLimit(2)
                     .truncationMode(.tail)
+                    .multilineTextAlignment(.leading)
             }
 
-            if let cwd = abbreviatedPathLabel(workspaceSessionStatus.cwd) {
+            if let cwd = Self.abbreviatedPathLabel(workspaceSessionStatus.cwd) {
                 Text(cwd)
                     .font(ToastyTheme.fontWorkspaceSessionPath)
                     .foregroundStyle(ToastyTheme.sidebarSessionPathText)
@@ -504,7 +505,7 @@ struct SidebarView: View {
     }
 
     private func sessionStatusChip(_ status: SessionStatus) -> some View {
-        Text(status.summary)
+        Text(sessionStatusBadgeLabel(for: status.kind))
             .font(ToastyTheme.fontWorkspaceSessionChip)
             .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: status.kind))
             .padding(.horizontal, 4)
@@ -546,11 +547,32 @@ struct SidebarView: View {
         }
     }
 
-    private func abbreviatedPathLabel(_ path: String?) -> String? {
+    static func abbreviatedPathLabel(_ path: String?) -> String? {
         guard let path else { return nil }
         let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
-        return (trimmed as NSString).abbreviatingWithTildeInPath
+        let normalizedPath = (trimmed as NSString).standardizingPath
+        let pathString = normalizedPath as NSString
+        let lastComponent = pathString.lastPathComponent
+        if lastComponent.isEmpty == false, lastComponent != "/", pathString.pathComponents.count > 1 {
+            return ".../\(lastComponent)"
+        }
+        return pathString.abbreviatingWithTildeInPath
+    }
+
+    private func sessionStatusBadgeLabel(for kind: SessionStatusKind) -> String {
+        switch kind {
+        case .idle:
+            return "idle"
+        case .working:
+            return "working"
+        case .needsApproval:
+            return "needs approval"
+        case .ready:
+            return "ready"
+        case .error:
+            return "error"
+        }
     }
 
     private func shortcutBadge(_ label: String) -> some View {

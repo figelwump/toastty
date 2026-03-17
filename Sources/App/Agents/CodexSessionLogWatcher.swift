@@ -142,6 +142,14 @@ private extension CodexSessionLogWatcher {
         }
 
         switch type {
+        case "user_message":
+            let dedupeKey = "user_message:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            return CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: normalizedSummaryText(message["message"], limit: 140) ?? "Responding to your prompt"
+            )
+
         case "task_started":
             let dedupeKey = "task_started:\(eventIdentifier(from: payload, message: message, fallback: line))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }

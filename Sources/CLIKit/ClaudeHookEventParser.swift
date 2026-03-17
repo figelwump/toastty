@@ -19,7 +19,7 @@ enum ClaudeHookEventParser {
                     panelID: panelID,
                     kind: .working,
                     summary: "Working",
-                    detail: "Responding to your prompt"
+                    detail: submittedPromptDetail(from: object) ?? "Responding to your prompt"
                 )
             ]
 
@@ -91,6 +91,10 @@ enum ClaudeHookEventParser {
             return nil
         }
         return "Retrying after \(displayToolName(toolName)) failed"
+    }
+
+    private static func submittedPromptDetail(from object: [String: Any]) -> String? {
+        normalizedSummaryText(object["prompt"], limit: 140)
     }
 
     private static func toolDescription(from object: [String: Any]) -> String? {
