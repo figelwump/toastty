@@ -517,6 +517,14 @@ extension TerminalRuntimeRegistry {
 #endif
 
 extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
+    func handleLocalInterruptKey(for panelID: UUID, kind: TerminalLocalInterruptKind) {
+        _ = sessionLifecycleTracker?.handleLocalInterruptForPanelIfActive(
+            panelID: panelID,
+            kind: kind,
+            at: Date()
+        )
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
         splitSourceSurfaceState(for: panelID)

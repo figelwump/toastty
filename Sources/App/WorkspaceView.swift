@@ -398,17 +398,9 @@ private struct PanelCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                if hasUnreadNotification {
-                    unreadIndicatorDot
-                }
-
-                if let panelSessionStatus {
-                    SessionActivityRail(
-                        kind: panelSessionStatus.status.kind,
-                        width: 16,
-                        height: 6,
-                        cornerRadius: 3
-                    )
+                let indicatorState = panelIndicatorState
+                if indicatorState != .hidden {
+                    SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
                 }
 
                 Text(panelLabel)
@@ -530,16 +522,27 @@ private struct PanelCardView: View {
         return appIsActive ? ToastyTheme.accent : ToastyTheme.accent.opacity(0.5)
     }
 
-    private var unreadIndicatorColor: Color {
-        guard let panelSessionStatus else { return ToastyTheme.badgeBlue }
-        return ToastyTheme.sessionStatusIndicatorColor(for: panelSessionStatus.status.kind)
-    }
+    private var panelIndicatorState: SessionStatusIndicatorState {
+        if let panelSessionStatus, panelSessionStatus.status.kind == .working {
+            return .spinner
+        }
 
-    private var unreadIndicatorDot: some View {
-        Circle()
-            .fill(unreadIndicatorColor)
-            .frame(width: 7, height: 7)
-            .shadow(color: unreadIndicatorColor.opacity(0.45), radius: 3, x: 0, y: 0)
+        guard hasUnreadNotification && !isFocused else {
+            return .hidden
+        }
+
+        guard let panelSessionStatus else {
+            return .dot
+        }
+
+        switch panelSessionStatus.status.kind {
+        case .needsApproval, .ready, .error:
+            return .dot
+        case .idle:
+            return .hidden
+        case .working:
+            return .spinner
+        }
     }
 
     @ViewBuilder

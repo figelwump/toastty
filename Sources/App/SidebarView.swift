@@ -295,7 +295,10 @@ struct SidebarView: View {
         isHovered: Bool
     ) -> some View {
         let status = workspaceSessionStatus.status
-        let showsUnreadIndicator = workspace.unreadPanelIDs.contains(workspaceSessionStatus.panelID)
+        let showsUnreadIndicator = showsSessionAttentionIndicator(
+            for: workspaceSessionStatus.panelID,
+            in: workspace
+        )
         let canFocusPanel = workspace.panels[workspaceSessionStatus.panelID] != nil
 
         Group {
@@ -339,55 +342,57 @@ struct SidebarView: View {
         showsUnreadIndicator: Bool,
         isHovered: Bool
     ) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            SessionActivityRail(kind: status.kind, width: 4, height: 34, cornerRadius: 2)
-                .padding(.top, 1)
+        let indicatorState = sessionIndicatorState(
+            for: status,
+            showsUnreadIndicator: showsUnreadIndicator
+        )
 
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    if showsUnreadIndicator {
-                        sessionStatusIndicator(for: workspaceSessionStatus.status.kind)
-                    }
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                if indicatorState != .hidden {
+                    SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
+                }
 
-                    Text(workspaceSessionStatus.agent.displayName)
-                        .font(ToastyTheme.fontWorkspaceSessionAgent)
-                        .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
-                        .lineLimit(1)
+                Text(workspaceSessionStatus.agent.displayName)
+                    .font(ToastyTheme.fontWorkspaceSessionAgent)
+                    .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
+                    .lineLimit(1)
 
+                if status.kind != .idle {
                     sessionStatusChip(status)
-
-                    Spacer(minLength: 0)
                 }
 
-                if let detail = status.detail {
-                    Text(detail)
-                        .font(ToastyTheme.fontWorkspaceSessionDetail)
-                        .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                }
+                Spacer(minLength: 0)
+            }
 
-                if let cwd = abbreviatedPathLabel(workspaceSessionStatus.cwd) {
-                    Text(cwd)
-                        .font(ToastyTheme.fontWorkspaceSessionPath)
-                        .foregroundStyle(ToastyTheme.sidebarSessionPathText)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
+            if let detail = status.detail {
+                Text(detail)
+                    .font(ToastyTheme.fontWorkspaceSessionDetail)
+                    .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+
+            if let cwd = abbreviatedPathLabel(workspaceSessionStatus.cwd) {
+                Text(cwd)
+                    .font(ToastyTheme.fontWorkspaceSessionPath)
+                    .foregroundStyle(ToastyTheme.sidebarSessionPathText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 6)
+        .padding(.vertical, 5)
+        .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: 5)
                 .fill(isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: 5)
                 .stroke(isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear, lineWidth: 1)
         )
-        .contentShape(RoundedRectangle(cornerRadius: 4))
+        .contentShape(RoundedRectangle(cornerRadius: 5))
     }
 
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
@@ -511,13 +516,34 @@ struct SidebarView: View {
             .truncationMode(.tail)
     }
 
-    private func sessionStatusIndicator(for kind: SessionStatusKind) -> some View {
-        let indicatorColor = ToastyTheme.sessionStatusIndicatorColor(for: kind)
+    private func showsSessionAttentionIndicator(
+        for panelID: UUID,
+        in workspace: WorkspaceState
+    ) -> Bool {
+        guard workspace.unreadPanelIDs.contains(panelID) else {
+            return false
+        }
 
-        return Circle()
-            .fill(indicatorColor)
-            .frame(width: 7, height: 7)
-            .shadow(color: indicatorColor.opacity(0.45), radius: 3, x: 0, y: 0)
+        if store.selectedWorkspaceID(in: windowID) == workspace.id,
+           workspace.focusedPanelID == panelID {
+            return false
+        }
+
+        return true
+    }
+
+    private func sessionIndicatorState(
+        for status: SessionStatus,
+        showsUnreadIndicator: Bool
+    ) -> SessionStatusIndicatorState {
+        switch status.kind {
+        case .working:
+            return .spinner
+        case .needsApproval, .ready, .error:
+            return showsUnreadIndicator ? .dot : .hidden
+        case .idle:
+            return .hidden
+        }
     }
 
     private func abbreviatedPathLabel(_ path: String?) -> String? {

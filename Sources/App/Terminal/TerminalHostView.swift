@@ -25,6 +25,7 @@ final class TerminalHostView: NSView {
     /// Gives the owning controller a chance to reclaim AppKit first responder
     /// when the host view finishes attaching or becomes visible again.
     var requestFirstResponderIfNeeded: (() -> Void)?
+    var handleLocalInterruptKey: ((TerminalLocalInterruptKind) -> Void)?
     private var pendingImageFileDrop: PreparedImageFileDrop?
     private var pendingVisibilitySyncTask: Task<Void, Never>?
     private var mouseTrackingArea: NSTrackingArea?
@@ -718,10 +719,13 @@ final class TerminalHostView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        guard handleKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS) else {
-            super.keyDown(with: event)
+        let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
+        notifyLocalInterruptIfNeeded(event, action: action)
+        let handled = handleKeyEvent(event, action: action)
+        if handled {
             return
         }
+        super.keyDown(with: event)
     }
 
     override func keyUp(with event: NSEvent) {
@@ -810,6 +814,18 @@ final class TerminalHostView: NSView {
         )
 
         return handled
+    }
+
+    private func notifyLocalInterruptIfNeeded(_ event: NSEvent, action: ghostty_input_action_e) {
+        guard action == GHOSTTY_ACTION_PRESS else { return }
+        guard let kind = Self.localInterruptKind(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers
+        ) else {
+            return
+        }
+        handleLocalInterruptKey?(kind)
     }
 
     private func focusHostViewIfNeeded() {
@@ -1066,6 +1082,35 @@ final class TerminalHostView: NSView {
         ghosttyUnshiftedCodepoint(eventType: event.type) {
             event.characters(byApplyingModifiers: [])
         }
+    }
+
+    static func isLocalInterruptKey(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        charactersIgnoringModifiers: String?
+    ) -> Bool {
+        localInterruptKind(
+            keyCode: keyCode,
+            modifierFlags: modifierFlags,
+            charactersIgnoringModifiers: charactersIgnoringModifiers
+        ) != nil
+    }
+
+    static func localInterruptKind(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        charactersIgnoringModifiers: String?
+    ) -> TerminalLocalInterruptKind? {
+        if keyCode == 53 {
+            return .escape
+        }
+
+        let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard flags.contains(.control),
+              charactersIgnoringModifiers?.lowercased() == "c" else {
+            return nil
+        }
+        return .controlC
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT

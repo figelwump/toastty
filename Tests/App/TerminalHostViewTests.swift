@@ -166,6 +166,46 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertEqual(requestCount, 1)
     }
+
+    func testLocalInterruptKeyRecognizesEscape() {
+        XCTAssertTrue(
+            TerminalHostView.isLocalInterruptKey(
+                keyCode: 53,
+                modifierFlags: [],
+                charactersIgnoringModifiers: nil
+            )
+        )
+    }
+
+    func testLocalInterruptKeyRecognizesControlC() {
+        XCTAssertTrue(
+            TerminalHostView.isLocalInterruptKey(
+                keyCode: 8,
+                modifierFlags: [.control],
+                charactersIgnoringModifiers: "c"
+            )
+        )
+    }
+
+    func testLocalInterruptKeyIgnoresPlainC() {
+        XCTAssertFalse(
+            TerminalHostView.isLocalInterruptKey(
+                keyCode: 8,
+                modifierFlags: [],
+                charactersIgnoringModifiers: "c"
+            )
+        )
+    }
+
+    func testLocalInterruptKeyIgnoresCommandC() {
+        XCTAssertFalse(
+            TerminalHostView.isLocalInterruptKey(
+                keyCode: 8,
+                modifierFlags: [.command],
+                charactersIgnoringModifiers: "c"
+            )
+        )
+    }
 }
 
 private final class TestWindow: NSWindow {

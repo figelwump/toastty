@@ -112,6 +112,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return false }
             return self.delegate?.handlePreparedImageFileDrop(drop) ?? false
         }
+        terminalHostView.handleLocalInterruptKey = { [weak self] kind in
+            guard let self else { return }
+            self.delegate?.handleLocalInterruptKey(for: self.panelID, kind: kind)
+        }
         #else
         hostedView = fallbackView
         #endif

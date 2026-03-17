@@ -5,9 +5,11 @@ import Foundation
 final class SessionRuntimeStore: ObservableObject {
     @Published private(set) var sessionRegistry = SessionRegistry()
 
+    private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
 
     func bind(store: AppStore) {
+        self.store = store
         synchronize(with: store.state)
 
         guard storeActionObserverToken == nil else { return }
@@ -67,9 +69,15 @@ final class SessionRuntimeStore: ObservableObject {
         status: SessionStatus,
         at now: Date
     ) {
+        let previousRecord = sessionRegistry.sessionsByID[sessionID]
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: status, at: now)
         publish(nextRegistry)
+        recordPanelAttentionIfNeeded(
+            previousRecord: previousRecord,
+            sessionID: sessionID,
+            status: status
+        )
     }
 
     func stopSession(sessionID: String, at now: Date) {
@@ -118,6 +126,42 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry = nextRegistry
     }
 
+    private func recordPanelAttentionIfNeeded(
+        previousRecord: SessionRecord?,
+        sessionID: String,
+        status: SessionStatus
+    ) {
+        guard let store else { return }
+        guard status.kind == .needsApproval || status.kind == .ready || status.kind == .error else {
+            return
+        }
+        guard previousRecord?.status?.kind != status.kind else {
+            return
+        }
+        guard let currentRecord = sessionRegistry.sessionsByID[sessionID],
+              currentRecord.isActive,
+              isPanelCurrentlyFocused(currentRecord.panelID, state: store.state) == false else {
+            return
+        }
+
+        _ = store.send(
+            .recordDesktopNotification(
+                workspaceID: currentRecord.workspaceID,
+                panelID: currentRecord.panelID
+            )
+        )
+    }
+
+    private func isPanelCurrentlyFocused(_ panelID: UUID, state: AppState) -> Bool {
+        guard let selection = state.selectedWorkspaceSelection() else {
+            return false
+        }
+        guard selection.workspace.focusedPanelID == panelID else {
+            return false
+        }
+        return selection.workspace.layoutTree.slotContaining(panelID: panelID) != nil
+    }
+
     private static func locatePanel(
         _ panelID: UUID,
         in state: AppState
@@ -135,6 +179,32 @@ final class SessionRuntimeStore: ObservableObject {
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
+    func handleLocalInterruptForPanelIfActive(
+        panelID: UUID,
+        kind: TerminalLocalInterruptKind,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              let currentStatus = record.status,
+              currentStatus.kind == .working || currentStatus.kind == .needsApproval else {
+            return false
+        }
+
+        if kind == .escape, record.agent == .codex {
+            // Codex emits an explicit turn_aborted watcher event for Esc.
+            // Let that authoritative signal drive idle transitions to avoid
+            // clearing the spinner on every in-TUI Escape press.
+            return false
+        }
+
+        updateStatus(
+            sessionID: record.sessionID,
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            at: now
+        )
+        return true
+    }
+
     func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool {
         guard sessionRegistry.activeSession(for: panelID) != nil else {
             return false

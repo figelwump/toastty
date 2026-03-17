@@ -10,6 +10,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     @discardableResult
     func handlePreparedImageFileDrop(_ drop: PreparedImageFileDrop) -> Bool
 
+    func handleLocalInterruptKey(for panelID: UUID, kind: TerminalLocalInterruptKind)
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState
     func consumeSplitSource(forNewPanelID panelID: UUID)

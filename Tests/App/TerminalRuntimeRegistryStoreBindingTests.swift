@@ -48,6 +48,17 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking {
     private(set) var stopActiveCalls: [UUID] = []
 
+    func handleLocalInterruptForPanelIfActive(
+        panelID: UUID,
+        kind: TerminalLocalInterruptKind,
+        at now: Date
+    ) -> Bool {
+        _ = panelID
+        _ = kind
+        _ = now
+        return false
+    }
+
     func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool {
         _ = now
         stopActiveCalls.append(panelID)

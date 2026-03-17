@@ -69,6 +69,35 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesTurnAbortedEvents() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let abortedEvent = expectation(description: "Turn aborted event arrives")
+        abortedEvent.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            abortedEvent.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-2","msg":{"type":"turn_aborted","reason":"interrupted"}}}"# + "\n",
+            to: logURL
+        )
+
+        await fulfillment(of: [abortedEvent], timeout: 1)
+        watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+        ])
+    }
+
     private func makeLogURL() throws -> URL {
         let directoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-codex-watcher-tests-\(UUID().uuidString)", isDirectory: true)

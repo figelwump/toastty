@@ -130,6 +130,11 @@ private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceContro
         return false
     }
 
+    func handleLocalInterruptKey(for panelID: UUID, kind: TerminalLocalInterruptKind) {
+        _ = panelID
+        _ = kind
+    }
+
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
         _ = panelID
         return .none

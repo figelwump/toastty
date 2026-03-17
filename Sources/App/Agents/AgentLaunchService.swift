@@ -362,6 +362,16 @@ final class AgentLaunchService {
                     status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
                 case .approvalNeeded:
                     status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
+                case .turnAborted:
+                    guard let currentKind = sessionRuntimeStore
+                        .sessionRegistry
+                        .activeSession(sessionID: sessionID)?
+                        .status?
+                        .kind,
+                          currentKind == .working || currentKind == .needsApproval else {
+                        return
+                    }
+                    status = SessionStatus(kind: .idle, summary: "Waiting", detail: event.detail)
                 }
 
                 sessionRuntimeStore.updateStatus(

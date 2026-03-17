@@ -1,78 +1,60 @@
 import CoreState
 import SwiftUI
 
-struct SessionActivityRail: View {
-    let kind: SessionStatusKind
-    var width: CGFloat
-    var height: CGFloat
-    var cornerRadius: CGFloat
+enum SessionStatusIndicatorState: Equatable {
+    case hidden
+    case spinner
+    case dot
+}
+
+struct SessionStatusIndicator: View {
+    let state: SessionStatusIndicatorState
+    var size: CGFloat
+    var lineWidth: CGFloat
 
     init(
-        kind: SessionStatusKind,
-        width: CGFloat = 4,
-        height: CGFloat = 34,
-        cornerRadius: CGFloat = 2
+        state: SessionStatusIndicatorState,
+        size: CGFloat = 8,
+        lineWidth: CGFloat = 1.5
     ) {
-        self.kind = kind
-        self.width = width
-        self.height = height
-        self.cornerRadius = cornerRadius
+        self.state = state
+        self.size = size
+        self.lineWidth = lineWidth
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
-            let roundedShape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-
-            roundedShape
-                .fill(ToastyTheme.sessionActivityRailGradient(for: kind))
-                .overlay {
-                    if kind == .working {
-                        shimmerOverlay(phaseDate: context.date)
-                            .mask(roundedShape)
-                    } else if kind == .needsApproval {
-                        pulseOverlay(phaseDate: context.date)
-                            .mask(roundedShape)
-                    }
+        Group {
+            switch state {
+            case .hidden:
+                EmptyView()
+            case .spinner:
+                TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { context in
+                    spinner(angle: spinnerAngle(at: context.date))
                 }
-                .overlay {
-                    roundedShape
-                        .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-                }
-                .shadow(color: ToastyTheme.sessionActivityRailShadowColor(for: kind), radius: 4, x: 0, y: 0)
+            case .dot:
+                Circle()
+                    .fill(ToastyTheme.badgeBlue)
+                    .frame(width: size, height: size)
+                    .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
+            }
         }
-        .frame(width: width, height: height)
         .accessibilityHidden(true)
     }
 
-    private func shimmerOverlay(phaseDate: Date) -> some View {
-        let phase = phaseDate.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.4) / 1.4
-        let travel = width * 3.4
-        let offset = CGFloat(phase) * travel - travel / 2
-
-        return Rectangle()
-            .fill(
-                LinearGradient(
-                    colors: [
-                        .clear,
-                        ToastyTheme.sessionActivityRailHighlightColor(for: kind),
-                        .clear,
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+    private func spinner(angle: Angle) -> some View {
+        Circle()
+            .trim(from: 0.16, to: 0.9)
+            .stroke(
+                ToastyTheme.sessionIndicatorSpinnerColor,
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
             )
-            .frame(width: max(width * 2.4, 10), height: height * 1.25)
-            .rotationEffect(.degrees(18))
-            .offset(x: offset)
-            .blur(radius: 1.2)
+            .rotationEffect(angle)
+            .frame(width: size, height: size)
     }
 
-    private func pulseOverlay(phaseDate: Date) -> some View {
-        let phase = phaseDate.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.2) / 1.2
-        let opacity = 0.28 + (sin(phase * .pi * 2) + 1) * 0.18
-
-        return Rectangle()
-            .fill(ToastyTheme.sessionActivityRailHighlightColor(for: kind))
-            .opacity(opacity)
+    private func spinnerAngle(at date: Date) -> Angle {
+        let phase = date.timeIntervalSinceReferenceDate
+            .truncatingRemainder(dividingBy: 0.9) / 0.9
+        return .degrees(phase * 360)
     }
 }
