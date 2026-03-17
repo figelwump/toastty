@@ -132,6 +132,8 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.installIfNeeded()
 
         XCTAssertEqual(closeAllItem.title, "Close Workspace")
+        XCTAssertEqual(closeAllItem.keyEquivalent, "")
+        XCTAssertEqual(closeAllItem.keyEquivalentModifierMask, [])
         XCTAssertTrue(closeAllItem.target === bridge)
         XCTAssertEqual(closeAllItem.action, #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:)))
         XCTAssertTrue(bridge.validateMenuItem(closeAllItem))
@@ -171,6 +173,8 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.installIfNeeded()
 
         XCTAssertEqual(closeAllItem.title, "Close Workspace")
+        XCTAssertEqual(closeAllItem.keyEquivalent, "")
+        XCTAssertEqual(closeAllItem.keyEquivalentModifierMask, [])
         XCTAssertTrue(closeAllItem.target === bridge)
         XCTAssertEqual(closeAllItem.action, #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:)))
     }
@@ -208,6 +212,8 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(workspaceShiftWItem.title, "Workspace Toggle")
         XCTAssertNil(workspaceShiftWItem.target)
         XCTAssertEqual(closeAllItem.title, "Close Workspace")
+        XCTAssertEqual(closeAllItem.keyEquivalent, "")
+        XCTAssertEqual(closeAllItem.keyEquivalentModifierMask, [])
         XCTAssertTrue(closeAllItem.target === bridge)
         XCTAssertEqual(
             closeAllItem.action,
@@ -449,6 +455,8 @@ final class WindowCommandControllerTests: XCTestCase {
         hiddenBridge.installIfNeeded()
 
         XCTAssertEqual(initialCloseAllItem.title, "Close Workspace")
+        XCTAssertEqual(initialCloseAllItem.keyEquivalent, "")
+        XCTAssertEqual(initialCloseAllItem.keyEquivalentModifierMask, [])
         XCTAssertTrue(initialCloseAllItem.target === closeWorkspaceBridge)
         XCTAssertEqual(
             initialCloseAllItem.action,
@@ -469,6 +477,8 @@ final class WindowCommandControllerTests: XCTestCase {
         wait(for: [refreshExpectation], timeout: 1)
 
         XCTAssertEqual(rebuiltCloseAllItem.title, "Close Workspace")
+        XCTAssertEqual(rebuiltCloseAllItem.keyEquivalent, "")
+        XCTAssertEqual(rebuiltCloseAllItem.keyEquivalentModifierMask, [])
         XCTAssertTrue(rebuiltCloseAllItem.target === closeWorkspaceBridge)
         XCTAssertEqual(
             rebuiltCloseAllItem.action,

@@ -32,11 +32,12 @@ final class CloseWorkspaceCommandController {
 
     @discardableResult
     func closeWorkspace() -> Bool {
-        // Toastty intentionally maps File > Close Workspace and Cmd+Shift+W to
-        // the selected workspace, but still routes through the shared
-        // confirmation flow instead of closing immediately. AppKit bridge
-        // actions do not carry SwiftUI's focused scene value, so this falls
-        // back to the store's selected window/workspace context.
+        // Toastty intentionally maps the File > Close Workspace menu item to
+        // the selected workspace, while the Cmd+Shift+W shortcut is owned by
+        // the Workspace menu command in ToasttyCommandMenus. AppKit bridge
+        // actions do not carry SwiftUI's focused scene value, so File-menu
+        // invocations fall back to the store's selected window/workspace
+        // context and still route through the shared confirmation flow.
         store.closeSelectedWorkspaceFromCommand(preferredWindowID: nil)
     }
 
@@ -127,6 +128,15 @@ final class CloseWorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         if closeWorkspaceItem.title != Self.closeWorkspaceMenuItemTitle {
             closeWorkspaceItem.title = Self.closeWorkspaceMenuItemTitle
         }
+        // The actual Cmd+Shift+W binding lives on the Workspace menu command.
+        // Clear the File menu slot's key equivalent so it cannot steal the
+        // shortcut before SwiftUI resolves the focused workspace command.
+        if closeWorkspaceItem.keyEquivalent.isEmpty == false {
+            closeWorkspaceItem.keyEquivalent = ""
+        }
+        if closeWorkspaceItem.keyEquivalentModifierMask.isEmpty == false {
+            closeWorkspaceItem.keyEquivalentModifierMask = []
+        }
         guard closeWorkspaceItem.target !== self ||
             closeWorkspaceItem.action != #selector(performCloseWorkspace(_:)) else {
             return
@@ -159,12 +169,19 @@ final class CloseWorkspaceMenuBridge: NSObject, NSMenuItemValidation {
             // Menu titles and actions can vary across localized system menus, so
             // identify the standard Close All slot by its keyboard equivalent,
             // but constrain the search to File menu items that still resemble
-            // the system slot we are retargeting.
+            // the system slot we are retargeting. Once retargeted, continue to
+            // match the File > Close Workspace item by title even after its
+            // shortcut is cleared so refreshes can reattach the bridge.
             let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
-            if item.keyEquivalent.lowercased() == "w",
-               inFileMenu,
-               (modifiers == [.command, .shift] || modifiers == [.shift]),
-               (item.title == systemCloseAllMenuItemTitle || item.title == closeWorkspaceMenuItemTitle) {
+            let matchesSystemCloseAllSlot = item.keyEquivalent.lowercased() == "w" &&
+                inFileMenu &&
+                (modifiers == [.command, .shift] || modifiers == [.shift]) &&
+                (item.title == systemCloseAllMenuItemTitle || item.title == closeWorkspaceMenuItemTitle)
+            let matchesRetargetedCloseWorkspaceItem = inFileMenu &&
+                item.title == closeWorkspaceMenuItemTitle &&
+                item.action == #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
+
+            if matchesSystemCloseAllSlot || matchesRetargetedCloseWorkspaceItem {
                 return item
             }
 

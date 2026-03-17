@@ -188,6 +188,10 @@ struct ToasttyCommandMenus: Commands {
             Button("Close Workspace") {
                 store.closeSelectedWorkspaceFromCommand(preferredWindowID: focusedWindowID)
             }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.closeWorkspace.key,
+                modifiers: ToasttyKeyboardShortcuts.closeWorkspace.modifiers
+            )
             .disabled(commandWorkspace == nil)
 
             Button("Close Panel") {
