@@ -86,6 +86,11 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
 
+        bridge.installIfNeeded()
+        XCTAssertEqual(closeItem.title, "Close Panel")
+        XCTAssertTrue(closeItem.target === bridge)
+        XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
+
         bridge.performCloseWindow(nil)
 
         let window = try XCTUnwrap(store.window(id: fixture.windowID))
@@ -126,6 +131,50 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.openProjectHelp(nil)
 
         XCTAssertEqual(openedURL, URL(string: "https://github.com/figelwump/toastty"))
+    }
+
+    func testSparkleMenuBridgeInsertsUpdaterItemAfterAboutAndTriggersCheck() throws {
+        var didCheckForUpdates = false
+        var canCheckForUpdates = true
+        let bridge = SparkleMenuBridge(
+            canCheckForUpdates: { canCheckForUpdates },
+            performCheckForUpdates: {
+                didCheckForUpdates = true
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let appRootItem = NSMenuItem(title: "Toastty", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Toastty")
+        let aboutItem = NSMenuItem(title: "About Toastty", action: nil, keyEquivalent: "")
+        let reloadItem = NSMenuItem(title: "Reload Configuration", action: nil, keyEquivalent: "")
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(reloadItem)
+        appRootItem.submenu = appMenu
+        mainMenu.addItem(appRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
+        let updaterItem = appMenu.items[1]
+        XCTAssertTrue(updaterItem.target === bridge)
+        XCTAssertEqual(updaterItem.action, #selector(SparkleMenuBridge.checkForUpdates(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(updaterItem))
+
+        bridge.checkForUpdates(nil)
+        XCTAssertTrue(didCheckForUpdates)
+
+        canCheckForUpdates = false
+        XCTAssertFalse(bridge.validateMenuItem(updaterItem))
+
+        appMenu.removeItem(updaterItem)
+        bridge.installIfNeeded()
+        XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
     }
 
     func testHiddenSystemMenuItemsBridgeHidesRequestedItemsByAction() {

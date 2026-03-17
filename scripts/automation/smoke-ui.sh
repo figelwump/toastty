@@ -54,6 +54,10 @@ run_tuist() {
   fi
 }
 
+ensure_tuist_dependencies() {
+  run_tuist install >/dev/null
+}
+
 cleanup() {
   local exit_code=$?
   if [[ -n "$DROP_IMAGE_PATH_TO_CLEANUP" && -f "$DROP_IMAGE_PATH_TO_CLEANUP" ]]; then
@@ -88,6 +92,7 @@ badge = "SMOKE"
 startupCommand = "printf 'PROFILE:%s:%s\\\\n' \"\$TOASTTY_TERMINAL_PROFILE_ID\" \"\$TOASTTY_LAUNCH_REASON\"; printf '\\\\033]2;${PROFILE_SMOKE_TITLE}\\\\007'; sleep 2"
 EOF
 
+ensure_tuist_dependencies
 run_tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \

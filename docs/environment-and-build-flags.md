@@ -12,6 +12,8 @@ Scope notes:
 
 These flags affect `tuist generate`, project configuration, or Ghostty artifact installation.
 
+Run `tuist install` after cloning the repo and whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes. The automation and release scripts do this for you.
+
 | Flag | Scope | Default | Effect |
 |---|---|---|---|
 | `TUIST_DISABLE_GHOSTTY` | `Project.swift`, automation scripts | unset | Disables Ghostty integration and generates/builds the fallback app path. This is the preferred flag for local fallback builds. |
@@ -139,6 +141,7 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_APPLE_ID` | none | Required Apple ID email passed to `xcrun notarytool submit`. |
 | `TOASTTY_NOTARY_PASSWORD` | none | Required app-specific password or other notary secret passed to `xcrun notarytool submit`. |
 | `TOASTTY_TEAM_ID` | none | Required Apple team ID passed to `xcrun notarytool submit`. |
+| `TOASTTY_SPARKLE_PRIVATE_KEY` | none | Required Sparkle EdDSA private key used to sign the final stapled DMG. Store it in `sv` and inject it with `sv exec --`. |
 Additional release behavior:
 
 - the git working tree must be clean before the build starts
@@ -149,6 +152,7 @@ Additional release behavior:
 - the script writes:
   - `artifacts/release/<version>-<build>/release-metadata.env`
   - `artifacts/release/<version>-<build>/ghostty-metadata.env`
+  - `artifacts/release/<version>-<build>/sparkle-metadata.env`
 - the script records `RELEASE_NOTES_PATH=artifacts/release/<version>-<build>/release-notes.md` in release metadata, but the notes file is drafted later by an agent or human using the recorded release diff and Ghostty metadata; the repo-local `toastty-release` skill documents that workflow and the repo-local `toastty-publish` skill handles later publication
 
 The staged release directory remains `artifacts/release/<version>-<build>/`, but the public DMG filename is `Toastty-<version>.dmg`.
@@ -169,11 +173,14 @@ sv exec -- env \
 |---|---|---|
 | `TOASTTY_VERSION` | none | Required release version used to derive the default Git tag (`v<version>`), default release title, and expected DMG filename. |
 | `TOASTTY_BUILD_NUMBER` | none | Required monotonic integer used to derive the expected staging directory under `artifacts/release/<version>-<build>/`. |
+| `SPARKLE_FEED_REPO` | `<repo-owner>/toastty-updates` | Optional GitHub repository that stores `appcast.xml` for the Sparkle feed. |
+| `SPARKLE_FEED_BRANCH` | `main` | Optional branch in `SPARKLE_FEED_REPO` that contains `appcast.xml`. |
 
 Prerequisites:
 
 - `gh` must be installed and authenticated
 - the release metadata file must exist at `artifacts/release/<version>-<build>/release-metadata.env`
+- the Sparkle metadata file must exist at `artifacts/release/<version>-<build>/sparkle-metadata.env`
 - the recorded release commit must exist in the current checkout
 - the tag must already exist locally and on `origin`, unless `--create-tag` is used
 
@@ -182,6 +189,7 @@ The publisher expects:
 - the DMG at `artifacts/release/<version>-<build>/Toastty-<version>.dmg`
 - release notes at `artifacts/release/<version>-<build>/release-notes.md` unless overridden
 - release metadata at `artifacts/release/<version>-<build>/release-metadata.env`
+- Sparkle metadata at `artifacts/release/<version>-<build>/sparkle-metadata.env`
 
 CLI options:
 
@@ -194,6 +202,11 @@ CLI options:
 | `--repo <owner/repo>` | inferred from `origin` | Overrides the target GitHub repository. Required when `origin` is not a parseable GitHub remote. |
 | `--tag <tag>` | `v<TOASTTY_VERSION>` | Overrides the Git tag used for the release. The tag must already exist locally and on `origin`, unless `--create-tag` is used. |
 | `--title <title>` | `v<TOASTTY_VERSION>` | Overrides the release title shown on GitHub. |
+
+Additional publish behavior:
+
+- draft GitHub releases do not touch the Sparkle appcast
+- `--publish` uploads the DMG to GitHub Releases and then merges a new item into `appcast.xml` in the configured feed repo
 
 ## Internal or Derived Flags
 
@@ -208,6 +221,7 @@ These names appear in the repo but are not intended as public runtime knobs.
 Build without Ghostty:
 
 ```bash
+tuist install
 TUIST_DISABLE_GHOSTTY=1 tuist generate
 ```
 

@@ -24,6 +24,10 @@ run_tuist() {
   fi
 }
 
+ensure_tuist_dependencies() {
+  run_tuist install >/dev/null
+}
+
 restore_default_workspace() {
   run_tuist generate --no-open >/dev/null 2>&1 || true
 }
@@ -60,6 +64,8 @@ validate_manifest_version_inputs() {
     return 1
   fi
 }
+
+ensure_tuist_dependencies
 
 if ! validate_manifest_version_inputs; then
   restore_default_workspace

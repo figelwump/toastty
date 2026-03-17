@@ -104,17 +104,59 @@ private enum ToasttyMenuActions {
 @MainActor
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
+    private var closeWindowMenuBridge: CloseWindowMenuBridge?
+    private var helpMenuBridge: HelpMenuBridge?
+    private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
+    private var sparkleMenuBridge: SparkleMenuBridge?
+    private var menuBridgeInstallationTask: Task<Void, Never>?
+    let sparkleUpdaterBridge: SparkleUpdaterBridge
 
     override init() {
         let processInfo = ProcessInfo.processInfo
-        shouldConfirmQuit = !AutomationConfig.shouldBypassInteractiveConfirmation(
-            arguments: processInfo.arguments,
-            environment: processInfo.environment
-        )
+        let isInteractiveSession = Self.isInteractiveSession(processInfo)
+        shouldConfirmQuit = isInteractiveSession
+        sparkleUpdaterBridge = SparkleUpdaterBridge(startingUpdater: isInteractiveSession)
         super.init()
     }
 
+    deinit {
+        menuBridgeInstallationTask?.cancel()
+    }
+
+    static func isInteractiveSession(_ processInfo: ProcessInfo) -> Bool {
+        !AutomationConfig.shouldBypassInteractiveConfirmation(
+            arguments: processInfo.arguments,
+            environment: processInfo.environment
+        )
+    }
+
+    func configureMenuBridges(
+        closeWindowMenuBridge: CloseWindowMenuBridge,
+        helpMenuBridge: HelpMenuBridge,
+        hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
+    ) {
+        self.closeWindowMenuBridge = closeWindowMenuBridge
+        self.helpMenuBridge = helpMenuBridge
+        self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
+
+        if sparkleMenuBridge == nil {
+            sparkleMenuBridge = SparkleMenuBridge(sparkleUpdaterBridge: sparkleUpdaterBridge)
+        }
+
+        scheduleMenuBridgeInstallations()
+    }
+
+    nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = notification
+        Task { @MainActor [weak self] in
+            self?.scheduleMenuBridgeInstallations()
+        }
+    }
+
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.scheduleMenuBridgeInstallations()
+        }
         _ = notification
         #if TOASTTY_HAS_GHOSTTY_KIT
         Task { @MainActor in
@@ -144,6 +186,26 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
         let response = confirmationAlert.runModal()
         return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    private func installMenuBridges() {
+        closeWindowMenuBridge?.installIfNeeded()
+        helpMenuBridge?.installIfNeeded()
+        hiddenSystemMenuItemsBridge?.installIfNeeded()
+        sparkleMenuBridge?.installIfNeeded()
+    }
+
+    private func scheduleMenuBridgeInstallations() {
+        menuBridgeInstallationTask?.cancel()
+        installMenuBridges()
+
+        menuBridgeInstallationTask = Task { @MainActor [weak self] in
+            for delay in [100, 500, 1_000, 2_000] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard Task.isCancelled == false else { return }
+                self?.installMenuBridges()
+            }
+        }
     }
 }
 
@@ -236,69 +298,6 @@ private final class AppResignActiveObserver: NSObject {
 }
 
 @MainActor
-private final class MenuBridgeInstaller {
-    private let closeWindowMenuBridge: CloseWindowMenuBridge
-    private let helpMenuBridge: HelpMenuBridge
-    private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
-    private var installationTask: Task<Void, Never>?
-
-    init(
-        closeWindowMenuBridge: CloseWindowMenuBridge,
-        helpMenuBridge: HelpMenuBridge,
-        hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
-    ) {
-        self.closeWindowMenuBridge = closeWindowMenuBridge
-        self.helpMenuBridge = helpMenuBridge
-        self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
-
-        scheduleInstallations()
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleApplicationLifecycleNotification(_:)),
-            name: NSApplication.didFinishLaunchingNotification,
-            object: nil
-        )
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleApplicationLifecycleNotification(_:)),
-            name: NSApplication.didBecomeActiveNotification,
-            object: nil
-        )
-    }
-
-    deinit {
-        installationTask?.cancel()
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    @objc
-    private func handleApplicationLifecycleNotification(_ notification: Notification) {
-        _ = notification
-        scheduleInstallations()
-    }
-
-    private func scheduleInstallations() {
-        installationTask?.cancel()
-        installationTask = Task { @MainActor [weak self] in
-            for delay in [0, 100, 500, 1_000, 2_000] {
-                if delay > 0 {
-                    try? await Task.sleep(for: .milliseconds(delay))
-                }
-                guard Task.isCancelled == false else { return }
-                self?.installIfPossible()
-            }
-        }
-    }
-
-    private func installIfPossible() {
-        guard NSApplication.shared.mainMenu != nil else { return }
-        closeWindowMenuBridge.installIfNeeded()
-        helpMenuBridge.installIfNeeded()
-        hiddenSystemMenuItemsBridge.installIfNeeded()
-    }
-}
-
-@MainActor
 @main
 struct ToasttyApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycleDelegate.self)
@@ -320,7 +319,6 @@ struct ToasttyApp: App {
     private let helpMenuBridge: HelpMenuBridge
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
-    private let menuBridgeInstaller: MenuBridgeInstaller
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
@@ -391,11 +389,6 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             installShellIntegrationAction: ToasttyMenuActions.installShellIntegration
         )
-        menuBridgeInstaller = MenuBridgeInstaller(
-            closeWindowMenuBridge: closeWindowMenuBridge,
-            helpMenuBridge: helpMenuBridge,
-            hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
-        )
         focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
@@ -461,6 +454,13 @@ struct ToasttyApp: App {
                 disableAnimations: disableAnimations
             )
             .frame(minWidth: 980, minHeight: 620)
+            .onAppear {
+                appLifecycleDelegate.configureMenuBridges(
+                    closeWindowMenuBridge: closeWindowMenuBridge,
+                    helpMenuBridge: helpMenuBridge,
+                    hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
+                )
+            }
         }
         // Let SwiftUI remove the native titlebar container so our custom
         // workspace chrome can occupy that space without AppKit overlaying it.

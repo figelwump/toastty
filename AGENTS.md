@@ -2,6 +2,7 @@
 
 ## Build & Generate
 - **Source of truth:** `Project.swift` — never hand-edit generated Xcode project/workspace files.
+- **Install packages:** `tuist install` after cloning and whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes. Repo scripts do this automatically where needed.
 - **Regenerate:** `tuist generate` after any project/dependency/build-setting change, or after source file adds/renames/deletes or branch switches. The generated `.xcodeproj`/`.xcworkspace` are gitignored and never updated by Git, leaving Xcode with stale references (symptom: `Build input file cannot be found`).
 - **Build:** `ARCH="$(uname -m)"; xcodebuild -workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=${ARCH}" -derivedDataPath Derived build`
 - **Full gate:** `./scripts/automation/check.sh` (generate + build + test)
@@ -9,8 +10,8 @@
 
 ## Release Workflow
 - **Ghostty release provenance:** install release artifacts with `GHOSTTY_BUILD_FLAGS=... ./scripts/ghostty/install-local-xcframework.sh`; the installer writes ignored sidecar metadata under `Dependencies/GhosttyKit.Release.metadata.env`.
-- **Build release DMG and draft notes:** use `.agents/skills/toastty-release/SKILL.md`. `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot, then writes `release-metadata.env` and `ghostty-metadata.env` into `artifacts/release/<version>-<build>/`; the release skill drafts `release-notes.md` in that same directory for review before publish.
-- **Publish later:** use `.agents/skills/toastty-publish/SKILL.md`. It verifies the existing drafted notes and runs `scripts/release/publish-github-release.sh --create-tag` to tag the recorded release commit and create the GitHub release.
+- **Build release DMG and draft notes:** use `.agents/skills/toastty-release/SKILL.md`. `scripts/release/release.sh` requires a clean Toastty git tree and a clean Ghostty metadata snapshot, then writes `release-metadata.env`, `ghostty-metadata.env`, and `sparkle-metadata.env` into `artifacts/release/<version>-<build>/`; the release skill drafts `release-notes.md` in that same directory for review before publish.
+- **Publish later:** use `.agents/skills/toastty-publish/SKILL.md`. It verifies the existing drafted notes and release metadata, then runs `scripts/release/publish-github-release.sh --create-tag` to tag the recorded release commit, create the GitHub release, and update the Sparkle appcast when `--publish` is used.
 
 ## Validation
 For any UI/runtime change, validate beyond unit tests — run automation and inspect visually.

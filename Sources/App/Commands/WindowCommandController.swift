@@ -66,7 +66,12 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
         for item in items {
             if item.keyEquivalent.lowercased() == "w",
                item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command],
-               (item.action == #selector(NSWindow.performClose(_:)) || item.action == nil) {
+               (
+                   item.action == #selector(NSWindow.performClose(_:)) ||
+                   item.action == #selector(CloseWindowMenuBridge.performCloseWindow(_:)) ||
+                   item.action == nil ||
+                   item.title == closePanelMenuItemTitle
+               ) {
                 return item
             }
 
@@ -123,6 +128,87 @@ final class HelpMenuBridge: NSObject {
         }
 
         return nil
+    }
+}
+
+@MainActor
+final class SparkleMenuBridge: NSObject, NSMenuItemValidation {
+    private static let menuItemTitle = "Check for Updates..."
+
+    private let canCheckForUpdates: () -> Bool
+    private let performCheckForUpdates: () -> Void
+
+    init(
+        canCheckForUpdates: @escaping () -> Bool,
+        performCheckForUpdates: @escaping () -> Void
+    ) {
+        self.canCheckForUpdates = canCheckForUpdates
+        self.performCheckForUpdates = performCheckForUpdates
+    }
+
+    convenience init(sparkleUpdaterBridge: SparkleUpdaterBridge) {
+        self.init(
+            canCheckForUpdates: { sparkleUpdaterBridge.canCheckForUpdates },
+            performCheckForUpdates: { sparkleUpdaterBridge.checkForUpdates() }
+        )
+    }
+
+    func installIfNeeded() {
+        guard let mainMenu = NSApp.mainMenu,
+              let appMenu = Self.findAppMenu(in: mainMenu.items) else {
+            return
+        }
+
+        let menuItem: NSMenuItem
+        if let existingMenuItem = Self.findCheckForUpdatesMenuItem(in: appMenu.items) {
+            menuItem = existingMenuItem
+        } else {
+            menuItem = NSMenuItem(title: Self.menuItemTitle, action: nil, keyEquivalent: "")
+            appMenu.insertItem(menuItem, at: Self.insertionIndex(in: appMenu.items))
+        }
+
+        menuItem.target = self
+        menuItem.action = #selector(checkForUpdates(_:))
+        menuItem.isEnabled = canCheckForUpdates()
+    }
+
+    @objc
+    func checkForUpdates(_: Any?) {
+        performCheckForUpdates()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard menuItem.title == Self.menuItemTitle else {
+            return true
+        }
+
+        return canCheckForUpdates()
+    }
+
+    private static func findAppMenu(in items: [NSMenuItem]) -> NSMenu? {
+        for item in items {
+            if item.title == "Apple" {
+                continue
+            }
+            guard let submenu = item.submenu else { continue }
+            if submenu.items.contains(where: { $0.title.hasPrefix("About ") }) {
+                return submenu
+            }
+        }
+
+        return nil
+    }
+
+    private static func findCheckForUpdatesMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
+        items.first(where: { $0.title == menuItemTitle })
+    }
+
+    private static func insertionIndex(in items: [NSMenuItem]) -> Int {
+        guard let aboutItemIndex = items.firstIndex(where: { $0.title.hasPrefix("About ") }) else {
+            return 0
+        }
+
+        return aboutItemIndex + 1
     }
 }
 

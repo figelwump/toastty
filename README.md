@@ -37,10 +37,11 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 ```bash
 git clone https://github.com/figelwump/toastty.git
 cd toastty
+tuist install
 tuist generate
 ```
 
-`Project.swift` is the source of truth. The generated `toastty.xcworkspace` is not committed, so re-run `tuist generate` after manifest or file-layout changes.
+`Project.swift` is the source of truth. The generated `toastty.xcworkspace` is not committed, so re-run `tuist generate` after manifest or file-layout changes. Re-run `tuist install` whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes.
 
 ### 2. Install sv
 
@@ -72,6 +73,7 @@ For the recommended upstream Ghostty build command, release note guidance, see [
 After installing, regenerate:
 
 ```bash
+tuist install
 tuist generate
 ```
 
@@ -114,6 +116,7 @@ The release script expects:
 - Ghostty provenance metadata at `Dependencies/GhosttyKit.Release.metadata.env`
 - a local `Developer ID Application` certificate
 - notarization credentials injected at runtime
+- a Sparkle private key injected at runtime as `TOASTTY_SPARKLE_PRIVATE_KEY`
 
 Use an explicit marketing version plus a monotonically increasing build number:
 
@@ -129,12 +132,13 @@ The script archives the app, exports a signed bundle, creates a plain drag-to-in
 It also snapshots release provenance into the release directory:
 - `release-metadata.env` with the exact Toastty commit that was built
 - `ghostty-metadata.env` with the embedded Ghostty commit and build flags
+- `sparkle-metadata.env` with the feed URL, public key, DMG signature, and enclosure metadata needed for appcast publication
 
 The script also records the canonical `artifacts/release/<version>-<build>/release-notes.md` path in `release-metadata.env`, but it does not generate the file for you. The repo-local `toastty-release` skill covers the build step and drafting `release-notes.md` from the recorded release diff so it can be reviewed before publish; the repo-local `toastty-publish` skill covers publishing those drafted notes later.
 
 ### 7. Publish a draft GitHub Release
 
-After the DMG exists locally, publish it to GitHub Releases with the helper script. The script defaults to a draft release; pass `--publish` only when you want the release to go live immediately.
+After the DMG exists locally, publish it to GitHub Releases with the helper script. The script defaults to a draft release; pass `--publish` only when you want the release to go live immediately and update the Sparkle appcast at `https://updates.toastty.dev/appcast.xml`.
 
 Prerequisites:
 - `gh` is installed and authenticated for the target repo

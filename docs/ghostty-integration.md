@@ -73,6 +73,7 @@ Release DMG builds require a complete release sidecar with a clean Ghostty sourc
 After installing an artifact, regenerate the workspace:
 
 ```bash
+tuist install
 tuist generate
 ```
 
