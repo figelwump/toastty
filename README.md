@@ -104,6 +104,12 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
+
+# Foreground-capable remote GUI validation
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/gui-validate.sh \
+  --scope working-tree \
+  --validation-command 'peekaboo menu list --pid "$TOASTTY_PID" --json | tee "$TOASTTY_ARTIFACTS_DIR/peekaboo-menu.json"'
 ```
 
 ### 6. Build a signed release DMG
@@ -168,6 +174,8 @@ Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `User
 For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, the default automation socket, and UI-managed defaults inside that runtime home instead of using the shared user locations. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`.
 
 For a fresh linked worktree that should reuse the Ghostty artifact from another Toastty checkout, run `./scripts/dev/bootstrap-worktree.sh` once before building. The helper creates symlinks back to the source worktree's `Dependencies/GhosttyKit*` artifacts, so rebuilding or replacing Ghostty there immediately affects linked worktrees. The smoke, shortcut-trace, and check helpers already do this automatically.
+
+For local runtime validation, start with `./scripts/automation/smoke-ui.sh` when the change is covered by socket automation. It restores the previously frontmost app after Toastty reaches automation readiness, so it is the least disruptive default local path. When validation needs Peekaboo, real menus, real shortcuts, or any other foreground-capable UI interaction, prefer `TOASTTY_REMOTE_GUI_HOST=... ./scripts/remote/gui-validate.sh ...` so the focus-stealing work runs on a dedicated remote Mac instead of the current desktop. The remote Mac must be awake, unlocked, and logged into the GUI session where Peekaboo is permitted.
 
 Today that means:
 

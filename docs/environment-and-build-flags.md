@@ -103,6 +103,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 |---|---|---|
 | `RUN_ID` | timestamped `smoke-*` value | Run ID passed through to the app. |
 | `FIXTURE` | `split-workspace` | Fixture passed through to the app. |
+| `TOASTTY_SMOKE_RESTORE_FRONT_APP` | `1` | When set to a truthy value such as `1`, `true`, `yes`, or `on`, the script restores the previously frontmost app after Toastty reaches automation readiness so local smoke runs minimize focus theft. Set it to `0` or leave it unset only if you want the default behavior suppressed explicitly. |
 | `DEV_RUN_ROOT` | `artifacts/dev-runs/<RUN_ID>` | Root directory for this smoke run's isolated derived data, runtime home, socket, and artifacts. |
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
@@ -130,6 +131,24 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `FOCUS_PREVIOUS_KEY_CODE` | `33` | Key code used for previous-pane focus tracing. |
 | `RESIZE_KEY_CODE` | `124` | Key code used for split resize tracing. |
 | `EQUALIZE_KEY_CODE` | `24` | Key code used for equalize tracing. |
+
+### `scripts/remote/gui-validate.sh`
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOASTTY_REMOTE_GUI_HOST` | unset | Required SSH host for the dedicated remote GUI validation machine. |
+| `TOASTTY_REMOTE_GUI_REPO_ROOT` | local Toastty repo path | Absolute Toastty repo path on the remote host. The wrapper creates disposable remote git worktrees from this repo. |
+| `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
+| `RUN_LABEL` | timestamped `gui-validate-*` value | Optional stable label for the remote validation run. Prefer `--run-label` for explicit CLI usage. |
+
+CLI notes:
+
+- `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
+- `--scope head` exports the current checked-out commit without uncommitted changes.
+- `--scope ref --ref <rev>` exports an explicit local git ref.
+- `--validation-command` runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
+- If `--validation-command` is omitted, the wrapper defaults to `peekaboo menu list --pid "$TOASTTY_PID" --json`.
+- The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions.
 
 ### `scripts/release/release.sh`
 

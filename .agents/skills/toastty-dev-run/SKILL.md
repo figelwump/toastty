@@ -1,13 +1,13 @@
 ---
 name: toastty-dev-run
-description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance with runtime isolation, instance.json targeting, and Peekaboo-based UI inspection.
+description: Use this skill when building, launching, or validating a live Toastty dev/debug/test app instance with runtime isolation, instance.json targeting, local smoke automation, and local or remote GUI validation.
 ---
 
 # Toastty Dev Run
 
-Use this workflow when the task requires a real running Toastty app instance rather than unit tests or socket-only automation.
+Use this workflow when the task requires a real running Toastty app instance rather than unit tests alone.
 
-Pair this skill with the global `peekaboo` skill for UI inspection and interaction.
+Pair this skill with the global `peekaboo` skill for local UI inspection and interaction. When foreground validation would steal focus from the current desktop, prefer the repo-local remote GUI wrapper instead of running Peekaboo locally.
 
 ## When to use this
 
@@ -15,7 +15,7 @@ Pair this skill with the global `peekaboo` skill for UI inspection and interacti
 - The agent needs the exact PID, runtime home, logs, or socket for the instance it launched.
 - The user is running Toastty from Xcode or from multiple worktrees and the agent must avoid shared local state.
 
-Do not use this skill for release builds, pure unit-test work, or smoke/trace cases already covered by `scripts/automation/smoke-ui.sh` or `scripts/automation/shortcut-trace.sh`.
+Do not use this skill for release builds or pure unit-test work.
 
 ## Core rules
 
@@ -28,6 +28,29 @@ Do not use this skill for release builds, pure unit-test work, or smoke/trace ca
 7. Before any `peekaboo` call, confirm the PID from `instance.json` is still alive. If it is stale, relaunch instead of guessing.
 8. Inspect logs and runtime state inside the same runtime home you launched. Do not inspect shared `~/.toastty` data for an isolated run.
 9. Clean up only the sandbox you launched.
+
+## Validation planning
+
+Before launching anything, decide what change scope you are validating:
+
+- `working-tree`: current unstaged or staged changes in the local worktree
+- `head`: the current checked-out commit as it exists now
+- `ref`: an explicit commit, branch, or tag the agent wants to validate
+
+Then derive a short validation plan from that scope:
+
+- Inspect the diff or the relevant changed files first.
+- Write down the concrete user-visible behaviors that could have changed.
+- Prefer 2-5 high-signal test cases over a generic “open the app and click around”.
+- If the user already gave explicit test cases, use those instead of inventing new ones.
+
+## Choosing the path
+
+Use the least disruptive path that still covers the change:
+
+- Local smoke: use `scripts/automation/smoke-ui.sh` first when socket automation covers the change. This is the default local path because it restores the previously frontmost app after Toastty reaches automation readiness.
+- Local foreground: use a local isolated dev run plus Peekaboo only when you need direct inspection but the focus impact is acceptable.
+- Remote foreground: use `scripts/remote/gui-validate.sh` when the validation needs Peekaboo, real menus, real shortcuts, or any other foreground-capable UI interaction that would disrupt the current desktop.
 
 ## Typical terminal flow
 
@@ -63,6 +86,28 @@ kill -0 "$PID"
 peekaboo menu list --pid "$PID" --json
 ```
 
+## Remote GUI flow
+
+For foreground-capable validation on a dedicated remote Mac:
+
+```bash
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/gui-validate.sh \
+  --scope working-tree \
+  --test-case "Verify the Window menu reflects the new command state" \
+  --validation-command 'peekaboo menu list --pid "$TOASTTY_PID" --json | tee "$TOASTTY_ARTIFACTS_DIR/window-menu.json"'
+```
+
+Notes:
+
+- `--scope working-tree` validates the current uncommitted local worktree by syncing it into a disposable remote worktree.
+- `--scope head` validates the current checked-out commit without uncommitted changes.
+- `--scope ref --ref <rev>` validates an explicit ref.
+- `--test-case` notes are copied into the local and remote artifacts so another agent or human can see what was intended.
+- The remote artifacts come back under `artifacts/remote-gui/<run-label>/remote/`.
+- If no `--validation-command` is given, the wrapper defaults to `peekaboo menu list --pid "$TOASTTY_PID" --json`.
+- The remote Mac must be awake, unlocked, logged into the target GUI session, and have Peekaboo permissions granted there.
+
 ## Runtime-home conventions
 
 - Explicit sandbox: `TOASTTY_RUNTIME_HOME=/custom/path`
@@ -77,7 +122,9 @@ peekaboo menu list --pid "$PID" --json
 
 ## Validation guidance
 
-- Use `scripts/automation/smoke-ui.sh` or `scripts/automation/shortcut-trace.sh` first when they cover the change.
+- Use `scripts/automation/smoke-ui.sh` first when it covers the change.
+- Use `scripts/automation/shortcut-trace.sh` only when you specifically need local real-shortcut tracing and the focus impact is acceptable.
+- Use `scripts/remote/gui-validate.sh` for remote Peekaboo-driven validation when focus stealing would be disruptive locally.
 - Use `peekaboo menu list --pid <pid> --json` for menu checks.
 - Use `peekaboo image`, `peekaboo see`, window commands, and keyboard commands against that same PID for live UI validation.
 - Tail `logs/toastty.log` under the runtime home for isolated runs.

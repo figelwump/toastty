@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-split-workspace}"
+RESTORE_FRONT_APP_AFTER_LAUNCH="${TOASTTY_SMOKE_RESTORE_FRONT_APP:-1}"
 DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
 DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$DEV_RUN_ROOT/artifacts}"
@@ -29,6 +30,8 @@ TERMINAL_PROFILES_PATH="$TOASTTY_RUNTIME_HOME/terminal-profiles.toml"
 PROFILE_SMOKE_PROFILE_ID="smoke-profile"
 PROFILE_SMOKE_TITLE="Profile Ready"
 PROFILE_SMOKE_VISIBLE_MARKER="PROFILE:${PROFILE_SMOKE_PROFILE_ID}:create"
+PREVIOUS_FRONT_BUNDLE_ID=""
+FRONT_APP_RESTORE_DONE=0
 
 mkdir -p "$ARTIFACTS_DIR" "$TOASTTY_RUNTIME_HOME" "$(dirname "$SOCKET_PATH")"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$LOG_FILE"
@@ -38,8 +41,48 @@ if ! command -v nc >/dev/null 2>&1; then
   exit 1
 fi
 
+frontmost_bundle_id() {
+  local front_asn
+  front_asn="$(lsappinfo front 2>/dev/null || true)"
+  if [[ -z "$front_asn" ]]; then
+    return 0
+  fi
+
+  local info
+  info="$(lsappinfo info -only bundleID "$front_asn" 2>/dev/null || true)"
+  if [[ -z "$info" ]]; then
+    return 0
+  fi
+
+  printf '%s\n' "$info" | sed -n 's/^"CFBundleIdentifier"="\(.*\)"$/\1/p'
+}
+
+restore_previous_front_app() {
+  local normalized_restore_flag
+  normalized_restore_flag="$(printf '%s' "$RESTORE_FRONT_APP_AFTER_LAUNCH" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized_restore_flag" in
+    1|true|yes|on)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  if [[ "$FRONT_APP_RESTORE_DONE" == "1" ]]; then
+    return 0
+  fi
+  if [[ -z "$PREVIOUS_FRONT_BUNDLE_ID" || "$PREVIOUS_FRONT_BUNDLE_ID" == "com.GiantThings.toastty" ]]; then
+    return 0
+  fi
+
+  FRONT_APP_RESTORE_DONE=1
+  open -b "$PREVIOUS_FRONT_BUNDLE_ID" >/dev/null 2>&1 || true
+}
+
+PREVIOUS_FRONT_BUNDLE_ID="$(frontmost_bundle_id)"
+
 cleanup() {
   local exit_code=$?
+  restore_previous_front_app
   if [[ -n "$DROP_IMAGE_PATH_TO_CLEANUP" && -f "$DROP_IMAGE_PATH_TO_CLEANUP" ]]; then
     rm -f "$DROP_IMAGE_PATH_TO_CLEANUP"
   fi
@@ -125,6 +168,8 @@ if [[ ! -S "$SOCKET_PATH" ]]; then
   echo "error: socket not available: $SOCKET_PATH" >&2
   exit 1
 fi
+
+restore_previous_front_app
 
 send_request() {
   local command="$1"
