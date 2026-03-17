@@ -324,6 +324,7 @@ struct ToasttyApp: App {
 
     init() {
         let processInfo = ProcessInfo.processInfo
+        Self.prepareRuntimeEnvironment(processInfo: processInfo)
         Self.ensureTerminalProfilesTemplateExists()
         Self.configureWindowPersistenceDefaults()
         let usesPersistentPreferences = AutomationConfig.parse(
@@ -344,6 +345,7 @@ struct ToasttyApp: App {
             processInfo: processInfo,
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
+        Self.recordRuntimeInstance(processInfo: processInfo, automationConfig: bootstrap.automationConfig)
         let persistTerminalFontPreference = bootstrap.automationConfig == nil
         let store = AppStore(
             state: bootstrap.state,
@@ -628,9 +630,26 @@ struct ToasttyApp: App {
 
         // Toastty persists window/workspace state explicitly, so AppKit's
         // saved-state restoration only adds stale SwiftUI scene identifiers.
-        let defaults = UserDefaults.standard
+        let defaults = ToasttyAppDefaults.current
         defaults.set(true, forKey: "ApplePersistenceIgnoreState")
         defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+    }
+
+    private static func prepareRuntimeEnvironment(processInfo: ProcessInfo) {
+        do {
+            try ToasttyRuntimePaths.resolve(environment: processInfo.environment).prepare()
+        } catch {
+            if let errorData = "toastty runtime preparation failed: \(error.localizedDescription)\n".data(using: .utf8) {
+                FileHandle.standardError.write(errorData)
+            }
+        }
+    }
+
+    private static func recordRuntimeInstance(processInfo: ProcessInfo, automationConfig: AutomationConfig?) {
+        ToasttyRuntimeInstanceRecorder.recordLaunch(
+            processInfo: processInfo,
+            automationConfig: automationConfig
+        )
     }
 
     private static func ensureTerminalProfilesTemplateExists() {

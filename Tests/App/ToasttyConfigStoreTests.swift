@@ -59,7 +59,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # terminal-font-size = 13
 
             # default-terminal-profile uses a profile ID from
-            # ~/.toastty/terminal-profiles.toml for new terminals only,
+            # terminal-profiles.toml for new terminals only,
             # including ordinary split shortcuts like Cmd+D and Cmd+Shift+D.
             # Existing terminals keep their current profiles.
             # default-terminal-profile = "zmx"
@@ -87,6 +87,15 @@ final class ToasttyConfigStoreTests: XCTestCase {
                 atPath: ToasttyConfigStore.configFileURL(homeDirectoryPath: homeDirectoryURL.path).path
             )
         )
+    }
+
+    func testConfigFileURLUsesRuntimeHomeWhenSet() {
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/config-runtime"]
+        )
+
+        XCTAssertEqual(configURL.path, "/tmp/toastty-runtime-home-tests/config-runtime/config")
     }
 }
 

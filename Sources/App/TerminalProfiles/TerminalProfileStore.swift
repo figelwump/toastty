@@ -21,17 +21,21 @@ final class TerminalProfileStore: ObservableObject, TerminalProfileProviding {
 
     private let fileManager: FileManager
     private let homeDirectoryPath: String
+    private let environment: [String: String]
 
     init(
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.fileManager = fileManager
         self.homeDirectoryPath = homeDirectoryPath
+        self.environment = environment
         do {
             catalog = try TerminalProfilesFile.load(
                 fileManager: fileManager,
-                homeDirectoryPath: homeDirectoryPath
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
             )
         } catch {
             catalog = .empty
@@ -39,7 +43,10 @@ final class TerminalProfileStore: ObservableObject, TerminalProfileProviding {
                 "Failed to load terminal profiles at startup",
                 category: .bootstrap,
                 metadata: [
-                    "path": TerminalProfilesFile.fileURL(homeDirectoryPath: homeDirectoryPath).path,
+                    "path": TerminalProfilesFile.fileURL(
+                        homeDirectoryPath: homeDirectoryPath,
+                        environment: environment
+                    ).path,
                     "error": error.localizedDescription,
                 ]
             )
@@ -47,7 +54,10 @@ final class TerminalProfileStore: ObservableObject, TerminalProfileProviding {
     }
 
     var fileURL: URL {
-        TerminalProfilesFile.fileURL(homeDirectoryPath: homeDirectoryPath)
+        TerminalProfilesFile.fileURL(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
     }
 
     @discardableResult
@@ -55,7 +65,8 @@ final class TerminalProfileStore: ObservableObject, TerminalProfileProviding {
         do {
             let nextCatalog = try TerminalProfilesFile.load(
                 fileManager: fileManager,
-                homeDirectoryPath: homeDirectoryPath
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
             )
             catalog = nextCatalog
             return .success(nextCatalog)

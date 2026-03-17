@@ -76,6 +76,24 @@ struct AutomationTests {
     }
 
     @Test
+    func parseAutomationConfigUsesRuntimeHomeSocketPathByDefault() throws {
+        let environment = [
+            "TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/runtime-home",
+            "TMPDIR": "/tmp/toastty-runtime-home-tests/tmp/",
+        ]
+        let config = try #require(
+            AutomationConfig.parse(
+                arguments: ["toastty", "--automation"],
+                environment: environment
+            )
+        )
+
+        #expect(
+            config.socketPath == ToasttyRuntimePaths.resolve(environment: environment).automationSocketFileURL?.path
+        )
+    }
+
+    @Test
     func parseAutomationConfigAcceptsTruthyEnvironmentFlags() throws {
         let config = try #require(
             AutomationConfig.parse(

@@ -4,13 +4,15 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN_ID="${RUN_ID:-shortcut-trace-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-split-workspace}"
-DERIVED_PATH="${DERIVED_PATH:-$ROOT_DIR/Derived}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts/automation}"
-SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock}"
+DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
+DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$DEV_RUN_ROOT/artifacts}"
+TOASTTY_RUNTIME_HOME="${TOASTTY_RUNTIME_HOME:-$DEV_RUN_ROOT/runtime-home}"
+SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-${RUN_ID}.sock}"
 ARCH="${ARCH:-$(uname -m)}"
 CLICK_X="${CLICK_X:-760}"
 CLICK_Y="${CLICK_Y:-420}"
-TRACE_LOG_PATH="${TRACE_LOG_PATH:-$HOME/Library/Logs/Toastty/shortcut-trace.log}"
+TRACE_LOG_PATH="${TRACE_LOG_PATH:-$TOASTTY_RUNTIME_HOME/logs/shortcut-trace.log}"
 SPLIT_KEY_CODE="${SPLIT_KEY_CODE:-2}"
 FOCUS_NEXT_KEY_CODE="${FOCUS_NEXT_KEY_CODE:-30}"
 FOCUS_PREVIOUS_KEY_CODE="${FOCUS_PREVIOUS_KEY_CODE:-33}"
@@ -27,7 +29,7 @@ APP_LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 
-mkdir -p "$ARTIFACTS_DIR"
+mkdir -p "$ARTIFACTS_DIR" "$TOASTTY_RUNTIME_HOME" "$(dirname "$SOCKET_PATH")" "$(dirname "$TRACE_LOG_PATH")"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$APP_LOG_FILE"
 rm -f "$TRACE_LOG_PATH"
 
@@ -332,7 +334,9 @@ xcodebuild \
 
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
+TOASTTY_RUNTIME_HOME="$TOASTTY_RUNTIME_HOME" \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
+TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
 TOASTTY_LOG_LEVEL=debug \
 TOASTTY_LOG_FILE="$TRACE_LOG_PATH" \
 "$APP_BINARY" \

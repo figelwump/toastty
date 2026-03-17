@@ -89,6 +89,10 @@ public struct AutomationConfig: Equatable, Sendable {
     }
 
     private static func defaultSocketPath(environment: [String: String]) -> String {
+        if let runtimeSocketFileURL = ToasttyRuntimePaths.resolve(environment: environment).automationSocketFileURL {
+            return runtimeSocketFileURL.path
+        }
+
         let tempDirectory = environment["TMPDIR"] ?? NSTemporaryDirectory()
         let directoryURL = URL(fileURLWithPath: tempDirectory, isDirectory: true)
             .appendingPathComponent("toastty-\(getuid())", isDirectory: true)

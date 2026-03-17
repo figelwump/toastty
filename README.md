@@ -167,6 +167,8 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 
 Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
 
+For isolated dev/test runs, set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home`. When that is set, Toastty keeps config, terminal profiles, workspace persistence, logs, the default automation socket, and UI-managed defaults inside that runtime home instead of using the shared user locations.
+
 Today that means:
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any UI override
@@ -187,7 +189,7 @@ Toastty can launch named terminal profiles from:
 - `Terminal > <Profile Name> > Split Right`
 - `Terminal > <Profile Name> > Split Down`
 
-Profiles live in `~/.toastty/terminal-profiles.toml`. Each profile defines the
+Profiles live in `~/.toastty/terminal-profiles.toml` for ordinary runs, or in `TOASTTY_RUNTIME_HOME/terminal-profiles.toml` when runtime isolation is enabled. Each profile defines the
 menu label, the panel-header badge label, and a startup command that Toastty sends
 to the pane's login shell when the pane is created or restored.
 
@@ -227,6 +229,7 @@ Use `Terminal > Install Shell Integration…`.
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:
 
+- Shell integration installation is disabled while `TOASTTY_RUNTIME_HOME` is set, because sandboxed dev/test runs must not rewrite your login shell files.
 - `zsh` → `~/.zshrc`
 - `bash` → `~/.bash_profile` by default, or an existing `~/.profile`
 
@@ -379,17 +382,17 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 
 Toastty is local-first. The app itself does not send usage analytics or cloud telemetry.
 
-- Toastty writes user-authored config to `~/.toastty/config`.
-- Toastty stores UI-managed font overrides in the app's `UserDefaults` domain.
-- Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`.
-- By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`.
+- Toastty writes user-authored config to `~/.toastty/config`, or to `TOASTTY_RUNTIME_HOME/config` for isolated dev/test runs.
+- Toastty stores UI-managed font overrides in the app's `UserDefaults` domain, or in an isolated defaults suite derived from `TOASTTY_RUNTIME_HOME`.
+- Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`, or to `TOASTTY_RUNTIME_HOME/workspace-layout-profiles.json` when runtime isolation is enabled.
+- By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`, or to `TOASTTY_RUNTIME_HOME/logs/toastty.log` when runtime isolation is enabled.
 - Toastty requests macOS notification permission the first time it tries to deliver a desktop notification.
 
 More detail is in [docs/privacy-and-local-data.md](docs/privacy-and-local-data.md).
 
 ## Logging
 
-By default, logs are written to `~/Library/Logs/Toastty/toastty.log` in JSON format and rotate to `toastty.previous.log` at 5 MB.
+By default, logs are written to `~/Library/Logs/Toastty/toastty.log` in JSON format and rotate to `toastty.previous.log` at 5 MB. When `TOASTTY_RUNTIME_HOME` is set, the default log moves to `TOASTTY_RUNTIME_HOME/logs/toastty.log`.
 
 ```bash
 tail -f ~/Library/Logs/Toastty/toastty.log | jq

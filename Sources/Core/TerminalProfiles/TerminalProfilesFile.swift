@@ -26,13 +26,20 @@ public enum TerminalProfilesFile {
         if let overrideURL = overrideFileURL(environment: environment) {
             return overrideURL
         }
-        return defaultFileURL(homeDirectoryPath: homeDirectoryPath)
+        return defaultFileURL(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
     }
 
-    private static func defaultFileURL(homeDirectoryPath: String) -> URL {
-        URL(filePath: homeDirectoryPath)
-            .appending(path: configDirectoryName, directoryHint: .isDirectory)
-            .appending(path: fileName, directoryHint: .notDirectory)
+    private static func defaultFileURL(
+        homeDirectoryPath: String,
+        environment: [String: String]
+    ) -> URL {
+        ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        ).terminalProfilesFileURL
     }
 
     private static func overrideFileURL(environment: [String: String]) -> URL? {

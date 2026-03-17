@@ -153,6 +153,16 @@ struct TerminalProfilesFileTests {
     }
 
     @Test
+    func fileURLUsesRuntimeHomeWhenNoExplicitOverrideIsPresent() {
+        let fileURL = TerminalProfilesFile.fileURL(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/profiles-runtime"]
+        )
+
+        #expect(fileURL.path == "/tmp/toastty-runtime-home-tests/profiles-runtime/terminal-profiles.toml")
+    }
+
+    @Test
     func loadParsesShortcutKeyAndNormalizesToLowercase() throws {
         let contents = """
         [zmx]

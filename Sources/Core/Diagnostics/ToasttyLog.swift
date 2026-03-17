@@ -59,8 +59,13 @@ public struct ToasttyLogConfiguration: Sendable, Equatable {
     }
 
     public static func fromEnvironment(
-        _ environment: [String: String] = ProcessInfo.processInfo.environment
+        _ environment: [String: String] = ProcessInfo.processInfo.environment,
+        homeDirectoryPath: String = NSHomeDirectory()
     ) -> ToasttyLogConfiguration {
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
         let enabled = !truthy(environment["TOASTTY_LOG_DISABLE"])
         let minimumLevel = parseLogLevel(environment["TOASTTY_LOG_LEVEL"]) ?? .info
         let mirrorToStderr = truthy(environment["TOASTTY_LOG_STDERR"])
@@ -71,9 +76,9 @@ public struct ToasttyLogConfiguration: Sendable, Equatable {
            rawPath.lowercased() != "none" {
             filePath = rawPath
         } else if truthy(environment["TOASTTY_LOG_TO_FILE"]) {
-            filePath = defaultLogPath()
+            filePath = runtimePaths.defaultLogFileURL.path
         } else if environment["TOASTTY_LOG_FILE"] == nil {
-            filePath = defaultLogPath()
+            filePath = runtimePaths.defaultLogFileURL.path
         } else {
             filePath = nil
         }
@@ -91,22 +96,6 @@ public struct ToasttyLogConfiguration: Sendable, Equatable {
             return nil
         }
         return ToasttyLogLevel(rawValue: normalized)
-    }
-
-    private static func defaultLogPath() -> String {
-        let fileManager = FileManager.default
-        if let libraryDirectory = fileManager.urls(for: .libraryDirectory, in: .userDomainMask).first {
-            return libraryDirectory
-                .appendingPathComponent("Logs", isDirectory: true)
-                .appendingPathComponent("Toastty", isDirectory: true)
-                .appendingPathComponent("toastty.log", isDirectory: false)
-                .path
-        }
-
-        return URL(filePath: NSHomeDirectory())
-            .appending(path: "Library/Logs/Toastty", directoryHint: .isDirectory)
-            .appending(path: "toastty.log", directoryHint: .notDirectory)
-            .path
     }
 
     private static func truthy(_ value: String?) -> Bool {
@@ -198,12 +187,18 @@ private final class ToasttyLogWriter: @unchecked Sendable {
     }
 
     func configurationSummary() -> [String: String] {
-        [
+        let runtimePaths = ToasttyRuntimePaths.resolve()
+        var summary = [
             "enabled": configuration.enabled ? "true" : "false",
             "minimum_level": configuration.minimumLevel.rawValue,
             "file_path": configuration.filePath ?? "",
             "stderr": configuration.mirrorToStderr ? "true" : "false",
+            "runtime_home": runtimePaths.runtimeHomeURL?.path ?? "",
         ]
+        if let defaultsSuiteName = runtimePaths.userDefaultsSuiteName {
+            summary["defaults_suite"] = defaultsSuiteName
+        }
+        return summary
     }
 
     func shouldWrite(_ level: ToasttyLogLevel) -> Bool {

@@ -4,9 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-split-workspace}"
-DERIVED_PATH="${DERIVED_PATH:-$ROOT_DIR/Derived}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts/automation}"
-SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock}"
+DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
+DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$DEV_RUN_ROOT/artifacts}"
+TOASTTY_RUNTIME_HOME="${TOASTTY_RUNTIME_HOME:-$DEV_RUN_ROOT/runtime-home}"
+SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-${RUN_ID}.sock}"
 ARCH="${ARCH:-$(uname -m)}"
 if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   ARCH="arm64"
@@ -33,12 +35,12 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]
   RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
 fi
 DROP_IMAGE_PATH_TO_CLEANUP=""
-TERMINAL_PROFILES_PATH="$ARTIFACTS_DIR/terminal-profiles-${RUN_ID}.toml"
+TERMINAL_PROFILES_PATH="$TOASTTY_RUNTIME_HOME/terminal-profiles.toml"
 PROFILE_SMOKE_PROFILE_ID="smoke-profile"
 PROFILE_SMOKE_TITLE="Profile Ready"
 PROFILE_SMOKE_VISIBLE_MARKER="PROFILE:${PROFILE_SMOKE_PROFILE_ID}:create"
 
-mkdir -p "$ARTIFACTS_DIR"
+mkdir -p "$ARTIFACTS_DIR" "$TOASTTY_RUNTIME_HOME" "$(dirname "$SOCKET_PATH")"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$LOG_FILE"
 
 if ! command -v nc >/dev/null 2>&1; then
@@ -104,8 +106,9 @@ xcodebuild \
 
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
+TOASTTY_RUNTIME_HOME="$TOASTTY_RUNTIME_HOME" \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
-TOASTTY_TERMINAL_PROFILES_PATH="$TERMINAL_PROFILES_PATH" \
+TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
 "$APP_BINARY" \
   --automation \
   --skip-quit-confirmation \

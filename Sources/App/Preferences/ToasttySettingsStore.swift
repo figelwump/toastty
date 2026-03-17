@@ -8,14 +8,14 @@ struct ToasttySettings: Equatable {
 enum ToasttySettingsStore {
     private static let terminalFontSizeKey = "toastty.terminalFontSizePoints"
 
-    static func load(userDefaults: UserDefaults = .standard) -> ToasttySettings {
+    static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
         let terminalFontSizePoints = loadTerminalFontSizePoints(userDefaults: userDefaults)
         return ToasttySettings(terminalFontSizePoints: terminalFontSizePoints)
     }
 
     static func persistTerminalFontSizePoints(
         _ points: Double?,
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = ToasttyAppDefaults.current
     ) {
         let clampedPoints = points.map(AppState.clampedTerminalFontPoints)
         if let clampedPoints {

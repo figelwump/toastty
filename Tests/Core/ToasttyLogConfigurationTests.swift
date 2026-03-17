@@ -35,4 +35,14 @@ struct ToasttyLogConfigurationTests {
 
         #expect(config.filePath == nil)
     }
+
+    @Test
+    func runtimeHomeChangesDefaultLogPath() {
+        let config = ToasttyLogConfiguration.fromEnvironment(
+            ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-log-tests/runtime-home"],
+            homeDirectoryPath: "/tmp/ignored-home"
+        )
+
+        #expect(config.filePath == "/tmp/toastty-runtime-log-tests/runtime-home/logs/toastty.log")
+    }
 }
