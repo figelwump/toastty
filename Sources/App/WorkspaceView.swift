@@ -399,15 +399,15 @@ private struct PanelCardView: View {
                         .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
                 }
 
+                if let terminalProfileBadge {
+                    profileBadge(terminalProfileBadge)
+                }
+
                 Text(panelLabel)
                     .font(panelTitleFont)
                     .foregroundStyle(panelTitleTextColor)
                     .lineLimit(1)
                     .truncationMode(.tail)
-
-                if let terminalProfileBadge {
-                    profileBadge(terminalProfileBadge)
-                }
 
                 Spacer(minLength: 0)
 
