@@ -405,11 +405,11 @@ private struct PanelCardView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
 
-                Spacer(minLength: 0)
-
                 if let terminalProfileBadge {
                     profileBadge(terminalProfileBadge)
                 }
+
+                Spacer(minLength: 0)
 
                 if let shortcutLabel {
                     shortcutBadge(shortcutLabel)
