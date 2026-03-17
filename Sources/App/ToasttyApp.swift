@@ -388,6 +388,7 @@ struct ToasttyApp: App {
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         terminalProfilesMenuController = TerminalProfilesMenuController(
             store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
             installShellIntegrationAction: ToasttyMenuActions.installShellIntegration
         )
         menuBridgeInstaller = MenuBridgeInstaller(

@@ -133,6 +133,29 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertFalse(status.createsInitFile)
     }
 
+    func testInstallationStatusRequiresInitFileUpdateWhenReferenceIsCommentedOut() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            shellPathProvider: { "/bin/zsh" }
+        )
+        let plan = try installer.installationPlan()
+        try writeFile(
+            """
+            # source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
+            """,
+            to: plan.initFileURL
+        )
+        try writeFile(plan.shell.managedSnippetContents + "\n", to: plan.managedSnippetURL)
+
+        let status = try installer.installationStatus(plan: plan)
+
+        XCTAssertFalse(status.isInstalled)
+        XCTAssertFalse(status.needsManagedSnippetWrite)
+        XCTAssertTrue(status.needsInitFileUpdate)
+        XCTAssertFalse(status.createsInitFile)
+    }
+
     func testBashInstallationUsesProfileWhenBashProfileIsMissing() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         try writeFile(

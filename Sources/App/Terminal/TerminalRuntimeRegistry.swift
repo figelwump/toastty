@@ -171,6 +171,22 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
+    @discardableResult
+    func splitFocusedSlotInDirectionWithTerminalProfile(
+        workspaceID: UUID,
+        direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding
+    ) -> Bool {
+        sendSplitAction(
+            workspaceID: workspaceID,
+            action: .splitFocusedSlotInDirectionWithTerminalProfile(
+                workspaceID: workspaceID,
+                direction: direction,
+                profileBinding: profileBinding
+            )
+        )
+    }
+
     func controller(for panelID: UUID, workspaceID: UUID, windowID: UUID) -> TerminalSurfaceController {
         runtimeStore.controller(
             for: panelID,

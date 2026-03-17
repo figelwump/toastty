@@ -833,21 +833,19 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             didMutate = store.send(.splitFocusedSlotInDirection(workspaceID: try workspaceID(), direction: .up))
 
         case "workspace.split.right.with-profile":
-            didMutate = store.send(
-                .splitFocusedSlotInDirectionWithTerminalProfile(
-                    workspaceID: try workspaceID(),
-                    direction: .right,
-                    profileBinding: try profileBinding()
-                )
+            let resolvedWorkspaceID = try workspaceID()
+            didMutate = terminalRuntimeRegistry.splitFocusedSlotInDirectionWithTerminalProfile(
+                workspaceID: resolvedWorkspaceID,
+                direction: .right,
+                profileBinding: try profileBinding()
             )
 
         case "workspace.split.down.with-profile":
-            didMutate = store.send(
-                .splitFocusedSlotInDirectionWithTerminalProfile(
-                    workspaceID: try workspaceID(),
-                    direction: .down,
-                    profileBinding: try profileBinding()
-                )
+            let resolvedWorkspaceID = try workspaceID()
+            didMutate = terminalRuntimeRegistry.splitFocusedSlotInDirectionWithTerminalProfile(
+                workspaceID: resolvedWorkspaceID,
+                direction: .down,
+                profileBinding: try profileBinding()
             )
 
         case "workspace.close-focused-panel":

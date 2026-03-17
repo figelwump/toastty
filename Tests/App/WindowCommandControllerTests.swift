@@ -258,9 +258,12 @@ final class WindowCommandControllerTests: XCTestCase {
 
     func testTerminalProfilesMenuControllerSplitsFocusedSlotWithProfileBinding() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
         let controller = TerminalProfilesMenuController(
             store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
             installShellIntegrationAction: {}
         )
 
@@ -283,9 +286,13 @@ final class WindowCommandControllerTests: XCTestCase {
     }
 
     func testTerminalProfilesMenuControllerRunsShellIntegrationAction() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
         var didInstallShellIntegration = false
         let controller = TerminalProfilesMenuController(
-            store: AppStore(state: .bootstrap(), persistTerminalFontPreference: false),
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
             installShellIntegrationAction: {
                 didInstallShellIntegration = true
             }

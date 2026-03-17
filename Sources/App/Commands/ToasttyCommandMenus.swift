@@ -4,13 +4,16 @@ import SwiftUI
 @MainActor
 final class TerminalProfilesMenuController {
     private let store: AppStore
+    private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let installShellIntegrationAction: @MainActor () -> Void
 
     init(
         store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
         installShellIntegrationAction: @escaping @MainActor () -> Void
     ) {
         self.store = store
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.installShellIntegrationAction = installShellIntegrationAction
     }
 
@@ -28,12 +31,10 @@ final class TerminalProfilesMenuController {
             return false
         }
 
-        return store.send(
-            .splitFocusedSlotInDirectionWithTerminalProfile(
-                workspaceID: workspaceID,
-                direction: direction,
-                profileBinding: TerminalProfileBinding(profileID: profileID)
-            )
+        return terminalRuntimeRegistry.splitFocusedSlotInDirectionWithTerminalProfile(
+            workspaceID: workspaceID,
+            direction: direction,
+            profileBinding: TerminalProfileBinding(profileID: profileID)
         )
     }
 

@@ -304,6 +304,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         let socketPath = socketDirectory.appendingPathComponent("events-v1.sock", isDirectory: false).path
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: registry,

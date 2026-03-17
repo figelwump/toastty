@@ -24,6 +24,65 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         }
     }
 
+    func testSendSplitActionRefreshesWorkingDirectoryBeforeProfileSplit() throws {
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.selectedWorkspaceSelection()?.workspaceID)
+        let sourcePanelID = try XCTUnwrap(state.selectedWorkspaceSelection()?.workspace.focusedPanelID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        workspace.panels[sourcePanelID] = .terminal(
+            TerminalPanelState(
+                title: "Terminal 1",
+                shell: "zsh",
+                cwd: "/tmp/stale"
+            )
+        )
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let metadataService = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { panelID in
+                panelID == sourcePanelID ? "/tmp/refreshed" : nil
+            },
+            processRefreshRetryDelay: { _ in }
+        )
+        let controllerStore = TerminalControllerStore()
+        let coordinator = TerminalStoreActionCoordinator(
+            metadataService: metadataService,
+            registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState in
+                controllerStore.registerPendingSplitSourceIfNeeded(
+                    workspaceID: workspaceID,
+                    previousState: previousState,
+                    nextState: nextState
+                )
+            },
+            armCloseTransitionViewportDeferral: { _, _ in },
+            requestWorkspaceFocusRestore: { _ in }
+        )
+        coordinator.bind(store: store)
+
+        XCTAssertTrue(
+            coordinator.sendSplitAction(
+                workspaceID: workspaceID,
+                action: .splitFocusedSlotInDirectionWithTerminalProfile(
+                    workspaceID: workspaceID,
+                    direction: .right,
+                    profileBinding: TerminalProfileBinding(profileID: "zmx")
+                )
+            )
+        )
+
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let newPanelID = try XCTUnwrap(updatedWorkspace.focusedPanelID)
+        guard case .terminal(let newTerminalState) = updatedWorkspace.panels[newPanelID] else {
+            return XCTFail("expected focused panel to remain terminal")
+        }
+        XCTAssertEqual(newTerminalState.profileBinding?.profileID, "zmx")
+        XCTAssertEqual(newTerminalState.cwd, "/tmp/refreshed")
+    }
+
     func testBindArmsCloseTransitionViewportDeferralWhenPanelCloses() throws {
         var armedWorkspaceIDs: [UUID] = []
         var armedPanelIDSets: [Set<UUID>] = []

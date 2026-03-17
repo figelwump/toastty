@@ -392,7 +392,13 @@ final class ProfileShellIntegrationInstaller {
             "~/.toastty/shell/\(fileName)",
         ]
 
-        return markers.contains(where: contents.contains)
+        return contents
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.isEmpty == false && $0.hasPrefix("#") == false }
+            .contains { line in
+                markers.contains(where: line.contains)
+            }
     }
 
     private func readFileIfPresent(at fileURL: URL) throws -> String {
