@@ -364,10 +364,6 @@ struct SidebarView: View {
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     .lineLimit(1)
 
-                if Self.showsSessionStatusChip(for: status.kind) {
-                    workingSessionStatusChip()
-                }
-
                 Spacer(minLength: 0)
             }
 
@@ -510,19 +506,6 @@ struct SidebarView: View {
         return paneLabel
     }
 
-    private func workingSessionStatusChip() -> some View {
-        Text("working")
-            .font(ToastyTheme.fontWorkspaceSessionChip)
-            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: .working))
-            .padding(.horizontal, 4)
-            .background(
-                ToastyTheme.sessionStatusBackgroundColor(for: .working),
-                in: RoundedRectangle(cornerRadius: 2)
-            )
-            .lineLimit(1)
-            .truncationMode(.tail)
-    }
-
     private func showsUnreadSessionAccent(
         for panelID: UUID,
         in workspace: WorkspaceState
@@ -537,10 +520,6 @@ struct SidebarView: View {
         }
 
         return true
-    }
-
-    static func showsSessionStatusChip(for kind: SessionStatusKind) -> Bool {
-        kind == .working
     }
 
     static func unreadSessionOutlineKind(

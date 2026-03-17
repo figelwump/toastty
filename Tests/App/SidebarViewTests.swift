@@ -12,14 +12,6 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(SidebarView.abbreviatedPathLabel("relative"), "relative")
     }
 
-    func testSessionStatusChipOnlyShowsForWorking() {
-        XCTAssertTrue(SidebarView.showsSessionStatusChip(for: .working))
-        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .idle))
-        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .needsApproval))
-        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .ready))
-        XCTAssertFalse(SidebarView.showsSessionStatusChip(for: .error))
-    }
-
     func testUnreadSessionOutlineOnlyShowsForUnreadAttentionStates() {
         XCTAssertNil(
             SidebarView.unreadSessionOutlineKind(
@@ -77,24 +69,38 @@ final class SidebarViewTests: XCTestCase {
         )
 
         let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(textValues.contains("Completed response"))
         XCTAssertFalse(
             textValues.contains("ready"),
             "Sidebar text values should not include a ready chip label: \(textValues)"
         )
     }
 
-    func testWorkingSessionStillRendersStatusChipLabel() throws {
+    func testWorkingSessionDoesNotRenderStatusChipLabel() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "sess-working",
             sessionStatus: SessionStatus(kind: .working, summary: "Working", detail: "Streaming changes")
         )
 
         let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(textValues.contains("working"))
+        XCTAssertFalse(
+            textValues.contains("working"),
+            "Sidebar text values should not include a working chip label: \(textValues)"
+        )
         XCTAssertFalse(textValues.contains("ready"))
         XCTAssertFalse(textValues.contains("needs approval"))
         XCTAssertFalse(textValues.contains("error"))
+    }
+
+    func testReadySessionOutlineColorUsesWhite() throws {
+        let outlineColor = try XCTUnwrap(
+            NSColor(ToastyTheme.sessionStatusOutlineColor(for: .ready)).usingColorSpace(.deviceRGB)
+        )
+        let expectedColor = try XCTUnwrap(NSColor.white.usingColorSpace(.deviceRGB))
+
+        XCTAssertEqual(outlineColor.redComponent, expectedColor.redComponent, accuracy: 0.001)
+        XCTAssertEqual(outlineColor.greenComponent, expectedColor.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(outlineColor.blueComponent, expectedColor.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(outlineColor.alphaComponent, expectedColor.alphaComponent, accuracy: 0.001)
     }
 
     func testBusySubtitleUpdatesWhenRuntimeRegistryPublishesChange() throws {

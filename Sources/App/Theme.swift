@@ -109,7 +109,12 @@ enum ToastyTheme {
     }
 
     static func sessionStatusOutlineColor(for kind: SessionStatusKind) -> Color {
-        sessionStatusTextColor(for: kind)
+        switch kind {
+        case .ready:
+            return .white
+        case .idle, .working, .needsApproval, .error:
+            return sessionStatusTextColor(for: kind)
+        }
     }
 
     static func sessionActivityRailGradient(for kind: SessionStatusKind) -> LinearGradient {
