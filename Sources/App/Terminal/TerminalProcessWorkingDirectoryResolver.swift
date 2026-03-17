@@ -42,7 +42,8 @@ final class TerminalProcessWorkingDirectoryResolver {
     private var cachedProcessByPanelID: [UUID: CachedProcessEntry] = [:]
     /// Panels that failed initial PID snapshot diff (child not visible yet).
     /// The poll loop will attempt deferred registration by scanning app children.
-    private var pendingDeferredRegistration: Set<UUID> = []
+    private var pendingDeferredRegistrationOrdinalByPanelID: [UUID: UInt64] = [:]
+    private var nextPendingDeferredRegistrationOrdinal: UInt64 = 0
     /// Login PIDs whose shell children haven't spawned yet. Keyed by panel ID.
     /// Resolved during the next CWD poll cycle.
     private var pendingLoginPIDByPanelID: [UUID: pid_t] = [:]
@@ -77,7 +78,7 @@ final class TerminalProcessWorkingDirectoryResolver {
 
         guard newChildren.isEmpty == false else {
             // Child not visible yet — mark for deferred registration during poll loop.
-            pendingDeferredRegistration.insert(panelID)
+            markPendingDeferredRegistration(panelID: panelID)
             ToasttyLog.debug(
                 "No new child process detected after surface creation; deferring registration",
                 category: .terminal,
@@ -100,7 +101,7 @@ final class TerminalProcessWorkingDirectoryResolver {
             candidates: candidates,
             preferNewestWhenAmbiguous: true
         ) else {
-            pendingDeferredRegistration.insert(panelID)
+            markPendingDeferredRegistration(panelID: panelID)
             ToasttyLog.debug(
                 "Ambiguous new child process candidates after surface creation; deferring registration",
                 category: .terminal,
@@ -119,7 +120,7 @@ final class TerminalProcessWorkingDirectoryResolver {
 
     func resolveWorkingDirectory(for panelID: UUID) -> String? {
         // Attempt deferred registration if this panel was never registered.
-        if pendingDeferredRegistration.contains(panelID) {
+        if pendingDeferredRegistrationOrdinalByPanelID[panelID] != nil {
             attemptDeferredRegistration(panelID: panelID)
         }
 
@@ -169,7 +170,7 @@ final class TerminalProcessWorkingDirectoryResolver {
 
     func invalidate(panelID: UUID) {
         cachedProcessByPanelID.removeValue(forKey: panelID)
-        pendingDeferredRegistration.remove(panelID)
+        pendingDeferredRegistrationOrdinalByPanelID.removeValue(forKey: panelID)
         pendingLoginPIDByPanelID.removeValue(forKey: panelID)
         expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
     }
@@ -178,7 +179,9 @@ final class TerminalProcessWorkingDirectoryResolver {
         cachedProcessByPanelID = cachedProcessByPanelID.filter { panelID, _ in
             panelIDs.contains(panelID)
         }
-        pendingDeferredRegistration = pendingDeferredRegistration.filter { panelIDs.contains($0) }
+        pendingDeferredRegistrationOrdinalByPanelID = pendingDeferredRegistrationOrdinalByPanelID.filter { panelID, _ in
+            panelIDs.contains(panelID)
+        }
         pendingLoginPIDByPanelID = pendingLoginPIDByPanelID.filter { panelID, _ in
             panelIDs.contains(panelID)
         }
@@ -196,7 +199,7 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// If the shell hasn't spawned yet, records the login PID for deferred
     /// resolution during the next poll cycle.
     private func cacheLoginOrShell(panelID: UUID, loginPID: pid_t, source: String) {
-        pendingDeferredRegistration.remove(panelID)
+        pendingDeferredRegistrationOrdinalByPanelID.removeValue(forKey: panelID)
 
         if let shellPID = resolvedShellPID(forLoginPID: loginPID),
            let signature = processStartSignature(pid: shellPID) {
@@ -241,16 +244,24 @@ final class TerminalProcessWorkingDirectoryResolver {
             reservedLoginPIDs: reservedLoginPIDs(excluding: panelID),
             knownShellPIDs: knownShellPIDs()
         )
-        guard let selectedCandidate = selectRegistrationCandidate(
+        if let selectedCandidate = selectRegistrationCandidate(
             panelID: panelID,
             candidates: candidates,
             preferNewestWhenAmbiguous: false
+        ) {
+            // Found an untracked child — assign it to this panel.
+            cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "deferred_scan")
+            return
+        }
+
+        guard let selectedCandidate = selectDeferredRegistrationCandidate(
+            panelID: panelID,
+            candidates: candidates
         ) else {
             return
         }
 
-        // Found an untracked child — assign it to this panel.
-        cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "deferred_scan")
+        cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "deferred_ordered_scan")
     }
 
     private func knownShellPIDs() -> Set<pid_t> {
@@ -293,6 +304,68 @@ final class TerminalProcessWorkingDirectoryResolver {
             )
         }
         return candidates
+    }
+
+    private func markPendingDeferredRegistration(panelID: UUID) {
+        guard pendingDeferredRegistrationOrdinalByPanelID[panelID] == nil else {
+            return
+        }
+        pendingDeferredRegistrationOrdinalByPanelID[panelID] = nextPendingDeferredRegistrationOrdinal
+        nextPendingDeferredRegistrationOrdinal += 1
+    }
+
+    private func selectDeferredRegistrationCandidate(
+        panelID: UUID,
+        candidates: [RegistrationCandidate]
+    ) -> RegistrationCandidate? {
+        let pendingPanelIDsByOrder = pendingDeferredRegistrationOrdinalByPanelID
+            .sorted { lhs, rhs in lhs.value < rhs.value }
+            .map(\.key)
+        guard let candidateIndex = Self.deferredRegistrationCandidateIndex(
+            panelID: panelID,
+            pendingPanelIDsByOrder: pendingPanelIDsByOrder,
+            candidateCount: candidates.count
+        ) else {
+            ToasttyLog.debug(
+                "Deferred terminal process registration remains ambiguous",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "candidate_count": String(candidates.count),
+                    "pending_panel_count": String(pendingPanelIDsByOrder.count),
+                ]
+            )
+            return nil
+        }
+
+        ToasttyLog.debug(
+            "Assigning deferred terminal process candidate by launch order",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "candidate_index": String(candidateIndex),
+                "candidate_count": String(candidates.count),
+                "pending_panel_count": String(pendingPanelIDsByOrder.count),
+            ]
+        )
+        return candidates[candidateIndex]
+    }
+
+    static func deferredRegistrationCandidateIndex(
+        panelID: UUID,
+        pendingPanelIDsByOrder: [UUID],
+        candidateCount: Int
+    ) -> Int? {
+        // Only use ordered fallback when the pending-pane set and unclaimed
+        // login-process set form an exact one-to-one mapping.
+        guard candidateCount == pendingPanelIDsByOrder.count else {
+            return nil
+        }
+        guard let panelIndex = pendingPanelIDsByOrder.firstIndex(of: panelID),
+              panelIndex < candidateCount else {
+            return nil
+        }
+        return panelIndex
     }
 
     private func selectRegistrationCandidate(

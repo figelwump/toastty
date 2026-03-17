@@ -41,15 +41,22 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
 public struct WorkspaceLayoutTerminalPanelSnapshot: Codable, Equatable, Sendable {
     public var shell: String
     public var launchWorkingDirectory: String
+    public var profileBinding: TerminalProfileBinding?
 
-    public init(shell: String, launchWorkingDirectory: String) {
+    public init(
+        shell: String,
+        launchWorkingDirectory: String,
+        profileBinding: TerminalProfileBinding? = nil
+    ) {
         self.shell = shell
         self.launchWorkingDirectory = launchWorkingDirectory
+        self.profileBinding = profileBinding
     }
 
     init(terminalState: TerminalPanelState) {
         shell = terminalState.shell
         launchWorkingDirectory = terminalState.workingDirectorySeed
+        profileBinding = terminalState.profileBinding
     }
 }
 
@@ -57,6 +64,7 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
     private enum CodingKeys: String, CodingKey {
         case shell
         case launchWorkingDirectory
+        case profileBinding
         case cwd
     }
 
@@ -68,12 +76,14 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
         } else {
             self.launchWorkingDirectory = try container.decode(String.self, forKey: .cwd)
         }
+        profileBinding = try container.decodeIfPresent(TerminalProfileBinding.self, forKey: .profileBinding)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(shell, forKey: .shell)
         try container.encode(launchWorkingDirectory, forKey: .launchWorkingDirectory)
+        try container.encodeIfPresent(profileBinding, forKey: .profileBinding)
         // Preserve downgrade compatibility while older builds still decode the
         // legacy terminal snapshot schema from `cwd`.
         try container.encode(launchWorkingDirectory, forKey: .cwd)
@@ -212,7 +222,8 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
                         // runtime metadata instead of treating persisted cwd as
                         // the live shell cwd shown in the UI.
                         cwd: "",
-                        launchWorkingDirectory: terminalSnapshot.launchWorkingDirectory
+                        launchWorkingDirectory: terminalSnapshot.launchWorkingDirectory,
+                        profileBinding: terminalSnapshot.profileBinding
                     )
                 )
             case .diff(let diffState):

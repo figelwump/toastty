@@ -5,6 +5,7 @@ import SwiftUI
 struct WorkspaceView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
@@ -141,6 +142,7 @@ struct WorkspaceView: View {
                         workspace: workspace,
                         isWorkspaceSelected: isSelected,
                         store: store,
+                        terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
                         globalFontPoints: store.state.globalTerminalFontPoints,
@@ -318,6 +320,7 @@ private struct SlotPlacementView: View {
     let workspace: WorkspaceState
     let isWorkspaceSelected: Bool
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let globalFontPoints: Double
@@ -341,6 +344,7 @@ private struct SlotPlacementView: View {
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     store: store,
+                    terminalProfileStore: terminalProfileStore,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
@@ -375,6 +379,7 @@ private struct PanelCardView: View {
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
 
     private var isFocused: Bool {
@@ -392,6 +397,10 @@ private struct PanelCardView: View {
                         .fill(ToastyTheme.badgeBlue)
                         .frame(width: 7, height: 7)
                         .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3, x: 0, y: 0)
+                }
+
+                if let terminalProfileBadge {
+                    profileBadge(terminalProfileBadge)
                 }
 
                 Text(panelLabel)
@@ -480,6 +489,22 @@ private struct PanelCardView: View {
         }
     }
 
+    private var terminalProfileBadge: TerminalProfileBadge? {
+        guard case .terminal(let terminalState) = panelState,
+              let profileBinding = terminalState.profileBinding else {
+            return nil
+        }
+
+        if let profile = terminalProfileStore.catalog.profile(id: profileBinding.profileID) {
+            return TerminalProfileBadge(label: profile.badgeLabel, isAvailable: true)
+        }
+
+        return TerminalProfileBadge(
+            label: profileBinding.profileID,
+            isAvailable: false
+        )
+    }
+
     private var shortcutLabel: String? {
         guard case .terminal = panelState else { return nil }
         guard let shortcutNumber else { return nil }
@@ -530,6 +555,29 @@ private struct PanelCardView: View {
             .padding(.vertical, 1)
             .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
     }
+
+    private func profileBadge(_ badge: TerminalProfileBadge) -> some View {
+        Text(badge.label)
+            .font(ToastyTheme.fontTerminalProfileBadge)
+            .foregroundStyle(
+                badge.isAvailable
+                    ? ToastyTheme.terminalProfileBadgeText
+                    : ToastyTheme.terminalProfileBadgeMissingText
+            )
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                badge.isAvailable
+                    ? ToastyTheme.terminalProfileBadgeBackground
+                    : ToastyTheme.terminalProfileBadgeMissingBackground,
+                in: Capsule()
+            )
+    }
+}
+
+private struct TerminalProfileBadge {
+    let label: String
+    let isAvailable: Bool
 }
 
 // MARK: - Top Bar Icons

@@ -148,6 +148,10 @@ final class TerminalWindowRuntimeStore {
     func unregister(surface: ghostty_surface_t, for panelID: UUID) {
         existingRuntime(containing: panelID)?.unregister(surface: surface, for: panelID)
     }
+
+    func armCloseTransitionViewportDeferral(workspaceID: UUID, panelIDs: Set<UUID>) {
+        existingRuntime(for: workspaceID)?.armCloseTransitionViewportDeferral(for: panelIDs)
+    }
     #endif
 
     private func runtime(for workspaceID: UUID, windowID: UUID, state: AppState?) -> TerminalWorkspaceRuntime {

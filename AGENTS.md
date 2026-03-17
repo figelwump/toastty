@@ -27,6 +27,8 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 - Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
+- For menu validation, target the exact built app instance by PID or full app bundle path. Multiple local `Toastty` builds may be running at once, and generic `osascript` checks can attach to the wrong process.
+- Prefer `peekaboo menu list --pid <pid> --json` for menu verification. It is more reliable than generic AppleScript enumeration for nested SwiftUI/AppKit menus.
 
 ## Ghostty Integration
 - **Default-on** when a local xcframework exists in `Dependencies/` and disable env is not set.
@@ -35,7 +37,8 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
   - `GHOSTTY_XCFRAMEWORK_VARIANT=release|debug` to pick variant
   - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework` to override source
 - **Config loading order:** `TOASTTY_GHOSTTY_CONFIG_PATH` > `$XDG_CONFIG_HOME/ghostty/config` > `~/.config/ghostty/config` > Ghostty defaults.
-- **Font override:** `~/.toastty/config` key `terminal-font-size` (cleared by `Reset Terminal Font`).
+- **Toastty config:** `~/.toastty/config` stores user-authored defaults such as `terminal-font-size` and `default-terminal-profile`.
+- **UI font override:** Toastty remembers menu-driven terminal font changes in `UserDefaults`; `Reset Terminal Font` clears that override and falls back to config or Ghostty baseline.
 - **Host-side split styling:** `unfocused-split-opacity`, `unfocused-split-fill` (falls back to Ghostty `background`).
 - **Reload config at runtime:** `Toastty -> Reload Configuration` menu item.
 - When linked, `Project.swift` adds `TOASTTY_HAS_GHOSTTY_KIT` and linker flags (`-lc++`, `-framework Carbon`).

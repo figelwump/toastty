@@ -41,12 +41,18 @@ public enum AppAction: Equatable, Sendable {
     case toggleAuxPanel(workspaceID: UUID, kind: PanelKind)
     case toggleFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
+    case setDefaultTerminalProfile(profileID: String?)
     case setGlobalTerminalFont(points: Double)
     case increaseGlobalTerminalFont
     case decreaseGlobalTerminalFont
     case resetGlobalTerminalFont
     case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
+    case splitFocusedSlotInDirectionWithTerminalProfile(
+        workspaceID: UUID,
+        direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding
+    )
     case focusSlot(workspaceID: UUID, direction: SlotFocusDirection)
     case resizeFocusedSlotSplit(workspaceID: UUID, direction: SplitResizeDirection, amount: Int)
     case equalizeLayoutSplits(workspaceID: UUID)
@@ -94,6 +100,8 @@ public extension AppAction {
             return "toggleFocusedPanelMode"
         case .setConfiguredTerminalFont:
             return "setConfiguredTerminalFont"
+        case .setDefaultTerminalProfile:
+            return "setDefaultTerminalProfile"
         case .setGlobalTerminalFont:
             return "setGlobalTerminalFont"
         case .increaseGlobalTerminalFont:
@@ -106,6 +114,8 @@ public extension AppAction {
             return "splitFocusedSlot"
         case .splitFocusedSlotInDirection:
             return "splitFocusedSlotInDirection"
+        case .splitFocusedSlotInDirectionWithTerminalProfile:
+            return "splitFocusedSlotInDirectionWithTerminalProfile"
         case .focusSlot:
             return "focusSlot"
         case .resizeFocusedSlotSplit:

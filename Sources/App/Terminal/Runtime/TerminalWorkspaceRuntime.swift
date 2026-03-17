@@ -92,5 +92,9 @@ final class TerminalWorkspaceRuntime {
     func unregister(surface: ghostty_surface_t, for panelID: UUID) {
         controllerStore.unregister(surface: surface, for: panelID)
     }
+
+    func armCloseTransitionViewportDeferral(for panelIDs: Set<UUID>) {
+        controllerStore.armCloseTransitionViewportDeferral(for: panelIDs)
+    }
     #endif
 }

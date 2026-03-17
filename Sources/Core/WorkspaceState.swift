@@ -51,7 +51,10 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         self.recentlyClosedPanels = recentlyClosedPanels
     }
 
-    public static func bootstrap(title: String = "Workspace 1") -> WorkspaceState {
+    public static func bootstrap(
+        title: String = "Workspace 1",
+        defaultTerminalProfileBinding: TerminalProfileBinding? = nil
+    ) -> WorkspaceState {
         let panelID = UUID()
         let slotID = UUID()
         return WorkspaceState(
@@ -59,7 +62,14 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             title: title,
             layoutTree: .slot(slotID: slotID, panelID: panelID),
             panels: [
-                panelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: NSHomeDirectory())),
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: NSHomeDirectory(),
+                        profileBinding: defaultTerminalProfileBinding
+                    )
+                ),
             ],
             focusedPanelID: panelID
         )

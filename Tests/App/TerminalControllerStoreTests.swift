@@ -7,6 +7,23 @@ import XCTest
 
 @MainActor
 final class TerminalControllerStoreTests: XCTestCase {
+    func testArmCloseTransitionViewportDeferralOnlyMarksRequestedControllers() {
+        let store = TerminalControllerStore()
+        let deferredPanelID = UUID()
+        let untouchedPanelID = UUID()
+        let delegate = TestTerminalSurfaceControllerDelegate()
+
+        let deferredController = store.controller(for: deferredPanelID, delegate: delegate)
+        let untouchedController = store.controller(for: untouchedPanelID, delegate: delegate)
+
+        store.armCloseTransitionViewportDeferral(for: [deferredPanelID])
+
+        XCTAssertTrue(deferredController.isCloseTransitionViewportDeferralArmed)
+        XCTAssertFalse(untouchedController.isCloseTransitionViewportDeferralArmed)
+        deferredController.invalidate()
+        untouchedController.invalidate()
+    }
+
     func testInvalidateControllersRemovesMissingPanelsAndPrunesSurfaceMappings() {
         let store = TerminalControllerStore()
         let livePanelID = UUID()
@@ -136,6 +153,15 @@ private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceContro
     }
 
     func consumeSplitSource(forNewPanelID panelID: UUID) {
+        _ = panelID
+    }
+
+    func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
+        _ = panelID
+        return .empty
+    }
+
+    func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
         _ = panelID
     }
 

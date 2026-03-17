@@ -30,6 +30,7 @@ public struct AppState: Codable, Equatable, Sendable {
     public var workspacesByID: [UUID: WorkspaceState]
     public var selectedWindowID: UUID?
     public var configuredTerminalFontPoints: Double?
+    public var defaultTerminalProfileID: String?
     public var globalTerminalFontPoints: Double
 
     public init(
@@ -37,12 +38,14 @@ public struct AppState: Codable, Equatable, Sendable {
         workspacesByID: [UUID: WorkspaceState],
         selectedWindowID: UUID?,
         configuredTerminalFontPoints: Double? = nil,
+        defaultTerminalProfileID: String? = nil,
         globalTerminalFontPoints: Double
     ) {
         self.windows = windows
         self.workspacesByID = workspacesByID
         self.selectedWindowID = selectedWindowID
         self.configuredTerminalFontPoints = configuredTerminalFontPoints
+        self.defaultTerminalProfileID = Self.normalizedTerminalProfileID(defaultTerminalProfileID)
         self.globalTerminalFontPoints = globalTerminalFontPoints
     }
 
@@ -50,8 +53,25 @@ public struct AppState: Codable, Equatable, Sendable {
         min(max(points, minTerminalFontPoints), maxTerminalFontPoints)
     }
 
-    public static func bootstrap() -> AppState {
-        let workspace = WorkspaceState.bootstrap()
+    public static func normalizedTerminalProfileID(_ profileID: String?) -> String? {
+        guard let profileID else { return nil }
+        let trimmed = profileID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        return trimmed
+    }
+
+    public var defaultTerminalProfileBinding: TerminalProfileBinding? {
+        guard let defaultTerminalProfileID else { return nil }
+        return TerminalProfileBinding(profileID: defaultTerminalProfileID)
+    }
+
+    public static func bootstrap(defaultTerminalProfileID: String? = nil) -> AppState {
+        let normalizedDefaultTerminalProfileID = normalizedTerminalProfileID(defaultTerminalProfileID)
+        let workspace = WorkspaceState.bootstrap(
+            defaultTerminalProfileBinding: normalizedDefaultTerminalProfileID.map { profileID in
+                TerminalProfileBinding(profileID: profileID)
+            }
+        )
         let window = WindowState(
             id: UUID(),
             frame: CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
@@ -64,6 +84,7 @@ public struct AppState: Codable, Equatable, Sendable {
             workspacesByID: [workspace.id: workspace],
             selectedWindowID: window.id,
             configuredTerminalFontPoints: nil,
+            defaultTerminalProfileID: normalizedDefaultTerminalProfileID,
             globalTerminalFontPoints: AppState.defaultTerminalFontPoints
         )
     }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct AppWindowSceneHostView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let sceneCoordinator: AppWindowSceneCoordinator
     let automationLifecycle: AutomationLifecycle?
@@ -31,6 +32,7 @@ struct AppWindowSceneHostView: View {
                 AppWindowSceneView(
                     windowID: boundWindowID,
                     store: store,
+                    terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     disableAnimations: disableAnimations
                 )

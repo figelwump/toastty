@@ -18,6 +18,10 @@ enum ToastyTheme {
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
     static let badgeBlue = Color(hex: 0x3B82F6)
+    static let terminalProfileBadgeText = Color(hex: 0xF5D6A0)
+    static let terminalProfileBadgeBackground = Color(hex: 0x5A3B14, alpha: 0.65)
+    static let terminalProfileBadgeMissingText = Color(hex: 0xF4B183)
+    static let terminalProfileBadgeMissingBackground = Color(hex: 0x5A2414, alpha: 0.65)
 
     // Empty state
     static let emptyStateToastCrust = Color(hex: 0x4A3425)
@@ -54,6 +58,7 @@ enum ToastyTheme {
     static let fontWorkspaceNameInactive = Font.system(size: 12, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontShortcutBadge = Font.system(size: 11, weight: .medium, design: .monospaced)
+    static let fontTerminalProfileBadge = Font.system(size: 10, weight: .semibold, design: .monospaced)
     static let fontNewWorkspace = Font.system(size: 11, weight: .regular, design: .default)
 }
 

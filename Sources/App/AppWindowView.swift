@@ -3,6 +3,7 @@ import SwiftUI
 struct AppWindowView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext
 
@@ -29,6 +30,7 @@ struct AppWindowView: View {
                 WorkspaceView(
                     windowID: windowID,
                     store: store,
+                    terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible

@@ -89,7 +89,10 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 - `configuredTerminalFontPoints` is reset to `nil`
 - `globalTerminalFontPoints` is reset to `AppState.defaultTerminalFontPoints`
 - restored terminal panels get regenerated `Terminal N` titles per workspace
+- restored terminal panels keep their stable `panelID` values from the snapshot
 - restored terminal panels keep `launchWorkingDirectory`
+- restored terminal panels keep `profileBinding` when present so profile-backed
+  panes can resume with the same terminal profile ID after restart
 - restored terminal panels start with blank live `cwd` and wait for authoritative
   runtime metadata
 

@@ -5,6 +5,7 @@ import SwiftUI
 struct AppWindowSceneView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let disableAnimations: Bool
 
@@ -28,6 +29,7 @@ struct AppWindowSceneView: View {
                 AppWindowView(
                     windowID: windowID,
                     store: store,
+                    terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     terminalRuntimeContext: terminalRuntimeContext
                 )

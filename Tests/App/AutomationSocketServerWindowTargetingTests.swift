@@ -100,6 +100,56 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testWorkspaceProfileSplitBindsTheNewFocusedTerminalPanel() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.split.right.with-profile",
+                    "args": [
+                        "profileID": "smoke-profile",
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
+            XCTAssertEqual(workspace.panels.count, 2)
+            guard case .terminal(let terminalState) = workspace.panels[focusedPanelID] else {
+                XCTFail("expected focused panel to remain terminal")
+                return
+            }
+            XCTAssertEqual(terminalState.profileBinding?.profileID, "smoke-profile")
+        }
+    }
+
+    func testWorkspaceProfileSplitRequiresProfileID() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.split.right.with-profile",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "profileID is required")
+
+            let state = await MainActor.run { harness.store.state }
+            XCTAssertEqual(state.workspacesByID[fixture.workspaceID]?.panels.count, 1)
+        }
+    }
+
     func testWorkspaceActionRejectsMismatchedWindowAndWorkspace() async throws {
         let fixture = makeTwoWindowFixture()
 
@@ -204,6 +254,31 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testTerminalStateIncludesProfileIDWhenTerminalIsProfileBound() async throws {
+        let fixture = makeSingleWindowFixture()
+        var state = fixture.state
+        guard let panelID = state.workspacesByID[fixture.workspaceID]?.focusedPanelID,
+              case .terminal(var terminalState)? = state.workspacesByID[fixture.workspaceID]?.panels[panelID] else {
+            XCTFail("expected bootstrap fixture to include a focused terminal")
+            return
+        }
+        terminalState.profileBinding = TerminalProfileBinding(profileID: "smoke-profile")
+        state.workspacesByID[fixture.workspaceID]?.panels[panelID] = .terminal(terminalState)
+
+        try await withAutomationHarness(state: state) { harness in
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "panelID": panelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["profileID"] as? String, "smoke-profile")
+        }
+    }
+
     private func withAutomationHarness(
         state: AppState,
         file: StaticString = #filePath,
@@ -229,6 +304,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         let socketPath = socketDirectory.appendingPathComponent("events-v1.sock", isDirectory: false).path
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: registry,
