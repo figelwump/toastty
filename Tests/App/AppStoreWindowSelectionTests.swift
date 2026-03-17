@@ -268,4 +268,185 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.windows[0].id, windowID)
         XCTAssertEqual(store.state.windows[0].workspaceIDs, originalWorkspaceIDs)
     }
+
+    func testSelectWorkspacePrefersMostRecentUnreadSessionPanelWhenSwitchingWorkspaces() throws {
+        let windowID = UUID()
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondLayout = makeTwoPanelWorkspace(title: "Two")
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id, secondLayout.workspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                )
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondLayout.workspace.id: secondLayout.workspace,
+            ],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-left",
+            agent: .codex,
+            panelID: secondLayout.leftPanelID,
+            windowID: windowID,
+            workspaceID: secondLayout.workspace.id,
+            cwd: "/repo/left",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-left",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Left"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        sessionStore.startSession(
+            sessionID: "sess-right",
+            agent: .claude,
+            panelID: secondLayout.rightPanelID,
+            windowID: windowID,
+            workspaceID: secondLayout.workspace.id,
+            cwd: "/repo/right",
+            repoRoot: "/repo",
+            at: startedAt.addingTimeInterval(2)
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-right",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Right"),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        XCTAssertTrue(
+            store.selectWorkspace(
+                windowID: windowID,
+                workspaceID: secondLayout.workspace.id,
+                preferringUnreadSessionPanelIn: sessionStore
+            )
+        )
+
+        let selectedWorkspace = try XCTUnwrap(store.selectedWorkspace(in: windowID))
+        XCTAssertEqual(selectedWorkspace.id, secondLayout.workspace.id)
+        XCTAssertEqual(selectedWorkspace.focusedPanelID, secondLayout.rightPanelID)
+        XCTAssertEqual(selectedWorkspace.unreadPanelIDs, [secondLayout.leftPanelID])
+    }
+
+    func testSelectWorkspaceDoesNotOverrideFocusWhenWorkspaceIsAlreadySelected() throws {
+        let windowID = UUID()
+        let secondLayout = makeTwoPanelWorkspace(title: "Two")
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [secondLayout.workspace.id],
+                    selectedWorkspaceID: secondLayout.workspace.id
+                )
+            ],
+            workspacesByID: [secondLayout.workspace.id: secondLayout.workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-right",
+            agent: .codex,
+            panelID: secondLayout.rightPanelID,
+            windowID: windowID,
+            workspaceID: secondLayout.workspace.id,
+            cwd: "/repo/right",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-right",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Right"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(
+            store.selectWorkspace(
+                windowID: windowID,
+                workspaceID: secondLayout.workspace.id,
+                preferringUnreadSessionPanelIn: sessionStore
+            )
+        )
+
+        let selectedWorkspace = try XCTUnwrap(store.selectedWorkspace(in: windowID))
+        XCTAssertEqual(selectedWorkspace.focusedPanelID, secondLayout.leftPanelID)
+        XCTAssertEqual(selectedWorkspace.unreadPanelIDs, [secondLayout.rightPanelID])
+    }
+
+    func testSelectWorkspaceIgnoresUnreadPanelsWithoutSessionStatus() throws {
+        let windowID = UUID()
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        var secondLayout = makeTwoPanelWorkspace(title: "Two")
+        secondLayout.workspace.unreadPanelIDs = [secondLayout.rightPanelID]
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id, secondLayout.workspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                )
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondLayout.workspace.id: secondLayout.workspace,
+            ],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+
+        XCTAssertTrue(
+            store.selectWorkspace(
+                windowID: windowID,
+                workspaceID: secondLayout.workspace.id,
+                preferringUnreadSessionPanelIn: sessionStore
+            )
+        )
+
+        let selectedWorkspace = try XCTUnwrap(store.selectedWorkspace(in: windowID))
+        XCTAssertEqual(selectedWorkspace.focusedPanelID, secondLayout.leftPanelID)
+        XCTAssertEqual(selectedWorkspace.unreadPanelIDs, [secondLayout.rightPanelID])
+    }
+
+    private func makeTwoPanelWorkspace(title: String) -> (workspace: WorkspaceState, leftPanelID: UUID, rightPanelID: UUID) {
+        let leftPanelID = UUID()
+        let rightPanelID = UUID()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: title,
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: leftPanelID),
+                second: .slot(slotID: UUID(), panelID: rightPanelID)
+            ),
+            panels: [
+                leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo/left")),
+                rightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo/right")),
+            ],
+            focusedPanelID: leftPanelID
+        )
+        return (workspace, leftPanelID, rightPanelID)
+    }
 }

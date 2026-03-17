@@ -8,6 +8,7 @@ struct ToasttyCommandMenus: Commands {
 
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
+    @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let supportsConfigurationReload: Bool
@@ -138,7 +139,11 @@ struct ToasttyCommandMenus: Commands {
         guard commandSelection.window.workspaceIDs.indices.contains(index) else { return }
         let workspaceID = commandSelection.window.workspaceIDs[index]
         guard store.state.workspacesByID[workspaceID] != nil else { return }
-        store.send(.selectWorkspace(windowID: commandSelection.windowID, workspaceID: workspaceID))
+        store.selectWorkspace(
+            windowID: commandSelection.windowID,
+            workspaceID: workspaceID,
+            preferringUnreadSessionPanelIn: sessionRuntimeStore
+        )
     }
 
     private func toggleFocusedPanelFromCommandSelection() {

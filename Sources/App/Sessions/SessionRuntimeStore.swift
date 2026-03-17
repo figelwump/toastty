@@ -121,6 +121,26 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry.panelStatus(for: panelID)
     }
 
+    func preferredUnreadStatusPanelID(in workspace: WorkspaceState) -> UUID? {
+        guard workspace.unreadPanelIDs.isEmpty == false else {
+            return nil
+        }
+
+        let visiblePanelIDs = Set(workspace.layoutTree.allSlotInfos.map(\.panelID))
+        return sessionRegistry.workspaceStatuses(for: workspace.id)
+            .filter { status in
+                workspace.unreadPanelIDs.contains(status.panelID) &&
+                visiblePanelIDs.contains(status.panelID)
+            }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt {
+                    return lhs.updatedAt > rhs.updatedAt
+                }
+                return lhs.sessionID < rhs.sessionID
+            }
+            .first?.panelID
+    }
+
     private func synchronize(with state: AppState, now: Date = Date()) {
         var nextRegistry = sessionRegistry
 

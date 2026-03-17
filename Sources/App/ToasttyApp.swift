@@ -328,6 +328,7 @@ struct ToasttyApp: App {
             ToasttyCommandMenus(
                 store: store,
                 agentCatalogStore: agentCatalogStore,
+                sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 supportsConfigurationReload: supportsConfigurationReload,

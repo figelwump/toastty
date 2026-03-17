@@ -54,13 +54,6 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testReadySessionOutlineUsesHalfPointBorder() {
-        XCTAssertEqual(SidebarView.sessionStatusBorderLineWidth(for: .ready), 0.5)
-        XCTAssertEqual(SidebarView.sessionStatusBorderLineWidth(for: .needsApproval), 1)
-        XCTAssertEqual(SidebarView.sessionStatusBorderLineWidth(for: .error), 1)
-        XCTAssertEqual(SidebarView.sessionStatusBorderLineWidth(for: nil), 1)
-    }
-
     func testSessionIndicatorStateShowsSpinnerOnlyForWorking() {
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .working), .spinner)
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .idle), .hidden)

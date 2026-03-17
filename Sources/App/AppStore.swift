@@ -86,6 +86,28 @@ final class AppStore: ObservableObject {
         state.workspaceSelection(in: windowID)?.workspace
     }
 
+    @discardableResult
+    func selectWorkspace(
+        windowID: UUID,
+        workspaceID: UUID,
+        preferringUnreadSessionPanelIn sessionRuntimeStore: SessionRuntimeStore?
+    ) -> Bool {
+        let previousWorkspaceID = selectedWorkspaceID(in: windowID)
+        guard send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID)) else {
+            return false
+        }
+
+        guard previousWorkspaceID != workspaceID,
+              let sessionRuntimeStore,
+              let workspace = state.workspacesByID[workspaceID],
+              let preferredPanelID = sessionRuntimeStore.preferredUnreadStatusPanelID(in: workspace) else {
+            return true
+        }
+
+        _ = send(.focusPanel(workspaceID: workspaceID, panelID: preferredPanelID))
+        return true
+    }
+
     func commandWindowID(preferredWindowID: UUID?) -> UUID? {
         guard case .existingWindow(let windowID)? = createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) else {
             return nil
