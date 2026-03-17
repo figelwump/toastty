@@ -64,8 +64,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
+    private var exitedTerminalPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
+    private var ghosttyCloseSurfaceHandler: ((Bool) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -208,6 +210,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
             .intersection(livePanelIDs)
+        exitedTerminalPanelIDs = exitedTerminalPanelIDs.intersection(livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
             state: state,
@@ -235,6 +238,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
+        if exitedTerminalPanelIDs.contains(panelID) {
+            return TerminalCloseConfirmationAssessment(requiresConfirmation: false)
+        }
         guard let controller = runtimeStore.existingController(for: panelID) else {
             ToasttyLog.warning(
                 "Skipping terminal close confirmation because the surface controller is unavailable",
@@ -484,6 +490,13 @@ private extension TerminalRuntimeRegistry {
                 }
             }
         }
+    }
+
+}
+
+extension TerminalRuntimeRegistry {
+    func setGhosttyCloseSurfaceHandler(_ handler: @escaping (Bool) -> Bool) {
+        ghosttyCloseSurfaceHandler = handler
     }
 }
 
@@ -789,6 +802,10 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         actionRouter?.handle(action) ?? false
     }
 
+    func handleGhosttyCloseSurfaceRequest(_ confirmed: Bool) -> Bool {
+        ghosttyCloseSurfaceHandler?(confirmed) ?? false
+    }
+
     func resolveActionTarget(
         for action: GhosttyRuntimeAction,
         state: AppState
@@ -850,6 +867,19 @@ extension TerminalRuntimeRegistry {
         store: AppStore
     ) -> Bool {
         _ = store
+        if case .showChildExited(let exitCode) = intent {
+            exitedTerminalPanelIDs.insert(panelID)
+            ToasttyLog.debug(
+                "Marked terminal panel as exited",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "exit_code": String(exitCode),
+                ]
+            )
+            return true
+        }
         return metadataService?.handleRuntimeMetadataAction(
             intent,
             workspaceID: workspaceID,

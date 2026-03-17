@@ -69,6 +69,14 @@ final class FocusedPanelCommandController {
             arguments: processInfo.arguments,
             environment: processInfo.environment
         )
+        runtimeRegistry.setGhosttyCloseSurfaceHandler { [weak self] _ in
+            guard let self else { return false }
+            // Route Ghostty close requests through the same close path as Cmd+W
+            // so exited panes skip confirmation while live panes keep prompts.
+            // Ghostty's local C header does not document the callback boolean,
+            // so preserve Toastty's existing close semantics here.
+            return self.closeFocusedPanel().consumesShortcut
+        }
     }
 
     func canCloseFocusedPanel(in workspaceID: UUID? = nil) -> Bool {

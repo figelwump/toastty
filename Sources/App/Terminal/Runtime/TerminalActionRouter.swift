@@ -30,7 +30,7 @@ final class TerminalActionRouter {
         }
 
         switch action.intent {
-        case .setTerminalTitle, .setTerminalCWD, .commandFinished:
+        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             return registry.handleRuntimeMetadataAction(
                 action.intent,
                 workspaceID: resolution.workspaceID,
@@ -84,7 +84,7 @@ final class TerminalActionRouter {
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: resolution.workspaceID))
 
-        case .setTerminalTitle, .setTerminalCWD, .commandFinished:
+        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             handled = false
 
         case .desktopNotification:

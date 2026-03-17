@@ -149,6 +149,68 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             try StateValidator.validate(store.state)
         }
     }
+
+    func testChildExitedMetadataMakesPanelSafeToCloseWithoutController() async throws {
+        try await MainActor.run {
+            let state = AppState.bootstrap()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+            let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+            let handled = registry.handleRuntimeMetadataAction(
+                .showChildExited(exitCode: 0),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state,
+                store: store
+            )
+
+            XCTAssertTrue(handled)
+            let assessment = try XCTUnwrap(registry.terminalCloseConfirmationAssessment(panelID: panelID))
+            XCTAssertFalse(assessment.requiresConfirmation)
+            XCTAssertNil(assessment.runningCommand)
+        }
+    }
+
+    func testCloseSurfaceRequestClosesFocusedExitedPanelViaFocusedPanelController() async throws {
+        try await MainActor.run {
+            let state = try makeSplitState()
+            let store = AppStore(state: state, persistTerminalFontPreference: false)
+            let registry = TerminalRuntimeRegistry()
+            registry.bind(store: store)
+            let focusedPanelCommandController = FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: registry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            )
+            let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+            let panelIDToClose = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+            let panelCountBeforeClose = try XCTUnwrap(store.selectedWorkspace?.panels.count)
+
+            withExtendedLifetime(focusedPanelCommandController) {
+                XCTAssertTrue(
+                    registry.handleRuntimeMetadataAction(
+                        .showChildExited(exitCode: 0),
+                        workspaceID: workspaceID,
+                        panelID: panelIDToClose,
+                        state: store.state,
+                        store: store
+                    )
+                )
+
+                let handled = registry.handleGhosttyCloseSurfaceRequest(false)
+
+                XCTAssertTrue(handled)
+                guard let workspaceAfterClose = try? XCTUnwrap(store.selectedWorkspace) else {
+                    XCTFail("expected selected workspace after close")
+                    return
+                }
+                XCTAssertEqual(workspaceAfterClose.panels.count, panelCountBeforeClose - 1)
+                XCTAssertNil(workspaceAfterClose.panels[panelIDToClose])
+            }
+            try StateValidator.validate(store.state)
+        }
+    }
 }
 
 @MainActor

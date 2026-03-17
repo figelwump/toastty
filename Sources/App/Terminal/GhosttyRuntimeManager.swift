@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 @MainActor
 protocol GhosttyRuntimeActionHandling: AnyObject {
     func handleGhosttyRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool
+    func handleGhosttyCloseSurfaceRequest(_ confirmed: Bool) -> Bool
 }
 
 struct GhosttyRuntimeAction: Sendable {
@@ -20,6 +21,7 @@ struct GhosttyRuntimeAction: Sendable {
         case toggleFocusedPanelMode
         case setTerminalTitle(String)
         case setTerminalCWD(String)
+        case showChildExited(exitCode: Int)
         case commandFinished(exitCode: Int?)
         case desktopNotification(title: String, body: String)
     }
@@ -43,6 +45,8 @@ struct GhosttyRuntimeAction: Sendable {
             return "set_terminal_title"
         case .setTerminalCWD:
             return "set_terminal_cwd"
+        case .showChildExited:
+            return "show_child_exited"
         case .commandFinished:
             return "command_finished"
         case .desktopNotification:
@@ -199,6 +203,9 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         let pwd = action.action.pwd.pwd.map { String(cString: $0) } ?? ""
         intent = .setTerminalCWD(pwd)
 
+    case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
+        intent = .showChildExited(exitCode: Int(action.action.child_exited.exit_code))
+
     case GHOSTTY_ACTION_COMMAND_FINISHED:
         let rawExitCode = Int(action.action.command_finished.exit_code)
         let exitCode = rawExitCode >= 0 ? rawExitCode : nil
@@ -303,6 +310,71 @@ private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
         // reentrancy-safe deferral (e.g. requesting a tick from within a callback
         // that ghostty_app_tick itself triggered).
         manager.tick()
+    }
+}
+
+@MainActor
+private func handleGhosttyCloseSurfaceRequestOnMain(
+    managerHandle: UInt,
+    confirmed: Bool,
+    callbackThread: String
+) {
+    guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
+        ToasttyLog.warning("Ghostty close-surface callback missing manager pointer", category: .ghostty)
+        return
+    }
+    let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
+    let handled = manager.routeCloseSurfaceRequest(confirmed: confirmed)
+    ToasttyLog.debug(
+        "Handled Ghostty close-surface request",
+        category: .ghostty,
+        metadata: [
+            "confirmed": confirmed ? "true" : "false",
+            "handled": handled ? "true" : "false",
+            "thread": callbackThread,
+        ]
+    )
+}
+
+private func ghosttyCloseSurfaceCallback(userdata: UnsafeMutableRawPointer?, confirmed: Bool) {
+    guard let userdata else {
+        ToasttyLog.warning("Ghostty close-surface callback missing userdata", category: .ghostty)
+        return
+    }
+
+    let managerHandle = UInt(bitPattern: userdata)
+    let callbackThread = Thread.isMainThread ? "main" : "background"
+
+    if Thread.isMainThread {
+        MainActor.assumeIsolated {
+            handleGhosttyCloseSurfaceRequestOnMain(
+                managerHandle: managerHandle,
+                confirmed: confirmed,
+                callbackThread: callbackThread
+            )
+        }
+        return
+    }
+
+    let semaphore = DispatchSemaphore(value: 0)
+    DispatchQueue.main.async {
+        MainActor.assumeIsolated {
+            handleGhosttyCloseSurfaceRequestOnMain(
+                managerHandle: managerHandle,
+                confirmed: confirmed,
+                callbackThread: callbackThread
+            )
+        }
+        semaphore.signal()
+    }
+
+    guard semaphore.wait(timeout: .now() + .milliseconds(250)) == .success else {
+        ToasttyLog.warning(
+            "Ghostty close-surface callback timed out waiting for main queue",
+            category: .ghostty,
+            metadata: ["thread": callbackThread]
+        )
+        return
     }
 }
 
@@ -698,7 +770,9 @@ private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghos
                 confirm: confirm
             )
         },
-        close_surface_cb: { _, _ in }
+        close_surface_cb: { userdata, confirmed in
+            ghosttyCloseSurfaceCallback(userdata: userdata, confirmed: confirmed)
+        }
     )
 }
 
@@ -1443,6 +1517,10 @@ final class GhosttyRuntimeManager {
 
     fileprivate func routeRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool {
         actionHandler?.handleGhosttyRuntimeAction(action) ?? false
+    }
+
+    fileprivate func routeCloseSurfaceRequest(confirmed: Bool) -> Bool {
+        actionHandler?.handleGhosttyCloseSurfaceRequest(confirmed) ?? false
     }
 }
 #endif
