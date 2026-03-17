@@ -31,6 +31,14 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - For menu validation, target the exact built app instance by PID or full app bundle path. Multiple local `Toastty` builds may be running at once, and generic `osascript` checks can attach to the wrong process.
 - Prefer `peekaboo menu list --pid <pid> --json` for menu verification. It is more reliable than generic AppleScript enumeration for nested SwiftUI/AppKit menus.
 
+## Parallel Dev Runs
+- When running multiple local Toastty builds in parallel for dev/test/debug, always treat PID, bundle path, and per-run filesystem paths as required targeting data, not optional bookkeeping.
+- For scripted or automation-backed runs, set unique `RUN_ID`, `DERIVED_PATH`, `ARTIFACTS_DIR`, and `SOCKET_PATH` for each instance so parallel agents do not reuse the same build products, artifacts, or automation socket.
+- For `shortcut-trace.sh` or other trace-style runs, also use a unique `TRACE_LOG_PATH` per instance instead of the shared default log path.
+- Capture the launched app PID and use PID-targeted tooling for validation whenever possible. Prefer `peekaboo ... --pid <pid>` and avoid generic `osascript` or app-name-only targeting when more than one Toastty instance may be running.
+- Current Toastty dev runs still share `~/.toastty`, app `UserDefaults`, and default log locations unless explicit overrides are used. Do not assume parallel runs are isolated just because their app bundles or DerivedData paths differ.
+- When a run is finished, clean up only its own per-run `Derived` and `artifacts` directories. Never delete paths for a still-running PID.
+
 ## Ghostty Integration
 - **Default-on** when a local xcframework exists in `Dependencies/` and disable env is not set.
 - **Opt out:** `TUIST_DISABLE_GHOSTTY=1` (or alias `TOASTTY_DISABLE_GHOSTTY=1`)
