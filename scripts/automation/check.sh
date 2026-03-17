@@ -32,6 +32,81 @@ restore_default_workspace() {
   run_tuist generate --no-open >/dev/null 2>&1 || true
 }
 
+resolve_app_path() {
+  local scheme="$1"
+  local configuration="$2"
+  local build_settings
+  local target_build_dir
+  local full_product_name
+
+  build_settings="$(
+    xcodebuild \
+      -workspace toastty.xcworkspace \
+      -scheme "$scheme" \
+      -configuration "$configuration" \
+      -showBuildSettings
+  )"
+  target_build_dir="$(printf '%s\n' "$build_settings" | awk -F ' = ' '/ TARGET_BUILD_DIR = / { print $2; exit }')"
+  full_product_name="$(printf '%s\n' "$build_settings" | awk -F ' = ' '/ FULL_PRODUCT_NAME = / { print $2; exit }')"
+
+  if [[ -z "$target_build_dir" || -z "$full_product_name" ]]; then
+    echo "error: failed to resolve app path for scheme ${scheme} (${configuration})" >&2
+    return 1
+  fi
+
+  printf '%s/%s\n' "$target_build_dir" "$full_product_name"
+}
+
+verify_child_process_tcc_metadata() {
+  local scheme="$1"
+  local configuration="$2"
+  local app_path
+  local info_plist
+  local camera_usage
+  local microphone_usage
+  local entitlements_summary
+
+  app_path="$(resolve_app_path "$scheme" "$configuration")" || return 1
+  info_plist="$app_path/Contents/Info.plist"
+
+  if [[ ! -f "$info_plist" ]]; then
+    echo "error: expected Info.plist at ${info_plist}" >&2
+    return 1
+  fi
+
+  camera_usage="$(plutil -extract NSCameraUsageDescription raw -o - "$info_plist" 2>/dev/null || true)"
+  microphone_usage="$(plutil -extract NSMicrophoneUsageDescription raw -o - "$info_plist" 2>/dev/null || true)"
+
+  if [[ -z "$camera_usage" ]]; then
+    echo "error: missing NSCameraUsageDescription in ${info_plist}" >&2
+    return 1
+  fi
+
+  if [[ -z "$microphone_usage" ]]; then
+    echo "error: missing NSMicrophoneUsageDescription in ${info_plist}" >&2
+    return 1
+  fi
+
+  entitlements_summary="$(
+    codesign -d --entitlements :- "$app_path" 2>/dev/null | plutil -p - 2>/dev/null || true
+  )"
+
+  if [[ -z "$entitlements_summary" ]]; then
+    echo "error: failed to read entitlements from ${app_path}" >&2
+    return 1
+  fi
+
+  if ! printf '%s\n' "$entitlements_summary" | rg -q '"com.apple.security.device.camera" => true'; then
+    echo "error: missing camera entitlement in ${app_path}" >&2
+    return 1
+  fi
+
+  if ! printf '%s\n' "$entitlements_summary" | rg -q '"com.apple.security.device.audio-input" => true'; then
+    echo "error: missing microphone entitlement in ${app_path}" >&2
+    return 1
+  fi
+}
+
 validate_manifest_version_inputs() {
   MANIFEST_VALIDATE_LOG="$(mktemp -t toastty-manifest-validate.XXXXXX.log)"
   MANIFEST_EMPTY_VALUE_LOG="$(mktemp -t toastty-manifest-empty.XXXXXX.log)"
@@ -77,6 +152,14 @@ if ! run_tuist generate --no-open; then
 fi
 
 if ! run_tuist build; then
+  exit 10
+fi
+
+if ! verify_child_process_tcc_metadata "ToasttyApp" "Debug"; then
+  exit 10
+fi
+
+if ! verify_child_process_tcc_metadata "ToasttyApp-Release" "Release"; then
   exit 10
 fi
 
