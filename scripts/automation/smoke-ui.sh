@@ -33,6 +33,10 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]
   RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
 fi
 DROP_IMAGE_PATH_TO_CLEANUP=""
+TERMINAL_PROFILES_PATH="$ARTIFACTS_DIR/terminal-profiles-${RUN_ID}.toml"
+PROFILE_SMOKE_PROFILE_ID="smoke-profile"
+PROFILE_SMOKE_TITLE="Profile Ready"
+PROFILE_SMOKE_VISIBLE_MARKER="PROFILE:${PROFILE_SMOKE_PROFILE_ID}:create"
 
 mkdir -p "$ARTIFACTS_DIR"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$LOG_FILE"
@@ -48,6 +52,10 @@ run_tuist() {
   else
     tuist "$@"
   fi
+}
+
+ensure_tuist_dependencies() {
+  run_tuist install >/dev/null
 }
 
 cleanup() {
@@ -77,6 +85,14 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 
+cat > "$TERMINAL_PROFILES_PATH" <<EOF
+[${PROFILE_SMOKE_PROFILE_ID}]
+displayName = "Smoke Profile"
+badge = "SMOKE"
+startupCommand = "printf 'PROFILE:%s:%s\\\\n' \"\$TOASTTY_TERMINAL_PROFILE_ID\" \"\$TOASTTY_LAUNCH_REASON\"; printf '\\\\033]2;${PROFILE_SMOKE_TITLE}\\\\007'; sleep 2"
+EOF
+
+ensure_tuist_dependencies
 run_tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \
@@ -89,6 +105,7 @@ xcodebuild \
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
+TOASTTY_TERMINAL_PROFILES_PATH="$TERMINAL_PROFILES_PATH" \
 "$APP_BINARY" \
   --automation \
   --skip-quit-confirmation \
@@ -608,6 +625,118 @@ if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]
     echo "expected input: ${DROP_EXPECTED_INPUT}" >&2
     echo "last terminal response: ${DROP_VISIBLE_RESPONSE}" >&2
     exit 1
+  fi
+
+  if [[ "$GHOSTTY_INPUT_READINESS_REQUIRED" == "1" ]]; then
+    send_request "automation.perform_action" "{\"action\":\"workspace.split.right.with-profile\",\"args\":{\"profileID\":\"${PROFILE_SMOKE_PROFILE_ID}\"}}" >/dev/null
+    PROFILE_SPLIT_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+    PROFILE_PANEL_ID="$(extract_string_field "$PROFILE_SPLIT_RESPONSE" "focusedPanelID")"
+    if [[ -z "$PROFILE_PANEL_ID" ]]; then
+      echo "error: focused panel missing after profiled split" >&2
+      echo "snapshot response: ${PROFILE_SPLIT_RESPONSE}" >&2
+      exit 1
+    fi
+
+    PROFILE_VISIBLE_RESPONSE=""
+    PROFILE_VISIBLE_FOUND=0
+    for _ in $(seq 1 40); do
+      PROFILE_VISIBLE_RESPONSE="$(send_request "automation.terminal_visible_text" "{\"contains\":\"${PROFILE_SMOKE_VISIBLE_MARKER}\",\"panelID\":\"${PROFILE_PANEL_ID}\"}")"
+      if echo "$PROFILE_VISIBLE_RESPONSE" | grep -qE '"contains"[[:space:]]*:[[:space:]]*true'; then
+        PROFILE_VISIBLE_FOUND=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$PROFILE_VISIBLE_FOUND" -ne 1 ]]; then
+      echo "error: profiled pane startup command output not observed" >&2
+      echo "panel id: ${PROFILE_PANEL_ID}" >&2
+      echo "expected marker: ${PROFILE_SMOKE_VISIBLE_MARKER}" >&2
+      echo "last visible text response: ${PROFILE_VISIBLE_RESPONSE}" >&2
+      exit 1
+    fi
+
+    PROFILE_STATE_RESPONSE=""
+    PROFILE_STATE_MATCHED=0
+    for _ in $(seq 1 40); do
+      PROFILE_STATE_RESPONSE="$(send_request "automation.terminal_state" "{\"panelID\":\"${PROFILE_PANEL_ID}\"}")"
+      PROFILE_STATE_TITLE="$(extract_string_field "$PROFILE_STATE_RESPONSE" "title")"
+      PROFILE_STATE_PROFILE_ID="$(extract_string_field "$PROFILE_STATE_RESPONSE" "profileID")"
+      if [[ "$PROFILE_STATE_TITLE" == "$PROFILE_SMOKE_TITLE" && "$PROFILE_STATE_PROFILE_ID" == "$PROFILE_SMOKE_PROFILE_ID" ]]; then
+        PROFILE_STATE_MATCHED=1
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$PROFILE_STATE_MATCHED" -ne 1 ]]; then
+      echo "error: profiled pane metadata did not reflect startup title/profile binding" >&2
+      echo "panel id: ${PROFILE_PANEL_ID}" >&2
+      echo "expected title: ${PROFILE_SMOKE_TITLE}" >&2
+      echo "expected profile id: ${PROFILE_SMOKE_PROFILE_ID}" >&2
+      echo "last terminal_state response: ${PROFILE_STATE_RESPONSE}" >&2
+      exit 1
+    fi
+
+    PROFILE_CLOSE_SLOT_COUNT="$(extract_int_field "$PROFILE_SPLIT_RESPONSE" "slotCount")"
+    if [[ -z "$PROFILE_CLOSE_SLOT_COUNT" || "$PROFILE_CLOSE_SLOT_COUNT" -lt 2 ]]; then
+      echo "error: profiled split did not leave enough slots for close-focused-panel validation" >&2
+      echo "snapshot response: ${PROFILE_SPLIT_RESPONSE}" >&2
+      exit 1
+    fi
+
+    send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}' >/dev/null
+    EXPECTED_PROFILE_CLOSE_SLOT_COUNT=$((PROFILE_CLOSE_SLOT_COUNT - 1))
+    PROFILE_CLOSE_RESPONSE=""
+    PROFILE_CLOSE_RENDER_RESPONSE=""
+    PROFILE_CLOSE_FOCUSED_PANEL_ID=""
+    PROFILE_CLOSE_TERMINAL_READY="false"
+    PROFILE_CLOSE_PROBE_RESPONSE=""
+    for _ in $(seq 1 40); do
+      PROFILE_CLOSE_RESPONSE="$(send_request "automation.workspace_snapshot" '{}')"
+      PROFILE_CLOSE_SLOT_COUNT="$(extract_int_field "$PROFILE_CLOSE_RESPONSE" "slotCount")"
+      PROFILE_CLOSE_FOCUSED_PANEL_ID="$(extract_string_field "$PROFILE_CLOSE_RESPONSE" "focusedPanelID")"
+      PROFILE_CLOSE_RENDER_RESPONSE="$(send_request "automation.workspace_render_snapshot" '{}')"
+      PROFILE_CLOSE_ALL_RENDERABLE="$(extract_bool_field "$PROFILE_CLOSE_RENDER_RESPONSE" "allRenderable")"
+      PROFILE_CLOSE_TERMINAL_READY="true"
+      PROFILE_CLOSE_PROBE_RESPONSE=""
+      if [[ "$GHOSTTY_INPUT_READINESS_REQUIRED" == "1" ]]; then
+        PROFILE_CLOSE_TERMINAL_READY="false"
+        if [[ "$PROFILE_CLOSE_ALL_RENDERABLE" == "true" && -n "$PROFILE_CLOSE_FOCUSED_PANEL_ID" ]]; then
+          PROFILE_CLOSE_PROBE_RESPONSE="$(probe_terminal_send_text_availability "$PROFILE_CLOSE_FOCUSED_PANEL_ID")"
+          if [[ "$(extract_bool_field "$PROFILE_CLOSE_PROBE_RESPONSE" "available")" == "true" ]]; then
+            PROFILE_CLOSE_TERMINAL_READY="true"
+          fi
+        fi
+      fi
+      if [[ "$PROFILE_CLOSE_SLOT_COUNT" == "$EXPECTED_PROFILE_CLOSE_SLOT_COUNT" && "$PROFILE_CLOSE_ALL_RENDERABLE" == "true" && -n "$PROFILE_CLOSE_FOCUSED_PANEL_ID" && "$PROFILE_CLOSE_TERMINAL_READY" == "true" ]]; then
+        break
+      fi
+      sleep 0.1
+    done
+    if [[ "$PROFILE_CLOSE_SLOT_COUNT" != "$EXPECTED_PROFILE_CLOSE_SLOT_COUNT" ]]; then
+      echo "error: profiled close-focused-panel did not reduce slot count as expected" >&2
+      echo "expected slot count: ${EXPECTED_PROFILE_CLOSE_SLOT_COUNT}" >&2
+      echo "actual slot count: ${PROFILE_CLOSE_SLOT_COUNT:-missing}" >&2
+      echo "snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      exit 1
+    fi
+    if [[ "$PROFILE_CLOSE_ALL_RENDERABLE" != "true" ]]; then
+      echo "error: profiled close-focused-panel left one or more surfaces non-renderable" >&2
+      echo "workspace snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      echo "render snapshot response: ${PROFILE_CLOSE_RENDER_RESPONSE}" >&2
+      exit 1
+    fi
+    if [[ -z "$PROFILE_CLOSE_FOCUSED_PANEL_ID" ]]; then
+      echo "error: profiled close-focused-panel did not resolve a focused survivor panel" >&2
+      echo "snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      exit 1
+    fi
+    if [[ "$GHOSTTY_INPUT_READINESS_REQUIRED" == "1" && "$PROFILE_CLOSE_TERMINAL_READY" != "true" ]]; then
+      echo "error: surviving terminal surface was not input-ready after profiled close-focused-panel" >&2
+      echo "workspace snapshot response: ${PROFILE_CLOSE_RESPONSE}" >&2
+      echo "render snapshot response: ${PROFILE_CLOSE_RENDER_RESPONSE}" >&2
+      echo "last terminal probe response: ${PROFILE_CLOSE_PROBE_RESPONSE}" >&2
+      exit 1
+    fi
   fi
 
   TERMINAL_VIEWPORT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"terminal-viewport-smoke"}')"

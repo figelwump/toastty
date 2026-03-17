@@ -32,7 +32,11 @@ final class TerminalHostView: NSView {
     private weak var observedWindow: NSWindow?
     private var windowOcclusionObserver: NSObjectProtocol?
     private var lastKnownSurfaceVisibility: Bool?
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    private var lastLoggedVisibilityTraceSnapshot: VisibilityTraceSnapshot?
+    #endif
     private(set) var isEffectivelyVisible = false
+    var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
     private static let imageFileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
         .urlReadingFileURLsOnly: true,
@@ -115,12 +119,35 @@ final class TerminalHostView: NSView {
     /// Tracks the last focus value sent to Ghostty to avoid redundant calls.
     /// Each `ghostty_surface_set_focus` call restarts the internal cursor blink
     /// timer; calling it on every layout pass causes irregular blinking and
-    /// input jitter.
+    /// input jitter. `nil` means the live surface's current focus is unknown,
+    /// which can happen when a reused surface is remounted into a new host.
     private var lastAppliedSurfaceFocus: Bool?
     private var rightMousePressWasForwarded = false
     private var ghosttyMouseCursorStyle: GhosttyMouseCursorStyle = .horizontalText
     private var ghosttyMouseCursorVisible = true
     private var ghosttyMouseOverLinkURL: String?
+
+    struct VisibilityTraceSnapshot: Equatable {
+        let hasWindow: Bool
+        let isHidden: Bool
+        let hasHiddenAncestor: Bool
+        let windowVisible: Bool
+        let selfAlphaThousandths: Int
+        let minAncestorAlphaThousandths: Int
+        let minChainAlphaThousandths: Int
+
+        var logicallyVisibleIgnoringTransparency: Bool {
+            hasWindow && isHidden == false && hasHiddenAncestor == false && windowVisible
+        }
+
+        var visuallyTransparent: Bool {
+            minChainAlphaThousandths <= 10
+        }
+
+        var resolvedVisible: Bool {
+            logicallyVisibleIgnoringTransparency && visuallyTransparent == false
+        }
+    }
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -153,7 +180,11 @@ final class TerminalHostView: NSView {
         let result = super.resignFirstResponder()
         #if TOASTTY_HAS_GHOSTTY_KIT
         if result {
-            syncSurfaceFocus(false)
+            syncSurfaceFocus(
+                false,
+                reason: "resign_first_responder",
+                refreshOnChange: true
+            )
         }
         #endif
         return result
@@ -181,6 +212,7 @@ final class TerminalHostView: NSView {
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
         #if TOASTTY_HAS_GHOSTTY_KIT
+        lastLoggedVisibilityTraceSnapshot = nil
         syncSurfaceVisibility(reason: "superview_changed")
         syncGhosttyCursorOwner()
         #else
@@ -193,6 +225,7 @@ final class TerminalHostView: NSView {
         #if TOASTTY_HAS_GHOSTTY_KIT
         updateWindowOcclusionObservation()
         syncLayerContentsScale()
+        lastLoggedVisibilityTraceSnapshot = nil
         syncSurfaceVisibility(reason: "window_changed")
         syncGhosttyCursorOwner()
         #else
@@ -242,6 +275,7 @@ final class TerminalHostView: NSView {
             ghosttyMouseOverLinkURL = nil
             syncGhosttyCursorOwner()
         }
+        lastLoggedVisibilityTraceSnapshot = nil
         syncSurfaceVisibility(reason: "surface_assignment")
     }
 
@@ -249,7 +283,11 @@ final class TerminalHostView: NSView {
     /// Returns `true` if focus was applied (i.e. it changed), `false` if
     /// it was a no-op.
     @discardableResult
-    func syncSurfaceFocus(_ focused: Bool) -> Bool {
+    func syncSurfaceFocus(
+        _ focused: Bool,
+        reason: String,
+        refreshOnChange: Bool = false
+    ) -> Bool {
         guard let ghosttySurface else {
             lastAppliedSurfaceFocus = nil
             return false
@@ -259,6 +297,21 @@ final class TerminalHostView: NSView {
         }
         lastAppliedSurfaceFocus = focused
         ghostty_surface_set_focus(ghosttySurface, focused)
+        let shouldRefresh = refreshOnChange && isEffectivelyVisible
+        if shouldRefresh {
+            GhosttyRuntimeManager.shared.requestImmediateTick()
+            ghostty_surface_refresh(ghosttySurface)
+        }
+        ToasttyLog.debug(
+            "Updated Ghostty surface focus",
+            category: .ghostty,
+            metadata: [
+                "focused": focused ? "true" : "false",
+                "reason": reason,
+                "host_effectively_visible": isEffectivelyVisible ? "true" : "false",
+                "refresh_requested": shouldRefresh ? "true" : "false",
+            ]
+        )
         return true
     }
 
@@ -293,12 +346,22 @@ final class TerminalHostView: NSView {
         observedWindow = nil
     }
 
-    func synchronizeGhosttySurfaceFocusFromApplicationState() {
-        let focused = isEffectivelyVisible &&
-            NSApp.isActive &&
+    func resolvedGhosttySurfaceFocusState() -> Bool {
+        isEffectivelyVisible &&
+            applicationIsActiveProvider() &&
             window?.isKeyWindow == true &&
             window?.firstResponder === self
-        syncSurfaceFocus(focused)
+    }
+
+    @discardableResult
+    func synchronizeGhosttySurfaceFocusFromApplicationState() -> Bool {
+        let focused = resolvedGhosttySurfaceFocusState()
+        syncSurfaceFocus(
+            focused,
+            reason: "application_state",
+            refreshOnChange: true
+        )
+        return focused
     }
 
     func setGhosttyMouseShape(_ shape: ghostty_action_mouse_shape_e) {
@@ -312,17 +375,19 @@ final class TerminalHostView: NSView {
     }
 
     private func resolvedSurfaceVisibility() -> Bool {
-        guard let window else {
-            return false
-        }
-        guard isHidden == false, hasHiddenAncestor == false else {
-            return false
-        }
-        return window.occlusionState.contains(.visible)
+        visibilityTraceSnapshot().resolvedVisible
+    }
+
+    @discardableResult
+    func synchronizePresentationVisibility(reason: String) -> Bool {
+        syncSurfaceVisibility(reason: reason)
+        return isEffectivelyVisible
     }
 
     private func syncSurfaceVisibility(reason: String) {
-        let visible = resolvedSurfaceVisibility()
+        let traceSnapshot = visibilityTraceSnapshot()
+        logVisibilityTraceIfNeeded(traceSnapshot, reason: reason)
+        let visible = traceSnapshot.resolvedVisible
         if shouldDeferInvisibleVisibilityUpdate(visible: visible) {
             scheduleDeferredVisibilitySync()
             return
@@ -330,7 +395,7 @@ final class TerminalHostView: NSView {
 
         pendingVisibilitySyncTask?.cancel()
         pendingVisibilitySyncTask = nil
-        applySurfaceVisibility(visible: visible, reason: reason)
+        applySurfaceVisibility(traceSnapshot: traceSnapshot, reason: reason)
     }
 
     private func shouldDeferInvisibleVisibilityUpdate(visible: Bool) -> Bool {
@@ -352,14 +417,18 @@ final class TerminalHostView: NSView {
             await Task.yield()
             guard let self else { return }
             self.pendingVisibilitySyncTask = nil
+            let traceSnapshot = self.visibilityTraceSnapshot()
+            self.logVisibilityTraceIfNeeded(traceSnapshot, reason: "deferred_window_reattach_check")
             self.applySurfaceVisibility(
-                visible: self.resolvedSurfaceVisibility(),
+                traceSnapshot: traceSnapshot,
                 reason: "deferred_window_reattach_check"
             )
         }
     }
 
-    private func applySurfaceVisibility(visible: Bool, reason: String) {
+    private func applySurfaceVisibility(traceSnapshot: VisibilityTraceSnapshot, reason: String) {
+        let visible = traceSnapshot.resolvedVisible
+        let previousVisible = lastKnownSurfaceVisibility
         isEffectivelyVisible = visible
         if visible {
             requestFirstResponderIfNeeded?()
@@ -376,29 +445,103 @@ final class TerminalHostView: NSView {
         lastKnownSurfaceVisibility = visible
         ghostty_surface_set_occlusion(ghosttySurface, visible)
         if visible {
-            let shouldRestoreFocus = NSApp.isActive &&
+            let shouldRestoreFocus = applicationIsActiveProvider() &&
                 window?.isKeyWindow == true &&
                 window?.firstResponder === self
-            syncSurfaceFocus(shouldRestoreFocus)
+            syncSurfaceFocus(
+                shouldRestoreFocus,
+                reason: "visibility_restoration",
+                refreshOnChange: false
+            )
             GhosttyRuntimeManager.shared.requestImmediateTick()
             ghostty_surface_refresh(ghosttySurface)
         } else {
-            syncSurfaceFocus(false)
+            syncSurfaceFocus(
+                false,
+                reason: "visibility_hidden",
+                refreshOnChange: false
+            )
         }
 
         ToasttyLog.debug(
             "Updated Ghostty surface occlusion",
             category: .ghostty,
             metadata: [
+                "previous_visible": previousVisible.map { $0 ? "true" : "false" } ?? "nil",
                 "visible": visible ? "true" : "false",
                 "reason": reason,
                 "restored_focus": visible &&
-                    NSApp.isActive &&
+                    applicationIsActiveProvider() &&
                     window?.isKeyWindow == true &&
                     window?.firstResponder === self ? "true" : "false",
-                "has_window": window == nil ? "false" : "true",
-                "is_hidden": isHidden ? "true" : "false",
-                "has_hidden_ancestor": hasHiddenAncestor ? "true" : "false",
+                "has_window": traceSnapshot.hasWindow ? "true" : "false",
+                "is_hidden": traceSnapshot.isHidden ? "true" : "false",
+                "has_hidden_ancestor": traceSnapshot.hasHiddenAncestor ? "true" : "false",
+                "window_visible": traceSnapshot.windowVisible ? "true" : "false",
+                "self_alpha_thousandths": String(traceSnapshot.selfAlphaThousandths),
+                "min_ancestor_alpha_thousandths": String(traceSnapshot.minAncestorAlphaThousandths),
+                "min_chain_alpha_thousandths": String(traceSnapshot.minChainAlphaThousandths),
+            ]
+        )
+    }
+
+    func visibilityTraceSnapshot() -> VisibilityTraceSnapshot {
+        let hasWindow = window != nil
+        let windowVisible = window?.occlusionState.contains(.visible) == true
+        let selfAlphaThousandths = Self.alphaThousandths(alphaValue)
+        let minAncestorAlphaThousandths = minimumAncestorAlphaThousandths()
+        let minChainAlphaThousandths = min(selfAlphaThousandths, minAncestorAlphaThousandths)
+        return VisibilityTraceSnapshot(
+            hasWindow: hasWindow,
+            isHidden: isHidden,
+            hasHiddenAncestor: hasHiddenAncestor,
+            windowVisible: windowVisible,
+            selfAlphaThousandths: selfAlphaThousandths,
+            minAncestorAlphaThousandths: minAncestorAlphaThousandths,
+            minChainAlphaThousandths: minChainAlphaThousandths
+        )
+    }
+
+    private func minimumAncestorAlphaThousandths() -> Int {
+        var result = 1_000
+        var ancestor = superview
+        while let current = ancestor {
+            result = min(result, Self.alphaThousandths(current.alphaValue))
+            ancestor = current.superview
+        }
+        return result
+    }
+
+    private static func alphaThousandths(_ alpha: CGFloat) -> Int {
+        Int((max(0, min(1, alpha)) * 1_000).rounded())
+    }
+
+    private func logVisibilityTraceIfNeeded(_ traceSnapshot: VisibilityTraceSnapshot, reason: String) {
+        guard lastLoggedVisibilityTraceSnapshot != traceSnapshot else {
+            return
+        }
+        lastLoggedVisibilityTraceSnapshot = traceSnapshot
+
+        let message: String
+        if traceSnapshot.logicallyVisibleIgnoringTransparency && traceSnapshot.visuallyTransparent {
+            message = "Ghostty surface treated as hidden because host alpha chain is effectively transparent"
+        } else {
+            message = "Resolved Ghostty surface visibility state"
+        }
+
+        ToasttyLog.debug(
+            message,
+            category: .ghostty,
+            metadata: [
+                "reason": reason,
+                "resolved_visible": traceSnapshot.resolvedVisible ? "true" : "false",
+                "has_window": traceSnapshot.hasWindow ? "true" : "false",
+                "window_visible": traceSnapshot.windowVisible ? "true" : "false",
+                "is_hidden": traceSnapshot.isHidden ? "true" : "false",
+                "has_hidden_ancestor": traceSnapshot.hasHiddenAncestor ? "true" : "false",
+                "self_alpha_thousandths": String(traceSnapshot.selfAlphaThousandths),
+                "min_ancestor_alpha_thousandths": String(traceSnapshot.minAncestorAlphaThousandths),
+                "min_chain_alpha_thousandths": String(traceSnapshot.minChainAlphaThousandths),
             ]
         )
     }

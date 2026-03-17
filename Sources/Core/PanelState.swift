@@ -53,18 +53,21 @@ public struct TerminalPanelState: Codable, Equatable, Sendable {
     public var shell: String
     public var cwd: String
     public var launchWorkingDirectory: String?
+    public var profileBinding: TerminalProfileBinding?
     private static let homeDirectory = (NSHomeDirectory() as NSString).standardizingPath
 
     public init(
         title: String,
         shell: String,
         cwd: String,
-        launchWorkingDirectory: String? = nil
+        launchWorkingDirectory: String? = nil,
+        profileBinding: TerminalProfileBinding? = nil
     ) {
         self.title = title
         self.shell = shell
         self.cwd = cwd
         self.launchWorkingDirectory = Self.normalizedWorkingDirectoryValue(launchWorkingDirectory)
+        self.profileBinding = profileBinding
     }
 
     /// The cwd we should use when launching or re-launching a shell surface.

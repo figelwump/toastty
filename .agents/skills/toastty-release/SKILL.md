@@ -14,7 +14,7 @@ Use this workflow when the user asks to cut or prepare a Toastty release build a
    - `Dependencies/GhosttyKit.Release.xcframework`
    - `Dependencies/GhosttyKit.Release.metadata.env`
 3. Run `scripts/release/release.sh` with the requested `TOASTTY_VERSION`, `TOASTTY_BUILD_NUMBER`, and signing/notary secrets.
-4. Verify that `artifacts/release/<version>-<build>/release-metadata.env`, `ghostty-metadata.env`, and `Toastty-<version>.dmg` all exist and are non-empty, then read the metadata files.
+4. Verify that `artifacts/release/<version>-<build>/release-metadata.env`, `ghostty-metadata.env`, `sparkle-metadata.env`, and `Toastty-<version>.dmg` all exist and are non-empty, then read the metadata files.
 5. Confirm `RELEASE_SOURCE_COMMIT` is available in the local clone before inspecting history or writing notes.
 6. Use `.agents/skills/toastty-release/assets/release-notes-template.md` as the starting structure for `RELEASE_NOTES_PATH`.
 7. Inspect the Toastty diff and commit history from `RELEASE_PREVIOUS_TAG` to `RELEASE_SOURCE_COMMIT`.
@@ -23,6 +23,7 @@ Use this workflow when the user asks to cut or prepare a Toastty release build a
 10. Hand off the generated release directory for later publication:
    - `release-metadata.env`
    - `ghostty-metadata.env`
+   - `sparkle-metadata.env`
    - `release-notes.md`
    - `Toastty-<version>.dmg`
 11. Stop after the build-and-draft handoff unless the user explicitly asks to continue into publication. If they do, open `../toastty-publish/SKILL.md` and follow that workflow.
@@ -38,6 +39,7 @@ Use this workflow when the user asks to cut or prepare a Toastty release build a
 - The generated release directory contains the handoff artifacts for the publish step:
   - `release-metadata.env`
   - `ghostty-metadata.env`
+  - `sparkle-metadata.env`
   - `release-notes.md`
   - `Toastty-<version>.dmg`
 - Keep `artifacts/release/<version>-<build>/` intact between the build and publish phases.
@@ -71,7 +73,7 @@ When the source path is inside a Ghostty git checkout, the installer auto-detect
 
 ## Validation
 
-- Before writing notes, confirm both metadata files and the DMG exist and are non-empty.
+- Before writing notes, confirm all three metadata files and the DMG exist and are non-empty.
 - Before diffing, confirm `RELEASE_SOURCE_COMMIT` is reachable in the local clone.
 - Before handing off to publish, confirm the notes file exists at `RELEASE_NOTES_PATH`, is non-empty, and has no leftover `{{placeholder}}` tokens.
 - Run at least targeted script validation after release-workflow changes.

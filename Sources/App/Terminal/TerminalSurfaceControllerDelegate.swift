@@ -15,6 +15,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState
     func consumeSplitSource(forNewPanelID panelID: UUID)
+    func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration
+    func markInitialSurfaceLaunchCompleted(for panelID: UUID)
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID)
     func unregisterSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID)
     func surfaceCreationChildPIDSnapshot() -> Set<pid_t>

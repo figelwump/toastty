@@ -135,12 +135,22 @@ final class TerminalMetadataService {
             )
 
         case .setTerminalCWD(let cwd):
-            if TerminalRuntimeRegistry.normalizedCWDValue(cwd) != nil {
+            let effectiveCWD = effectiveNativeGhosttyCWD(
+                for: cwd,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: state
+            )
+            if TerminalRuntimeRegistry.normalizedCWDValue(effectiveCWD) != nil {
+                // Profile attach wrappers surface the bootstrap shell process to
+                // both Ghostty and process polling first. Once we choose the
+                // restored launch cwd as the placeholder, suppress process
+                // fallback as well so that provisional shell cannot overwrite it.
                 recordNativeCWDSignal(panelID: panelID)
             }
             return handleTerminalMetadataUpdate(
                 title: nil,
-                cwd: cwd,
+                cwd: effectiveCWD,
                 allowLegacyCWDInference: false,
                 workspaceID: workspaceID,
                 panelID: panelID,
@@ -344,6 +354,42 @@ final class TerminalMetadataService {
                 metadata: ["panel_id": panelID.uuidString]
             )
         }
+    }
+
+    private func effectiveNativeGhosttyCWD(
+        for cwd: String?,
+        workspaceID: UUID,
+        panelID: UUID,
+        state: AppState
+    ) -> String? {
+        guard let incomingCWD = TerminalRuntimeRegistry.normalizedCWDValue(cwd) else {
+            return cwd
+        }
+        guard let workspace = state.workspacesByID[workspaceID],
+              case .terminal(let terminalState)? = workspace.panels[panelID],
+              normalizedProfileStartupCommandAwaitingTitleCleanup(
+                  panelID: panelID,
+                  terminalState: terminalState
+              ) != nil,
+              TerminalRuntimeRegistry.normalizedCWDValue(terminalState.cwd) == nil,
+              let restoredLaunchWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(
+                  terminalState.launchWorkingDirectory
+              ),
+              restoredLaunchWorkingDirectory != incomingCWD else {
+            return incomingCWD
+        }
+
+        ToasttyLog.debug(
+            "Replacing provisional profile startup cwd with restored launch working directory",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "incoming_cwd_sample": String(incomingCWD.prefix(120)),
+                "launch_cwd_sample": String(restoredLaunchWorkingDirectory.prefix(120)),
+            ]
+        )
+        return restoredLaunchWorkingDirectory
     }
 
     private func resolveDesktopNotificationRoute(
@@ -565,8 +611,32 @@ final class TerminalMetadataService {
             return false
         }
 
-        let normalizedTitle = TerminalRuntimeRegistry.normalizedMetadataValue(title)
+        var normalizedTitle = TerminalRuntimeRegistry.normalizedMetadataValue(title)
         var normalizedCWD = TerminalRuntimeRegistry.normalizedCWDValue(cwd)
+        let normalizedProfileStartupCommand = normalizedProfileStartupCommandAwaitingTitleCleanup(
+            panelID: panelID,
+            terminalState: terminalState
+        )
+        if shouldSuppressProfileStartupCommandTitleUpdate(
+            normalizedTitle: normalizedTitle,
+            normalizedProfileStartupCommand: normalizedProfileStartupCommand
+        ) {
+            ToasttyLog.debug(
+                "Suppressing transient profile startup-command title from pane metadata",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "profile_id": terminalState.profileBinding?.profileID ?? "nil",
+                ]
+            )
+            normalizedTitle = nil
+        } else if shouldClearStartupTitleCleanup(
+            normalizedTitle: normalizedTitle,
+            normalizedProfileStartupCommand: normalizedProfileStartupCommand
+        ) {
+            registry?.markProfileLaunchTitleCleanupCompleted(panelID: panelID)
+        }
         var cwdSource = "explicit"
         if allowLegacyCWDInference,
            normalizedCWD == nil,
@@ -592,6 +662,24 @@ final class TerminalMetadataService {
            ) {
             normalizedCWD = inferredCWD
             cwdSource = "visible_text_inference"
+        }
+        // Profiled terminals may run inside multiplexers (tmux, zmx, etc.)
+        // that forward title-setting sequences (OSC 0/2) but not CWD
+        // sequences (OSC 7). The bootstrap shell's CWD signal confirms
+        // native CWD support, but once the multiplexer takes over, CWD
+        // signals stop arriving. Use path-like title inference as a
+        // targeted fallback — but not the heavier visible-text heuristic,
+        // which could produce false positives from stale prompt lines.
+        if normalizedCWD == nil,
+           let normalizedTitle,
+           terminalState.profileBinding != nil {
+            normalizedCWD = TerminalRuntimeRegistry.inferredCWDFromTitle(
+                normalizedTitle,
+                currentCWD: terminalState.cwd
+            )
+            if normalizedCWD != nil {
+                cwdSource = "profiled_title_inference"
+            }
         }
         if normalizedCWD == nil {
             cwdSource = "none"
@@ -659,6 +747,48 @@ final class TerminalMetadataService {
             )
         }
         return handled
+    }
+
+    private func shouldSuppressProfileStartupCommandTitleUpdate(
+        normalizedTitle: String?,
+        normalizedProfileStartupCommand: String?
+    ) -> Bool {
+        guard let normalizedTitle else { return false }
+        guard let normalizedProfileStartupCommand else { return false }
+        return normalizedTitle == normalizedProfileStartupCommand
+    }
+
+    private func shouldClearStartupTitleCleanup(
+        normalizedTitle: String?,
+        normalizedProfileStartupCommand: String?
+    ) -> Bool {
+        guard let normalizedTitle else { return false }
+        guard let normalizedProfileStartupCommand else { return false }
+        guard normalizedTitle != normalizedProfileStartupCommand else { return false }
+        return Self.titleLooksSemantic(normalizedTitle)
+    }
+
+    private func normalizedProfileStartupCommandAwaitingTitleCleanup(
+        panelID: UUID,
+        terminalState: TerminalPanelState
+    ) -> String? {
+        guard let startupCommand = registry?.profileStartupCommandAwaitingTitleCleanup(
+            panelID: panelID,
+            terminalState: terminalState
+        ) else {
+            return nil
+        }
+        return TerminalRuntimeRegistry.normalizedMetadataValue(startupCommand)
+    }
+
+    private static func titleLooksSemantic(_ title: String) -> Bool {
+        if title.hasPrefix("/") || title.hasPrefix("~") || title.hasPrefix("file://") {
+            return false
+        }
+        if title.hasPrefix(".../") || title.hasPrefix("…/") {
+            return false
+        }
+        return true
     }
 
     private func handleCommandFinishedMetadataUpdate(

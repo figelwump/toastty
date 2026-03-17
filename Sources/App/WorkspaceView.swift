@@ -5,9 +5,11 @@ import SwiftUI
 struct WorkspaceView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
+    let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -64,6 +66,7 @@ struct WorkspaceView: View {
                 split(orientation: .horizontal)
             }
             .disabled(isFocusedPanelModeActive)
+            .help(ToasttyKeyboardShortcuts.splitHorizontal.helpText("Split Horizontally"))
             .accessibilityIdentifier("workspace.split.horizontal")
 
             topBarFlashButton(title: "Split V", icon: { highlighted in
@@ -72,9 +75,11 @@ struct WorkspaceView: View {
                 split(orientation: .vertical)
             }
             .disabled(isFocusedPanelModeActive)
+            .help(ToasttyKeyboardShortcuts.splitVertical.helpText("Split Vertically"))
             .accessibilityIdentifier("workspace.split.vertical")
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+        .padding(.trailing, 12)
         .padding(.top, ToastyTheme.topBarContentTopPadding)
         .frame(height: ToastyTheme.topBarHeight)
         .background(ToastyTheme.chromeBackground)
@@ -148,6 +153,7 @@ struct WorkspaceView: View {
                         workspace: workspace,
                         isWorkspaceSelected: isSelected,
                         store: store,
+                        terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
                         globalFontPoints: store.state.globalTerminalFontPoints,
@@ -200,6 +206,11 @@ struct WorkspaceView: View {
             guard let workspaceID = selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         }
+        .help(
+            ToasttyKeyboardShortcuts.toggleFocusedPanel.helpText(
+                isOn ? "Restore Layout" : "Focus Panel"
+            )
+        )
         .accessibilityIdentifier(identifier)
     }
 
@@ -326,6 +337,7 @@ private struct SlotPlacementView: View {
     let workspace: WorkspaceState
     let isWorkspaceSelected: Bool
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let globalFontPoints: Double
@@ -351,6 +363,7 @@ private struct SlotPlacementView: View {
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     store: store,
+                    terminalProfileStore: terminalProfileStore,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
@@ -386,6 +399,7 @@ private struct PanelCardView: View {
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
 
     private var isFocused: Bool {
@@ -401,6 +415,10 @@ private struct PanelCardView: View {
                 let indicatorState = panelIndicatorState
                 if indicatorState != .hidden {
                     SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
+                }
+
+                if let terminalProfileBadge {
+                    profileBadge(terminalProfileBadge)
                 }
 
                 Text(panelLabel)
@@ -492,6 +510,22 @@ private struct PanelCardView: View {
         }
     }
 
+    private var terminalProfileBadge: TerminalProfileBadge? {
+        guard case .terminal(let terminalState) = panelState,
+              let profileBinding = terminalState.profileBinding else {
+            return nil
+        }
+
+        if let profile = terminalProfileStore.catalog.profile(id: profileBinding.profileID) {
+            return TerminalProfileBadge(label: profile.badgeLabel, isAvailable: true)
+        }
+
+        return TerminalProfileBadge(
+            label: profileBinding.profileID,
+            isAvailable: false
+        )
+    }
+
     private var shortcutLabel: String? {
         guard case .terminal = panelState else { return nil }
         guard let shortcutNumber else { return nil }
@@ -565,9 +599,60 @@ private struct PanelCardView: View {
             .padding(.vertical, 1)
             .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
     }
+
+    private func profileBadge(_ badge: TerminalProfileBadge) -> some View {
+        Text(badge.label)
+            .font(ToastyTheme.fontTerminalProfileBadge)
+            .foregroundStyle(
+                badge.isAvailable
+                    ? ToastyTheme.terminalProfileBadgeText
+                    : ToastyTheme.terminalProfileBadgeMissingText
+            )
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                badge.isAvailable
+                    ? ToastyTheme.terminalProfileBadgeBackground
+                    : ToastyTheme.terminalProfileBadgeMissingBackground,
+                in: Capsule()
+            )
+    }
+}
+
+private struct TerminalProfileBadge {
+    let label: String
+    let isAvailable: Bool
 }
 
 // MARK: - Top Bar Icons
+
+/// Sidebar panel icon — rectangle with left panel section.
+/// When `sidebarVisible` is true the left panel is filled to indicate the sidebar is shown.
+struct SidebarToggleIconView: View {
+    let color: Color
+    let sidebarVisible: Bool
+
+    var body: some View {
+        Canvas { context, _ in
+            // Outer rectangle
+            let rect = Path(roundedRect: CGRect(x: 1, y: 1, width: 12, height: 12), cornerRadius: 1.5)
+            context.stroke(rect, with: .color(color), style: StrokeStyle(lineWidth: 1.2))
+
+            // Vertical divider separating sidebar panel from main area
+            var divider = Path()
+            divider.move(to: CGPoint(x: 5.2, y: 1))
+            divider.addLine(to: CGPoint(x: 5.2, y: 13))
+            context.stroke(divider, with: .color(color), style: StrokeStyle(lineWidth: 1.2))
+
+            // Fill the left panel area when sidebar is visible
+            if sidebarVisible {
+                let fill = Path(CGRect(x: 1.7, y: 1.7, width: 3.5, height: 10.6))
+                context.fill(fill, with: .color(color.opacity(0.3)))
+            }
+        }
+        .frame(width: 14, height: 14)
+    }
+}
 
 /// Viewfinder bracket corners with center dot — Focus/Zoom toggle icon.
 /// Matches the 11×11 stroke-based icon language used across the top nav bar.

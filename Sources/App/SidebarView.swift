@@ -9,7 +9,6 @@ struct SidebarView: View {
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
-    @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var hoveredPanelID: UUID?
 
     var body: some View {
@@ -73,22 +72,16 @@ struct SidebarView: View {
         .padding(.bottom, 10)
         .padding(.horizontal, 8)
         .background(ToastyTheme.chromeBackground)
-        .alert(
-            "Close this workspace?",
-            isPresented: pendingWorkspaceCloseBinding,
-            presenting: pendingWorkspaceClose
-        ) { closeTarget in
-            Button("Cancel", role: .cancel) {
-                pendingWorkspaceClose = nil
-            }
-            Button("Close", role: .destructive) {
-                confirmWorkspaceClose(closeTarget.workspaceID)
-            }
-        } message: { _ in
-            Text("Closing this workspace will close all terminals and panels within it.")
-        }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
+        }
+        .onChange(of: store.pendingRenameWorkspaceID) { _, newValue in
+            guard let workspaceID = newValue,
+                  let window = store.window(id: windowID),
+                  window.workspaceIDs.contains(workspaceID),
+                  let workspace = store.state.workspacesByID[workspaceID] else { return }
+            store.pendingRenameWorkspaceID = nil
+            beginWorkspaceRename(workspace)
         }
     }
 
@@ -118,10 +111,11 @@ struct SidebarView: View {
             }
         }
         .contextMenu {
-            Button("Rename") {
+            Button(ToasttyKeyboardShortcuts.renameWorkspace.menuTitle("Rename Workspace")) {
                 beginWorkspaceRename(workspace)
             }
-            Button("Close", role: .destructive) {
+
+            Button(ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"), role: .destructive) {
                 requestWorkspaceClose(workspaceID: workspaceID)
             }
         }
@@ -255,17 +249,6 @@ struct SidebarView: View {
         .contentShape(Rectangle())
     }
 
-    private var pendingWorkspaceCloseBinding: Binding<Bool> {
-        Binding(
-            get: { pendingWorkspaceClose != nil },
-            set: { isPresented in
-                if !isPresented {
-                    pendingWorkspaceClose = nil
-                }
-            }
-        )
-    }
-
     @ViewBuilder
     private func sessionStatusesContent(
         _ workspaceSessionStatuses: [WorkspaceSessionStatus],
@@ -397,7 +380,6 @@ struct SidebarView: View {
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
     }
-
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
         if let currentEvent = NSApp.currentEvent,
            currentEvent.type == .leftMouseUp,
@@ -471,16 +453,7 @@ struct SidebarView: View {
     }
 
     private func requestWorkspaceClose(workspaceID: UUID) {
-        guard store.state.workspacesByID[workspaceID] != nil else { return }
-        pendingWorkspaceClose = PendingWorkspaceClose(workspaceID: workspaceID)
-    }
-
-    private func confirmWorkspaceClose(_ workspaceID: UUID) {
-        pendingWorkspaceClose = nil
-        if renamingWorkspaceID == workspaceID {
-            cancelWorkspaceRename()
-        }
-        _ = store.send(.closeWorkspace(workspaceID: workspaceID))
+        _ = store.requestWorkspaceClose(workspaceID: workspaceID)
     }
 
     private func pruneTransientSidebarState() {
@@ -488,17 +461,6 @@ struct SidebarView: View {
            store.state.workspacesByID[renamingWorkspaceID] == nil {
             cancelWorkspaceRename()
         }
-
-        if let pendingWorkspaceClose,
-           store.state.workspacesByID[pendingWorkspaceClose.workspaceID] == nil {
-            self.pendingWorkspaceClose = nil
-        }
-    }
-
-    private struct PendingWorkspaceClose: Identifiable {
-        let workspaceID: UUID
-
-        var id: UUID { workspaceID }
     }
 
     private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {

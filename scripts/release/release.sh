@@ -8,6 +8,7 @@ APP_NAME="Toastty"
 APP_BUNDLE_NAME="${APP_NAME}.app"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_RELEASE_METADATA_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.metadata.env"
+SPARKLE_TOOLS_DIRECTORY=""
 SIGNING_IDENTITY=""
 ATTACHED_DEVICE=""
 MOUNT_POINT=""
@@ -29,6 +30,12 @@ GHOSTTY_SOURCE_DIRTY=""
 GHOSTTY_BUILD_FLAGS=""
 GHOSTTY_INSTALLED_AT=""
 GHOSTTY_METADATA_SNAPSHOT_PATH=""
+SPARKLE_METADATA_PATH=""
+SPARKLE_FEED_URL=""
+SPARKLE_PUBLIC_ED_KEY=""
+SPARKLE_MINIMUM_SYSTEM_VERSION=""
+SPARKLE_ED_SIGNATURE=""
+SPARKLE_ENCLOSURE_LENGTH=""
 RELEASE_NOTES_PATH=""
 RELEASE_METADATA_PATH=""
 
@@ -43,6 +50,7 @@ Required environment:
   TOASTTY_APPLE_ID
   TOASTTY_NOTARY_PASSWORD
   TOASTTY_TEAM_ID
+  TOASTTY_SPARKLE_PRIVATE_KEY
 
 Additional requirements:
   - clean Toastty git working tree
@@ -51,6 +59,7 @@ Additional requirements:
 Outputs:
   artifacts/release/<version>-<build>/release-metadata.env
   artifacts/release/<version>-<build>/ghostty-metadata.env
+  artifacts/release/<version>-<build>/sparkle-metadata.env
   artifacts/release/<version>-<build>/Toastty-<version>.dmg
 
 Recommended invocation:
@@ -189,6 +198,22 @@ ensure_ghostty_release_metadata() {
   fi
 }
 
+resolve_sparkle_tools_directory() {
+  local candidate=""
+
+  for candidate in \
+    "$ROOT_DIR/Tuist/.build/artifacts/sparkle/Sparkle/bin" \
+    "$ROOT_DIR/Tuist/.build/checkouts/Sparkle/bin"
+  do
+    if [[ -x "$candidate/sign_update" ]]; then
+      SPARKLE_TOOLS_DIRECTORY="$candidate"
+      return 0
+    fi
+  done
+
+  fail "Sparkle tools not found; run 'tuist install' and ensure Sparkle artifacts are available under Tuist/.build"
+}
+
 resolve_source_provenance() {
   local exact_tag=""
 
@@ -225,6 +250,18 @@ snapshot_ghostty_metadata() {
   write_env_assignment "$GHOSTTY_METADATA_SNAPSHOT_PATH" "GHOSTTY_INSTALLED_AT" "$GHOSTTY_INSTALLED_AT"
 }
 
+snapshot_sparkle_metadata() {
+  log "Snapshotting Sparkle release metadata"
+  : >"$SPARKLE_METADATA_PATH"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_FEED_URL" "$SPARKLE_FEED_URL"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_PUBLIC_ED_KEY" "$SPARKLE_PUBLIC_ED_KEY"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_MINIMUM_SYSTEM_VERSION" "$SPARKLE_MINIMUM_SYSTEM_VERSION"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_PATH" "$DMG_PATH"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_DMG_FILENAME" "$(basename "$DMG_PATH")"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_ENCLOSURE_LENGTH" "$SPARKLE_ENCLOSURE_LENGTH"
+  write_env_assignment "$SPARKLE_METADATA_PATH" "SPARKLE_ED_SIGNATURE" "$SPARKLE_ED_SIGNATURE"
+}
+
 write_release_metadata() {
   : >"$RELEASE_METADATA_PATH"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_VERSION" "$TOASTTY_VERSION"
@@ -242,6 +279,7 @@ write_release_metadata() {
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_DMG_PATH" "$DMG_PATH"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_NOTES_PATH" "$RELEASE_NOTES_PATH"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_GHOSTTY_METADATA_PATH" "$GHOSTTY_METADATA_SNAPSHOT_PATH"
+  write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_SPARKLE_METADATA_PATH" "$SPARKLE_METADATA_PATH"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_GHOSTTY_COMMIT" "$GHOSTTY_COMMIT"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_GHOSTTY_COMMIT_SHORT" "$GHOSTTY_COMMIT_SHORT"
   write_env_assignment "$RELEASE_METADATA_PATH" "RELEASE_GHOSTTY_SOURCE_REPO" "$GHOSTTY_SOURCE_REPO"
@@ -268,6 +306,17 @@ write_export_options_plist() {
 </dict>
 </plist>
 EOF
+}
+
+install_tuist_dependencies() {
+  log "Installing Tuist dependencies"
+  tuist install
+
+  if [[ -n "$(git -C "$ROOT_DIR" status --porcelain)" ]]; then
+    fail "tuist install changed tracked files; commit dependency resolution updates before building a release"
+  fi
+
+  resolve_sparkle_tools_directory
 }
 
 generate_workspace() {
@@ -300,6 +349,9 @@ export_app() {
 
 verify_exported_app() {
   local exported_build_number=""
+  local exported_feed_url=""
+  local exported_minimum_system_version=""
+  local exported_public_ed_key=""
   local exported_version=""
 
   [[ -d "$EXPORTED_APP_PATH" ]] || fail "exported app not found at $EXPORTED_APP_PATH"
@@ -308,11 +360,20 @@ verify_exported_app() {
 
   exported_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$EXPORTED_APP_PATH/Contents/Info.plist")"
   exported_build_number="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$EXPORTED_APP_PATH/Contents/Info.plist")"
+  exported_feed_url="$(/usr/libexec/PlistBuddy -c 'Print :SUFeedURL' "$EXPORTED_APP_PATH/Contents/Info.plist")"
+  exported_minimum_system_version="$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$EXPORTED_APP_PATH/Contents/Info.plist")"
+  exported_public_ed_key="$(/usr/libexec/PlistBuddy -c 'Print :SUPublicEDKey' "$EXPORTED_APP_PATH/Contents/Info.plist")"
   [[ "$exported_version" == "$TOASTTY_VERSION" ]] || fail "exported app version mismatch: expected $TOASTTY_VERSION, got $exported_version"
   [[ "$exported_build_number" == "$TOASTTY_BUILD_NUMBER" ]] || fail "exported app build number mismatch: expected $TOASTTY_BUILD_NUMBER, got $exported_build_number"
+  [[ -n "$exported_feed_url" ]] || fail "exported app is missing SUFeedURL"
+  [[ -n "$exported_minimum_system_version" ]] || fail "exported app is missing LSMinimumSystemVersion"
+  [[ -n "$exported_public_ed_key" ]] || fail "exported app is missing SUPublicEDKey"
 
   SIGNING_IDENTITY="$(codesign -dv --verbose=4 "$EXPORTED_APP_PATH" 2>&1 | sed -n 's/^Authority=//p' | grep -m1 '^Developer ID Application:' || true)"
   [[ -n "$SIGNING_IDENTITY" ]] || fail "failed to determine exported app signing identity"
+  SPARKLE_FEED_URL="$exported_feed_url"
+  SPARKLE_MINIMUM_SYSTEM_VERSION="$exported_minimum_system_version"
+  SPARKLE_PUBLIC_ED_KEY="$exported_public_ed_key"
 }
 
 stage_dmg_contents() {
@@ -476,6 +537,26 @@ verify_final_artifacts() {
   xcrun stapler validate "$DMG_PATH"
 }
 
+sign_dmg_for_sparkle() {
+  local sign_update_path="$SPARKLE_TOOLS_DIRECTORY/sign_update"
+
+  log "Signing DMG for Sparkle updates"
+  SPARKLE_ED_SIGNATURE="$(
+    printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
+      | "$sign_update_path" --ed-key-file - -p "$DMG_PATH" \
+      | tr -d '\n'
+  )"
+  SPARKLE_ENCLOSURE_LENGTH="$(stat -f '%z' "$DMG_PATH")"
+
+  [[ "$SPARKLE_ED_SIGNATURE" =~ ^[A-Za-z0-9+/=]+$ ]] \
+    || fail "Sparkle signature output is empty or malformed"
+  [[ "$SPARKLE_ENCLOSURE_LENGTH" =~ ^[0-9]+$ && "$SPARKLE_ENCLOSURE_LENGTH" -gt 0 ]] \
+    || fail "failed to determine Sparkle enclosure length for $DMG_PATH"
+
+  printf '%s\n' "$TOASTTY_SPARKLE_PRIVATE_KEY" \
+    | "$sign_update_path" --ed-key-file - --verify "$DMG_PATH" "$SPARKLE_ED_SIGNATURE" >/dev/null
+}
+
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
   usage
   exit 0
@@ -499,6 +580,7 @@ require_env TUIST_DEVELOPMENT_TEAM
 require_env TOASTTY_APPLE_ID
 require_env TOASTTY_NOTARY_PASSWORD
 require_env TOASTTY_TEAM_ID
+require_env TOASTTY_SPARKLE_PRIVATE_KEY
 
 validate_build_number
 validate_version_string
@@ -522,6 +604,7 @@ RW_DMG_PATH="$RELEASE_DIR/${APP_NAME}-${TOASTTY_VERSION}.rw.dmg"
 EXPORT_OPTIONS_PLIST_PATH="$RELEASE_DIR/export-options.plist"
 NOTARIZATION_RESULT_PATH="$RELEASE_DIR/notarization-result.json"
 GHOSTTY_METADATA_SNAPSHOT_PATH="$RELEASE_DIR/ghostty-metadata.env"
+SPARKLE_METADATA_PATH="$RELEASE_DIR/sparkle-metadata.env"
 RELEASE_NOTES_PATH="$RELEASE_DIR/release-notes.md"
 RELEASE_METADATA_PATH="$RELEASE_DIR/release-metadata.env"
 
@@ -530,6 +613,7 @@ mkdir -p "$RELEASE_DIR"
 
 cd "$ROOT_DIR"
 
+install_tuist_dependencies
 write_export_options_plist
 generate_workspace
 archive_app
@@ -541,9 +625,12 @@ sign_dmg
 notarize_dmg
 staple_dmg
 verify_final_artifacts
+sign_dmg_for_sparkle
 snapshot_ghostty_metadata
+snapshot_sparkle_metadata
 write_release_metadata
 
 log "Release DMG ready: $DMG_PATH"
 log "Release metadata snapshot: $RELEASE_METADATA_PATH"
+log "Sparkle metadata snapshot: $SPARKLE_METADATA_PATH"
 log "Author release notes before publish: $RELEASE_NOTES_PATH"

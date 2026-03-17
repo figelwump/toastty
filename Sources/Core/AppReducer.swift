@@ -34,7 +34,10 @@ public struct AppReducer {
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
 
             let resolvedTitle = title ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state)
-            let workspace = WorkspaceState.bootstrap(title: resolvedTitle)
+            let workspace = WorkspaceState.bootstrap(
+                title: resolvedTitle,
+                defaultTerminalProfileBinding: state.defaultTerminalProfileBinding
+            )
 
             state.workspacesByID[workspace.id] = workspace
             state.windows[windowIndex].workspaceIDs.append(workspace.id)
@@ -42,7 +45,10 @@ public struct AppReducer {
             return true
 
         case .createWindow(let initialWorkspaceTitle, let initialFrame):
-            let workspace = WorkspaceState.bootstrap(title: initialWorkspaceTitle ?? "Workspace 1")
+            let workspace = WorkspaceState.bootstrap(
+                title: initialWorkspaceTitle ?? "Workspace 1",
+                defaultTerminalProfileBinding: state.defaultTerminalProfileBinding
+            )
             let window = WindowState(
                 id: UUID(),
                 frame: initialFrame ?? CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
@@ -373,6 +379,12 @@ public struct AppReducer {
             state.configuredTerminalFontPoints = clampedConfiguredPoints
             return true
 
+        case .setDefaultTerminalProfile(let profileID):
+            let normalizedProfileID = AppState.normalizedTerminalProfileID(profileID)
+            guard state.defaultTerminalProfileID != normalizedProfileID else { return false }
+            state.defaultTerminalProfileID = normalizedProfileID
+            return true
+
         case .setGlobalTerminalFont(let points):
             let clampedPoints = AppState.clampedTerminalFontPoints(points)
             guard abs(state.globalTerminalFontPoints - clampedPoints) >= AppState.terminalFontComparisonEpsilon else {
@@ -416,6 +428,14 @@ public struct AppReducer {
         case .splitFocusedSlotInDirection(let workspaceID, let direction):
             return splitFocusedSlot(workspaceID: workspaceID, direction: direction, state: &state)
 
+        case .splitFocusedSlotInDirectionWithTerminalProfile(let workspaceID, let direction, let profileBinding):
+            return splitFocusedSlot(
+                workspaceID: workspaceID,
+                direction: direction,
+                profileBinding: profileBinding,
+                state: &state
+            )
+
         case .focusSlot(let workspaceID, let direction):
             return focusSlot(workspaceID: workspaceID, direction: direction, state: &state)
 
@@ -438,7 +458,8 @@ public struct AppReducer {
                 TerminalPanelState(
                     title: nextTerminalTitle(in: workspace),
                     shell: "zsh",
-                    cwd: NSHomeDirectory()
+                    cwd: NSHomeDirectory(),
+                    profileBinding: state.defaultTerminalProfileBinding
                 )
             )
 
@@ -499,6 +520,11 @@ public struct AppReducer {
                 state.workspacesByID[workspaceID] = workspace
             }
             return true
+
+        case .toggleSidebar(let windowID):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            state.windows[windowIndex].sidebarVisible.toggle()
+            return true
         }
     }
 
@@ -506,6 +532,7 @@ public struct AppReducer {
     private static func splitFocusedSlot(
         workspaceID: UUID,
         direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding? = nil,
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -523,12 +550,14 @@ public struct AppReducer {
 
         let newPanelID = UUID()
         let newSlotID = UUID()
+        let resolvedProfileBinding = profileBinding ?? state.defaultTerminalProfileBinding
 
         workspace.panels[newPanelID] = .terminal(
             TerminalPanelState(
                 title: nextTerminalTitle(in: workspace),
                 shell: "zsh",
-                cwd: inheritedCWD
+                cwd: inheritedCWD,
+                profileBinding: resolvedProfileBinding
             )
         )
 

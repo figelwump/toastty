@@ -212,7 +212,23 @@ final class TerminalWorkspaceMaintenanceService {
 
         let panelIDs = visibleTerminalPanelIDs(in: workspace)
         guard panelIDs.isEmpty == false else { return }
+        ToasttyLog.debug(
+            "Pulsing visible Ghostty surfaces after workspace switch",
+            category: .ghostty,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_count": String(panelIDs.count),
+            ]
+        )
         for panelID in panelIDs {
+            ToasttyLog.debug(
+                "Pulsing Ghostty surface refresh for workspace-selected panel",
+                category: .ghostty,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                ]
+            )
             controllerForPanelID(panelID)?.pulseVisibilityRefresh()
         }
     }

@@ -3,6 +3,7 @@ import Foundation
 
 struct AppBootstrapResult {
     let state: AppState
+    let restoredTerminalPanelIDs: Set<UUID>
     let automationConfig: AutomationConfig?
     let automationLifecycle: AutomationLifecycle?
     let disableAnimations: Bool
@@ -10,7 +11,10 @@ struct AppBootstrapResult {
 }
 
 enum AppBootstrap {
-    static func make(processInfo: ProcessInfo = .processInfo) -> AppBootstrapResult {
+    static func make(
+        processInfo: ProcessInfo = .processInfo,
+        defaultTerminalProfileID: String? = nil
+    ) -> AppBootstrapResult {
         ToasttyLog.info(
             "Bootstrapping app",
             category: .bootstrap,
@@ -22,9 +26,12 @@ enum AppBootstrap {
         ) else {
             ensureAgentProfilesTemplateExists()
             let layoutPersistenceContext = WorkspaceLayoutPersistenceContext.resolve(processInfo: processInfo)
-            let state: AppState
+            var state: AppState
+            let restoredTerminalPanelIDs: Set<UUID>
             if let restored = layoutPersistenceContext.loadState() {
                 state = restored.state
+                state.defaultTerminalProfileID = AppState.normalizedTerminalProfileID(defaultTerminalProfileID)
+                restoredTerminalPanelIDs = Self.restoredTerminalPanelIDs(in: state)
                 ToasttyLog.info(
                     "Restored workspace layout state",
                     category: .bootstrap,
@@ -35,7 +42,8 @@ enum AppBootstrap {
                     ]
                 )
             } else {
-                state = .bootstrap()
+                state = .bootstrap(defaultTerminalProfileID: defaultTerminalProfileID)
+                restoredTerminalPanelIDs = []
                 ToasttyLog.info(
                     "Launching without persisted layout state",
                     category: .bootstrap,
@@ -47,6 +55,7 @@ enum AppBootstrap {
             }
             return AppBootstrapResult(
                 state: state,
+                restoredTerminalPanelIDs: restoredTerminalPanelIDs,
                 automationConfig: nil,
                 automationLifecycle: nil,
                 disableAnimations: false,
@@ -94,6 +103,7 @@ enum AppBootstrap {
         )
         return AppBootstrapResult(
             state: state,
+            restoredTerminalPanelIDs: [],
             automationConfig: automationConfig,
             automationLifecycle: AutomationLifecycle(config: automationConfig, startupError: startupError),
             disableAnimations: automationConfig.disableAnimations,
@@ -115,6 +125,16 @@ enum AppBootstrap {
                     "error": error.localizedDescription,
                 ]
             )
+        }
+    }
+
+    private static func restoredTerminalPanelIDs(in state: AppState) -> Set<UUID> {
+        state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
+            for (panelID, panelState) in workspace.panels {
+                if case .terminal = panelState {
+                    result.insert(panelID)
+                }
+            }
         }
     }
 }

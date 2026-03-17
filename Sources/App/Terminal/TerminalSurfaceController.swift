@@ -34,6 +34,11 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var lastAttachmentTransitionAt: Date?
     private var lastViewportResumeSignature: SurfaceCreationSignature?
     private var lastPresentationSignature: SurfacePresentationSignature?
+    private weak var latestViewportSourceContainer: NSView?
+    private var latestViewportUpdate: PendingViewportUpdate?
+    private var closeTransitionViewportDeferralArmed = false
+    private var closeTransitionViewportUpdatePending = false
+    private var closeTransitionViewportReplayTask: Task<Void, Never>?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
@@ -70,6 +75,15 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let pixelSizingEnabled: Bool
     }
 
+    private struct PendingViewportUpdate {
+        let terminalState: TerminalPanelState
+        let focused: Bool
+        let fontPoints: Double
+        let viewportSize: CGSize
+        let backingScaleFactor: CGFloat
+        let attachment: PanelHostAttachmentToken
+    }
+
     private enum SurfaceCreationDeferralReason: String {
         case noWindow = "no_window"
         case hiddenHost = "hidden_host"
@@ -100,9 +114,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         hostedView = surfaceScrollView
         terminalHostView.requestFirstResponderIfNeeded = { [weak self] in
             guard let self else { return }
-            self.ensureFirstResponderIfNeeded(
-                focused: self.requestedFocus && self.terminalHostView.isEffectivelyVisible
-            )
+            guard self.requestedFocus && self.terminalHostView.isEffectivelyVisible else {
+                return
+            }
+            _ = self.focusHostViewIfNeeded()
         }
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
@@ -321,6 +336,15 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         }
 
         #if TOASTTY_HAS_GHOSTTY_KIT
+        recordLatestViewportUpdate(
+            terminalState: terminalState,
+            focused: focused,
+            fontPoints: fontPoints,
+            viewportSize: viewportSize,
+            backingScaleFactor: backingScaleFactor,
+            sourceContainer: sourceContainer,
+            attachment: attachment
+        )
         diagnostics.updateCount += 1
         requestedFocus = focused
         if activeSourceContainer !== sourceContainer || hostedView.superview !== sourceContainer {
@@ -395,6 +419,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
         let pixelWidth = max(Int((viewportSize.width * backingScaleFactor).rounded()), 1)
         let pixelHeight = max(Int((viewportSize.height * backingScaleFactor).rounded()), 1)
+        if shouldDeferCloseTransitionViewportResize(
+            logicalWidth: logicalWidth,
+            logicalHeight: logicalHeight,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight
+        ) {
+            return
+        }
         let hasUsableViewport = logicalWidth > 16 && logicalHeight > 16
         var measuredSizeForLogging: ghostty_surface_size_s?
 
@@ -448,12 +480,24 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         if hostedView.isHidden { hostedView.isHidden = false }
         temporarilyHiddenForViewportDeferral = false
         resetViewportResumeStability()
-        let effectiveFocused = focused && hostView.isEffectivelyVisible
-        ensureFirstResponderIfNeeded(focused: effectiveFocused)
-        if focused {
-            hostView.synchronizeGhosttySurfaceFocusFromApplicationState()
+        let hostVisible = hostView.synchronizePresentationVisibility(reason: "controller_update")
+        let requestedFocused = focused && hostVisible
+        ensureFirstResponderIfNeeded(focused: requestedFocused)
+        let resolvedFocused: Bool
+        if requestedFocused {
+            resolvedFocused = hostView.resolvedGhosttySurfaceFocusState()
+            hostView.syncSurfaceFocus(
+                resolvedFocused,
+                reason: "controller_update",
+                refreshOnChange: false
+            )
         } else {
-            hostView.syncSurfaceFocus(false)
+            resolvedFocused = false
+            hostView.syncSurfaceFocus(
+                false,
+                reason: "controller_update",
+                refreshOnChange: false
+            )
         }
 
         let presentationSignature = SurfacePresentationSignature(
@@ -462,14 +506,24 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             scaleThousandths: Int((xScale * 1000).rounded()),
-            focused: effectiveFocused,
+            focused: resolvedFocused,
             pixelSizingEnabled: usesBackingPixelSurfaceSizing
         )
         let presentationChanged = presentationSignature != lastPresentationSignature
         lastPresentationSignature = presentationSignature
 
-        if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
-            requestImmediateSurfaceRefresh(ghosttySurface)
+        if hostVisible && (resumedFromViewportDeferral || presentationChanged) {
+            requestImmediateSurfaceRefresh(
+                ghosttySurface,
+                reason: resumedFromViewportDeferral ? "viewport_resume" : "presentation_change",
+                extra: [
+                    "focused": resolvedFocused ? "true" : "false",
+                    "logical_width": String(logicalWidth),
+                    "logical_height": String(logicalHeight),
+                    "pixel_width": String(pixelWidth),
+                    "pixel_height": String(pixelHeight),
+                ]
+            )
         }
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
@@ -509,6 +563,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastAttachmentTransitionAt = nil
         resetViewportResumeStability()
         lastPresentationSignature = nil
+        latestViewportSourceContainer = nil
+        latestViewportUpdate = nil
+        closeTransitionViewportReplayTask?.cancel()
+        closeTransitionViewportReplayTask = nil
+        closeTransitionViewportDeferralArmed = false
+        closeTransitionViewportUpdatePending = false
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -854,13 +914,15 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.
         let previousChildPIDs = delegate.surfaceCreationChildPIDSnapshot()
+        let launchConfiguration = delegate.surfaceLaunchConfiguration(for: panelID)
 
         diagnostics.surfaceAttemptCount += 1
         guard let createdSurface = ghosttyManager.makeSurface(
             hostView: hostView,
             workingDirectory: requestedWorkingDirectory,
             fontPoints: fontPoints,
-            inheritFrom: inheritedSourceSurface
+            inheritFrom: inheritedSourceSurface,
+            launchConfiguration: launchConfiguration
         ) else {
             diagnostics.surfaceFailureCount += 1
             if diagnostics.surfaceFailureCount <= 5 || diagnostics.surfaceFailureCount.isMultiple(of: 20) {
@@ -909,6 +971,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             panelID: panelID,
             source: "surface_create_process"
         )
+        delegate.markInitialSurfaceLaunchCompleted(for: panelID)
     }
 
     private enum SurfaceCreationReadiness {
@@ -1037,7 +1100,17 @@ extension TerminalSurfaceController {
     private func refreshSurfaceAfterContainerMove(sourceContainer: NSView) {
         guard let ghosttySurface else { return }
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
-        requestImmediateSurfaceRefresh(ghosttySurface)
+        requestImmediateSurfaceRefresh(
+            ghosttySurface,
+            reason: "container_move",
+            extra: [
+                "container_has_window": sourceContainer.window == nil ? "false" : "true",
+                "container_hidden": sourceContainer.isHidden ? "true" : "false",
+                "container_hidden_ancestor": sourceContainer.hasHiddenAncestor ? "true" : "false",
+                "container_width": String(format: "%.1f", sourceContainer.bounds.width),
+                "container_height": String(format: "%.1f", sourceContainer.bounds.height),
+            ]
+        )
     }
 
     private func updateDisplayIDIfNeeded(surface: ghostty_surface_t, sourceContainer: NSView) {
@@ -1150,16 +1223,138 @@ extension TerminalSurfaceController {
 
     func pulseVisibilityRefresh() {
         guard let ghosttySurface else { return }
-        requestImmediateSurfaceRefresh(ghosttySurface)
+        guard terminalHostView.synchronizePresentationVisibility(reason: "visibility_pulse") else {
+            return
+        }
+        requestImmediateSurfaceRefresh(
+            ghosttySurface,
+            reason: "visibility_pulse",
+            extra: [
+                "host_effectively_visible": terminalHostView.isEffectivelyVisible ? "true" : "false",
+                "lifecycle_state": lifecycleState.automationLabel,
+            ]
+        )
     }
 
-    private func requestImmediateSurfaceRefresh(_ surface: ghostty_surface_t) {
+    // Closing a split can briefly produce an intermediate resize before the
+    // surviving pane settles into its final frame. Replay the latest viewport
+    // one turn later so Ghostty only sees the stabilized size.
+    func armCloseTransitionViewportDeferral() {
+        closeTransitionViewportReplayTask?.cancel()
+        closeTransitionViewportDeferralArmed = true
+        closeTransitionViewportUpdatePending = false
+        closeTransitionViewportReplayTask = Task { @MainActor [weak self] in
+            await Task.yield()
+            guard Task.isCancelled == false else { return }
+            guard let self else { return }
+            self.closeTransitionViewportReplayTask = nil
+            guard self.closeTransitionViewportDeferralArmed else { return }
+            let shouldReplay = self.closeTransitionViewportUpdatePending
+            self.closeTransitionViewportDeferralArmed = false
+            self.closeTransitionViewportUpdatePending = false
+            guard shouldReplay else { return }
+            self.replayDeferredViewportUpdateIfNeeded()
+        }
+    }
+
+    var isCloseTransitionViewportDeferralArmed: Bool {
+        closeTransitionViewportDeferralArmed
+    }
+
+    private func requestImmediateSurfaceRefresh(
+        _ surface: ghostty_surface_t,
+        reason: String,
+        extra: [String: String] = [:]
+    ) {
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "reason": reason,
+            "host_effectively_visible": terminalHostView.isEffectivelyVisible ? "true" : "false",
+        ]
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        ToasttyLog.debug(
+            "Requesting immediate Ghostty surface refresh",
+            category: .ghostty,
+            metadata: metadata
+        )
         ghosttyManager.requestImmediateTick()
         ghostty_surface_refresh(surface)
     }
 
     func synchronizeGhosttySurfaceFocusFromApplicationState() {
         terminalHostView.synchronizeGhosttySurfaceFocusFromApplicationState()
+    }
+
+    private func recordLatestViewportUpdate(
+        terminalState: TerminalPanelState,
+        focused: Bool,
+        fontPoints: Double,
+        viewportSize: CGSize,
+        backingScaleFactor: CGFloat,
+        sourceContainer: NSView,
+        attachment: PanelHostAttachmentToken
+    ) {
+        latestViewportSourceContainer = sourceContainer
+        latestViewportUpdate = PendingViewportUpdate(
+            terminalState: terminalState,
+            focused: focused,
+            fontPoints: fontPoints,
+            viewportSize: viewportSize,
+            backingScaleFactor: backingScaleFactor,
+            attachment: attachment
+        )
+    }
+
+    private func shouldDeferCloseTransitionViewportResize(
+        logicalWidth: Int,
+        logicalHeight: Int,
+        pixelWidth: Int,
+        pixelHeight: Int
+    ) -> Bool {
+        guard closeTransitionViewportDeferralArmed,
+              let lastPresentationSignature else {
+            return false
+        }
+        let logicalSizeChanged = lastPresentationSignature.logicalWidth != logicalWidth ||
+            lastPresentationSignature.logicalHeight != logicalHeight
+        let pixelSizeChanged = lastPresentationSignature.pixelWidth != pixelWidth ||
+            lastPresentationSignature.pixelHeight != pixelHeight
+        guard logicalSizeChanged || pixelSizeChanged else {
+            return false
+        }
+        closeTransitionViewportUpdatePending = true
+        logSurfaceDiagnostics(
+            message: "Deferring Ghostty viewport resize during close-transition layout churn",
+            extra: [
+                "last_logical_width": String(lastPresentationSignature.logicalWidth),
+                "last_logical_height": String(lastPresentationSignature.logicalHeight),
+                "next_logical_width": String(logicalWidth),
+                "next_logical_height": String(logicalHeight),
+                "last_pixel_width": String(lastPresentationSignature.pixelWidth),
+                "last_pixel_height": String(lastPresentationSignature.pixelHeight),
+                "next_pixel_width": String(pixelWidth),
+                "next_pixel_height": String(pixelHeight),
+            ]
+        )
+        return true
+    }
+
+    private func replayDeferredViewportUpdateIfNeeded() {
+        guard let pendingViewportUpdate = latestViewportUpdate,
+              let sourceContainer = latestViewportSourceContainer else {
+            return
+        }
+        update(
+            terminalState: pendingViewportUpdate.terminalState,
+            focused: pendingViewportUpdate.focused,
+            fontPoints: pendingViewportUpdate.fontPoints,
+            viewportSize: pendingViewportUpdate.viewportSize,
+            backingScaleFactor: pendingViewportUpdate.backingScaleFactor,
+            sourceContainer: sourceContainer,
+            attachment: pendingViewportUpdate.attachment
+        )
     }
     #endif
 }

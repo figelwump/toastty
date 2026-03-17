@@ -133,6 +133,15 @@ private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceContro
         _ = panelID
     }
 
+    func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
+        _ = panelID
+        return .empty
+    }
+
+    func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
+        _ = panelID
+    }
+
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {
         _ = surface
         _ = panelID

@@ -64,6 +64,10 @@ run_tuist() {
   fi
 }
 
+ensure_tuist_dependencies() {
+  run_tuist install >/dev/null
+}
+
 cleanup() {
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" >/dev/null 2>&1 || true
@@ -316,6 +320,7 @@ capture_close_outcome() {
 
 cd "$ROOT_DIR"
 
+ensure_tuist_dependencies
 run_tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \

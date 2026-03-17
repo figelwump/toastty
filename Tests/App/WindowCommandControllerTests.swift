@@ -86,6 +86,11 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
 
+        bridge.installIfNeeded()
+        XCTAssertEqual(closeItem.title, "Close Panel")
+        XCTAssertTrue(closeItem.target === bridge)
+        XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
+
         bridge.performCloseWindow(nil)
 
         let window = try XCTUnwrap(store.window(id: fixture.windowID))
@@ -97,6 +102,123 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertNotNil(workspace.focusedPanelID)
         XCTAssertEqual(store.state.selectedWindowID, fixture.windowID)
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
+    }
+
+    func testCloseWorkspaceMenuBridgeRetargetsDefaultCloseAllItemAndRequestsSelectedWorkspaceClose() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let firstWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let firstWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(store.send(.createWorkspace(windowID: firstWindowID, title: "Second")))
+        let secondWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertNotEqual(firstWorkspaceID, secondWorkspaceID)
+
+        let controller = CloseWorkspaceCommandController(store: store)
+        let bridge = CloseWorkspaceMenuBridge(closeWorkspaceCommandController: controller)
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
+        closeAllItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(closeAllItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(closeAllItem.title, "Close Workspace")
+        XCTAssertEqual(closeAllItem.keyEquivalent, "")
+        XCTAssertEqual(closeAllItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(closeAllItem.target === bridge)
+        XCTAssertEqual(closeAllItem.action, #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(closeAllItem))
+
+        bridge.performCloseWorkspace(nil)
+
+        let window = try XCTUnwrap(store.window(id: firstWindowID))
+        XCTAssertEqual(window.workspaceIDs, [firstWorkspaceID, secondWorkspaceID])
+        XCTAssertEqual(window.selectedWorkspaceID, secondWorkspaceID)
+        XCTAssertEqual(
+            store.pendingCloseWorkspaceRequest,
+            PendingWorkspaceCloseRequest(windowID: firstWindowID, workspaceID: secondWorkspaceID)
+        )
+        XCTAssertNotNil(store.state.workspacesByID[secondWorkspaceID])
+        XCTAssertTrue(bridge.validateMenuItem(closeAllItem))
+    }
+
+    func testCloseWorkspaceMenuBridgeMatchesSystemCloseAllMaskWithoutExplicitCommandBit() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let controller = CloseWorkspaceCommandController(store: store)
+        let bridge = CloseWorkspaceMenuBridge(closeWorkspaceCommandController: controller)
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
+        closeAllItem.keyEquivalentModifierMask = [.shift]
+        fileMenu.addItem(closeAllItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(closeAllItem.title, "Close Workspace")
+        XCTAssertEqual(closeAllItem.keyEquivalent, "")
+        XCTAssertEqual(closeAllItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(closeAllItem.target === bridge)
+        XCTAssertEqual(closeAllItem.action, #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:)))
+    }
+
+    func testCloseWorkspaceMenuBridgeDoesNotRetargetNonFileShiftWItem() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let controller = CloseWorkspaceCommandController(store: store)
+        let bridge = CloseWorkspaceMenuBridge(closeWorkspaceCommandController: controller)
+
+        let mainMenu = NSMenu(title: "Main")
+
+        let workspaceRootItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let workspaceShiftWItem = NSMenuItem(title: "Workspace Toggle", action: nil, keyEquivalent: "w")
+        workspaceShiftWItem.keyEquivalentModifierMask = [.shift]
+        workspaceMenu.addItem(workspaceShiftWItem)
+        workspaceRootItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceRootItem)
+
+        let fileRootItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
+        closeAllItem.keyEquivalentModifierMask = [.shift]
+        fileMenu.addItem(closeAllItem)
+        fileRootItem.submenu = fileMenu
+        mainMenu.addItem(fileRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(workspaceShiftWItem.title, "Workspace Toggle")
+        XCTAssertNil(workspaceShiftWItem.target)
+        XCTAssertEqual(closeAllItem.title, "Close Workspace")
+        XCTAssertEqual(closeAllItem.keyEquivalent, "")
+        XCTAssertEqual(closeAllItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(closeAllItem.target === bridge)
+        XCTAssertEqual(
+            closeAllItem.action,
+            #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
+        )
     }
 
     func testHelpMenuBridgeRetargetsToasttyHelpItemAndOpensGitHub() {
@@ -126,6 +248,55 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.openProjectHelp(nil)
 
         XCTAssertEqual(openedURL, URL(string: "https://github.com/figelwump/toastty"))
+    }
+
+    func testSparkleMenuBridgeInsertsUpdaterItemAfterAboutAndTriggersCheck() throws {
+        var didCheckForUpdates = false
+        var canCheckForUpdates = true
+        let bridge = SparkleMenuBridge(
+            canCheckForUpdates: { canCheckForUpdates },
+            performCheckForUpdates: {
+                didCheckForUpdates = true
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let appRootItem = NSMenuItem(title: "Toastty", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Toastty")
+        let aboutItem = NSMenuItem(title: "About Toastty", action: nil, keyEquivalent: "")
+        let reloadItem = NSMenuItem(title: "Reload Configuration", action: nil, keyEquivalent: "")
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(reloadItem)
+        appRootItem.submenu = appMenu
+        mainMenu.addItem(appRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
+        let updaterItem = appMenu.items[1]
+        XCTAssertTrue(updaterItem.target === bridge)
+        XCTAssertEqual(updaterItem.action, #selector(SparkleMenuBridge.checkForUpdates(_:)))
+        XCTAssertNotNil(updaterItem.image)
+        XCTAssertEqual(updaterItem.image?.isTemplate, true)
+        XCTAssertTrue(bridge.validateMenuItem(updaterItem))
+
+        bridge.checkForUpdates(nil)
+        XCTAssertTrue(didCheckForUpdates)
+
+        canCheckForUpdates = false
+        XCTAssertFalse(bridge.validateMenuItem(updaterItem))
+
+        bridge.installIfNeeded()
+        XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
+
+        appMenu.removeItem(updaterItem)
+        bridge.installIfNeeded()
+        XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
     }
 
     func testHiddenSystemMenuItemsBridgeHidesRequestedItemsByAction() {
@@ -254,6 +425,111 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(rebuiltNewWindowItem.isHidden)
         XCTAssertFalse(rebuiltOpenRecentItem.isHidden)
         XCTAssertTrue(rebuiltFileMenu.delegate === bridge)
+    }
+
+    func testHiddenSystemMenuItemsBridgeReinstallsCloseWorkspaceBridgeAfterMenuMutation() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let closeWorkspaceBridge = CloseWorkspaceMenuBridge(
+            closeWorkspaceCommandController: CloseWorkspaceCommandController(store: store)
+        )
+        let hiddenBridge = HiddenSystemMenuItemsBridge(
+            onMenuTreeRefresh: {
+                closeWorkspaceBridge.installIfNeeded()
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "File")
+        let initialCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
+        initialCloseAllItem.keyEquivalentModifierMask = [.shift]
+        initialFileMenu.addItem(initialCloseAllItem)
+        fileItem.submenu = initialFileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        hiddenBridge.installIfNeeded()
+
+        XCTAssertEqual(initialCloseAllItem.title, "Close Workspace")
+        XCTAssertEqual(initialCloseAllItem.keyEquivalent, "")
+        XCTAssertEqual(initialCloseAllItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(initialCloseAllItem.target === closeWorkspaceBridge)
+        XCTAssertEqual(
+            initialCloseAllItem.action,
+            #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
+        )
+
+        let rebuiltFileMenu = NSMenu(title: "File")
+        let rebuiltCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
+        rebuiltCloseAllItem.keyEquivalentModifierMask = [.shift]
+        rebuiltFileMenu.addItem(rebuiltCloseAllItem)
+        fileItem.submenu = rebuiltFileMenu
+
+        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
+        let refreshExpectation = expectation(description: "menu refresh")
+        DispatchQueue.main.async {
+            refreshExpectation.fulfill()
+        }
+        wait(for: [refreshExpectation], timeout: 1)
+
+        XCTAssertEqual(rebuiltCloseAllItem.title, "Close Workspace")
+        XCTAssertEqual(rebuiltCloseAllItem.keyEquivalent, "")
+        XCTAssertEqual(rebuiltCloseAllItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(rebuiltCloseAllItem.target === closeWorkspaceBridge)
+        XCTAssertEqual(
+            rebuiltCloseAllItem.action,
+            #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
+        )
+    }
+
+    func testTerminalProfilesMenuControllerSplitsFocusedSlotWithProfileBinding() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let controller = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            installShellIntegrationAction: {}
+        )
+
+        XCTAssertTrue(controller.canSplitFocusedSlotWithTerminalProfile(preferredWindowID: nil))
+        XCTAssertTrue(
+            controller.splitFocusedSlot(
+                profileID: "zmx",
+                direction: .right,
+                preferredWindowID: nil
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let profiledPanels = workspace.panels.values.compactMap { panel -> TerminalPanelState? in
+            guard case .terminal(let terminalState) = panel else { return nil }
+            return terminalState.profileBinding?.profileID == "zmx" ? terminalState : nil
+        }
+
+        XCTAssertEqual(profiledPanels.count, 1)
+    }
+
+    func testTerminalProfilesMenuControllerRunsShellIntegrationAction() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        var didInstallShellIntegration = false
+        let controller = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            installShellIntegrationAction: {
+                didInstallShellIntegration = true
+            }
+        )
+
+        controller.installShellIntegration()
+        XCTAssertTrue(didInstallShellIntegration)
     }
 
     private func makeSplitWorkspaceFixture() throws -> SplitWorkspaceFixture {

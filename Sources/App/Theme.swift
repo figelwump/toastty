@@ -35,6 +35,10 @@ enum ToastyTheme {
     static let sessionReadyBackground = Color(hex: 0x5DBB63, alpha: 0.12)
     static let sessionErrorText = Color(hex: 0xD4553A)
     static let sessionErrorBackground = Color(hex: 0xD4553A, alpha: 0.12)
+    static let terminalProfileBadgeText = Color(hex: 0xF5D6A0)
+    static let terminalProfileBadgeBackground = Color(hex: 0x5A3B14, alpha: 0.65)
+    static let terminalProfileBadgeMissingText = Color(hex: 0xF4B183)
+    static let terminalProfileBadgeMissingBackground = Color(hex: 0x5A2414, alpha: 0.65)
 
     // Empty state
     static let emptyStateToastCrust = Color(hex: 0x4A3425)
@@ -56,6 +60,9 @@ enum ToastyTheme {
     /// Used only to keep sidebar content clear of the traffic lights.
     static let titlebarHeight: CGFloat = 28
     static let sidebarTopPadding: CGFloat = titlebarHeight + 4
+    /// Leading padding for the top bar content when the sidebar is hidden,
+    /// leaving room for the traffic lights and sidebar toggle button.
+    static let topBarLeadingPaddingWithoutSidebar: CGFloat = 100
 
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)
@@ -72,6 +79,7 @@ enum ToastyTheme {
     static let fontWorkspaceSessionDetail = Font.system(size: 10, weight: .regular, design: .default)
     static let fontWorkspaceSessionPath = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontShortcutBadge = Font.system(size: 11, weight: .medium, design: .monospaced)
+    static let fontTerminalProfileBadge = Font.system(size: 10, weight: .semibold, design: .monospaced)
     static let fontNewWorkspace = Font.system(size: 11, weight: .regular, design: .default)
 
     static func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {

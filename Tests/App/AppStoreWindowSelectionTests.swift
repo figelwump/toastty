@@ -257,6 +257,152 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.globalTerminalFontPoints, 15)
     }
 
+    func testRenameSelectedWorkspaceFromCommandSetsPendingRename() throws {
+        let workspace = WorkspaceState.bootstrap(title: "Dev")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertNil(store.pendingRenameWorkspaceID)
+        store.renameSelectedWorkspaceFromCommand(preferredWindowID: windowID)
+        XCTAssertEqual(store.pendingRenameWorkspaceID, workspace.id)
+    }
+
+    func testRenameSelectedWorkspaceFromCommandDoesNothingWithoutWorkspace() {
+        let store = AppStore(
+            state: AppState(
+                windows: [],
+                workspacesByID: [:],
+                selectedWindowID: nil,
+                globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            ),
+            persistTerminalFontPreference: false
+        )
+
+        store.renameSelectedWorkspaceFromCommand(preferredWindowID: nil)
+        XCTAssertNil(store.pendingRenameWorkspaceID)
+    }
+
+    func testCloseSelectedWorkspaceFromCommandRequestsFocusedWorkspaceClose() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(store.closeSelectedWorkspaceFromCommand(preferredWindowID: secondWindowID))
+        XCTAssertEqual(
+            store.pendingCloseWorkspaceRequest,
+            PendingWorkspaceCloseRequest(windowID: secondWindowID, workspaceID: secondWorkspace.id)
+        )
+        XCTAssertNotNil(store.window(id: firstWindowID))
+        XCTAssertNotNil(store.window(id: secondWindowID))
+        XCTAssertNotNil(store.state.workspacesByID[secondWorkspace.id])
+    }
+
+    func testCloseSelectedWorkspaceFromCommandDoesNothingWithoutWorkspace() {
+        let store = AppStore(
+            state: AppState(
+                windows: [],
+                workspacesByID: [:],
+                selectedWindowID: nil,
+                globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            ),
+            persistTerminalFontPreference: false
+        )
+
+        XCTAssertFalse(store.closeSelectedWorkspaceFromCommand(preferredWindowID: nil))
+        XCTAssertNil(store.pendingCloseWorkspaceRequest)
+    }
+
+    func testConfirmWorkspaceCloseClosesRequestedWorkspace() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let firstWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(store.send(.createWorkspace(windowID: windowID, title: "Second")))
+        let secondWorkspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(store.requestWorkspaceClose(workspaceID: secondWorkspaceID))
+
+        XCTAssertTrue(store.confirmWorkspaceClose(windowID: windowID, workspaceID: secondWorkspaceID))
+
+        let window = try XCTUnwrap(store.window(id: windowID))
+        XCTAssertEqual(window.workspaceIDs, [firstWorkspaceID])
+        XCTAssertEqual(window.selectedWorkspaceID, firstWorkspaceID)
+        XCTAssertNil(store.pendingCloseWorkspaceRequest)
+        XCTAssertNil(store.state.workspacesByID[secondWorkspaceID])
+    }
+
+    func testRequestWorkspaceCloseDoesNotOverwriteDifferentPendingRequest() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(store.requestWorkspaceClose(workspaceID: firstWorkspace.id))
+        XCTAssertFalse(store.requestWorkspaceClose(workspaceID: secondWorkspace.id))
+        XCTAssertEqual(
+            store.pendingCloseWorkspaceRequest,
+            PendingWorkspaceCloseRequest(windowID: firstWindowID, workspaceID: firstWorkspace.id)
+        )
+    }
+
     func testCreateWorkspaceFromCommandDoesNotRerouteMissingFocusedWindow() {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = store.state.windows[0].id

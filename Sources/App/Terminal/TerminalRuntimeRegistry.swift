@@ -59,8 +59,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private let runtimeStore = TerminalWindowRuntimeStore()
     private weak var store: AppStore?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
+    private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private var stateObservation: AnyCancellable?
     private var observedGlobalFontPoints: Double?
+    private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
+    private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
+    private var launchedProfiledPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -111,6 +115,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
                     nextState: nextState
                 )
             },
+            armCloseTransitionViewportDeferral: { [weak self] workspaceID, panelIDs in
+                self?.runtimeStore.armCloseTransitionViewportDeferral(
+                    workspaceID: workspaceID,
+                    panelIDs: panelIDs
+                )
+            },
             requestWorkspaceFocusRestore: { [weak self] workspaceID in
                 self?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
             }
@@ -150,6 +160,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
         #endif
     }
 
+    func setTerminalProfileProvider(
+        _ terminalProfileProvider: any TerminalProfileProviding,
+        restoredTerminalPanelIDs: Set<UUID>
+    ) {
+        self.terminalProfileProvider = terminalProfileProvider
+        restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDs
+        profiledTerminalPanelIDsAwaitingStartupTitleCleanup = restoredTerminalPanelIDs
+    }
+
     @discardableResult
     func splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation) -> Bool {
         sendSplitAction(
@@ -163,6 +182,22 @@ final class TerminalRuntimeRegistry: ObservableObject {
         sendSplitAction(
             workspaceID: workspaceID,
             action: .splitFocusedSlotInDirection(workspaceID: workspaceID, direction: direction)
+        )
+    }
+
+    @discardableResult
+    func splitFocusedSlotInDirectionWithTerminalProfile(
+        workspaceID: UUID,
+        direction: SlotSplitDirection,
+        profileBinding: TerminalProfileBinding
+    ) -> Bool {
+        sendSplitAction(
+            workspaceID: workspaceID,
+            action: .splitFocusedSlotInDirectionWithTerminalProfile(
+                workspaceID: workspaceID,
+                direction: direction,
+                profileBinding: profileBinding
+            )
         )
     }
 
@@ -182,10 +217,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func synchronize(with state: AppState) {
         let removedPanelIDs = runtimeStore.synchronize(with: state)
+        let livePanelIDs = liveTerminalPanelIDs(in: state)
+        launchedProfiledPanelIDs = launchedProfiledPanelIDs.intersection(livePanelIDs)
+        restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
+        profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
+            .intersection(livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
             state: state,
-            livePanelIDs: liveTerminalPanelIDs(in: state),
+            livePanelIDs: livePanelIDs,
             removedPanelIDs: removedPanelIDs
         )
         #endif
@@ -534,6 +574,77 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         consumeSplitSource(for: panelID)
     }
 
+    func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
+        guard launchedProfiledPanelIDs.contains(panelID) == false else {
+            return .empty
+        }
+        guard let store,
+              let workspaceID = workspaceID(containing: panelID, state: store.state),
+              let workspace = store.state.workspacesByID[workspaceID],
+              case .terminal(let terminalState)? = workspace.panels[panelID] else {
+            return .empty
+        }
+
+        let catalog = terminalProfileProvider?.catalog ?? .empty
+        switch TerminalProfileLaunchResolver.resolve(
+            panelID: panelID,
+            terminalState: terminalState,
+            catalog: catalog,
+            restoredTerminalPanelIDsAwaitingLaunch: restoredTerminalPanelIDsAwaitingLaunch,
+            launchedProfiledPanelIDs: launchedProfiledPanelIDs
+        ) {
+        case .none:
+            return .empty
+        case .missingProfile(let profileID, let reason):
+            ToasttyLog.warning(
+                "Launching profiled pane without startup command because the profile is unavailable",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "profile_id": profileID,
+                    "launch_reason": reason.rawValue,
+                ]
+            )
+            return .empty
+        case .launch(let configuration):
+            if Self.shouldSuppressProfileStartupCommandTitle(configuration.initialInput) {
+                // Seed cleanup before the surface starts emitting title callbacks so the
+                // literal launch wrapper title cannot win the first race on fresh panes.
+                profiledTerminalPanelIDsAwaitingStartupTitleCleanup.insert(panelID)
+            }
+            return configuration
+        }
+    }
+
+    func profileStartupCommandAwaitingTitleCleanup(
+        panelID: UUID,
+        terminalState: TerminalPanelState
+    ) -> String? {
+        guard profiledTerminalPanelIDsAwaitingStartupTitleCleanup.contains(panelID),
+              let profileBinding = terminalState.profileBinding,
+              let profile = terminalProfileProvider?.catalog.profile(id: profileBinding.profileID),
+              Self.shouldSuppressProfileStartupCommandTitle(profile.startupCommand) else {
+            return nil
+        }
+        return profile.startupCommand
+    }
+
+    func markProfileLaunchTitleCleanupCompleted(panelID: UUID) {
+        profiledTerminalPanelIDsAwaitingStartupTitleCleanup.remove(panelID)
+    }
+
+    func markInitialSurfaceLaunchCompleted(for panelID: UUID) {
+        restoredTerminalPanelIDsAwaitingLaunch.remove(panelID)
+        guard let store,
+              let workspaceID = workspaceID(containing: panelID, state: store.state),
+              let workspace = store.state.workspacesByID[workspaceID],
+              case .terminal(let terminalState)? = workspace.panels[panelID],
+              terminalState.profileBinding != nil else {
+            return
+        }
+        launchedProfiledPanelIDs.insert(panelID)
+    }
+
     func registerSurfaceHandle(_ surface: ghostty_surface_t, for panelID: UUID) {
         register(surface: surface, for: panelID)
     }
@@ -812,6 +923,11 @@ extension TerminalRuntimeRegistry {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else { return nil }
         return trimmed
+    }
+
+    static func shouldSuppressProfileStartupCommandTitle(_ startupCommand: String?) -> Bool {
+        guard let normalizedCommand = normalizedMetadataValue(startupCommand) else { return false }
+        return normalizedCommand.contains("$TOASTTY_") || normalizedCommand.contains("${TOASTTY_")
     }
 
     static func normalizedCWDValue(_ value: String?) -> String? {

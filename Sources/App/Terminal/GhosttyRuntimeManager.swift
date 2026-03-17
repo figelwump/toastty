@@ -397,6 +397,22 @@ private func ghosttyPasteboard(for location: ghostty_clipboard_e) -> NSPasteboar
     }
 }
 
+private func ghosttyShellEscape(_ path: String) -> String {
+    guard !path.isEmpty else { return "''" }
+    return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+}
+
+private func ghosttyClipboardStringContents(from pasteboard: NSPasteboard) -> String? {
+    if let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
+       !urls.isEmpty {
+        return urls
+            .map { $0.isFileURL ? ghosttyShellEscape($0.path) : $0.absoluteString }
+            .joined(separator: " ")
+    }
+
+    return pasteboard.string(forType: .string)
+}
+
 private func ghosttyClipboardLocationName(_ location: ghostty_clipboard_e) -> String {
     switch location {
     case GHOSTTY_CLIPBOARD_STANDARD:
@@ -495,25 +511,32 @@ private func ghosttyReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
     location: ghostty_clipboard_e,
     state: UnsafeMutableRawPointer?
-) {
+) -> Bool {
     guard let userdata else {
         ToasttyLog.warning("Ghostty read clipboard callback missing userdata", category: .ghostty)
-        return
+        return false
     }
+    guard let state else { return false }
 
     let hostViewHandle = UInt(bitPattern: userdata)
+    // This helper runs inline on main and synchronously hops to main otherwise,
+    // so the callback result is determined before returning to Ghostty.
+    var didStartRequest = false
     ghosttyRunClipboardWorkOnMainThread {
         let surfaceHandle = ghosttyResolveClipboardSurfaceHandle(hostViewHandle: hostViewHandle)
-        let surface = surfaceHandle.flatMap { ghostty_surface_t(bitPattern: $0) }
-        let pasteboard = ghosttyPasteboard(for: location)
-        let clipboardValue = pasteboard?.string(forType: .string) ?? ""
+        guard let surfaceHandle else { return }
+        guard let surface = ghostty_surface_t(bitPattern: surfaceHandle) else { return }
+        guard let pasteboard = ghosttyPasteboard(for: location) else { return }
+        guard let clipboardValue = ghosttyClipboardStringContents(from: pasteboard) else { return }
         ghosttyCompleteClipboardRead(
             surface: surface,
             state: state,
             data: clipboardValue,
             confirmed: false
         )
+        didStartRequest = true
     }
+    return didStartRequest
 }
 
 private func ghosttyConfirmReadClipboardCallback(
@@ -749,7 +772,8 @@ final class GhosttyRuntimeManager {
         hostView: NSView,
         workingDirectory: String,
         fontPoints: Double,
-        inheritFrom sourceSurface: ghostty_surface_t? = nil
+        inheritFrom sourceSurface: ghostty_surface_t? = nil,
+        launchConfiguration: TerminalSurfaceLaunchConfiguration = .empty
     ) -> SurfaceCreationResult? {
         guard let app else { return nil }
 
@@ -776,6 +800,11 @@ final class GhosttyRuntimeManager {
         surfaceConfig.scale_factor = max(Double(hostScale), 1)
         surfaceConfig.font_size = Float(fontPoints)
         surfaceConfig.context = GHOSTTY_SURFACE_CONTEXT_SPLIT
+        surfaceConfig.command = nil
+        surfaceConfig.initial_input = nil
+        surfaceConfig.env_vars = nil
+        surfaceConfig.env_var_count = 0
+        surfaceConfig.wait_after_command = false
 
         let requestedWorkingDirectory = Self.normalizedWorkingDirectoryValue(workingDirectory)
         let resolvedWorkingDirectory: String
@@ -798,9 +827,16 @@ final class GhosttyRuntimeManager {
             resolvedWorkingDirectory = NSHomeDirectory()
         }
 
-        let surface = resolvedWorkingDirectory.withCString { cwdPointer in
-            surfaceConfig.working_directory = cwdPointer
-            return ghostty_surface_new(app, &surfaceConfig)
+        let surface = Self.withGhosttyEnvironmentVariables(launchConfiguration.environmentVariables) { envVarsPointer, envVarCount in
+            resolvedWorkingDirectory.withCString { cwdPointer in
+                surfaceConfig.working_directory = cwdPointer
+                surfaceConfig.env_vars = envVarsPointer
+                surfaceConfig.env_var_count = envVarCount
+                return Self.withOptionalCString(launchConfiguration.normalizedInitialInput) { inputPointer in
+                    surfaceConfig.initial_input = inputPointer
+                    return ghostty_surface_new(app, &surfaceConfig)
+                }
+            }
         }
         if let surface {
             registerClipboardSurface(surface, forHostView: hostView)
@@ -836,6 +872,51 @@ final class GhosttyRuntimeManager {
         clipboardSurfaceHandleByHostViewHandle[hostViewHandle] = surfaceHandle
         if let terminalHostView = hostView as? TerminalHostView {
             hostViewBySurfaceHandle[surfaceHandle] = WeakTerminalHostViewBox(terminalHostView)
+        }
+    }
+
+    private static func withOptionalCString<T>(
+        _ value: String?,
+        body: (UnsafePointer<CChar>?) -> T
+    ) -> T {
+        guard let value else {
+            return body(nil)
+        }
+        return value.withCString { body($0) }
+    }
+
+    private static func withGhosttyEnvironmentVariables<T>(
+        _ environmentVariables: [String: String],
+        body: (UnsafeMutablePointer<ghostty_env_var_s>?, Int) -> T
+    ) -> T {
+        guard environmentVariables.isEmpty == false else {
+            return body(nil, 0)
+        }
+
+        let pairs = environmentVariables.sorted { lhs, rhs in
+            if lhs.key == rhs.key {
+                return lhs.value < rhs.value
+            }
+            return lhs.key < rhs.key
+        }
+
+        let keyPointers = pairs.map { strdup($0.key) }
+        let valuePointers = pairs.map { strdup($0.value) }
+        defer {
+            keyPointers.forEach { free($0) }
+            valuePointers.forEach { free($0) }
+        }
+
+        var ghosttyEnvVars = zip(keyPointers, valuePointers).map { pair in
+            let (keyPointer, valuePointer) = pair
+            return ghostty_env_var_s(
+                key: UnsafePointer(keyPointer),
+                value: UnsafePointer(valuePointer)
+            )
+        }
+
+        return ghosttyEnvVars.withUnsafeMutableBufferPointer { buffer in
+            body(buffer.baseAddress, buffer.count)
         }
     }
 

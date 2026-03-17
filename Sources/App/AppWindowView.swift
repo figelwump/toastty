@@ -3,32 +3,62 @@ import SwiftUI
 struct AppWindowView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
+    @State private var pendingWorkspaceClose: PendingWorkspaceClose?
+
+    private var sidebarVisible: Bool {
+        store.window(id: windowID)?.sidebarVisible ?? true
+    }
 
     var body: some View {
-        HStack(spacing: 0) {
-            SidebarView(
-                windowID: windowID,
-                store: store,
-                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                sessionRuntimeStore: sessionRuntimeStore,
-                terminalRuntimeContext: terminalRuntimeContext
-            )
-                .frame(width: ToastyTheme.sidebarWidth)
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: 0) {
+                if sidebarVisible {
+                    SidebarView(
+                        windowID: windowID,
+                        store: store,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        sessionRuntimeStore: sessionRuntimeStore,
+                        terminalRuntimeContext: terminalRuntimeContext
+                    )
+                        .frame(width: ToastyTheme.sidebarWidth)
 
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(width: 1)
+                    Rectangle()
+                        .fill(ToastyTheme.hairline)
+                        .frame(width: 1)
+                }
 
-            WorkspaceView(
-                windowID: windowID,
-                store: store,
-                terminalRuntimeRegistry: terminalRuntimeRegistry,
-                sessionRuntimeStore: sessionRuntimeStore,
-                terminalRuntimeContext: terminalRuntimeContext
-            )
+                WorkspaceView(
+                    windowID: windowID,
+                    store: store,
+                    terminalProfileStore: terminalProfileStore,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    sessionRuntimeStore: sessionRuntimeStore,
+                    terminalRuntimeContext: terminalRuntimeContext,
+                    sidebarVisible: sidebarVisible
+                )
+            }
+            .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
+
+            // Sidebar toggle button in the title bar area, right of traffic lights
+            sidebarToggleButton
+        }
+        .alert(
+            "Close this workspace?",
+            isPresented: pendingWorkspaceCloseBinding,
+            presenting: pendingWorkspaceClose
+        ) { closeTarget in
+            Button("Cancel", role: .cancel) {
+                pendingWorkspaceClose = nil
+            }
+            Button("Close", role: .destructive) {
+                confirmWorkspaceClose(closeTarget)
+            }
+        } message: { _ in
+            Text("Closing this workspace will close all terminals and panels within it.")
         }
         .onAppear {
             scheduleWindowFocusRestore()
@@ -36,7 +66,45 @@ struct AppWindowView: View {
         .onChange(of: slotFocusSignature) { _, _ in
             scheduleWindowFocusRestore()
         }
+        .onChange(of: store.state.workspacesByID) { _, _ in
+            if let pendingWorkspaceClose,
+               store.state.workspacesByID[pendingWorkspaceClose.workspaceID] == nil {
+                self.pendingWorkspaceClose = nil
+            }
+        }
+        .onChange(of: store.pendingCloseWorkspaceRequest) { _, newValue in
+            guard let request = newValue,
+                  request.windowID == windowID,
+                  store.state.workspacesByID[request.workspaceID] != nil,
+                  store.consumePendingWorkspaceCloseRequest(windowID: windowID) != nil else { return }
+            pendingWorkspaceClose = PendingWorkspaceClose(
+                windowID: request.windowID,
+                workspaceID: request.workspaceID
+            )
+        }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
+    }
+
+    private var sidebarToggleButton: some View {
+        Button {
+            store.send(.toggleSidebar(windowID: windowID))
+        } label: {
+            SidebarToggleIconView(
+                color: sidebarVisible ? ToastyTheme.inactiveText : ToastyTheme.accent,
+                sidebarVisible: sidebarVisible
+            )
+        }
+        .buttonStyle(.plain)
+        .frame(width: 22, height: 22)
+        .contentShape(Rectangle())
+        .help(
+            ToasttyKeyboardShortcuts.toggleSidebar.helpText(
+                sidebarVisible ? "Hide Workspaces" : "Show Workspaces"
+            )
+        )
+        .padding(.leading, 76)
+        .padding(.top, 5)
+        .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 
     private var slotFocusSignature: WindowSlotFocusSignature? {
@@ -55,10 +123,36 @@ struct AppWindowView: View {
             avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         )
     }
+
+    private var pendingWorkspaceCloseBinding: Binding<Bool> {
+        Binding(
+            get: { pendingWorkspaceClose != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingWorkspaceClose = nil
+                }
+            }
+        )
+    }
+
+    private func confirmWorkspaceClose(_ closeTarget: PendingWorkspaceClose) {
+        pendingWorkspaceClose = nil
+        _ = store.confirmWorkspaceClose(
+            windowID: closeTarget.windowID,
+            workspaceID: closeTarget.workspaceID
+        )
+    }
 }
 
 private struct WindowSlotFocusSignature: Equatable {
     let windowID: UUID
     let workspaceID: UUID?
     let focusedPanelID: UUID?
+}
+
+private struct PendingWorkspaceClose: Identifiable {
+    let windowID: UUID
+    let workspaceID: UUID
+
+    var id: UUID { workspaceID }
 }

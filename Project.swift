@@ -43,6 +43,8 @@ let buildNumber = resolvedManifestEnvironmentValue(
     compatibilityKey: "TOASTTY_BUILD_NUMBER",
     defaultValue: "1"
 )
+let sparkleFeedURL = "https://updates.toastty.dev/appcast.xml"
+let sparklePublicEDKey = "TmgFEcjPjqplsktNMX2rJSj+2YjJyVX5UvGMvSBHjlM="
 // Repo-local toggle consumed by Project.swift, not a Tuist built-in.
 let distributionSigning = environment["TUIST_DISTRIBUTION_SIGNING"] == "1"
 let ghosttyMacOSSliceDirectoryCandidates = [
@@ -151,8 +153,12 @@ func applyGhosttyVariantLinkSettings(
 
 var appDependencies: [TargetDependency] = [
     .target(name: "CoreState"),
+    .external(name: "Sparkle"),
 ]
 
+var appTestTargetSettingsBase: SettingsDictionary = [
+    "CODE_SIGNING_ALLOWED": "YES",
+]
 // Apple Development signing is required for UNUserNotificationCenter — macOS won't
 // register unsigned or ad-hoc signed apps in the Notifications preferences pane.
 // The project-level CODE_SIGNING_ALLOWED=NO is intentional for framework/test targets;
@@ -174,7 +180,6 @@ var appTargetSettingsBase: SettingsDictionary = [
     // so @testable import ToasttyApp and the struct ToasttyApp: App name stay consistent.
     "PRODUCT_MODULE_NAME": "ToasttyApp",
 ]
-var appTestTargetSettingsBase: SettingsDictionary = [:]
 if let developmentTeam {
     appTargetSettingsBase["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
     appTargetSettingsBase["CODE_SIGN_IDENTITY[config=Debug]"] = "Apple Development"
@@ -187,8 +192,15 @@ if let developmentTeam {
         appTargetSettingsBase["CODE_SIGN_IDENTITY[config=Release]"] = "Apple Development"
         appTargetSettingsBase["CODE_SIGN_STYLE[config=Release]"] = "Automatic"
     }
+
+    appTestTargetSettingsBase["DEVELOPMENT_TEAM"] = SettingValue(stringLiteral: developmentTeam)
+    appTestTargetSettingsBase["CODE_SIGN_IDENTITY[config=Debug]"] = "Apple Development"
+    appTestTargetSettingsBase["CODE_SIGN_STYLE[config=Debug]"] = "Automatic"
+    appTestTargetSettingsBase["CODE_SIGN_IDENTITY[config=Release]"] = "Apple Development"
+    appTestTargetSettingsBase["CODE_SIGN_STYLE[config=Release]"] = "Automatic"
 } else {
     appTargetSettingsBase["CODE_SIGN_IDENTITY"] = "-"
+    appTestTargetSettingsBase["CODE_SIGN_IDENTITY"] = "-"
 }
 var appTestDependencies: [TargetDependency] = [
     .target(name: "ToasttyApp"),
@@ -268,7 +280,10 @@ let project = Project(
                 "CFBundleShortVersionString": .string("$(MARKETING_VERSION)"),
                 "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
                 "LSApplicationCategoryType": .string("public.app-category.developer-tools"),
+                "LSMinimumSystemVersion": .string("14.0"),
                 "NSHumanReadableCopyright": .string("Copyright © 2026 Vishal Kapur. All rights reserved."),
+                "SUFeedURL": .string(sparkleFeedURL),
+                "SUPublicEDKey": .string(sparklePublicEDKey),
             ]),
             sources: ["Sources/App/**"],
             resources: ["Sources/App/Resources/**"],

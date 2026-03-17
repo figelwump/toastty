@@ -163,6 +163,56 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func makeAppStatePreservesTerminalProfileBindingAndPanelIDs() throws {
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let binding = TerminalProfileBinding(profileID: "zmx")
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Profiled",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: "/tmp/profiled",
+                        profileBinding: binding
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        #expect(restoredWorkspace.panels[panelID] != nil)
+
+        guard case .terminal(let restoredTerminalState) = restoredWorkspace.panels[panelID] else {
+            Issue.record("Expected terminal panel to survive restore")
+            return
+        }
+        #expect(restoredTerminalState.profileBinding == binding)
+        #expect(restoredWorkspace.focusedPanelID == panelID)
+    }
+
+    @Test
     func snapshotPersistsLaunchWorkingDirectoryWhenLiveCWDIsBlank() {
         let workspace = WorkspaceState.bootstrap(title: "Restore")
         let panelID = workspace.layoutTree.allSlotInfos[0].panelID
@@ -226,6 +276,21 @@ struct WorkspaceLayoutSnapshotTests {
 
         #expect(json["launchWorkingDirectory"] == "/tmp/compat")
         #expect(json["cwd"] == "/tmp/compat")
+    }
+
+    @Test
+    func terminalSnapshotEncodesProfileBindingWhenPresent() throws {
+        let snapshot = WorkspaceLayoutTerminalPanelSnapshot(
+            shell: "zsh",
+            launchWorkingDirectory: "/tmp/compat",
+            profileBinding: TerminalProfileBinding(profileID: "zmx")
+        )
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        let binding = try #require(json["profileBinding"] as? [String: String])
+
+        #expect(binding["profileID"] == "zmx")
     }
 
     @Test
