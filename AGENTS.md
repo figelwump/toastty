@@ -27,6 +27,8 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 - Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
+- For menu validation, target the exact built app instance by PID or full app bundle path. Multiple local `Toastty` builds may be running at once, and generic `osascript` checks can attach to the wrong process.
+- Prefer `peekaboo menu list --pid <pid> --json` for menu verification. It is more reliable than generic AppleScript enumeration for nested SwiftUI/AppKit menus.
 
 ## Ghostty Integration
 - **Default-on** when a local xcframework exists in `Dependencies/` and disable env is not set.
