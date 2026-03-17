@@ -137,6 +137,33 @@ struct WorkspaceSplitTreeTests {
     }
 
     @Test
+    func directionalFocusPrefersAlignedNeighborInMixedSplitLayout() {
+        let leftSlotID = UUID()
+        let topRightSlotID = UUID()
+        let bottomRightSlotID = UUID()
+        let tree = WorkspaceSplitTree(
+            root: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: leftSlotID, panelID: UUID()),
+                second: .split(
+                    nodeID: UUID(),
+                    orientation: .vertical,
+                    ratio: 0.5,
+                    first: .slot(slotID: topRightSlotID, panelID: UUID()),
+                    second: .slot(slotID: bottomRightSlotID, panelID: UUID())
+                )
+            )
+        )
+
+        #expect(tree.focusTarget(from: bottomRightSlotID, direction: .up) == topRightSlotID)
+        #expect(tree.focusTarget(from: topRightSlotID, direction: .down) == bottomRightSlotID)
+        #expect(tree.focusTarget(from: topRightSlotID, direction: .left) == leftSlotID)
+        #expect(tree.focusTarget(from: bottomRightSlotID, direction: .left) == leftSlotID)
+    }
+
+    @Test
     func splittingPlacesNewLeafOnRequestedSide() throws {
         let sourcePanelID = UUID()
         let sourceSlotID = UUID()
