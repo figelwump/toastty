@@ -164,6 +164,8 @@ final class WindowCommandControllerTests: XCTestCase {
         let updaterItem = appMenu.items[1]
         XCTAssertTrue(updaterItem.target === bridge)
         XCTAssertEqual(updaterItem.action, #selector(SparkleMenuBridge.checkForUpdates(_:)))
+        XCTAssertNotNil(updaterItem.image)
+        XCTAssertEqual(updaterItem.image?.isTemplate, true)
         XCTAssertTrue(bridge.validateMenuItem(updaterItem))
 
         bridge.checkForUpdates(nil)
