@@ -180,8 +180,8 @@ default-terminal-profile = "zmx"
 
 Toastty can launch named terminal profiles from:
 
-- `Terminal > Split Right With Profile`
-- `Terminal > Split Down With Profile`
+- `Terminal > <Profile Name> > Split Right`
+- `Terminal > <Profile Name> > Split Down`
 
 Profiles live in `~/.toastty/terminal-profiles.toml`. Each profile defines the
 menu label, the panel-header badge label, and a startup command that Toastty sends

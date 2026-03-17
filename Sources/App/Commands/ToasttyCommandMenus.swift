@@ -2,15 +2,104 @@ import CoreState
 import SwiftUI
 
 @MainActor
+final class TerminalProfilesMenuController {
+    private let store: AppStore
+    private let installShellIntegrationAction: @MainActor () -> Void
+
+    init(
+        store: AppStore,
+        installShellIntegrationAction: @escaping @MainActor () -> Void
+    ) {
+        self.store = store
+        self.installShellIntegrationAction = installShellIntegrationAction
+    }
+
+    func canSplitFocusedSlotWithTerminalProfile(preferredWindowID: UUID?) -> Bool {
+        store.commandSelection(preferredWindowID: preferredWindowID) != nil
+    }
+
+    @discardableResult
+    func splitFocusedSlot(
+        profileID: String,
+        direction: SlotSplitDirection,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        return store.send(
+            .splitFocusedSlotInDirectionWithTerminalProfile(
+                workspaceID: workspaceID,
+                direction: direction,
+                profileBinding: TerminalProfileBinding(profileID: profileID)
+            )
+        )
+    }
+
+    func installShellIntegration() {
+        installShellIntegrationAction()
+    }
+}
+
+struct TerminalProfileMenuModel: Equatable {
+    struct Section: Equatable, Identifiable {
+        struct Action: Equatable, Identifiable {
+            let title: String
+            let direction: SlotSplitDirection
+            let shortcutKey: Character?
+
+            var id: String { title }
+
+            var shortcutModifiers: EventModifiers? {
+                guard shortcutKey != nil else { return nil }
+                return direction == .down
+                    ? [.command, .control, .shift]
+                    : [.command, .control]
+            }
+        }
+
+        let title: String
+        let profileID: String
+        let actions: [Action]
+
+        var id: String { profileID }
+    }
+
+    let sections: [Section]
+
+    init(catalog: TerminalProfileCatalog) {
+        sections = catalog.profiles.map { profile in
+            Section(
+                title: profile.displayName,
+                profileID: profile.id,
+                actions: [
+                    Section.Action(
+                        title: "Split Right",
+                        direction: .right,
+                        shortcutKey: profile.shortcutKey
+                    ),
+                    Section.Action(
+                        title: "Split Down",
+                        direction: .down,
+                        shortcutKey: profile.shortcutKey
+                    ),
+                ]
+            )
+        }
+    }
+}
+
+@MainActor
 struct ToasttyCommandMenus: Commands {
     private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     let focusedPanelCommandController: FocusedPanelCommandController
+    let terminalProfilesMenuController: TerminalProfilesMenuController
     let supportsConfigurationReload: Bool
     let reloadConfiguration: () -> Void
-    let installShellIntegration: () -> Void
 
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
 
@@ -24,6 +113,10 @@ struct ToasttyCommandMenus: Commands {
 
     private var commandWorkspace: WorkspaceState? {
         commandSelection?.workspace
+    }
+
+    private var terminalProfileMenuModel: TerminalProfileMenuModel {
+        TerminalProfileMenuModel(catalog: terminalProfileStore.catalog)
     }
 
     var body: some Commands {
@@ -52,17 +145,13 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Menu("Split Right With Profile") {
-                profileMenuItems(direction: .right)
-            }
-
-            Menu("Split Down With Profile") {
-                profileMenuItems(direction: .down)
-            }
+            terminalProfileMenuItems()
 
             Divider()
 
-            Button("Install Shell Integration…", action: installShellIntegration)
+            Button("Install Shell Integration…") {
+                terminalProfilesMenuController.installShellIntegration()
+            }
         }
 
         CommandMenu("View") {
@@ -159,33 +248,46 @@ struct ToasttyCommandMenus: Commands {
     }
 
     @ViewBuilder
-    private func profileMenuItems(direction: SlotSplitDirection) -> some View {
-        if terminalProfileStore.catalog.profiles.isEmpty {
+    private func terminalProfileMenuItems() -> some View {
+        if terminalProfileMenuModel.sections.isEmpty {
             Button("No Terminal Profiles Configured") {}
                 .disabled(true)
         } else {
-            ForEach(terminalProfileStore.catalog.profiles, id: \.id) { profile in
-                let button = Button(profile.displayName) {
-                    guard let workspaceID = commandWorkspace?.id else { return }
-                    store.send(
-                        .splitFocusedSlotInDirectionWithTerminalProfile(
-                            workspaceID: workspaceID,
-                            direction: direction,
-                            profileBinding: TerminalProfileBinding(profileID: profile.id)
-                        )
-                    )
-                }
-                .disabled(commandWorkspace == nil)
-
-                if let shortcutKey = profile.shortcutKey {
-                    let modifiers: EventModifiers = direction == .down
-                        ? [.command, .control, .shift]
-                        : [.command, .control]
-                    button.keyboardShortcut(KeyEquivalent(shortcutKey), modifiers: modifiers)
-                } else {
-                    button
+            ForEach(terminalProfileMenuModel.sections) { section in
+                Menu(section.title) {
+                    ForEach(section.actions) { action in
+                        terminalProfileActionButton(section: section, action: action)
+                    }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func terminalProfileActionButton(
+        section: TerminalProfileMenuModel.Section,
+        action: TerminalProfileMenuModel.Section.Action
+    ) -> some View {
+        let button = Button(action.title) {
+            _ = terminalProfilesMenuController.splitFocusedSlot(
+                profileID: section.profileID,
+                direction: action.direction,
+                preferredWindowID: focusedWindowID
+            )
+        }
+        .disabled(
+            terminalProfilesMenuController.canSplitFocusedSlotWithTerminalProfile(
+                preferredWindowID: focusedWindowID
+            ) == false
+        )
+
+        if let shortcutKey = action.shortcutKey {
+            button.keyboardShortcut(
+                KeyEquivalent(shortcutKey),
+                modifiers: action.shortcutModifiers ?? []
+            )
+        } else {
+            button
         }
     }
 

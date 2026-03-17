@@ -256,6 +256,45 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(rebuiltFileMenu.delegate === bridge)
     }
 
+    func testTerminalProfilesMenuControllerSplitsFocusedSlotWithProfileBinding() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let controller = TerminalProfilesMenuController(
+            store: store,
+            installShellIntegrationAction: {}
+        )
+
+        XCTAssertTrue(controller.canSplitFocusedSlotWithTerminalProfile(preferredWindowID: nil))
+        XCTAssertTrue(
+            controller.splitFocusedSlot(
+                profileID: "zmx",
+                direction: .right,
+                preferredWindowID: nil
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let profiledPanels = workspace.panels.values.compactMap { panel -> TerminalPanelState? in
+            guard case .terminal(let terminalState) = panel else { return nil }
+            return terminalState.profileBinding?.profileID == "zmx" ? terminalState : nil
+        }
+
+        XCTAssertEqual(profiledPanels.count, 1)
+    }
+
+    func testTerminalProfilesMenuControllerRunsShellIntegrationAction() {
+        var didInstallShellIntegration = false
+        let controller = TerminalProfilesMenuController(
+            store: AppStore(state: .bootstrap(), persistTerminalFontPreference: false),
+            installShellIntegrationAction: {
+                didInstallShellIntegration = true
+            }
+        )
+
+        controller.installShellIntegration()
+        XCTAssertTrue(didInstallShellIntegration)
+    }
+
     private func makeSplitWorkspaceFixture() throws -> SplitWorkspaceFixture {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
