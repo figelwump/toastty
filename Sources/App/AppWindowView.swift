@@ -62,7 +62,11 @@ struct AppWindowView: View {
         .buttonStyle(.plain)
         .frame(width: 22, height: 22)
         .contentShape(Rectangle())
-        .help(sidebarVisible ? "Hide Workspaces (⇧⌘W)" : "Show Workspaces (⇧⌘W)")
+        .help(
+            ToasttyKeyboardShortcuts.toggleSidebar.helpText(
+                sidebarVisible ? "Hide Workspaces" : "Show Workspaces"
+            )
+        )
         .padding(.leading, 76)
         .padding(.top, 5)
         .accessibilityIdentifier("titlebar.toggle.sidebar")

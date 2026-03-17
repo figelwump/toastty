@@ -65,6 +65,7 @@ struct WorkspaceView: View {
                 split(orientation: .horizontal)
             }
             .disabled(isFocusedPanelModeActive)
+            .help(ToasttyKeyboardShortcuts.splitHorizontal.helpText("Split Horizontally"))
             .accessibilityIdentifier("workspace.split.horizontal")
 
             topBarFlashButton(title: "Split V", icon: { highlighted in
@@ -73,6 +74,7 @@ struct WorkspaceView: View {
                 split(orientation: .vertical)
             }
             .disabled(isFocusedPanelModeActive)
+            .help(ToasttyKeyboardShortcuts.splitVertical.helpText("Split Vertically"))
             .accessibilityIdentifier("workspace.split.vertical")
         }
         .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
@@ -194,6 +196,11 @@ struct WorkspaceView: View {
             guard let workspaceID = selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         }
+        .help(
+            ToasttyKeyboardShortcuts.toggleFocusedPanel.helpText(
+                isOn ? "Restore Layout" : "Focus Panel"
+            )
+        )
         .accessibilityIdentifier(identifier)
     }
 

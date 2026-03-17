@@ -159,7 +159,10 @@ struct ToasttyCommandMenus: Commands {
             Button(sidebarVisibleForCommand ? "Hide Sidebar" : "Show Sidebar") {
                 toggleSidebarFromCommandSelection()
             }
-            .keyboardShortcut("w", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.toggleSidebar.key,
+                modifiers: ToasttyKeyboardShortcuts.toggleSidebar.modifiers
+            )
             .disabled(commandSelection == nil)
         }
 
@@ -167,13 +170,19 @@ struct ToasttyCommandMenus: Commands {
             Button("New Workspace") {
                 store.createWorkspaceFromCommand(preferredWindowID: focusedWindowID)
             }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newWorkspace.key,
+                modifiers: ToasttyKeyboardShortcuts.newWorkspace.modifiers
+            )
             .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: focusedWindowID) == false)
 
             Button("Rename Workspace") {
                 store.renameSelectedWorkspaceFromCommand(preferredWindowID: focusedWindowID)
             }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.renameWorkspace.key,
+                modifiers: ToasttyKeyboardShortcuts.renameWorkspace.modifiers
+            )
             .disabled(commandWorkspace == nil)
 
             Button("Close Panel") {
@@ -184,7 +193,10 @@ struct ToasttyCommandMenus: Commands {
             Button(commandWorkspace?.focusedPanelModeActive == true ? "Restore Layout" : "Focus Panel") {
                 toggleFocusedPanelFromCommandSelection()
             }
-            .keyboardShortcut("f", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.toggleFocusedPanel.key,
+                modifiers: ToasttyKeyboardShortcuts.toggleFocusedPanel.modifiers
+            )
             .disabled(commandWorkspace == nil)
 
             if let window = commandWindow {
@@ -209,25 +221,37 @@ struct ToasttyCommandMenus: Commands {
                 guard let workspaceID = commandWorkspace?.id else { return }
                 store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
             }
-            .keyboardShortcut("d", modifiers: [.command])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.splitHorizontal.key,
+                modifiers: ToasttyKeyboardShortcuts.splitHorizontal.modifiers
+            )
 
             Button("Split Down") {
                 guard let workspaceID = commandWorkspace?.id else { return }
                 store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .down))
             }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.splitVertical.key,
+                modifiers: ToasttyKeyboardShortcuts.splitVertical.modifiers
+            )
 
             Button("Focus Previous Pane") {
                 guard let workspaceID = commandWorkspace?.id else { return }
                 store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
             }
-            .keyboardShortcut("[", modifiers: [.command])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.focusPreviousPane.key,
+                modifiers: ToasttyKeyboardShortcuts.focusPreviousPane.modifiers
+            )
 
             Button("Focus Next Pane") {
                 guard let workspaceID = commandWorkspace?.id else { return }
                 store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
             }
-            .keyboardShortcut("]", modifiers: [.command])
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.focusNextPane.key,
+                modifiers: ToasttyKeyboardShortcuts.focusNextPane.modifiers
+            )
         }
         #endif
     }

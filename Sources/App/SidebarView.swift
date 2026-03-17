@@ -125,10 +125,11 @@ struct SidebarView: View {
             }
         }
         .contextMenu {
-            Button("Rename") {
+            Button(ToasttyKeyboardShortcuts.renameWorkspace.menuTitle("Rename Workspace")) {
                 beginWorkspaceRename(workspace)
             }
-            Button("Close", role: .destructive) {
+
+            Button("Close workspace", role: .destructive) {
                 requestWorkspaceClose(workspaceID: workspaceID)
             }
         }

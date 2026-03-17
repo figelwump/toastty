@@ -1,0 +1,89 @@
+import SwiftUI
+
+struct ToasttyKeyboardShortcut: Equatable {
+    let key: KeyEquivalent
+    let modifiers: EventModifiers
+
+    init(
+        _ key: KeyEquivalent,
+        modifiers: EventModifiers
+    ) {
+        self.key = key
+        self.modifiers = modifiers
+    }
+
+    var symbolLabel: String {
+        "\(modifiers.symbolLabel)\(String(key.character).uppercased())"
+    }
+
+    func helpText(_ title: String) -> String {
+        "\(title) (\(symbolLabel))"
+    }
+
+    // AppKit uses a tab-delimited trailing column for menu shortcut text.
+    // This shows the hint in contextual menus without rebinding the shortcut.
+    func menuTitle(_ title: String) -> String {
+        "\(title)\t\(symbolLabel)"
+    }
+}
+
+private extension EventModifiers {
+    var symbolLabel: String {
+        var label = ""
+        if contains(.control) {
+            label += "⌃"
+        }
+        if contains(.option) {
+            label += "⌥"
+        }
+        if contains(.shift) {
+            label += "⇧"
+        }
+        if contains(.command) {
+            label += "⌘"
+        }
+        return label
+    }
+}
+
+enum ToasttyKeyboardShortcuts {
+    static let toggleSidebar = ToasttyKeyboardShortcut(
+        "w",
+        modifiers: [.command, .shift]
+    )
+
+    static let newWorkspace = ToasttyKeyboardShortcut(
+        "n",
+        modifiers: [.command, .shift]
+    )
+
+    static let renameWorkspace = ToasttyKeyboardShortcut(
+        "e",
+        modifiers: [.command, .shift]
+    )
+
+    static let toggleFocusedPanel = ToasttyKeyboardShortcut(
+        "f",
+        modifiers: [.command, .shift]
+    )
+
+    static let splitHorizontal = ToasttyKeyboardShortcut(
+        "d",
+        modifiers: [.command]
+    )
+
+    static let splitVertical = ToasttyKeyboardShortcut(
+        "d",
+        modifiers: [.command, .shift]
+    )
+
+    static let focusPreviousPane = ToasttyKeyboardShortcut(
+        "[",
+        modifiers: [.command]
+    )
+
+    static let focusNextPane = ToasttyKeyboardShortcut(
+        "]",
+        modifiers: [.command]
+    )
+}
