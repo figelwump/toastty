@@ -487,15 +487,13 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             resolvedFocused = hostView.resolvedGhosttySurfaceFocusState()
             hostView.syncSurfaceFocus(
                 resolvedFocused,
-                reason: "controller_update",
-                refreshOnChange: false
+                reason: "controller_update"
             )
         } else {
             resolvedFocused = false
             hostView.syncSurfaceFocus(
                 false,
-                reason: "controller_update",
-                refreshOnChange: false
+                reason: "controller_update"
             )
         }
 

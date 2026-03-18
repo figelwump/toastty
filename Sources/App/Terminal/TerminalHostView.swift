@@ -180,8 +180,7 @@ final class TerminalHostView: NSView {
         if result {
             syncSurfaceFocus(
                 false,
-                reason: "resign_first_responder",
-                refreshOnChange: true
+                reason: "resign_first_responder"
             )
         }
         #endif
@@ -283,8 +282,7 @@ final class TerminalHostView: NSView {
     @discardableResult
     func syncSurfaceFocus(
         _ focused: Bool,
-        reason: String,
-        refreshOnChange: Bool = false
+        reason: String
     ) -> Bool {
         guard let ghosttySurface else {
             lastAppliedSurfaceFocus = nil
@@ -294,12 +292,11 @@ final class TerminalHostView: NSView {
             return false
         }
         lastAppliedSurfaceFocus = focused
+        // Focus transitions intentionally avoid forcing an immediate surface
+        // refresh here. Doing so injects extra render work into active typing
+        // flows and regressed cursor stability in terminal UIs like Codex and
+        // Claude Code. Ghostty's normal render loop picks up the focus change.
         ghostty_surface_set_focus(ghosttySurface, focused)
-        let shouldRefresh = refreshOnChange && isEffectivelyVisible
-        if shouldRefresh {
-            GhosttyRuntimeManager.shared.requestImmediateTick()
-            ghostty_surface_refresh(ghosttySurface)
-        }
         ToasttyLog.debug(
             "Updated Ghostty surface focus",
             category: .ghostty,
@@ -307,7 +304,6 @@ final class TerminalHostView: NSView {
                 "focused": focused ? "true" : "false",
                 "reason": reason,
                 "host_effectively_visible": isEffectivelyVisible ? "true" : "false",
-                "refresh_requested": shouldRefresh ? "true" : "false",
             ]
         )
         return true
@@ -356,8 +352,7 @@ final class TerminalHostView: NSView {
         let focused = resolvedGhosttySurfaceFocusState()
         syncSurfaceFocus(
             focused,
-            reason: "application_state",
-            refreshOnChange: true
+            reason: "application_state"
         )
         return focused
     }
@@ -448,16 +443,14 @@ final class TerminalHostView: NSView {
                 window?.firstResponder === self
             syncSurfaceFocus(
                 shouldRestoreFocus,
-                reason: "visibility_restoration",
-                refreshOnChange: false
+                reason: "visibility_restoration"
             )
             GhosttyRuntimeManager.shared.requestImmediateTick()
             ghostty_surface_refresh(ghosttySurface)
         } else {
             syncSurfaceFocus(
                 false,
-                reason: "visibility_hidden",
-                refreshOnChange: false
+                reason: "visibility_hidden"
             )
         }
 
