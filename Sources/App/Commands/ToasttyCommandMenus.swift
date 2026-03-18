@@ -218,7 +218,7 @@ struct ToasttyCommandMenus: Commands {
                     Button(title) {
                         selectWorkspaceFromShortcutIndex(index)
                     }
-                    .keyboardShortcut(Self.workspaceShortcutKeys[index], modifiers: [.command])
+                    .keyboardShortcut(Self.workspaceShortcutKeys[index], modifiers: [.option])
                     .disabled(workspace == nil)
                 }
             }

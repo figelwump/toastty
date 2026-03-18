@@ -37,9 +37,9 @@ enum TerminalShortcutConfig {
     static func shortcutLabel(for number: Int) -> String? {
         switch number {
         case 1 ... 9:
-            return "⌥\(number)"
+            return "⌥⇧\(number)"
         case 10:
-            return "⌥0"
+            return "⌥⇧0"
         default:
             return nil
         }

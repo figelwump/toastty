@@ -247,7 +247,7 @@ private final class FocusTerminalShortcutInterceptor {
 
     private static func shortcutNumber(for event: NSEvent) -> Int? {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags == [.option] else { return nil }
+        guard flags == [.option, .shift] else { return nil }
         return TerminalShortcutConfig.shortcutNumber(from: event.charactersIgnoringModifiers)
     }
 
