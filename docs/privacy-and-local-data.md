@@ -14,10 +14,17 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Structured JSON logs.
 - By default, `~/Library/Logs/Toastty/toastty.previous.log`
   - Rotated copy of the previous log file once the active log exceeds 5 MB.
+- When runtime isolation is enabled for an isolated dev/test run, either by setting `TOASTTY_RUNTIME_HOME` directly or by setting `TOASTTY_DEV_WORKTREE_ROOT` and letting Toastty derive a runtime home under `artifacts/dev-runs/`:
+  - `<runtime-home>/config`
+  - `<runtime-home>/terminal-profiles.toml`
+  - `<runtime-home>/workspace-layout-profiles.json`
+  - `<runtime-home>/logs/toastty.log`
+  - `<runtime-home>/instance.json`
+  - a dedicated `UserDefaults` suite derived from that runtime-home path
 
 ## What Toastty creates temporarily
 
-- Automation mode creates a per-user Unix domain socket under `$TMPDIR/toastty-$UID/events-v1.sock` unless `TOASTTY_SOCKET_PATH` overrides it.
+- Automation mode creates a Unix domain socket at a short temp path derived from the active runtime home when runtime isolation is enabled, otherwise under `$TMPDIR/toastty-$UID/events-v1.sock`, unless `TOASTTY_SOCKET_PATH` overrides it.
 - Automation runs can also write screenshots and state dumps under `artifacts/` or the directory provided via `--artifacts-dir`.
 
 ## Permissions and platform integrations

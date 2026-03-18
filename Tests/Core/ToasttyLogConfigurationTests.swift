@@ -35,4 +35,25 @@ struct ToasttyLogConfigurationTests {
 
         #expect(config.filePath == nil)
     }
+
+    @Test
+    func runtimeHomeChangesDefaultLogPath() {
+        let config = ToasttyLogConfiguration.fromEnvironment(
+            ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-log-tests/runtime-home"],
+            homeDirectoryPath: "/tmp/ignored-home"
+        )
+
+        #expect(config.filePath == "/tmp/toastty-runtime-log-tests/runtime-home/logs/toastty.log")
+    }
+
+    @Test
+    func worktreeRootChangesDefaultLogPath() {
+        let config = ToasttyLogConfiguration.fromEnvironment(
+            ["TOASTTY_DEV_WORKTREE_ROOT": "/tmp/toastty-runtime-log-tests/worktrees/main"],
+            homeDirectoryPath: "/tmp/ignored-home"
+        )
+
+        #expect(config.filePath?.contains("/tmp/toastty-runtime-log-tests/worktrees/main/artifacts/dev-runs/worktree-main-") == true)
+        #expect(config.filePath?.hasSuffix("/runtime-home/logs/toastty.log") == true)
+    }
 }

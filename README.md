@@ -37,11 +37,10 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 ```bash
 git clone https://github.com/figelwump/toastty.git
 cd toastty
-tuist install
-tuist generate
+./scripts/dev/bootstrap-worktree.sh
 ```
 
-`Project.swift` is the source of truth. The generated `toastty.xcworkspace` is not committed, so re-run `tuist generate` after manifest or file-layout changes. Re-run `tuist install` whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes.
+`Project.swift` is the source of truth. `./scripts/dev/bootstrap-worktree.sh` runs `tuist install` and `tuist generate --no-open`, and in a fresh linked worktree it also reuses local Ghostty xcframeworks from another Toastty worktree when available. The generated `toastty.xcworkspace` is not committed, so rerun the bootstrap script or `tuist generate` after manifest or file-layout changes. Re-run `tuist install` whenever `Tuist/Package.swift` or `Tuist/Package.resolved` changes.
 
 ### 2. Install sv
 
@@ -73,14 +72,13 @@ For the recommended upstream Ghostty build command, release note guidance, see [
 After installing, regenerate:
 
 ```bash
-tuist install
-tuist generate
+./scripts/dev/bootstrap-worktree.sh
 ```
 
 To build without Ghostty:
 
 ```bash
-TUIST_DISABLE_GHOSTTY=1 tuist generate
+TUIST_DISABLE_GHOSTTY=1 ./scripts/dev/bootstrap-worktree.sh
 ```
 
 ### 4. Build
@@ -106,6 +104,12 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
+
+# Foreground-capable remote GUI validation
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/gui-validate.sh \
+  --scope working-tree \
+  --validation-command 'peekaboo menu list --pid "$TOASTTY_PID" --json | tee "$TOASTTY_ARTIFACTS_DIR/peekaboo-menu.json"'
 ```
 
 ### 6. Build a signed release DMG
@@ -167,6 +171,12 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 
 Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
 
+For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, the default automation socket, and UI-managed defaults inside that runtime home instead of using the shared user locations. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`.
+
+For a fresh linked worktree that should reuse the Ghostty artifact from another Toastty checkout, run `./scripts/dev/bootstrap-worktree.sh` once before building. The helper creates symlinks back to the source worktree's `Dependencies/GhosttyKit*` artifacts, so rebuilding or replacing Ghostty there immediately affects linked worktrees. The smoke, shortcut-trace, and check helpers already do this automatically.
+
+For local runtime validation, start with `./scripts/automation/smoke-ui.sh` when the change is covered by socket automation. It restores the previously frontmost app after Toastty reaches automation readiness, so it is the least disruptive default local path. When validation needs Peekaboo, real menus, real shortcuts, or any other foreground-capable UI interaction, prefer `TOASTTY_REMOTE_GUI_HOST=... ./scripts/remote/gui-validate.sh ...` so the focus-stealing work runs on a dedicated remote Mac instead of the current desktop. The remote Mac must be awake, unlocked, and logged into the GUI session where Peekaboo is permitted.
+
 Today that means:
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any UI override
@@ -187,7 +197,7 @@ Toastty can launch named terminal profiles from:
 - `Terminal > <Profile Name> > Split Right`
 - `Terminal > <Profile Name> > Split Down`
 
-Profiles live in `~/.toastty/terminal-profiles.toml`. Each profile defines the
+Profiles live in `~/.toastty/terminal-profiles.toml` for ordinary runs, or in the active runtime home's `terminal-profiles.toml` when runtime isolation is enabled. Each profile defines the
 menu label, the panel-header badge label, and a startup command that Toastty sends
 to the pane's login shell when the pane is created or restored.
 
@@ -227,6 +237,7 @@ Use `Terminal > Install Shell Integration…`.
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:
 
+- Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
 - `zsh` → `~/.zshrc`
 - `bash` → `~/.bash_profile` by default, or an existing `~/.profile`
 
@@ -379,17 +390,17 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 
 Toastty is local-first. The app itself does not send usage analytics or cloud telemetry.
 
-- Toastty writes user-authored config to `~/.toastty/config`.
-- Toastty stores UI-managed font overrides in the app's `UserDefaults` domain.
-- Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`.
-- By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`.
+- Toastty writes user-authored config to `~/.toastty/config`, or to `TOASTTY_RUNTIME_HOME/config` for isolated dev/test runs. `TOASTTY_DEV_WORKTREE_ROOT` also enables that isolated runtime-home behavior by deriving a stable sandbox under the worktree.
+- Toastty stores UI-managed font overrides in the app's `UserDefaults` domain, or in an isolated defaults suite derived from the active runtime home.
+- Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`, or to the active runtime home's `workspace-layout-profiles.json` when runtime isolation is enabled.
+- By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`, or to the active runtime home's `logs/toastty.log` when runtime isolation is enabled.
 - Toastty requests macOS notification permission the first time it tries to deliver a desktop notification.
 
 More detail is in [docs/privacy-and-local-data.md](docs/privacy-and-local-data.md).
 
 ## Logging
 
-By default, logs are written to `~/Library/Logs/Toastty/toastty.log` in JSON format and rotate to `toastty.previous.log` at 5 MB.
+By default, logs are written to `~/Library/Logs/Toastty/toastty.log` in JSON format and rotate to `toastty.previous.log` at 5 MB. When runtime isolation is enabled, the default log moves to the active runtime home's `logs/toastty.log`.
 
 ```bash
 tail -f ~/Library/Logs/Toastty/toastty.log | jq

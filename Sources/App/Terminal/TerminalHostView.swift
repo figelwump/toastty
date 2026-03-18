@@ -31,7 +31,6 @@ final class TerminalHostView: NSView {
     private weak var observedWindow: NSWindow?
     private var windowOcclusionObserver: NSObjectProtocol?
     private var lastKnownSurfaceVisibility: Bool?
-    private var lastLoggedVisibilityTraceSnapshot: VisibilityTraceSnapshot?
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
@@ -41,6 +40,8 @@ final class TerminalHostView: NSView {
     ]
 
     #if TOASTTY_HAS_GHOSTTY_KIT
+    private var lastLoggedVisibilityTraceSnapshot: VisibilityTraceSnapshot?
+
     enum GhosttyMouseCursorStyle: Equatable {
         case `default`
         case grabIdle

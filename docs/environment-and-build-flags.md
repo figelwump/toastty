@@ -39,6 +39,8 @@ These flags are read by the app itself when Toastty launches normally.
 
 | Flag | Default | Effect |
 |---|---|---|
+| `TOASTTY_RUNTIME_HOME` | unset | Enables an isolated runtime sandbox for dev/test runs. When set, Toastty stores config, workspace layouts, terminal profiles, the default log path, `instance.json`, and UI-managed defaults under this directory instead of the shared user locations. The default automation socket path is also derived from this sandbox identity, but lives under the system temp directory to stay within Unix socket path-length limits. Explicit overrides such as `TOASTTY_TERMINAL_PROFILES_PATH`, `TOASTTY_LOG_FILE`, and `TOASTTY_SOCKET_PATH` still win. |
+| `TOASTTY_DEV_WORKTREE_ROOT` | unset | Enables a stable worktree-derived runtime sandbox for manual dev/debug/test runs when `TOASTTY_RUNTIME_HOME` is not set. Toastty derives `artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` under this worktree root, then uses that runtime home for config, workspace layouts, terminal profiles, logs, `instance.json`, and UI-managed defaults. Use this for repeated manual launches from one worktree. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set it to `$(SRCROOT)`. |
 | `TOASTTY_GHOSTTY_CONFIG_PATH` | unset | Overrides Ghostty config loading with a specific config file. Must be an absolute path or use a `~/` prefix. Toastty loads that file and then Ghostty recursive includes. |
 | `TOASTTY_GHOSTTY_PARSE_CLI_ARGS` | unset | If enabled, lets Ghostty parse Toastty's process arguments as Ghostty CLI args before config finalization. Off by default. |
 | `GHOSTTY_RESOURCES_DIR` | auto-detected | Advanced override for Ghostty shell-integration resources. If unset or invalid, Toastty tries to auto-detect a usable resources directory. |
@@ -49,7 +51,7 @@ These flags are read by the app itself when Toastty launches normally.
 | Flag | Default | Effect |
 |---|---|---|
 | `TOASTTY_LOG_LEVEL` | `info` | Minimum log level. Supported values: `debug`, `info`, `warning`, `error`. |
-| `TOASTTY_LOG_FILE` | `~/Library/Logs/Toastty/toastty.log` | Overrides the log file path. Set to `none` to disable the file sink entirely. |
+| `TOASTTY_LOG_FILE` | `~/Library/Logs/Toastty/toastty.log` or `<runtime-home>/logs/toastty.log` | Overrides the log file path. Set to `none` to disable the file sink entirely. |
 | `TOASTTY_LOG_STDERR` | unset | Mirrors logs to stderr in addition to the file sink. |
 | `TOASTTY_LOG_DISABLE` | unset | Disables Toastty logging entirely. |
 | `TOASTTY_LOG_TO_FILE` | unset | Legacy compatibility toggle that forces the default file sink when `TOASTTY_LOG_FILE` is otherwise unset. Prefer `TOASTTY_LOG_FILE`. |
@@ -59,7 +61,7 @@ These flags are read by the app itself when Toastty launches normally.
 | Variable | Effect |
 |---|---|
 | `XDG_CONFIG_HOME` | Used when looking for `ghostty/config` before falling back to `~/.config/ghostty/config`. |
-| `TMPDIR` | Used for the default automation socket location when `TOASTTY_SOCKET_PATH` is not set. |
+| `TMPDIR` | Used for the default automation socket location when `TOASTTY_SOCKET_PATH` is unset. With runtime isolation enabled, Toastty derives a short temp socket path from the sandbox identity. |
 
 ## Launch Arguments
 
@@ -86,7 +88,7 @@ These flags are consumed by the app when it is launched in automation mode.
 | `TOASTTY_RUN_ID` | `default` | Automation run identifier when `--run-id` is not passed. |
 | `TOASTTY_FIXTURE` | unset | Automation fixture name when `--fixture` is not passed. |
 | `TOASTTY_ARTIFACTS_DIR` | temp directory derived from run ID | Directory for automation artifacts when `--artifacts-dir` is not passed. |
-| `TOASTTY_SOCKET_PATH` | `$TMPDIR/toastty-$UID/events-v1.sock` | Unix socket path for automation requests when `--socket-path` is not passed. |
+| `TOASTTY_SOCKET_PATH` | temp socket path derived from the active runtime home, otherwise `$TMPDIR/toastty-$UID/events-v1.sock` | Unix socket path for automation requests when `--socket-path` is not passed. |
 | `TOASTTY_DISABLE_ANIMATIONS` | unset | Disables animations in automation mode. |
 | `TOASTTY_FIXED_LOCALE` | unset | Forces a fixed locale identifier for automation determinism. |
 | `TOASTTY_FIXED_TIMEZONE` | unset | Forces a fixed time zone identifier for automation determinism. |
@@ -101,9 +103,12 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 |---|---|---|
 | `RUN_ID` | timestamped `smoke-*` value | Run ID passed through to the app. |
 | `FIXTURE` | `split-workspace` | Fixture passed through to the app. |
-| `DERIVED_PATH` | `Derived` | DerivedData output path for the build. |
-| `ARTIFACTS_DIR` | `artifacts/automation` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `$TMPDIR/toastty-$UID/events-v1.sock` | Socket path passed through to the app. |
+| `TOASTTY_SMOKE_RESTORE_FRONT_APP` | `1` | When set to a truthy value such as `1`, `true`, `yes`, or `on`, the script restores the previously frontmost app after Toastty reaches automation readiness so local smoke runs minimize focus theft. Set it to `0` or leave it unset only if you want the default behavior suppressed explicitly. |
+| `DEV_RUN_ROOT` | `artifacts/dev-runs/<RUN_ID>` | Root directory for this smoke run's isolated derived data, runtime home, socket, and artifacts. |
+| `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
+| `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
+| `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/shortcut-trace.sh`
@@ -112,18 +117,38 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 |---|---|---|
 | `RUN_ID` | timestamped `shortcut-trace-*` value | Run ID passed through to the app. |
 | `FIXTURE` | `split-workspace` | Fixture passed through to the app. |
-| `DERIVED_PATH` | `Derived` | DerivedData output path for the build. |
-| `ARTIFACTS_DIR` | `artifacts/automation` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `$TMPDIR/toastty-$UID/events-v1.sock` | Socket path passed through to the app. |
+| `DEV_RUN_ROOT` | `artifacts/dev-runs/<RUN_ID>` | Root directory for this trace run's isolated derived data, runtime home, socket, and artifacts. |
+| `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
+| `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
+| `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
 | `ARCH` | current machine arch | Build destination architecture. |
 | `CLICK_X` | `760` | Screen-space click X coordinate used to focus a panel before driving shortcuts. |
 | `CLICK_Y` | `420` | Screen-space click Y coordinate used to focus a panel before driving shortcuts. |
-| `TRACE_LOG_PATH` | `~/Library/Logs/Toastty/shortcut-trace.log` | Log path used for the trace run. |
+| `TRACE_LOG_PATH` | `<TOASTTY_RUNTIME_HOME>/logs/shortcut-trace.log` | Log path used for the trace run. |
 | `SPLIT_KEY_CODE` | `2` | Key code used for split tracing. |
 | `FOCUS_NEXT_KEY_CODE` | `30` | Key code used for next-pane focus tracing. |
 | `FOCUS_PREVIOUS_KEY_CODE` | `33` | Key code used for previous-pane focus tracing. |
 | `RESIZE_KEY_CODE` | `124` | Key code used for split resize tracing. |
 | `EQUALIZE_KEY_CODE` | `24` | Key code used for equalize tracing. |
+
+### `scripts/remote/gui-validate.sh`
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOASTTY_REMOTE_GUI_HOST` | unset | Required SSH host for the dedicated remote GUI validation machine. |
+| `TOASTTY_REMOTE_GUI_REPO_ROOT` | local Toastty repo path | Absolute Toastty repo path on the remote host. The wrapper creates disposable remote git worktrees from this repo. |
+| `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
+| `RUN_LABEL` | timestamped `gui-validate-*` value | Optional stable label for the remote validation run. Prefer `--run-label` for explicit CLI usage. |
+
+CLI notes:
+
+- `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
+- `--scope head` exports the current checked-out commit without uncommitted changes.
+- `--scope ref --ref <rev>` exports an explicit local git ref.
+- `--validation-command` runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
+- If `--validation-command` is omitted, the wrapper defaults to `peekaboo menu list --pid "$TOASTTY_PID" --json`.
+- The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions.
 
 ### `scripts/release/release.sh`
 
@@ -221,8 +246,7 @@ These names appear in the repo but are not intended as public runtime knobs.
 Build without Ghostty:
 
 ```bash
-tuist install
-TUIST_DISABLE_GHOSTTY=1 tuist generate
+TUIST_DISABLE_GHOSTTY=1 ./scripts/dev/bootstrap-worktree.sh
 ```
 
 Install the local Debug Ghostty artifact:
@@ -233,6 +257,12 @@ GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework \
 ./scripts/ghostty/install-local-xcframework.sh
 ```
 
+Bootstrap a fresh linked worktree so it can reuse Ghostty artifacts from another Toastty checkout:
+
+```bash
+./scripts/dev/bootstrap-worktree.sh
+```
+
 Launch Toastty with a custom Ghostty config and stderr logging:
 
 ```bash
@@ -240,6 +270,16 @@ TOASTTY_GHOSTTY_CONFIG_PATH=~/.config/ghostty/config \
 TOASTTY_LOG_STDERR=1 \
 /path/to/Toastty.app/Contents/MacOS/Toastty
 ```
+
+Launch an isolated dev/test run:
+
+```bash
+TOASTTY_DEV_WORKTREE_ROOT="$PWD" \
+TOASTTY_LOG_STDERR=1 \
+/path/to/Toastty.app/Contents/MacOS/Toastty
+```
+
+For Tuist-generated Xcode Run actions, `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)` is already present in the `ToasttyApp` and `ToasttyApp-Release` schemes.
 
 Launch Toastty in automation mode:
 

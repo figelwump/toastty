@@ -15,11 +15,23 @@ enum ToasttyConfigStore {
 
     static func load(
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> ToasttyConfig {
-        let primaryURL = configFileURL(homeDirectoryPath: homeDirectoryPath)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
+        let primaryURL = configFileURL(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
         if let contents = try? String(contentsOf: primaryURL, encoding: .utf8) {
             return parse(contents: contents)
+        }
+
+        guard runtimePaths.isRuntimeHomeEnabled == false else {
+            return ToasttyConfig()
         }
 
         let legacyURL = legacyConfigFileURL(homeDirectoryPath: homeDirectoryPath)
@@ -37,12 +49,22 @@ enum ToasttyConfigStore {
 
     static func ensureTemplateExists(
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) throws {
-        let configURL = configFileURL(homeDirectoryPath: homeDirectoryPath)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
+        let configURL = configFileURL(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
         let legacyURL = legacyConfigFileURL(homeDirectoryPath: homeDirectoryPath)
-        guard fileManager.fileExists(atPath: configURL.path) == false,
-              fileManager.fileExists(atPath: legacyURL.path) == false else {
+        guard fileManager.fileExists(atPath: configURL.path) == false else {
+            return
+        }
+        guard runtimePaths.isRuntimeHomeEnabled || fileManager.fileExists(atPath: legacyURL.path) == false else {
             return
         }
 
@@ -95,7 +117,7 @@ enum ToasttyConfigStore {
             "# terminal-font-size = 13",
             "",
             "# default-terminal-profile uses a profile ID from",
-            "# ~/.toastty/terminal-profiles.toml for new terminals only,",
+            "# terminal-profiles.toml for new terminals only,",
             "# including ordinary split shortcuts like Cmd+D and Cmd+Shift+D.",
             "# Existing terminals keep their current profiles.",
             "# default-terminal-profile = \"zmx\"",
@@ -232,10 +254,14 @@ enum ToasttyConfigStore {
         }
     }
 
-    static func configFileURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {
-        URL(filePath: homeDirectoryPath)
-            .appending(path: configDirectoryName, directoryHint: .isDirectory)
-            .appending(path: configFileName, directoryHint: .notDirectory)
+    static func configFileURL(
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        ).configFileURL
     }
 
     private static func legacyConfigFileURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {
