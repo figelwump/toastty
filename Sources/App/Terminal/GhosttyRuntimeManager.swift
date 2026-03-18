@@ -344,37 +344,16 @@ private func ghosttyCloseSurfaceCallback(userdata: UnsafeMutableRawPointer?, con
 
     let managerHandle = UInt(bitPattern: userdata)
     let callbackThread = Thread.isMainThread ? "main" : "background"
-
-    if Thread.isMainThread {
-        MainActor.assumeIsolated {
-            handleGhosttyCloseSurfaceRequestOnMain(
-                managerHandle: managerHandle,
-                confirmed: confirmed,
-                callbackThread: callbackThread
-            )
-        }
-        return
-    }
-
-    let semaphore = DispatchSemaphore(value: 0)
-    DispatchQueue.main.async {
-        MainActor.assumeIsolated {
-            handleGhosttyCloseSurfaceRequestOnMain(
-                managerHandle: managerHandle,
-                confirmed: confirmed,
-                callbackThread: callbackThread
-            )
-        }
-        semaphore.signal()
-    }
-
-    guard semaphore.wait(timeout: .now() + .milliseconds(250)) == .success else {
-        ToasttyLog.warning(
-            "Ghostty close-surface callback timed out waiting for main queue",
-            category: .ghostty,
-            metadata: ["thread": callbackThread]
+    // Ghostty's embedded close-surface callback is fire-and-forget (void), so
+    // we can defer to the next main-actor turn. That lets Ghostty finish
+    // unwinding Surface.close/childExited before Toastty invalidates the host
+    // controller and frees the surface.
+    Task { @MainActor in
+        handleGhosttyCloseSurfaceRequestOnMain(
+            managerHandle: managerHandle,
+            confirmed: confirmed,
+            callbackThread: callbackThread
         )
-        return
     }
 }
 
@@ -795,7 +774,11 @@ final class GhosttyRuntimeManager {
     private static let ghosttyParseCLIArgsEnvironmentKey = "TOASTTY_GHOSTTY_PARSE_CLI_ARGS"
     private static let ghosttyResourcesDirectoryEnvironmentKey = "GHOSTTY_RESOURCES_DIR"
 
-    weak var actionHandler: (any GhosttyRuntimeActionHandling)?
+    // This is intentionally strong. TerminalRuntimeRegistry is installed once
+    // from ToasttyApp as app-lifetime state, and it does not retain the
+    // manager back. Avoid weak storage here because deferred close callbacks
+    // hit weak-side-table failures while loading the handler.
+    var actionHandler: (any GhosttyRuntimeActionHandling)?
 
     private var app: ghostty_app_t?
     private var config: ghostty_config_t?
