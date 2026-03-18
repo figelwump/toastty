@@ -39,12 +39,15 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var closeTransitionViewportDeferralArmed = false
     private var closeTransitionViewportUpdatePending = false
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
+    private var latestScrollbarState: TerminalScrollbarState?
+    private var focusedPanelViewportBottomAlignmentPending = false
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
     private let requiredStableViewportResumePasses = 2
     private let requiredAutomationInputStabilityInterval: TimeInterval = 0.5
+    private static let scrollToBottomBindingAction = "scroll_to_bottom"
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -508,6 +511,11 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let presentationChanged = presentationSignature != lastPresentationSignature
         lastPresentationSignature = presentationSignature
 
+        let didApplyFocusedPanelViewportBottomAlignment = applyFocusedPanelViewportBottomAlignmentIfNeeded(
+            on: ghosttySurface,
+            logicalWidth: logicalWidth,
+            logicalHeight: logicalHeight
+        )
         if hostVisible && (resumedFromViewportDeferral || presentationChanged) {
             requestImmediateSurfaceRefresh(
                 ghosttySurface,
@@ -518,6 +526,19 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                     "logical_height": String(logicalHeight),
                     "pixel_width": String(pixelWidth),
                     "pixel_height": String(pixelHeight),
+                ]
+            )
+        }
+        if didApplyFocusedPanelViewportBottomAlignment {
+            requestImmediateSurfaceRefresh(
+                ghosttySurface,
+                reason: "focused_panel_viewport_bottom_alignment",
+                extra: [
+                    "logical_width": String(logicalWidth),
+                    "logical_height": String(logicalHeight),
+                    "scrollbar_total": latestScrollbarState.map { String($0.total) } ?? "nil",
+                    "scrollbar_offset": latestScrollbarState.map { String($0.offset) } ?? "nil",
+                    "scrollbar_visible_length": latestScrollbarState.map { String($0.visibleLength) } ?? "nil",
                 ]
             )
         }
@@ -565,6 +586,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         closeTransitionViewportReplayTask = nil
         closeTransitionViewportDeferralArmed = false
         closeTransitionViewportUpdatePending = false
+        latestScrollbarState = nil
+        focusedPanelViewportBottomAlignmentPending = false
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -1087,6 +1110,26 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         }
         ToasttyLog.debug(message, category: .ghostty, metadata: metadata)
     }
+
+    func updateScrollbarState(_ state: TerminalScrollbarState) {
+        latestScrollbarState = state
+    }
+
+    var currentScrollbarState: TerminalScrollbarState? {
+        latestScrollbarState
+    }
+
+    func armFocusedPanelViewportBottomAlignmentIfNeeded() {
+        guard latestScrollbarState?.isPinnedToBottom == true else {
+            focusedPanelViewportBottomAlignmentPending = false
+            return
+        }
+        focusedPanelViewportBottomAlignmentPending = true
+    }
+
+    var isFocusedPanelViewportBottomAlignmentPending: Bool {
+        focusedPanelViewportBottomAlignmentPending
+    }
     #endif
 }
 
@@ -1301,6 +1344,33 @@ extension TerminalSurfaceController {
             backingScaleFactor: backingScaleFactor,
             attachment: attachment
         )
+    }
+
+    private func applyFocusedPanelViewportBottomAlignmentIfNeeded(
+        on surface: ghostty_surface_t,
+        logicalWidth: Int,
+        logicalHeight: Int
+    ) -> Bool {
+        guard focusedPanelViewportBottomAlignmentPending else {
+            return false
+        }
+        focusedPanelViewportBottomAlignmentPending = false
+        let handled = invokeGhosttyBindingAction(Self.scrollToBottomBindingAction, on: surface)
+        if handled {
+            ToasttyLog.debug(
+                "Aligned focused panel viewport to the terminal bottom after focus-mode toggle",
+                category: .ghostty,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "logical_width": String(logicalWidth),
+                    "logical_height": String(logicalHeight),
+                    "scrollbar_total": latestScrollbarState.map { String($0.total) } ?? "nil",
+                    "scrollbar_offset": latestScrollbarState.map { String($0.offset) } ?? "nil",
+                    "scrollbar_visible_length": latestScrollbarState.map { String($0.visibleLength) } ?? "nil",
+                ]
+            )
+        }
+        return handled
     }
 
     private func shouldDeferCloseTransitionViewportResize(

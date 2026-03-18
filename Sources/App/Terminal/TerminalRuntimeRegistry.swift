@@ -117,6 +117,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
                     panelIDs: panelIDs
                 )
             },
+            armFocusedPanelViewportBottomAlignment: { [weak self] workspaceID, panelID in
+                self?.runtimeStore.armFocusedPanelViewportBottomAlignment(
+                    workspaceID: workspaceID,
+                    panelID: panelID
+                )
+            },
             requestWorkspaceFocusRestore: { [weak self] workspaceID in
                 self?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
             }
@@ -532,6 +538,12 @@ extension TerminalRuntimeRegistry {
         runtimeStore.panelID(forSurfaceHandle: surfaceHandle)
     }
 
+    #if DEBUG
+    func registerSurfaceHandleForTesting(_ surfaceHandle: UInt, for panelID: UUID) {
+        runtimeStore.registerSurfaceHandleForTesting(surfaceHandle, for: panelID)
+    }
+    #endif
+
     func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
@@ -852,6 +864,18 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         return (resolvedPanelID, selection.workspaceID)
+    }
+
+    func handleScrollbarAction(
+        action: GhosttyRuntimeAction,
+        scrollbarState: TerminalScrollbarState,
+        state: AppState
+    ) -> Bool {
+        guard let resolution = resolveActionTarget(for: action, state: state) else {
+            return false
+        }
+        runtimeStore.updateScrollbarState(scrollbarState, for: resolution.panelID)
+        return true
     }
 
     func handleDesktopNotificationAction(

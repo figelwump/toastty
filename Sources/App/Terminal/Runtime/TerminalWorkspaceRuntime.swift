@@ -96,5 +96,19 @@ final class TerminalWorkspaceRuntime {
     func armCloseTransitionViewportDeferral(for panelIDs: Set<UUID>) {
         controllerStore.armCloseTransitionViewportDeferral(for: panelIDs)
     }
+
+    func updateScrollbarState(_ state: TerminalScrollbarState, for panelID: UUID) {
+        controllerStore.updateScrollbarState(state, for: panelID)
+    }
+
+    func armFocusedPanelViewportBottomAlignment(for panelID: UUID) {
+        controllerStore.armFocusedPanelViewportBottomAlignment(for: panelID)
+    }
+
+    #if DEBUG
+    func registerSurfaceHandleForTesting(_ surfaceHandle: UInt, for panelID: UUID) {
+        controllerStore.registerSurfaceHandleForTesting(surfaceHandle, for: panelID)
+    }
+    #endif
     #endif
 }

@@ -2,6 +2,7 @@
 @testable import ToasttyApp
 import CoreState
 import Foundation
+import GhosttyKit
 import XCTest
 
 final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
@@ -82,6 +83,32 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             XCTAssertTrue(store.selectedWorkspace?.focusedPanelModeActive ?? false)
             try StateValidator.validate(store.state)
         }
+    }
+
+    @MainActor
+    func testSurfaceTargetScrollbarActionUpdatesOwningControllerScrollbarState() throws {
+        let state = AppState.bootstrap()
+        let (store, registry) = makeStoreAndRegistry(state: state)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let controller = registry.controller(for: panelID, workspaceID: workspaceID, windowID: windowID)
+        registry.registerSurfaceHandleForTesting(0x5150, for: panelID)
+
+        let handled = registry.handleGhosttyRuntimeAction(
+            GhosttyRuntimeAction(
+                surfaceHandle: 0x5150,
+                intent: .scrollbar(
+                    TerminalScrollbarState(total: 100, offset: 75, visibleLength: 25)
+                )
+            )
+        )
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(
+            controller.currentScrollbarState,
+            TerminalScrollbarState(total: 100, offset: 75, visibleLength: 25)
+        )
     }
 
     func testAppTargetTitleMetadataActionUpdatesFocusedPanelWithoutChangingFocus() async throws {

@@ -13,19 +13,27 @@ final class TerminalActionRouter {
     }
 
     func handle(_ action: GhosttyRuntimeAction) -> Bool {
-        let state = store.state
+        let appState = store.state
+
+        if case .scrollbar(let scrollbarState) = action.intent {
+            return registry.handleScrollbarAction(
+                action: action,
+                scrollbarState: scrollbarState,
+                state: appState
+            )
+        }
 
         if case .desktopNotification(let title, let body) = action.intent {
             return registry.handleDesktopNotificationAction(
                 action: action,
                 title: title,
                 body: body,
-                state: state,
+                state: appState,
                 store: store
             )
         }
 
-        guard let resolution = registry.resolveActionTarget(for: action, state: state) else {
+        guard let resolution = registry.resolveActionTarget(for: action, state: appState) else {
             return false
         }
 
@@ -35,7 +43,7 @@ final class TerminalActionRouter {
                 action.intent,
                 workspaceID: resolution.workspaceID,
                 panelID: resolution.panelID,
-                state: state,
+                state: appState,
                 store: store
             )
 
@@ -88,6 +96,9 @@ final class TerminalActionRouter {
             handled = false
 
         case .desktopNotification:
+            handled = false
+
+        case .scrollbar:
             handled = false
         }
 

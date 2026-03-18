@@ -59,6 +59,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
                 )
             },
             armCloseTransitionViewportDeferral: { _, _ in },
+            armFocusedPanelViewportBottomAlignment: { _, _ in },
             requestWorkspaceFocusRestore: { _ in }
         )
         coordinator.bind(store: store)
@@ -105,6 +106,21 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         XCTAssertEqual(armedPanelIDSets, [liveTerminalPanelIDs(in: workspace)])
     }
 
+    func testBindArmsFocusedPanelViewportBottomAlignmentWhenSelectedWorkspaceFocusedModeToggles() throws {
+        var armedTargets: [(workspaceID: UUID, panelID: UUID)] = []
+        let fixture = try makeStoreActionFixture(
+            armFocusedPanelViewportBottomAlignment: { workspaceID, panelID in
+                armedTargets.append((workspaceID, panelID))
+            }
+        )
+
+        XCTAssertTrue(fixture.store.send(.toggleFocusedPanelMode(workspaceID: fixture.workspaceID)))
+
+        XCTAssertEqual(armedTargets.count, 1)
+        XCTAssertEqual(armedTargets.first?.workspaceID, fixture.workspaceID)
+        XCTAssertEqual(armedTargets.first?.panelID, fixture.sourcePanelID)
+    }
+
     func testBindRequestsFocusRestoreWhenSelectedWorkspaceFocusedModeToggles() throws {
         var restoredWorkspaceIDs: [UUID] = []
         let fixture = try makeStoreActionFixture(
@@ -134,6 +150,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
                 )
             },
             armCloseTransitionViewportDeferral: { _, _ in },
+            armFocusedPanelViewportBottomAlignment: { _, _ in },
             requestWorkspaceFocusRestore: { workspaceID in
                 restoredWorkspaceIDs.append(workspaceID)
             }
@@ -177,6 +194,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 @MainActor
 private func makeStoreActionFixture(
     armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void = { _, _ in },
+    armFocusedPanelViewportBottomAlignment: @escaping (UUID, UUID) -> Void = { _, _ in },
     requestWorkspaceFocusRestore: @escaping (UUID) -> Void = { _ in }
 ) throws -> (
     store: AppStore,
@@ -200,6 +218,7 @@ private func makeStoreActionFixture(
             )
         },
         armCloseTransitionViewportDeferral: armCloseTransitionViewportDeferral,
+        armFocusedPanelViewportBottomAlignment: armFocusedPanelViewportBottomAlignment,
         requestWorkspaceFocusRestore: requestWorkspaceFocusRestore
     )
     coordinator.bind(store: store)

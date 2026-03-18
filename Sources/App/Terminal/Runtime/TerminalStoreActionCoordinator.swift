@@ -9,17 +9,20 @@ final class TerminalStoreActionCoordinator {
     private let metadataService: TerminalMetadataService
     private let registerPendingSplitSourceIfNeeded: (UUID, AppState, AppState) -> Void
     private let armCloseTransitionViewportDeferral: (UUID, Set<UUID>) -> Void
+    private let armFocusedPanelViewportBottomAlignment: (UUID, UUID) -> Void
     private let requestWorkspaceFocusRestore: (UUID) -> Void
 
     init(
         metadataService: TerminalMetadataService,
         registerPendingSplitSourceIfNeeded: @escaping (UUID, AppState, AppState) -> Void,
         armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void,
+        armFocusedPanelViewportBottomAlignment: @escaping (UUID, UUID) -> Void,
         requestWorkspaceFocusRestore: @escaping (UUID) -> Void
     ) {
         self.metadataService = metadataService
         self.registerPendingSplitSourceIfNeeded = registerPendingSplitSourceIfNeeded
         self.armCloseTransitionViewportDeferral = armCloseTransitionViewportDeferral
+        self.armFocusedPanelViewportBottomAlignment = armFocusedPanelViewportBottomAlignment
         self.requestWorkspaceFocusRestore = requestWorkspaceFocusRestore
     }
 
@@ -74,6 +77,10 @@ final class TerminalStoreActionCoordinator {
                 nextState: nextState
             )
         case .toggleFocusedPanelMode(workspaceID: let workspaceID):
+            armFocusedPanelViewportBottomAlignmentIfNeeded(
+                workspaceID: workspaceID,
+                nextState: nextState
+            )
             scheduleFocusedPanelFocusRestoreIfNeeded(
                 workspaceID: workspaceID,
                 previousState: previousState,
@@ -121,6 +128,18 @@ final class TerminalStoreActionCoordinator {
         armCloseTransitionViewportDeferral(workspaceID, liveTerminalPanelIDs)
     }
 
+    private func armFocusedPanelViewportBottomAlignmentIfNeeded(
+        workspaceID: UUID,
+        nextState: AppState
+    ) {
+        guard nextState.selectedWorkspaceSelection()?.workspaceID == workspaceID,
+              let nextWorkspace = nextState.workspacesByID[workspaceID],
+              let panelID = Self.resolvedFocusedTerminalPanelID(in: nextWorkspace) else {
+            return
+        }
+        armFocusedPanelViewportBottomAlignment(workspaceID, panelID)
+    }
+
     private func scheduleFocusedPanelFocusRestoreIfNeeded(
         workspaceID: UUID,
         previousState: AppState,
@@ -151,6 +170,15 @@ final class TerminalStoreActionCoordinator {
         }
 
         return nil
+    }
+
+    private static func resolvedFocusedTerminalPanelID(in workspace: WorkspaceState) -> UUID? {
+        guard let panelID = resolvedActionPanelID(in: workspace),
+              let panelState = workspace.panels[panelID],
+              case .terminal = panelState else {
+            return nil
+        }
+        return panelID
     }
 
     private static func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
