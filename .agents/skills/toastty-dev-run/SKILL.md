@@ -26,8 +26,9 @@ Do not use this skill for release builds or pure unit-test work.
 5. Launch the app, then read `instance.json` from the runtime home before using `peekaboo`.
 6. Use the PID from `instance.json` for `peekaboo ... --pid <pid>`. Do not target Toastty by app name if a PID is available.
 7. Before any `peekaboo` call, confirm the PID from `instance.json` is still alive. If it is stale, relaunch instead of guessing.
-8. Inspect logs and runtime state inside the same runtime home you launched. Do not inspect shared `~/.toastty` data for an isolated run.
-9. Clean up only the sandbox you launched.
+8. Before any required local `peekaboo` interaction, run `peekaboo permissions --json`. If Accessibility is not granted, stop and ask the user to grant local Accessibility before continuing. Do not keep trying local `peekaboo` or improvise local screenshot/menu workarounds after a failed permissions preflight. If the user does not want to grant it locally, switch to the remote GUI path.
+9. Inspect logs and runtime state inside the same runtime home you launched. Do not inspect shared `~/.toastty` data for an isolated run.
+10. Clean up only the sandbox you launched.
 
 ## Validation planning
 
@@ -49,6 +50,7 @@ Then derive a short validation plan from that scope:
 Use the least disruptive path that still covers the change:
 
 - Local smoke: use `scripts/automation/smoke-ui.sh` first when socket automation covers the change. This is the default local path because it restores the previously frontmost app after Toastty reaches automation readiness.
+- Shortcut-hints smoke: use `scripts/automation/shortcut-hints-smoke.sh` when the change only needs a visual artifact for always-visible shortcut badges or hint text.
 - Local foreground: use a local isolated dev run plus Peekaboo only when you need direct inspection but the focus impact is acceptable.
 - Remote foreground: use `scripts/remote/gui-validate.sh` when the validation needs Peekaboo, real menus, real shortcuts, or any other foreground-capable UI interaction that would disrupt the current desktop.
 
@@ -123,6 +125,7 @@ Notes:
 ## Validation guidance
 
 - Use `scripts/automation/smoke-ui.sh` first when it covers the change.
+- Use `scripts/automation/shortcut-hints-smoke.sh` for visible shortcut-badge validation before considering `peekaboo`.
 - Use `scripts/automation/shortcut-trace.sh` only when you specifically need local real-shortcut tracing and the focus impact is acceptable.
 - Use `scripts/remote/gui-validate.sh` for remote Peekaboo-driven validation when focus stealing would be disruptive locally.
 - Use `peekaboo menu list --pid <pid> --json` for menu checks.

@@ -177,4 +177,5 @@ Recommended validation commands:
 ./scripts/automation/check.sh
 TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh
 ./scripts/automation/smoke-ui.sh
+./scripts/automation/shortcut-hints-smoke.sh
 ```

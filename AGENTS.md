@@ -30,8 +30,10 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 - Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
 - `scripts/automation/smoke-ui.sh` is the default local runtime-validation path when the change is covered by socket automation. It restores the previously frontmost app after Toastty reaches automation readiness, so prefer it before any foreground-only tooling.
+- `scripts/automation/shortcut-hints-smoke.sh` is the preferred local path for visual-only verification of workspace and panel shortcut badges or other always-visible shortcut hints. Use it before any `peekaboo` flow when a static screenshot artifact is enough.
 - For live UI validation of a running app instance, use `.agents/skills/toastty-dev-run/SKILL.md` together with the global `peekaboo` skill. Do not invent an ad-hoc launch flow when the skill applies.
 - Use `peekaboo` for menus, shortcuts, focus, window state, and visual inspection of a running Toastty instance. Do not use it for build verification, log inspection, or checks that automation/unit tests already cover.
+- Before any required local `peekaboo` flow, run `peekaboo permissions --json` and inspect Accessibility. If Accessibility is missing, stop and ask the user to grant it before continuing locally. Do not keep trying local `peekaboo` or invent ad-hoc screenshot/menu workarounds after that failure. If the user does not want to grant local Accessibility, switch to `scripts/remote/gui-validate.sh`.
 - If a validation flow would steal focus locally, prefer `TOASTTY_REMOTE_GUI_HOST=... ./scripts/remote/gui-validate.sh ...` so Peekaboo and shortcut-style checks run on the dedicated remote GUI machine instead of the current desktop.
 - For menu validation, target the exact built app instance by PID or full app bundle path. Multiple local `Toastty` builds may be running at once, and generic `osascript` checks can attach to the wrong process.
 - Prefer `peekaboo menu list --pid <pid> --json` for menu verification. It is more reliable than generic AppleScript enumeration for nested SwiftUI/AppKit menus.
@@ -67,11 +69,13 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 
 ## Automation Details
 - **`smoke-ui.sh`** — builds/runs app in automation mode, drives socket actions, emits screenshots/state dumps, and restores the previously frontmost app after Toastty is ready so local smoke runs minimize focus theft.
+- **`shortcut-hints-smoke.sh`** — builds/runs app in automation mode, captures a single screenshot focused on visible shortcut hints, emits a matching state dump, and restores the previously frontmost app after Toastty is ready. Use this for badge/hint verification before considering `peekaboo`.
 - **`shortcut-trace.sh`** — drives real keyboard shortcuts via AppKit and verifies split/focus/resize workflows.
   - Requires: Accessibility + Automation permissions, Ghostty-enabled build, `nc`, `osascript`, `uuidgen`.
   - Default focus coordinates: `CLICK_X=760`, `CLICK_Y=420` (override for your display layout).
 - **`gui-validate.sh`** — runs foreground-capable GUI validation on a remote macOS host over SSH, then copies the remote artifacts back locally.
 - **Smoke env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`
+- **Shortcut-hints env:** `RUN_ID`, `FIXTURE`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`, `TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP`
 - **Shortcut-trace env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`
 - **Remote GUI env:** `TOASTTY_REMOTE_GUI_HOST`, `TOASTTY_REMOTE_GUI_REPO_ROOT`, `TOASTTY_REMOTE_GUI_ROOT`
 - **Manual/Xcode env:** `TOASTTY_RUNTIME_HOME` or `TOASTTY_DEV_WORKTREE_ROOT`, plus `TOASTTY_SOCKET_PATH` if you need a specific socket path

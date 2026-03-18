@@ -111,6 +111,20 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
+### `scripts/automation/shortcut-hints-smoke.sh`
+
+| Variable | Default | Effect |
+|---|---|---|
+| `RUN_ID` | timestamped `shortcut-hints-smoke-*` value | Run ID passed through to the app. |
+| `FIXTURE` | `split-workspace` | Fixture passed through to the app before capturing the screenshot. |
+| `TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP` | `1` | When truthy, the script restores the previously frontmost app after Toastty reaches automation readiness so local screenshot runs minimize focus theft. |
+| `DEV_RUN_ROOT` | `artifacts/dev-runs/<RUN_ID>` | Root directory for this hint-smoke run's isolated derived data, runtime home, socket, and artifacts. |
+| `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
+| `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
+| `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
+| `ARCH` | current machine arch | Build destination architecture. |
+
 ### `scripts/automation/shortcut-trace.sh`
 
 | Variable | Default | Effect |
@@ -131,6 +145,11 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `FOCUS_PREVIOUS_KEY_CODE` | `33` | Key code used for previous-pane focus tracing. |
 | `RESIZE_KEY_CODE` | `124` | Key code used for split resize tracing. |
 | `EQUALIZE_KEY_CODE` | `24` | Key code used for equalize tracing. |
+
+Local permissions note:
+
+- `scripts/automation/shortcut-trace.sh` requires local Accessibility permission because it drives real keyboard shortcuts with `osascript`.
+- `peekaboo` workflows also require local Accessibility for interaction. Run `peekaboo permissions --json` first, and if Accessibility is missing, stop and ask the user to grant it before continuing locally.
 
 ### `scripts/remote/gui-validate.sh`
 

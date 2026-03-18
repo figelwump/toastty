@@ -102,6 +102,9 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 # Smoke UI automation
 ./scripts/automation/smoke-ui.sh
 
+# Shortcut hint screenshot smoke
+./scripts/automation/shortcut-hints-smoke.sh
+
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
 
@@ -175,7 +178,7 @@ For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-ho
 
 For a fresh linked worktree that should reuse the Ghostty artifact from another Toastty checkout, run `./scripts/dev/bootstrap-worktree.sh` once before building. The helper creates symlinks back to the source worktree's `Dependencies/GhosttyKit*` artifacts, so rebuilding or replacing Ghostty there immediately affects linked worktrees. The smoke, shortcut-trace, and check helpers already do this automatically.
 
-For local runtime validation, start with `./scripts/automation/smoke-ui.sh` when the change is covered by socket automation. It restores the previously frontmost app after Toastty reaches automation readiness, so it is the least disruptive default local path. When validation needs Peekaboo, real menus, real shortcuts, or any other foreground-capable UI interaction, prefer `TOASTTY_REMOTE_GUI_HOST=... ./scripts/remote/gui-validate.sh ...` so the focus-stealing work runs on a dedicated remote Mac instead of the current desktop. The remote Mac must be awake, unlocked, and logged into the GUI session where Peekaboo is permitted.
+For local runtime validation, start with `./scripts/automation/smoke-ui.sh` when the change is covered by socket automation. Use `./scripts/automation/shortcut-hints-smoke.sh` when you only need a screenshot artifact for always-visible shortcut badges or hint text. When validation truly needs local Peekaboo, run `peekaboo permissions --json` first and stop for the user to grant Accessibility if it is missing. If the user does not want to grant local Accessibility, or if the validation needs real menus, real shortcuts, or any other foreground-capable UI interaction, prefer `TOASTTY_REMOTE_GUI_HOST=... ./scripts/remote/gui-validate.sh ...` so the focus-stealing work runs on a dedicated remote Mac instead of the current desktop. The remote Mac must be awake, unlocked, and logged into the GUI session where Peekaboo is permitted.
 
 Today that means:
 
