@@ -179,7 +179,12 @@ send_equalize_shortcut() {
 
 send_workspace_shortcut() {
   local index="$1"
-  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {command down}"
+  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {option down}"
+}
+
+send_panel_focus_shortcut() {
+  local index="$1"
+  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {option down, shift down}"
 }
 
 send_close_shortcut() {
@@ -600,7 +605,7 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" || "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" != "$WORKSPACE_SWITCH_FIRST_WORKSPACE_ID" ]]; then
-  echo "error: workspace-switch regression did not select workspace 1 via Cmd+1" >&2
+  echo "error: workspace-switch regression did not select workspace 1 via Option+1" >&2
   echo "expected workspace ID: ${WORKSPACE_SWITCH_FIRST_WORKSPACE_ID}" >&2
   echo "observed workspace ID: ${WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID:-<missing>}" >&2
   echo "snapshot response: ${WORKSPACE_SWITCH_SELECTED_FIRST_SNAPSHOT}" >&2
@@ -623,7 +628,7 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" || "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" -lt "$EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT" ]]; then
-  echo "error: Cmd+D after workspace switch did not split the visible workspace" >&2
+  echo "error: Cmd+D after Option+1 workspace switch did not split the visible workspace" >&2
   echo "workspace 1 baseline slot count: ${WORKSPACE_SWITCH_FIRST_SLOT_COUNT}" >&2
   echo "expected workspace 1 slot count after split: ${EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT}" >&2
   echo "observed workspace 1 slot count: ${WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT:-<missing>}" >&2
@@ -643,7 +648,7 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" || "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" != "$WORKSPACE_SWITCH_SECOND_WORKSPACE_ID" ]]; then
-  echo "error: workspace-switch regression did not return to workspace 2 via Cmd+2" >&2
+  echo "error: workspace-switch regression did not return to workspace 2 via Option+2" >&2
   echo "expected workspace ID: ${WORKSPACE_SWITCH_SECOND_WORKSPACE_ID}" >&2
   echo "observed workspace ID: ${WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID:-<missing>}" >&2
   echo "snapshot response: ${WORKSPACE_SWITCH_SELECTED_SECOND_SNAPSHOT}" >&2
@@ -664,10 +669,84 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" || "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" != "$WORKSPACE_SWITCH_SECOND_SLOT_COUNT" ]]; then
-  echo "error: Cmd+D after workspace switch mutated the hidden workspace instead of the visible one" >&2
+  echo "error: Cmd+D after Option+2 workspace switch mutated the hidden workspace instead of the visible one" >&2
   echo "workspace 2 baseline slot count: ${WORKSPACE_SWITCH_SECOND_SLOT_COUNT}" >&2
   echo "observed workspace 2 slot count after returning: ${WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT:-<missing>}" >&2
   echo "snapshot response: ${WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+PANEL_FOCUS_BASELINE_SNAPSHOT=""
+PANEL_FOCUS_BASELINE_FIRST_PANEL_ID=""
+PANEL_FOCUS_BASELINE_SECOND_PANEL_ID=""
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_BASELINE_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_BASELINE_FIRST_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_BASELINE_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+  echo "error: missing baseline focused panel for panel-focus regression" >&2
+  echo "workspace snapshot response: ${PANEL_FOCUS_BASELINE_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.focus-slot.next"}' >/dev/null
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_BASELINE_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_BASELINE_SECOND_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_BASELINE_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" && -n "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" || -z "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+  echo "error: missing panel IDs for panel-focus regression" >&2
+  echo "workspace snapshot response: ${PANEL_FOCUS_BASELINE_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.focus-slot.previous"}' >/dev/null
+
+focus_app_terminal
+send_panel_focus_shortcut 2
+PANEL_FOCUS_SECOND_SNAPSHOT=""
+PANEL_FOCUS_SECOND_PANEL_ID=""
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_SECOND_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_SECOND_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_SECOND_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_SECOND_PANEL_ID" && "$PANEL_FOCUS_SECOND_PANEL_ID" == "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_SECOND_PANEL_ID" || "$PANEL_FOCUS_SECOND_PANEL_ID" != "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+  echo "error: panel-focus regression did not focus panel 2 via Option+Shift+2" >&2
+  echo "expected panel ID: ${PANEL_FOCUS_BASELINE_SECOND_PANEL_ID}" >&2
+  echo "observed panel ID: ${PANEL_FOCUS_SECOND_PANEL_ID:-<missing>}" >&2
+  echo "snapshot response: ${PANEL_FOCUS_SECOND_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_panel_focus_shortcut 1
+PANEL_FOCUS_FIRST_SNAPSHOT=""
+PANEL_FOCUS_FIRST_PANEL_ID=""
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_FIRST_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_FIRST_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_FIRST_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_FIRST_PANEL_ID" && "$PANEL_FOCUS_FIRST_PANEL_ID" == "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_FIRST_PANEL_ID" || "$PANEL_FOCUS_FIRST_PANEL_ID" != "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+  echo "error: panel-focus regression did not return to panel 1 via Option+Shift+1" >&2
+  echo "expected panel ID: ${PANEL_FOCUS_BASELINE_FIRST_PANEL_ID}" >&2
+  echo "observed panel ID: ${PANEL_FOCUS_FIRST_PANEL_ID:-<missing>}" >&2
+  echo "snapshot response: ${PANEL_FOCUS_FIRST_SNAPSHOT}" >&2
   exit 1
 fi
 
@@ -752,8 +831,12 @@ echo "workspace 1 ID: $WORKSPACE_SWITCH_FIRST_WORKSPACE_ID"
 echo "workspace 2 ID: $WORKSPACE_SWITCH_SECOND_WORKSPACE_ID"
 echo "workspace 1 baseline slot count: $WORKSPACE_SWITCH_FIRST_SLOT_COUNT"
 echo "workspace 2 baseline slot count: $WORKSPACE_SWITCH_SECOND_SLOT_COUNT"
-echo "workspace 1 slot count after Cmd+1 then Cmd+D: $WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT"
-echo "workspace 2 slot count after returning with Cmd+2: $WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT"
+echo "workspace 1 slot count after Option+1 then Cmd+D: $WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT"
+echo "workspace 2 slot count after returning with Option+2: $WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT"
+echo "panel 1 baseline ID: $PANEL_FOCUS_BASELINE_FIRST_PANEL_ID"
+echo "panel 2 baseline ID: $PANEL_FOCUS_BASELINE_SECOND_PANEL_ID"
+echo "focused panel after Option+Shift+2: $PANEL_FOCUS_SECOND_PANEL_ID"
+echo "focused panel after returning with Option+Shift+1: $PANEL_FOCUS_FIRST_PANEL_ID"
 echo "action close structure: $ACTION_CLOSE_STRUCTURE"
 echo "menu close structure: $MENU_CLOSE_STRUCTURE"
 echo "shortcut close structure: $SHORTCUT_CLOSE_STRUCTURE"

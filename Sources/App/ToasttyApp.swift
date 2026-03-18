@@ -224,18 +224,23 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 }
 
 @MainActor
-private final class FocusTerminalShortcutInterceptor {
+private final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
     nonisolated(unsafe) private var eventMonitor: Any?
+
+    private enum ShortcutAction {
+        case switchWorkspace(Int)
+        case focusPanel(Int)
+    }
 
     init(store: AppStore) {
         self.store = store
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            guard let shortcutNumber = Self.shortcutNumber(for: event) else { return event }
-            let didFocusPanel = self.focusTerminalPanel(shortcutNumber: shortcutNumber)
-            // If no panel is mapped to this shortcut, keep default key behavior.
-            return didFocusPanel ? nil : event
+            guard let action = Self.shortcutAction(for: event) else { return event }
+            let didHandleShortcut = self.handle(action)
+            // If no workspace or panel is mapped to this shortcut, keep default key behavior.
+            return didHandleShortcut ? nil : event
         }
     }
 
@@ -245,10 +250,36 @@ private final class FocusTerminalShortcutInterceptor {
         }
     }
 
-    private static func shortcutNumber(for event: NSEvent) -> Int? {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags == [.option, .shift] else { return nil }
-        return TerminalShortcutConfig.shortcutNumber(from: event.charactersIgnoringModifiers)
+    private static func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+        if let shortcutNumber = DisplayShortcutConfig.shortcutNumber(for: event, scope: .panelFocus) {
+            return .focusPanel(shortcutNumber)
+        }
+        if let shortcutNumber = DisplayShortcutConfig.shortcutNumber(for: event, scope: .workspaceSwitch) {
+            return .switchWorkspace(shortcutNumber)
+        }
+        return nil
+    }
+
+    private func handle(_ action: ShortcutAction) -> Bool {
+        switch action {
+        case .switchWorkspace(let shortcutNumber):
+            switchWorkspace(shortcutNumber: shortcutNumber)
+        case .focusPanel(let shortcutNumber):
+            focusTerminalPanel(shortcutNumber: shortcutNumber)
+        }
+    }
+
+    private func switchWorkspace(shortcutNumber: Int) -> Bool {
+        guard let store else { return false }
+        guard shortcutNumber > 0, shortcutNumber <= DisplayShortcutConfig.maxWorkspaceShortcutCount else {
+            return false
+        }
+        guard let window = store.selectedWindow else { return false }
+        let index = shortcutNumber - 1
+        guard window.workspaceIDs.indices.contains(index) else { return false }
+        let workspaceID = window.workspaceIDs[index]
+        guard store.state.workspacesByID[workspaceID] != nil else { return false }
+        return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
     }
 
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
@@ -335,7 +366,7 @@ struct ToasttyApp: App {
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let focusedPanelCommandController: FocusedPanelCommandController
-    private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
+    private let displayShortcutInterceptor: DisplayShortcutInterceptor
 
     init() {
         let processInfo = ProcessInfo.processInfo
@@ -409,7 +440,7 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             installShellIntegrationAction: ToasttyMenuActions.installShellIntegration
         )
-        focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
+        displayShortcutInterceptor = DisplayShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
         appWindowSceneCoordinator = AppWindowSceneCoordinator()

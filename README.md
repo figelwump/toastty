@@ -12,7 +12,7 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 
 ## Features
 
-- **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
+- **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, SSH, or other scripted environments from the menu, with a pill badge in each panel header
@@ -383,8 +383,8 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Ctrl+Arrow` | Resize split |
 | `Cmd+Ctrl+=` | Equalize splits |
-| `Cmd+1`–`Cmd+9` | Switch workspace |
-| `Option+1`–`Option+9` | Focus pane by position |
+| `Option+1`–`Option+9` | Switch workspace |
+| `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
 
 ## Privacy and Local State
 

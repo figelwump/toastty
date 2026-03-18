@@ -93,8 +93,6 @@ struct TerminalProfileMenuModel: Equatable {
 
 @MainActor
 struct ToasttyCommandMenus: Commands {
-    private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -210,15 +208,14 @@ struct ToasttyCommandMenus: Commands {
 
             if let window = commandWindow {
                 ForEach(
-                    Array(window.workspaceIDs.prefix(Self.workspaceShortcutKeys.count).enumerated()),
+                    Array(window.workspaceIDs.prefix(DisplayShortcutConfig.maxWorkspaceShortcutCount).enumerated()),
                     id: \.offset
                 ) { index, workspaceID in
                     let workspace = store.state.workspacesByID[workspaceID]
                     let title = workspace?.title ?? "Missing Workspace \(index + 1)"
-                    Button(title) {
+                    Button(DisplayShortcutConfig.workspaceSwitchMenuTitle(title, number: index + 1)) {
                         selectWorkspaceFromShortcutIndex(index)
                     }
-                    .keyboardShortcut(Self.workspaceShortcutKeys[index], modifiers: [.option])
                     .disabled(workspace == nil)
                 }
             }

@@ -124,7 +124,7 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState, isSelected: Bool) -> some View {
         let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
-            limit: TerminalShortcutConfig.maxShortcutCount
+            limit: DisplayShortcutConfig.maxPanelFocusShortcutCount
         )
         let renderedLayout = workspace.renderedLayout
         GeometryReader { geometry in
@@ -515,7 +515,7 @@ private struct PanelCardView: View {
     private var shortcutLabel: String? {
         guard case .terminal = panelState else { return nil }
         guard let shortcutNumber else { return nil }
-        return TerminalShortcutConfig.shortcutLabel(for: shortcutNumber)
+        return DisplayShortcutConfig.panelFocusShortcutLabel(for: shortcutNumber)
     }
 
     private var panelTitleFont: Font {
