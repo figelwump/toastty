@@ -290,6 +290,105 @@ ET.parse(appcast_path)
 PY
 }
 
+validate_published_appcast() {
+  local appcast_path="$1"
+  local expected_download_url="$2"
+
+  /usr/bin/python3 - "$appcast_path" "$TOASTTY_VERSION" "$TOASTTY_BUILD_NUMBER" "$expected_download_url" "$SPARKLE_ED_SIGNATURE" <<'PY'
+import pathlib
+import sys
+import xml.etree.ElementTree as ET
+
+SPARKLE_NS = "http://www.andymatuschak.org/xml-namespaces/sparkle"
+
+appcast_path = pathlib.Path(sys.argv[1])
+short_version = sys.argv[2]
+build_number = sys.argv[3]
+download_url = sys.argv[4]
+signature = sys.argv[5]
+
+
+def fail(message: str) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+
+try:
+    tree = ET.parse(appcast_path)
+except ET.ParseError as exc:
+    fail(f"appcast is malformed XML: {exc}")
+
+root = tree.getroot()
+channel = root.find("channel")
+if channel is None:
+    fail("appcast is missing <channel>")
+
+items = channel.findall("item")
+if not items:
+    fail("appcast contains no <item> entries")
+
+for item in items:
+    enclosure = item.find("enclosure")
+    if enclosure is None:
+        continue
+
+    if (
+        enclosure.get("url") == download_url
+        and enclosure.get(f"{{{SPARKLE_NS}}}version") == build_number
+        and enclosure.get(f"{{{SPARKLE_NS}}}shortVersionString") == short_version
+        and enclosure.get(f"{{{SPARKLE_NS}}}edSignature") == signature
+    ):
+        raise SystemExit(0)
+
+fail(
+    "appcast does not contain the expected published release item "
+    f"for version {short_version} ({build_number})"
+)
+PY
+}
+
+smoke_test_published_sparkle_feed() {
+  local release_download_url="https://github.com/$REPO/releases/download/$TAG/$SPARKLE_DMG_FILENAME"
+  local max_attempts=24
+  local retry_delay_seconds=5
+  local attempt=1
+  local appcast_path=""
+  local curl_stderr_path=""
+  local last_error="unknown failure"
+
+  [[ "$PUBLISH_MODE" == "publish" ]] || return 0
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    log "Skipping live Sparkle feed smoke check for dry run"
+    return 0
+  fi
+
+  appcast_path="$(mktemp /tmp/toastty-live-appcast.XXXXXX.xml)"
+  curl_stderr_path="$(mktemp /tmp/toastty-live-appcast-curl.XXXXXX.log)"
+
+  while (( attempt <= max_attempts )); do
+    if curl --fail --silent --show-error --location "$SPARKLE_FEED_URL" >"$appcast_path" 2>"$curl_stderr_path"; then
+      if last_error="$(validate_published_appcast "$appcast_path" "$release_download_url" 2>&1)"; then
+        log "Sparkle feed smoke check passed for $SPARKLE_FEED_URL"
+        rm -f "$appcast_path" "$curl_stderr_path"
+        return 0
+      fi
+    else
+      last_error="$(<"$curl_stderr_path")"
+    fi
+
+    if (( attempt < max_attempts )); then
+      log "Sparkle feed not ready yet (attempt $attempt/$max_attempts): $last_error"
+      sleep "$retry_delay_seconds"
+    fi
+
+    attempt=$((attempt + 1))
+  done
+
+  rm -f "$appcast_path" "$curl_stderr_path"
+  fail "Sparkle feed smoke check failed for $SPARKLE_FEED_URL after $max_attempts attempts: $last_error"
+}
+
 local_tag_commit() {
   git -C "$ROOT_DIR" rev-list -n1 "$1" 2>/dev/null || true
 }
@@ -606,6 +705,7 @@ fi
 require_command git
 require_command gh
 require_command base64
+require_command curl
 require_env TOASTTY_VERSION
 require_env TOASTTY_BUILD_NUMBER
 
@@ -626,3 +726,4 @@ fi
 create_tag_if_requested
 create_release
 publish_sparkle_appcast
+smoke_test_published_sparkle_feed
