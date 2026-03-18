@@ -581,6 +581,9 @@ private func ghosttyRunClipboardWorkOnMainThread(_ work: () -> Void) {
     DispatchQueue.main.sync(execute: work)
 }
 
+// Ghostty v1.3.1 expects this callback to report whether a request started,
+// while older builds treat it as a fire-and-forget void callback.
+@discardableResult
 private func ghosttyReadClipboardCallback(
     userdata: UnsafeMutableRawPointer?,
     location: ghostty_clipboard_e,
