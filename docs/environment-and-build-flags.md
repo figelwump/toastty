@@ -33,6 +33,8 @@ Run `tuist install` after cloning the repo and whenever `Tuist/Package.swift` or
 
 ## Runtime Environment
 
+For the runtime-home model, `instance.json`, and cleanup conventions, see [Runtime Sandboxing](runtime-sandboxing.md).
+
 These flags are read by the app itself when Toastty launches normally.
 
 ### Ghostty runtime and config
@@ -45,6 +47,7 @@ These flags are read by the app itself when Toastty launches normally.
 | `TOASTTY_GHOSTTY_PARSE_CLI_ARGS` | unset | If enabled, lets Ghostty parse Toastty's process arguments as Ghostty CLI args before config finalization. Off by default. |
 | `GHOSTTY_RESOURCES_DIR` | auto-detected | Advanced override for Ghostty shell-integration resources. If unset or invalid, Toastty tries to auto-detect a usable resources directory. |
 | `TOASTTY_LAYOUT_PROFILE` | display-derived profile ID | Overrides the workspace layout profile key used for saved layouts. Useful when you want deterministic layout persistence across machines or display changes. |
+| `TOASTTY_TERMINAL_PROFILES_PATH` | unset | Overrides the terminal profile catalog path. Supports absolute paths and `~/`-prefixed paths. When set, Toastty reads profiles from that file instead of `<runtime-home>/terminal-profiles.toml` or `~/.toastty/terminal-profiles.toml`. |
 
 ### Logging
 

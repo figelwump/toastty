@@ -15,10 +15,11 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
-- **Terminal profiles** — Launch named terminal setups such as `zmx`, SSH, or other scripted environments from the menu, with a pill badge in each panel header
+- **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts, with a pill badge in each panel header
 - **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, with UI changes remembered locally
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
+- **App updates** — Direct-distribution builds expose `Check for Updates...` through Sparkle
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
@@ -174,7 +175,7 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 
 Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
 
-For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, the default automation socket, and UI-managed defaults inside that runtime home instead of using the shared user locations. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`.
+For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, and UI-managed defaults inside that runtime home instead of using the shared user locations, and it derives the default automation socket from that sandbox identity. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`. For the full sandbox model, `instance.json`, and cleanup conventions, see [docs/runtime-sandboxing.md](docs/runtime-sandboxing.md).
 
 For a fresh linked worktree that should reuse the Ghostty artifact from another Toastty checkout, run `./scripts/dev/bootstrap-worktree.sh` once before building. The helper creates symlinks back to the source worktree's `Dependencies/GhosttyKit*` artifacts, so rebuilding or replacing Ghostty there immediately affects linked worktrees. The smoke, shortcut-trace, and check helpers already do this automatically.
 
@@ -195,21 +196,28 @@ default-terminal-profile = "zmx"
 
 ### Terminal profiles
 
+Terminal profiles are Toastty's way to turn a new pane into a named environment with predictable startup behavior, labeling, and optional split shortcuts. They can be used to:
+
+- open `Split Right` and `Split Down` actions from `Terminal > <Profile Name>`
+- bind optional `shortcutKey` values to `Cmd+Ctrl+<key>` and `Cmd+Ctrl+Shift+<key>` profile splits
+- restore the same profile binding after Toastty relaunches and workspace state is reloaded
+
 Toastty can launch named terminal profiles from:
 
 - `Terminal > <Profile Name> > Split Right`
 - `Terminal > <Profile Name> > Split Down`
 
-Profiles live in `~/.toastty/terminal-profiles.toml` for ordinary runs, or in the active runtime home's `terminal-profiles.toml` when runtime isolation is enabled. Each profile defines the
-menu label, the panel-header badge label, and a startup command that Toastty sends
-to the pane's login shell when the pane is created or restored.
+Profiles live in `~/.toastty/terminal-profiles.toml` for ordinary runs, or in the active runtime home's `terminal-profiles.toml` when runtime isolation is enabled. Set `TOASTTY_TERMINAL_PROFILES_PATH` if you want Toastty to load another file instead. Each profile defines the menu label, the panel-header badge label, a startup command that Toastty sends to the pane's login shell when the pane is created or restored, and an optional `shortcutKey`.
 
 ```toml
 [zmx]
 displayName = "ZMX"
 badge = "ZMX"
 startupCommand = "zmx attach toastty.$TOASTTY_PANEL_ID"
+shortcutKey = "z"
 ```
+
+The full schema, validation rules, and more examples are in [docs/terminal-profiles.md](docs/terminal-profiles.md).
 
 Toastty sets these environment variables for profiled panes:
 
@@ -378,7 +386,10 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 
 | Shortcut | Action |
 |---|---|
+| `Cmd+B` | Show or hide sidebar |
 | `Cmd+Shift+N` | New workspace |
+| `Cmd+Shift+E` | Rename workspace |
+| `Cmd+Shift+W` | Close workspace |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
@@ -422,6 +433,8 @@ Logs may contain local file paths, config paths, working directories, panel/work
 
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
 - [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
+- [Terminal Profiles](docs/terminal-profiles.md) — `terminal-profiles.toml` schema, shortcuts, and example profile setups
+- [Runtime Sandboxing](docs/runtime-sandboxing.md) — runtime-home strategies, `instance.json`, and cleanup guidance
 - [Privacy and Local Data](docs/privacy-and-local-data.md) — local files, permissions, sockets, logging, and Ghostty crash-reporting notes
 - [Socket Protocol](docs/socket-protocol.md) — v1.0 JSON-RPC automation protocol
 - [State Invariants](docs/state-invariants.md) — AppState correctness rules and validation
