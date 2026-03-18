@@ -69,13 +69,16 @@ final class FocusedPanelCommandController {
             arguments: processInfo.arguments,
             environment: processInfo.environment
         )
-        runtimeRegistry.setGhosttyCloseSurfaceHandler { [weak self] _ in
+        runtimeRegistry.setGhosttyCloseSurfaceHandler { [weak self] panelID, _ in
             guard let self else { return false }
             // Route Ghostty close requests through the same close path as Cmd+W
             // so exited panes skip confirmation while live panes keep prompts.
-            // Ghostty's local C header does not document the callback boolean,
-            // so preserve Toastty's existing close semantics here.
-            return self.closeFocusedPanel().consumesShortcut
+            // Ghostty's callback boolean does not override Toastty's own
+            // per-panel close confirmation assessment.
+            // The callback identifies a specific surface, so close that panel
+            // directly rather than whichever panel is focused after the async
+            // main-actor hop completes.
+            return self.closePanel(panelID: panelID).consumesShortcut
         }
     }
 
@@ -88,19 +91,33 @@ final class FocusedPanelCommandController {
 
     @discardableResult
     func closeFocusedPanel(in workspaceID: UUID? = nil) -> CloseResult {
-        guard let store else { return .notHandled }
-        let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
         guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID),
               let focusedPanelID = workspace.focusedPanelID else {
             return .notHandled
         }
-        let resolvedWorkspaceID = workspace.id
+        return closePanel(panelID: focusedPanelID, preferredWorkspaceID: workspace.id)
+    }
 
-        let focusedPanelState = workspace.panels[focusedPanelID]
+    @discardableResult
+    func closePanel(panelID: UUID) -> CloseResult {
+        closePanel(panelID: panelID, preferredWorkspaceID: nil)
+    }
+
+    @discardableResult
+    private func closePanel(panelID: UUID, preferredWorkspaceID: UUID?) -> CloseResult {
+        guard let store else { return .notHandled }
+        let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
+        guard let workspace = resolvedWorkspace(containing: panelID, preferredWorkspaceID: preferredWorkspaceID) else {
+            return .notHandled
+        }
+
+        let resolvedWorkspaceID = workspace.id
+        let closedPanelWasFocused = workspace.focusedPanelID == panelID
+        let panelState = workspace.panels[panelID]
         var didPromptForConfirmation = false
         if shouldConfirmClose,
-           focusedPanelState?.kind == .terminal {
-            if let closeAssessment = runtimeRegistry?.terminalCloseConfirmationAssessment(panelID: focusedPanelID) {
+           panelState?.kind == .terminal {
+            if let closeAssessment = runtimeRegistry?.terminalCloseConfirmationAssessment(panelID: panelID) {
                 if closeAssessment.requiresConfirmation {
                     didPromptForConfirmation = true
                     guard confirmRunningTerminalClose(closeAssessment) else {
@@ -113,23 +130,24 @@ final class FocusedPanelCommandController {
                     category: .terminal,
                     metadata: [
                         "workspace_id": resolvedWorkspaceID.uuidString,
-                        "panel_id": focusedPanelID.uuidString,
+                        "panel_id": panelID.uuidString,
                         "runtime_registry_available": runtimeRegistry == nil ? "false" : "true",
                     ]
                 )
             }
         }
 
-        let didClosePanel = store.send(.closePanel(panelID: focusedPanelID))
+        let didClosePanel = store.send(.closePanel(panelID: panelID))
         guard didClosePanel else {
             return didPromptForConfirmation ? .canceled : .notHandled
         }
 
-        // Only restore focus when the close originated from the visible workspace.
-        let shouldRestoreFocus = workspaceID == nil || selectedWorkspaceIDBeforeClose == resolvedWorkspaceID
+        // Only restore AppKit focus when the close removed the currently
+        // focused panel from the visible workspace.
+        let shouldRestoreFocus = closedPanelWasFocused && selectedWorkspaceIDBeforeClose == resolvedWorkspaceID
         guard shouldRestoreFocus,
               let runtimeRegistry,
-              let nextFocusedPanelID = store.selectedWorkspace?.focusedPanelID else {
+              let nextFocusedPanelID = store.state.workspacesByID[resolvedWorkspaceID]?.focusedPanelID else {
             return .closed
         }
 
@@ -146,6 +164,30 @@ final class FocusedPanelCommandController {
         let resolvedWorkspaceID = workspaceID ?? store.selectedWorkspace?.id
         guard let resolvedWorkspaceID else { return nil }
         return store.state.workspacesByID[resolvedWorkspaceID]
+    }
+
+    private func resolvedWorkspace(containing panelID: UUID, preferredWorkspaceID: UUID?) -> WorkspaceState? {
+        guard let store else { return nil }
+
+        if let preferredWorkspaceID,
+           let workspace = store.state.workspacesByID[preferredWorkspaceID],
+           workspace.panels[panelID] != nil,
+           workspace.layoutTree.slotContaining(panelID: panelID) != nil {
+            return workspace
+        }
+
+        for window in store.state.windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = store.state.workspacesByID[workspaceID],
+                      workspace.panels[panelID] != nil,
+                      workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
+                    continue
+                }
+                return workspace
+            }
+        }
+
+        return nil
     }
 
     private func confirmRunningTerminalClose(_ assessment: TerminalCloseConfirmationAssessment) -> Bool {

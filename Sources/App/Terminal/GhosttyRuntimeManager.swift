@@ -9,7 +9,7 @@ import UniformTypeIdentifiers
 @MainActor
 protocol GhosttyRuntimeActionHandling: AnyObject {
     func handleGhosttyRuntimeAction(_ action: GhosttyRuntimeAction) -> Bool
-    func handleGhosttyCloseSurfaceRequest(_ confirmed: Bool) -> Bool
+    func handleGhosttyCloseSurfaceRequest(surfaceHandle: UInt?, confirmed: Bool) -> Bool
 }
 
 struct GhosttyRuntimeAction: Sendable {
@@ -315,22 +315,30 @@ private func ghosttyWakeupCallback(_ userdata: UnsafeMutableRawPointer?) {
 
 @MainActor
 private func handleGhosttyCloseSurfaceRequestOnMain(
-    managerHandle: UInt,
+    hostViewHandle: UInt,
     confirmed: Bool,
     callbackThread: String
 ) {
-    guard let pointer = UnsafeMutableRawPointer(bitPattern: managerHandle) else {
-        ToasttyLog.warning("Ghostty close-surface callback missing manager pointer", category: .ghostty)
-        return
+    let manager = GhosttyRuntimeManager.shared
+    let surfaceHandle = manager.surfaceHandle(forHostViewHandle: hostViewHandle)
+    if surfaceHandle == nil {
+        ToasttyLog.debug(
+            "Ghostty close-surface callback arrived after surface association was released",
+            category: .ghostty,
+            metadata: [
+                "host_view_handle": String(hostViewHandle),
+                "thread": callbackThread,
+            ]
+        )
     }
-    let manager = Unmanaged<GhosttyRuntimeManager>.fromOpaque(pointer).takeUnretainedValue()
-    let handled = manager.routeCloseSurfaceRequest(confirmed: confirmed)
+    let handled = manager.routeCloseSurfaceRequest(surfaceHandle: surfaceHandle, confirmed: confirmed)
     ToasttyLog.debug(
         "Handled Ghostty close-surface request",
         category: .ghostty,
         metadata: [
             "confirmed": confirmed ? "true" : "false",
             "handled": handled ? "true" : "false",
+            "surface_handle": surfaceHandle.map(String.init) ?? "nil",
             "thread": callbackThread,
         ]
     )
@@ -342,15 +350,15 @@ private func ghosttyCloseSurfaceCallback(userdata: UnsafeMutableRawPointer?, con
         return
     }
 
-    let managerHandle = UInt(bitPattern: userdata)
+    let hostViewHandle = UInt(bitPattern: userdata)
     let callbackThread = Thread.isMainThread ? "main" : "background"
-    // Ghostty's embedded close-surface callback is fire-and-forget (void), so
-    // we can defer to the next main-actor turn. That lets Ghostty finish
-    // unwinding Surface.close/childExited before Toastty invalidates the host
-    // controller and frees the surface.
+    // Ghostty passes surface userdata here, which Toastty sets to the host
+    // view pointer. Defer close handling to the next main-queue turn so
+    // Ghostty can finish unwinding Surface.close/childExited before Toastty
+    // invalidates the controller and frees the surface.
     Task { @MainActor in
         handleGhosttyCloseSurfaceRequestOnMain(
-            managerHandle: managerHandle,
+            hostViewHandle: hostViewHandle,
             confirmed: confirmed,
             callbackThread: callbackThread
         )
@@ -542,9 +550,9 @@ private func ghosttyCompleteClipboardRead(
     }
 }
 
-private func ghosttyResolveClipboardSurfaceHandle(hostViewHandle: UInt) -> UInt? {
+private func ghosttyResolveSurfaceHandle(hostViewHandle: UInt) -> UInt? {
     MainActor.assumeIsolated {
-        GhosttyRuntimeManager.shared.clipboardSurfaceHandle(forHostViewHandle: hostViewHandle)
+        GhosttyRuntimeManager.shared.surfaceHandle(forHostViewHandle: hostViewHandle)
     }
 }
 
@@ -574,7 +582,7 @@ private func ghosttyReadClipboardCallback(
     // so the callback result is determined before returning to Ghostty.
     var didStartRequest = false
     ghosttyRunClipboardWorkOnMainThread {
-        let surfaceHandle = ghosttyResolveClipboardSurfaceHandle(hostViewHandle: hostViewHandle)
+        let surfaceHandle = ghosttyResolveSurfaceHandle(hostViewHandle: hostViewHandle)
         guard let surfaceHandle else { return }
         guard let surface = ghostty_surface_t(bitPattern: surfaceHandle) else { return }
         guard let pasteboard = ghosttyPasteboard(for: location) else { return }
@@ -605,7 +613,7 @@ private func ghosttyConfirmReadClipboardCallback(
     let content = string.map { String(cString: $0) } ?? ""
 
     ghosttyRunClipboardWorkOnMainThread {
-        let surfaceHandle = ghosttyResolveClipboardSurfaceHandle(hostViewHandle: hostViewHandle)
+        let surfaceHandle = ghosttyResolveSurfaceHandle(hostViewHandle: hostViewHandle)
         let surface = surfaceHandle.flatMap { ghostty_surface_t(bitPattern: $0) }
         ToasttyLog.info(
             "Auto-confirming Ghostty clipboard request because Toastty has no confirmation UI yet",
@@ -774,17 +782,13 @@ final class GhosttyRuntimeManager {
     private static let ghosttyParseCLIArgsEnvironmentKey = "TOASTTY_GHOSTTY_PARSE_CLI_ARGS"
     private static let ghosttyResourcesDirectoryEnvironmentKey = "GHOSTTY_RESOURCES_DIR"
 
-    // This is intentionally strong. TerminalRuntimeRegistry is installed once
-    // from ToasttyApp as app-lifetime state, and it does not retain the
-    // manager back. Avoid weak storage here because deferred close callbacks
-    // hit weak-side-table failures while loading the handler.
-    var actionHandler: (any GhosttyRuntimeActionHandling)?
+    weak var actionHandler: (any GhosttyRuntimeActionHandling)?
 
     private var app: ghostty_app_t?
     private var config: ghostty_config_t?
     private(set) var configuredTerminalFontPoints: Double?
     private var isTickScheduled = false
-    private var clipboardSurfaceHandleByHostViewHandle: [UInt: UInt] = [:]
+    private var surfaceHandleByHostViewHandle: [UInt: UInt] = [:]
     private var hostViewBySurfaceHandle: [UInt: WeakTerminalHostViewBox] = [:]
 
     private init() {
@@ -896,7 +900,7 @@ final class GhosttyRuntimeManager {
             }
         }
         if let surface {
-            registerClipboardSurface(surface, forHostView: hostView)
+            registerSurfaceAssociation(surface, forHostView: hostView)
             scheduleImmediateTick()
             return SurfaceCreationResult(
                 surface: surface,
@@ -907,26 +911,26 @@ final class GhosttyRuntimeManager {
         return nil
     }
 
-    func unregisterClipboardSurface(forHostView hostView: NSView, surface: ghostty_surface_t?) {
+    func unregisterSurfaceAssociation(forHostView hostView: NSView, surface: ghostty_surface_t?) {
         let hostViewHandle = UInt(bitPattern: Unmanaged.passUnretained(hostView).toOpaque())
-        guard let currentSurfaceHandle = clipboardSurfaceHandleByHostViewHandle[hostViewHandle] else {
+        guard let currentSurfaceHandle = surfaceHandleByHostViewHandle[hostViewHandle] else {
             return
         }
         if let surface, currentSurfaceHandle != UInt(bitPattern: surface) {
             return
         }
-        clipboardSurfaceHandleByHostViewHandle.removeValue(forKey: hostViewHandle)
+        surfaceHandleByHostViewHandle.removeValue(forKey: hostViewHandle)
         hostViewBySurfaceHandle.removeValue(forKey: currentSurfaceHandle)
     }
 
-    fileprivate func clipboardSurfaceHandle(forHostViewHandle hostViewHandle: UInt) -> UInt? {
-        clipboardSurfaceHandleByHostViewHandle[hostViewHandle]
+    fileprivate func surfaceHandle(forHostViewHandle hostViewHandle: UInt) -> UInt? {
+        surfaceHandleByHostViewHandle[hostViewHandle]
     }
 
-    private func registerClipboardSurface(_ surface: ghostty_surface_t, forHostView hostView: NSView) {
+    private func registerSurfaceAssociation(_ surface: ghostty_surface_t, forHostView hostView: NSView) {
         let hostViewHandle = UInt(bitPattern: Unmanaged.passUnretained(hostView).toOpaque())
         let surfaceHandle = UInt(bitPattern: surface)
-        clipboardSurfaceHandleByHostViewHandle[hostViewHandle] = surfaceHandle
+        surfaceHandleByHostViewHandle[hostViewHandle] = surfaceHandle
         if let terminalHostView = hostView as? TerminalHostView {
             hostViewBySurfaceHandle[surfaceHandle] = WeakTerminalHostViewBox(terminalHostView)
         }
@@ -1502,8 +1506,8 @@ final class GhosttyRuntimeManager {
         actionHandler?.handleGhosttyRuntimeAction(action) ?? false
     }
 
-    fileprivate func routeCloseSurfaceRequest(confirmed: Bool) -> Bool {
-        actionHandler?.handleGhosttyCloseSurfaceRequest(confirmed) ?? false
+    fileprivate func routeCloseSurfaceRequest(surfaceHandle: UInt?, confirmed: Bool) -> Bool {
+        actionHandler?.handleGhosttyCloseSurfaceRequest(surfaceHandle: surfaceHandle, confirmed: confirmed) ?? false
     }
 }
 #endif

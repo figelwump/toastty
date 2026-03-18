@@ -542,7 +542,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         #if TOASTTY_HAS_GHOSTTY_KIT
         terminalHostView.setGhosttySurface(nil)
         if let ghosttySurface {
-            ghosttyManager.unregisterClipboardSurface(forHostView: terminalHostView, surface: ghosttySurface)
+            ghosttyManager.unregisterSurfaceAssociation(forHostView: terminalHostView, surface: ghosttySurface)
             delegate?.unregisterSurfaceHandle(ghosttySurface, for: panelID)
             ghostty_surface_free(ghosttySurface)
             self.ghosttySurface = nil

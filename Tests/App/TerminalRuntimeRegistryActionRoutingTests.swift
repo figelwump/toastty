@@ -172,7 +172,7 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
         }
     }
 
-    func testCloseSurfaceRequestClosesFocusedExitedPanelViaFocusedPanelController() async throws {
+    func testClosePanelClosesExitedNonFocusedPanelWithoutConfirmation() async throws {
         try await MainActor.run {
             let state = try makeSplitState()
             let store = AppStore(state: state, persistTerminalFontPreference: false)
@@ -183,30 +183,86 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
                 runtimeRegistry: registry,
                 slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
             )
-            let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
-            let panelIDToClose = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+            let workspace = try XCTUnwrap(store.selectedWorkspace)
+            let panelIDToKeepFocused = try XCTUnwrap(workspace.focusedPanelID)
+            let panelIDToClose = try XCTUnwrap(workspace.panels.keys.first { $0 != panelIDToKeepFocused })
+            let workspaceID = workspace.id
             let panelCountBeforeClose = try XCTUnwrap(store.selectedWorkspace?.panels.count)
 
-            withExtendedLifetime(focusedPanelCommandController) {
-                XCTAssertTrue(
-                    registry.handleRuntimeMetadataAction(
-                        .showChildExited(exitCode: 0),
-                        workspaceID: workspaceID,
-                        panelID: panelIDToClose,
-                        state: store.state,
-                        store: store
-                    )
+            XCTAssertTrue(
+                registry.handleRuntimeMetadataAction(
+                    .showChildExited(exitCode: 0),
+                    workspaceID: workspaceID,
+                    panelID: panelIDToClose,
+                    state: store.state,
+                    store: store
                 )
+            )
 
-                let handled = registry.handleGhosttyCloseSurfaceRequest(false)
+            withExtendedLifetime(focusedPanelCommandController) {
+                let closeResult = focusedPanelCommandController.closePanel(panelID: panelIDToClose)
 
-                XCTAssertTrue(handled)
+                XCTAssertEqual(closeResult, .closed)
                 guard let workspaceAfterClose = try? XCTUnwrap(store.selectedWorkspace) else {
                     XCTFail("expected selected workspace after close")
                     return
                 }
                 XCTAssertEqual(workspaceAfterClose.panels.count, panelCountBeforeClose - 1)
                 XCTAssertNil(workspaceAfterClose.panels[panelIDToClose])
+                XCTAssertEqual(workspaceAfterClose.focusedPanelID, panelIDToKeepFocused)
+            }
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testClosePanelClosesExitedPanelInBackgroundWorkspaceWithoutChangingSelection() async throws {
+        try await MainActor.run {
+            var state = AppState.bootstrap()
+            let reducer = AppReducer()
+            let windowID = try XCTUnwrap(state.windows.first?.id)
+            let backgroundWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+
+            XCTAssertTrue(
+                reducer.send(.splitFocusedSlot(workspaceID: backgroundWorkspaceID, orientation: .horizontal), state: &state)
+            )
+            let backgroundWorkspacePanelToClose = try XCTUnwrap(
+                state.workspacesByID[backgroundWorkspaceID]?.focusedPanelID
+            )
+
+            XCTAssertTrue(reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state))
+            let selectedWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+            XCTAssertNotEqual(selectedWorkspaceID, backgroundWorkspaceID)
+            let selectedWorkspaceFocusedPanelID = try XCTUnwrap(
+                state.workspacesByID[selectedWorkspaceID]?.focusedPanelID
+            )
+
+            let store = AppStore(state: state, persistTerminalFontPreference: false)
+            let registry = TerminalRuntimeRegistry()
+            registry.bind(store: store)
+            let focusedPanelCommandController = FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: registry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            )
+
+            XCTAssertTrue(
+                registry.handleRuntimeMetadataAction(
+                    .showChildExited(exitCode: 0),
+                    workspaceID: backgroundWorkspaceID,
+                    panelID: backgroundWorkspacePanelToClose,
+                    state: store.state,
+                    store: store
+                )
+            )
+
+            withExtendedLifetime(focusedPanelCommandController) {
+                let closeResult = focusedPanelCommandController.closePanel(panelID: backgroundWorkspacePanelToClose)
+
+                XCTAssertEqual(closeResult, .closed)
+                let selectedWorkspaceAfterClose = try? XCTUnwrap(store.selectedWorkspace)
+                XCTAssertEqual(selectedWorkspaceAfterClose?.id, selectedWorkspaceID)
+                XCTAssertEqual(selectedWorkspaceAfterClose?.focusedPanelID, selectedWorkspaceFocusedPanelID)
+                XCTAssertNil(store.state.workspacesByID[backgroundWorkspaceID]?.panels[backgroundWorkspacePanelToClose])
             }
             try StateValidator.validate(store.state)
         }

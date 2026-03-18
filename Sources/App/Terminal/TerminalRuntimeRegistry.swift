@@ -67,7 +67,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var exitedTerminalPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
-    private var ghosttyCloseSurfaceHandler: ((Bool) -> Bool)?
+    private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -495,7 +495,7 @@ private extension TerminalRuntimeRegistry {
 }
 
 extension TerminalRuntimeRegistry {
-    func setGhosttyCloseSurfaceHandler(_ handler: @escaping (Bool) -> Bool) {
+    func setGhosttyCloseSurfaceHandler(_ handler: @escaping (UUID, Bool) -> Bool) {
         ghosttyCloseSurfaceHandler = handler
     }
 }
@@ -802,8 +802,23 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         actionRouter?.handle(action) ?? false
     }
 
-    func handleGhosttyCloseSurfaceRequest(_ confirmed: Bool) -> Bool {
-        ghosttyCloseSurfaceHandler?(confirmed) ?? false
+    func handleGhosttyCloseSurfaceRequest(surfaceHandle: UInt?, confirmed: Bool) -> Bool {
+        guard let surfaceHandle else {
+            ToasttyLog.warning(
+                "Ignoring Ghostty close-surface request without a resolved surface handle",
+                category: .ghostty
+            )
+            return false
+        }
+        guard let panelID = panelID(forSurfaceHandle: surfaceHandle) else {
+            ToasttyLog.warning(
+                "Ignoring Ghostty close-surface request for an unknown surface handle",
+                category: .ghostty,
+                metadata: ["surface_handle": String(surfaceHandle)]
+            )
+            return false
+        }
+        return ghosttyCloseSurfaceHandler?(panelID, confirmed) ?? false
     }
 
     func resolveActionTarget(
