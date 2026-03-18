@@ -19,7 +19,7 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 - **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, with UI changes remembered locally
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
-- **App updates** — Direct-distribution builds expose `Check for Updates...` through Sparkle
+- **App updates** — Direct-distribution builds expose `Toastty > Check for Updates...` through Sparkle
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
@@ -396,9 +396,11 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 | `Cmd+[` | Focus previous pane |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Ctrl+Arrow` | Resize split |
+| `Cmd+W` | Close panel |
 | `Cmd+Ctrl+=` | Equalize splits |
 | `Option+1`–`Option+9` | Switch workspace |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
+| `Cmd+Ctrl+<key>` / `Cmd+Ctrl+Shift+<key>` | Profile split right / split down (when profile defines `shortcutKey`) |
 
 ## Privacy and Local State
 

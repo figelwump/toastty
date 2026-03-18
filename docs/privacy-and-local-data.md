@@ -8,8 +8,12 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - User-authored Toastty defaults such as `terminal-font-size` and `default-terminal-profile`.
 - macOS `UserDefaults` for Toastty
   - UI-managed settings that Toastty remembers locally, currently the terminal font-size override changed from the menu.
+- `~/.toastty/terminal-profiles.toml`
+  - Named terminal profile definitions loaded at startup and on config reload.
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots.
+- `~/.toastty/shell/` (created by `Terminal > Install Shell Integration…`)
+  - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash).
 - By default, `~/Library/Logs/Toastty/toastty.log`
   - Structured JSON logs.
 - By default, `~/Library/Logs/Toastty/toastty.previous.log`
