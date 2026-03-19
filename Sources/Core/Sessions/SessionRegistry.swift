@@ -18,6 +18,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        usesSessionStatusNotifications: Bool = false,
         cwd: String?,
         repoRoot: String?,
         at now: Date
@@ -41,6 +42,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            usesSessionStatusNotifications: usesSessionStatusNotifications,
             repoRoot: repoRoot,
             cwd: cwd,
             startedAt: now,

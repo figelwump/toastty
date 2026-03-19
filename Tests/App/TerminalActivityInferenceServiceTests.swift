@@ -409,6 +409,11 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
 
     private(set) var stopOlderThanCalls: [StopOlderThanCall] = []
 
+    func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
+        _ = panelID
+        return false
+    }
+
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,

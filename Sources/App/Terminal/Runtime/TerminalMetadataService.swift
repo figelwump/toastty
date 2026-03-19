@@ -489,6 +489,25 @@ final class TerminalMetadataService {
         let appIsActive = NSApplication.shared.isActive
         let currentSelection = state.selectedWorkspaceSelection()
         let currentSelectedWorkspaceID = currentSelection?.workspaceID
+
+        if let panelID,
+           sessionLifecycleTracker?.activeSessionUsesStatusNotifications(panelID: panelID) == true {
+            var metadata: [String: String] = [
+                "title": title,
+                "route_source": route.source,
+                "panel_id": panelID.uuidString,
+            ]
+            if let workspaceID {
+                metadata["workspace_id"] = workspaceID.uuidString
+            }
+            ToasttyLog.debug(
+                "Suppressed desktop notification for panel with managed session status notifications",
+                category: .notifications,
+                metadata: metadata
+            )
+            return true
+        }
+
         let panelIsFocused: Bool
         if let workspaceID,
            let panelID,

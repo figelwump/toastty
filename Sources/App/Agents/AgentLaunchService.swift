@@ -173,6 +173,7 @@ final class AgentLaunchService {
             panelID: target.panelID,
             windowID: target.windowID,
             workspaceID: target.workspaceID,
+            usesSessionStatusNotifications: true,
             cwd: target.cwd,
             repoRoot: repoRoot,
             at: now

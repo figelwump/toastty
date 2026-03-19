@@ -7,6 +7,7 @@ enum TerminalLocalInterruptKind: Equatable, Sendable {
 
 @MainActor
 protocol TerminalSessionLifecycleTracking: AnyObject {
+    func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,

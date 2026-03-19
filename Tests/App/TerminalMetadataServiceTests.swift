@@ -812,6 +812,43 @@ final class TerminalMetadataServiceTests: XCTestCase {
         XCTAssertEqual(tracker.stopActiveCalls, [panelID])
         try StateValidator.validate(store.state)
     }
+
+    func testDesktopNotificationIsSuppressedForManagedSessionPanel() throws {
+        let state = try makeTwoWorkspaceState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let selection = try XCTUnwrap(store.state.selectedWorkspaceSelection())
+        let managedWorkspaceID = try XCTUnwrap(selection.window.workspaceIDs.first { $0 != selection.workspaceID })
+        let managedWorkspace = try XCTUnwrap(store.state.workspacesByID[managedWorkspaceID])
+        let managedPanelID = try XCTUnwrap(managedWorkspace.focusedPanelID)
+        let tracker = SessionLifecycleTrackerSpy()
+        tracker.panelsUsingStatusNotifications = [managedPanelID]
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            sessionLifecycleTracker: tracker,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleDesktopNotificationAction(
+                action: GhosttyRuntimeAction(
+                    surfaceHandle: nil,
+                    intent: .desktopNotification(title: "Codex is ready", body: "Done")
+                ),
+                title: "Codex is ready",
+                body: "Done",
+                state: store.state
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[managedWorkspaceID])
+        XCTAssertTrue(workspaceAfter.unreadPanelIDs.isEmpty)
+        try StateValidator.validate(store.state)
+    }
 }
 
 @MainActor
@@ -854,6 +891,17 @@ private func makeRestoredUnprofiledPanelState() -> AppState {
     terminalState.launchWorkingDirectory = "/tmp/restored"
     workspace.panels[panelID] = .terminal(terminalState)
     state.workspacesByID[workspaceID] = workspace
+    return state
+}
+
+private func makeTwoWorkspaceState() throws -> AppState {
+    var state = AppState.bootstrap()
+    let reducer = AppReducer()
+    let windowID = try XCTUnwrap(state.windows.first?.id)
+    XCTAssertTrue(
+        reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state),
+        "expected second workspace creation to succeed"
+    )
     return state
 }
 
@@ -915,7 +963,12 @@ private enum TerminalMetadataServiceTestError: Error {
 
 @MainActor
 private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking {
+    var panelsUsingStatusNotifications: Set<UUID> = []
     private(set) var stopActiveCalls: [UUID] = []
+
+    func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
+        panelsUsingStatusNotifications.contains(panelID)
+    }
 
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,

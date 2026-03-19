@@ -3,10 +3,25 @@ import Foundation
 
 @MainActor
 final class SessionRuntimeStore: ObservableObject {
+    typealias SessionStatusNotificationHandler = @Sendable (
+        _ title: String,
+        _ body: String,
+        _ workspaceID: UUID,
+        _ panelID: UUID,
+        _ context: DesktopNotificationContext
+    ) async -> Void
+
     @Published private(set) var sessionRegistry = SessionRegistry()
 
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
+    private let sendSessionStatusNotification: SessionStatusNotificationHandler
+
+    init(
+        sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification
+    ) {
+        self.sendSessionStatusNotification = sendSessionStatusNotification
+    }
 
     func bind(store: AppStore) {
         self.store = store
@@ -28,6 +43,7 @@ final class SessionRuntimeStore: ObservableObject {
         panelID: UUID,
         windowID: UUID,
         workspaceID: UUID,
+        usesSessionStatusNotifications: Bool = false,
         cwd: String?,
         repoRoot: String?,
         at now: Date
@@ -39,6 +55,7 @@ final class SessionRuntimeStore: ObservableObject {
             panelID: panelID,
             windowID: windowID,
             workspaceID: workspaceID,
+            usesSessionStatusNotifications: usesSessionStatusNotifications,
             cwd: cwd,
             repoRoot: repoRoot,
             at: now
@@ -73,7 +90,7 @@ final class SessionRuntimeStore: ObservableObject {
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: status, at: now)
         publish(nextRegistry)
-        recordPanelAttentionIfNeeded(
+        handleActionableStatusTransitionIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,
             status: status
@@ -167,13 +184,13 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry = nextRegistry
     }
 
-    private func recordPanelAttentionIfNeeded(
+    private func handleActionableStatusTransitionIfNeeded(
         previousRecord: SessionRecord?,
         sessionID: String,
         status: SessionStatus
     ) {
         guard let store else { return }
-        guard status.kind == .needsApproval || status.kind == .ready || status.kind == .error else {
+        guard isActionableStatusKind(status.kind) else {
             return
         }
         guard previousRecord?.status?.kind != status.kind else {
@@ -191,6 +208,25 @@ final class SessionRuntimeStore: ObservableObject {
                 panelID: currentRecord.panelID
             )
         )
+
+        guard currentRecord.usesSessionStatusNotifications else {
+            return
+        }
+
+        let notificationContext = desktopNotificationContext(for: currentRecord, state: store.state)
+        let title = notificationTitle(for: currentRecord, status: status)
+        let body = notificationBody(for: status)
+        let workspaceID = currentRecord.workspaceID
+        let panelID = currentRecord.panelID
+        Task {
+            await sendSessionStatusNotification(
+                title,
+                body,
+                workspaceID,
+                panelID,
+                notificationContext
+            )
+        }
     }
 
     private func isPanelCurrentlyFocused(_ panelID: UUID, state: AppState) -> Bool {
@@ -217,9 +253,69 @@ final class SessionRuntimeStore: ObservableObject {
         }
         return nil
     }
+
+    private func isActionableStatusKind(_ kind: SessionStatusKind) -> Bool {
+        kind == .needsApproval || kind == .ready || kind == .error
+    }
+
+    private func notificationTitle(for record: SessionRecord, status: SessionStatus) -> String {
+        switch status.kind {
+        case .needsApproval:
+            return "\(record.agent.displayName) needs approval"
+        case .ready:
+            return "\(record.agent.displayName) is ready"
+        case .error:
+            return "\(record.agent.displayName) hit an error"
+        case .idle, .working:
+            return record.agent.displayName
+        }
+    }
+
+    private func notificationBody(for status: SessionStatus) -> String {
+        if let detail = normalizedNonEmpty(status.detail) {
+            return detail
+        }
+        if let summary = normalizedNonEmpty(status.summary) {
+            return summary
+        }
+        return status.summary
+    }
+
+    private func desktopNotificationContext(
+        for record: SessionRecord,
+        state: AppState
+    ) -> DesktopNotificationContext {
+        guard let workspace = state.workspacesByID[record.workspaceID] else {
+            return DesktopNotificationContext()
+        }
+        return DesktopNotificationContext(
+            workspaceTitle: workspace.title,
+            panelLabel: workspace.panels[record.panelID]?.notificationLabel
+        )
+    }
+
+    nonisolated private static func defaultSendSessionStatusNotification(
+        title: String,
+        body: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        context: DesktopNotificationContext
+    ) async {
+        await SystemNotificationSender.send(
+            title: title,
+            body: body,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            context: context
+        )
+    }
 }
 
 extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
+    func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
+        sessionRegistry.activeSession(for: panelID)?.usesSessionStatusNotifications == true
+    }
+
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,
@@ -267,4 +363,12 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         stopSessionForPanel(panelID: panelID, at: now)
         return true
     }
+}
+
+private func normalizedNonEmpty(_ value: String?) -> String? {
+    guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+          trimmed.isEmpty == false else {
+        return nil
+    }
+    return trimmed
 }

@@ -230,6 +230,11 @@ final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
 private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking {
     private(set) var stopActiveCalls: [UUID] = []
 
+    func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
+        _ = panelID
+        return false
+    }
+
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,

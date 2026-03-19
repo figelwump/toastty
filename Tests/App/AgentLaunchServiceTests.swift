@@ -40,6 +40,7 @@ struct AgentLaunchServiceTests {
         #expect(activeSession.panelID == panelID)
         #expect(activeSession.cwd == cwd)
         #expect(activeSession.repoRoot == projectRoot.path)
+        #expect(activeSession.usesSessionStatusNotifications)
         #expect(activeSession.status == SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])

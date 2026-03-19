@@ -4,6 +4,60 @@ import Testing
 
 struct SessionRegistryTests {
     @Test
+    func startSessionStoresManagedNotificationPreference() throws {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let now = Date(timeIntervalSince1970: 999)
+
+        registry.startSession(
+            sessionID: "managed",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+
+        let record = try #require(registry.activeSession(for: panelID))
+        #expect(record.usesSessionStatusNotifications)
+    }
+
+    @Test
+    func sessionRecordDecodesLegacyPayloadWithoutManagedNotificationKey() throws {
+        let record = SessionRecord(
+            sessionID: "legacy",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Done"),
+            repoRoot: "/repo",
+            cwd: "/repo",
+            startedAt: Date(timeIntervalSince1970: 1_000),
+            updatedAt: Date(timeIntervalSince1970: 1_001)
+        )
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let data = try encoder.encode(record)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "usesSessionStatusNotifications")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try decoder.decode(SessionRecord.self, from: legacyData)
+
+        #expect(decoded.usesSessionStatusNotifications == false)
+        #expect(decoded.sessionID == record.sessionID)
+        #expect(decoded.agent == record.agent)
+        #expect(decoded.panelID == record.panelID)
+        #expect(decoded.workspaceID == record.workspaceID)
+        #expect(decoded.status == record.status)
+    }
+
+    @Test
     func startSessionReplacesExistingActiveSessionForPanel() throws {
         var registry = SessionRegistry()
         let now = Date(timeIntervalSince1970: 1000)

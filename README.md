@@ -26,6 +26,8 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 
 Toastty keeps first-party agent session state current automatically when a run is launched through Toastty. The launch path injects `TOASTTY_*` session context and generated Claude/Codex wrappers report follow-up events through the bundled `toastty` CLI, so built-in launches do not require a separate agent skill to keep the sidebar up to date.
 
+For those built-in launches, actionable agent lifecycle updates such as `needs_approval`, `ready`, and `error` also drive Toastty's unread badges and local notifications directly. While a managed agent session remains active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
+
 For custom wrappers and third-party agents, the manual integration surface remains available through `toastty session start`, `toastty session status`, `toastty session update-files`, `toastty session stop`, and `toastty notify`. Provider-specific `toastty session ingest-agent-event` is a CLI-local helper for Toastty-managed Claude/Codex instrumentation, not a general socket protocol entry point.
 
 ### Agent profiles

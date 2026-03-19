@@ -144,6 +144,60 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func updateStatusSendsNotificationForManagedUnfocusedPanel() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-managed",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-managed",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        let notifications = await recorder.notifications()
+        let notification = try #require(notifications.first)
+        #expect(notification.title == "Codex is ready")
+        #expect(notification.body == "Finished")
+        #expect(notification.workspaceID == selection.workspaceID)
+        #expect(notification.panelID == backgroundPanelID)
+        #expect(notification.context.workspaceTitle == "Workspace 1")
+
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+    }
+
+    @Test
     func updateStatusDoesNotMarkFocusedPanelUnreadWhenSessionNeedsAttention() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
@@ -171,6 +225,197 @@ struct SessionRuntimeStoreTests {
 
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func updateStatusDoesNotSendNotificationForFocusedManagedPanel() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let focusedPanelID = try #require(selection.workspace.focusedPanelID)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-focused-managed",
+            agent: .claude,
+            panelID: focusedPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-focused-managed",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Confirm"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        await settleNotificationTasks()
+
+        let notifications = await recorder.notifications()
+        #expect(notifications.isEmpty)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func updateStatusDoesNotSendNotificationForUnmanagedSession() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-unmanaged",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-unmanaged",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        await settleNotificationTasks()
+
+        let notifications = await recorder.notifications()
+        #expect(notifications.isEmpty)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
+    }
+
+    @Test
+    func updateStatusDoesNotRepeatNotificationForSameActionableKind() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-repeat",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-repeat",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "First"),
+            at: startedAt.addingTimeInterval(1)
+        )
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        sessionStore.updateStatus(
+            sessionID: "sess-repeat",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Second"),
+            at: startedAt.addingTimeInterval(2)
+        )
+        await settleNotificationTasks()
+
+        let notificationCount = await recorder.count()
+        #expect(notificationCount == 1)
+    }
+
+    @Test
+    func updateStatusFallsBackToTrimmedSummaryWhenDetailIsBlank() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-blank-detail",
+            agent: .claude,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-blank-detail",
+            status: SessionStatus(kind: .ready, summary: "  Ready for prompt  ", detail: "   \n"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        let notification = try #require(await recorder.notifications().first)
+        #expect(notification.body == "Ready for prompt")
     }
 
     @Test
@@ -328,5 +573,60 @@ struct SessionRuntimeStoreTests {
             configuredTerminalFontPoints: nil,
             globalTerminalFontPoints: AppState.defaultTerminalFontPoints
         )
+    }
+}
+
+private struct RecordedSessionNotification: Equatable {
+    let title: String
+    let body: String
+    let workspaceID: UUID
+    let panelID: UUID
+    let context: DesktopNotificationContext
+}
+
+private actor SessionNotificationRecorder {
+    private var recorded: [RecordedSessionNotification] = []
+
+    func record(
+        title: String,
+        body: String,
+        workspaceID: UUID,
+        panelID: UUID,
+        context: DesktopNotificationContext
+    ) {
+        recorded.append(
+            RecordedSessionNotification(
+                title: title,
+                body: body,
+                workspaceID: workspaceID,
+                panelID: panelID,
+                context: context
+            )
+        )
+    }
+
+    func notifications() -> [RecordedSessionNotification] {
+        recorded
+    }
+
+    func count() -> Int {
+        recorded.count
+    }
+}
+
+private func settleNotificationTasks(iterations: Int = 12) async {
+    for _ in 0..<iterations {
+        await Task.yield()
+    }
+}
+
+private func waitUntilNotificationCount(
+    _ recorder: SessionNotificationRecorder,
+    expectedCount: Int,
+    timeoutNanoseconds: UInt64 = 1_000_000_000
+) async {
+    let deadline = Date().addingTimeInterval(Double(timeoutNanoseconds) / 1_000_000_000)
+    while await recorder.count() != expectedCount && Date() < deadline {
+        await Task.yield()
     }
 }
