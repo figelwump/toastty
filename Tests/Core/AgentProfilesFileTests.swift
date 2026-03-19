@@ -58,6 +58,24 @@ struct AgentProfilesFileTests {
     }
 
     @Test
+    func loadParsesShortcutKeyAndNormalizesUppercase() throws {
+        let contents = """
+        [codex]
+        displayName = "Codex"
+        argv = ["codex"]
+        shortcutKey = "C"
+        """
+
+        let fileManager = InMemoryFileManager(templateContents: contents)
+        let catalog = try AgentProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path
+        )
+
+        #expect(catalog.profiles.first?.shortcutKey == Character("c"))
+    }
+
+    @Test
     func ensureTemplateExistsCreatesCommentOnlyFileOnce() throws {
         let fileManager = InMemoryFileManager(templateContents: nil)
 
@@ -103,6 +121,34 @@ struct AgentProfilesFileTests {
         let fileManager = InMemoryFileManager(templateContents: contents)
 
         #expect(throws: AgentProfilesParseError(line: 1, message: "invalid agent ID '--session'")) {
+            _ = try AgentProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsDuplicateShortcutKeys() throws {
+        let contents = """
+        [codex]
+        displayName = "Codex"
+        argv = ["codex"]
+        shortcutKey = "c"
+
+        [claude]
+        displayName = "Claude"
+        argv = ["claude"]
+        shortcutKey = "c"
+        """
+        let fileManager = InMemoryFileManager(templateContents: contents)
+
+        #expect(
+            throws: AgentProfilesParseError(
+                line: 6,
+                message: "[claude] shortcutKey 'c' is already used by [codex]"
+            )
+        ) {
             _ = try AgentProfilesFile.load(
                 fileManager: fileManager.fileManager,
                 homeDirectoryPath: fileManager.rootURL.path

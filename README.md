@@ -40,13 +40,16 @@ Each profile defines the menu label and the exact command Toastty should launch:
 [codex]
 displayName = "Codex"
 argv = ["codex"]
+shortcutKey = "c"
 
 [claude]
 displayName = "Claude Code"
 argv = ["claude"]
 ```
 
-Configured profiles appear in the `Agent` menu and as top-bar buttons, and launch with Toastty's built-in session telemetry wiring.
+Configured profiles appear in the `Agent` menu and as top-bar buttons, and launch with Toastty's built-in session telemetry wiring. `shortcutKey` is optional; when set, Toastty binds `Cmd+Ctrl+<key>` to launch that profile directly from the `Agent` menu.
+
+If an agent shortcut conflicts with another agent shortcut or with a terminal-profile shortcut chord, Toastty disables the conflicting binding and reports a warning on startup or configuration reload.
 
 ## Requirements
 

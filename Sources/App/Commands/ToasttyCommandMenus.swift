@@ -48,16 +48,9 @@ struct TerminalProfileMenuModel: Equatable {
         struct Action: Equatable, Identifiable {
             let title: String
             let direction: SlotSplitDirection
-            let shortcutKey: Character?
+            let shortcut: ShortcutChord?
 
             var id: String { title }
-
-            var shortcutModifiers: EventModifiers? {
-                guard shortcutKey != nil else { return nil }
-                return direction == .down
-                    ? [.command, .control, .shift]
-                    : [.command, .control]
-            }
         }
 
         let title: String
@@ -69,7 +62,7 @@ struct TerminalProfileMenuModel: Equatable {
 
     let sections: [Section]
 
-    init(catalog: TerminalProfileCatalog) {
+    init(catalog: TerminalProfileCatalog, registry: ProfileShortcutRegistry) {
         sections = catalog.profiles.map { profile in
             Section(
                 title: profile.displayName,
@@ -78,12 +71,22 @@ struct TerminalProfileMenuModel: Equatable {
                     Section.Action(
                         title: "Split Right",
                         direction: .right,
-                        shortcutKey: profile.shortcutKey
+                        shortcut: registry.chord(
+                            for: .terminalProfileSplit(
+                                profileID: profile.id,
+                                direction: .right
+                            )
+                        )
                     ),
                     Section.Action(
                         title: "Split Down",
                         direction: .down,
-                        shortcutKey: profile.shortcutKey
+                        shortcut: registry.chord(
+                            for: .terminalProfileSplit(
+                                profileID: profile.id,
+                                direction: .down
+                            )
+                        )
                     ),
                 ]
             )
@@ -99,6 +102,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let terminalProfilesMenuController: TerminalProfilesMenuController
@@ -121,7 +125,10 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private var terminalProfileMenuModel: TerminalProfileMenuModel {
-        TerminalProfileMenuModel(catalog: terminalProfileStore.catalog)
+        TerminalProfileMenuModel(
+            catalog: terminalProfileStore.catalog,
+            registry: profileShortcutRegistry
+        )
     }
 
     var body: some Commands {
@@ -234,10 +241,7 @@ struct ToasttyCommandMenus: Commands {
                     .disabled(true)
             } else {
                 ForEach(agentCatalogStore.catalog.profiles) { profile in
-                    Button(profile.displayName) {
-                        launchAgentFromCommandSelection(profile.id)
-                    }
-                    .disabled(canLaunchAgent(profileID: profile.id) == false)
+                    agentProfileMenuButton(profile)
                 }
             }
 
@@ -356,10 +360,29 @@ struct ToasttyCommandMenus: Commands {
             ) == false
         )
 
-        if let shortcutKey = action.shortcutKey {
+        if let shortcut = action.shortcut {
             button.keyboardShortcut(
-                KeyEquivalent(shortcutKey),
-                modifiers: action.shortcutModifiers ?? []
+                shortcut.keyEquivalent,
+                modifiers: shortcut.eventModifiers
+            )
+        } else {
+            button
+        }
+    }
+
+    @ViewBuilder
+    private func agentProfileMenuButton(_ profile: AgentProfile) -> some View {
+        let button = Button(profile.displayName) {
+            launchAgentFromCommandSelection(profile.id)
+        }
+        .disabled(canLaunchAgent(profileID: profile.id) == false)
+
+        if let shortcut = profileShortcutRegistry.chord(
+            for: .agentProfileLaunch(profileID: profile.id)
+        ) {
+            button.keyboardShortcut(
+                shortcut.keyEquivalent,
+                modifiers: shortcut.eventModifiers
             )
         } else {
             button
@@ -373,5 +396,28 @@ struct ToasttyCommandMenus: Commands {
     private func toggleSidebarFromCommandSelection() {
         guard let windowID = commandSelection?.windowID else { return }
         store.send(.toggleSidebar(windowID: windowID))
+    }
+}
+
+private extension ShortcutChord {
+    var keyEquivalent: KeyEquivalent {
+        KeyEquivalent(key)
+    }
+
+    var eventModifiers: EventModifiers {
+        var modifiers: EventModifiers = []
+        if self.modifiers.contains(.command) {
+            modifiers.insert(.command)
+        }
+        if self.modifiers.contains(.control) {
+            modifiers.insert(.control)
+        }
+        if self.modifiers.contains(.option) {
+            modifiers.insert(.option)
+        }
+        if self.modifiers.contains(.shift) {
+            modifiers.insert(.shift)
+        }
+        return modifiers
     }
 }

@@ -61,6 +61,8 @@ public enum AgentProfilesFile {
         # Uncomment and edit profiles below to make them available in Toastty UI.
         # `displayName` is shown in menus and buttons.
         # `argv` is the exact command Toastty runs for that profile.
+        # `shortcutKey` (optional) is a single letter or digit that registers
+        # ⌘⌃<key> to launch that agent profile.
         # The table name is the internal agent ID used for sessions and telemetry.
         #
         # Edit these examples to match your local setup.
@@ -68,6 +70,7 @@ public enum AgentProfilesFile {
         # [codex]
         # displayName = "Codex"
         # argv = ["codex"]
+        # shortcutKey = "c"
         #
         # [claude]
         # displayName = "Claude Code"
@@ -82,6 +85,7 @@ private enum AgentProfilesParser {
         var line: Int
         var displayName: String?
         var argv: [String]?
+        var shortcutKey: String?
     }
 
     static func parse(contents: String) throws -> AgentCatalog {
@@ -90,6 +94,7 @@ private enum AgentProfilesParser {
         var currentID: String?
         var currentProfile: PartialProfile?
         var seenProfileIDs = Set<String>()
+        var seenShortcutKeys = [Character: String]()
 
         func finalizeCurrentProfile() throws {
             guard let currentID, let currentProfile else { return }
@@ -105,11 +110,17 @@ private enum AgentProfilesParser {
                     message: "[\(currentID)] is missing argv"
                 )
             }
+            let shortcutKey: Character? = if let raw = normalizedNonEmpty(currentProfile.shortcutKey) {
+                try validateShortcutKey(raw, line: currentProfile.line, profileID: currentID, seen: &seenShortcutKeys)
+            } else {
+                nil
+            }
             profiles.append(
                 AgentProfile(
                     id: currentID,
                     displayName: displayName,
-                    argv: argv
+                    argv: argv,
+                    shortcutKey: shortcutKey
                 )
             )
         }
@@ -221,6 +232,22 @@ private enum AgentProfilesParser {
                     )
                 }
 
+            case "shortcutKey":
+                guard currentProfile?.shortcutKey == nil else {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "[\(currentID)] has duplicate shortcutKey"
+                    )
+                }
+                do {
+                    currentProfile?.shortcutKey = try decodeJSONString(rawValue)
+                } catch {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "[\(currentID)] has invalid shortcutKey"
+                    )
+                }
+
             default:
                 throw AgentProfilesParseError(
                     line: lineIndex + 1,
@@ -307,6 +334,30 @@ private enum AgentProfilesParser {
         }
 
         return balance
+    }
+
+    private static func validateShortcutKey(
+        _ raw: String,
+        line: Int,
+        profileID: String,
+        seen: inout [Character: String]
+    ) throws -> Character {
+        let lowered = raw.lowercased()
+        guard lowered.count == 1, let char = lowered.first,
+              char.isASCII && (char.isLetter || char.isNumber) else {
+            throw AgentProfilesParseError(
+                line: line,
+                message: "[\(profileID)] shortcutKey must be a single letter or digit"
+            )
+        }
+        if let existingID = seen[char] {
+            throw AgentProfilesParseError(
+                line: line,
+                message: "[\(profileID)] shortcutKey '\(char)' is already used by [\(existingID)]"
+            )
+        }
+        seen[char] = profileID
+        return char
     }
 }
 

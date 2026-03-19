@@ -339,6 +339,15 @@ struct ToasttyApp: App {
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
 
+    private var profileShortcutRegistry: ProfileShortcutRegistry {
+        Self.makeProfileShortcutRegistry(
+            terminalProfiles: terminalProfileStore.catalog,
+            terminalProfilesFilePath: terminalProfileStore.fileURL.path,
+            agentProfiles: agentCatalogStore.catalog,
+            agentProfilesFilePath: agentCatalogStore.fileURL.path
+        )
+    }
+
     init() {
         let processInfo = ProcessInfo.processInfo
         Self.ensureTerminalProfilesTemplateExists()
@@ -367,6 +376,13 @@ struct ToasttyApp: App {
             persistTerminalFontPreference: persistTerminalFontPreference
         )
         let agentCatalogStore = AgentCatalogStore()
+        let initialProfileShortcutRegistry = Self.makeProfileShortcutRegistry(
+            terminalProfiles: terminalProfileStore.catalog,
+            terminalProfilesFilePath: terminalProfileStore.fileURL.path,
+            agentProfiles: agentCatalogStore.catalog,
+            agentProfilesFilePath: agentCatalogStore.fileURL.path
+        )
+        Self.logProfileShortcutWarnings(initialProfileShortcutRegistry.warningMessages)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
@@ -506,6 +522,7 @@ struct ToasttyApp: App {
                 agentCatalogStore: agentCatalogStore,
                 terminalProfileStore: terminalProfileStore,
                 sessionRuntimeStore: sessionRuntimeStore,
+                profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 terminalProfilesMenuController: terminalProfilesMenuController,
@@ -523,6 +540,7 @@ struct ToasttyApp: App {
     @MainActor
     private func reloadConfiguration() {
         var failureMessages: [String] = []
+        var warningMessages: [String] = []
 
         switch agentCatalogStore.reload() {
         case .success:
@@ -574,12 +592,18 @@ struct ToasttyApp: App {
         )
         #endif
 
-        guard failureMessages.isEmpty == false else { return }
+        let resolvedProfileShortcutRegistry = profileShortcutRegistry
+        warningMessages.append(contentsOf: resolvedProfileShortcutRegistry.warningMessages)
+        Self.logProfileShortcutWarnings(warningMessages)
+
+        guard failureMessages.isEmpty == false || warningMessages.isEmpty == false else { return }
 
         let alert = NSAlert()
-        alert.messageText = "Unable to Reload Configuration"
-        alert.informativeText = failureMessages.joined(separator: "\n")
-        alert.alertStyle = .warning
+        alert.messageText = failureMessages.isEmpty
+            ? "Configuration Reload Warnings"
+            : "Unable to Reload Configuration"
+        alert.informativeText = (failureMessages + warningMessages).joined(separator: "\n")
+        alert.alertStyle = failureMessages.isEmpty ? .informational : .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
@@ -680,6 +704,29 @@ struct ToasttyApp: App {
             _ = store.send(.setGlobalTerminalFont(points: persistedFontSizePoints))
         } else {
             _ = store.send(.resetGlobalTerminalFont)
+        }
+    }
+
+    private static func makeProfileShortcutRegistry(
+        terminalProfiles: TerminalProfileCatalog,
+        terminalProfilesFilePath: String,
+        agentProfiles: AgentCatalog,
+        agentProfilesFilePath: String
+    ) -> ProfileShortcutRegistry {
+        ProfileShortcutRegistry(
+            terminalProfiles: terminalProfiles,
+            terminalProfilesFilePath: terminalProfilesFilePath,
+            agentProfiles: agentProfiles,
+            agentProfilesFilePath: agentProfilesFilePath
+        )
+    }
+
+    private static func logProfileShortcutWarnings(_ warnings: [String]) {
+        for warning in warnings {
+            ToasttyLog.warning(
+                warning,
+                category: .bootstrap
+            )
         }
     }
 
