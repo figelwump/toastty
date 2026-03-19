@@ -874,6 +874,20 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         guard let resolution = resolveActionTarget(for: action, state: state) else {
             return false
         }
+        ToasttyLog.debug(
+            "Routed Ghostty scrollbar action to terminal controller",
+            category: .ghostty,
+            metadata: [
+                "workspace_id": resolution.workspaceID.uuidString,
+                "panel_id": resolution.panelID.uuidString,
+                "surface_handle": action.surfaceHandle.map(String.init) ?? "nil",
+                "scrollbar_total": String(scrollbarState.total),
+                "scrollbar_offset": String(scrollbarState.offset),
+                "scrollbar_visible_length": String(scrollbarState.visibleLength),
+                "scrollbar_trailing_edge": String(scrollbarState.trailingEdge),
+                "scrollbar_pinned_to_bottom": scrollbarState.isPinnedToBottom ? "true" : "false",
+            ]
+        )
         runtimeStore.updateScrollbarState(scrollbarState, for: resolution.panelID)
         return true
     }
