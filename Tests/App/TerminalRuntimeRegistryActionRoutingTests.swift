@@ -196,22 +196,6 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
         }
     }
 
-    func testScrollbarAcknowledgementBypassesSurfaceResolution() async throws {
-        try await MainActor.run {
-            let state = try makeSplitState()
-            let (store, registry) = makeStoreAndRegistry(state: state)
-            let focusedPanelIDBefore = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
-
-            let handled = registry.handleGhosttyRuntimeAction(
-                GhosttyRuntimeAction(surfaceHandle: 0xDEADBEEF, intent: .acknowledgeScrollbar)
-            )
-
-            XCTAssertTrue(handled)
-            XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, focusedPanelIDBefore)
-            try StateValidator.validate(store.state)
-        }
-    }
-
     func testChildExitedMetadataMakesPanelSafeToCloseWithoutController() async throws {
         try await MainActor.run {
             let state = AppState.bootstrap()

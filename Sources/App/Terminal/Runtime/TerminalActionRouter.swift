@@ -24,11 +24,6 @@ final class TerminalActionRouter {
                 store: store
             )
         }
-        if case .acknowledgeScrollbar = action.intent {
-            // Ghostty expects scrollbar callbacks to be acknowledged even
-            // though Toastty no longer routes or stores that state.
-            return true
-        }
 
         guard let resolution = registry.resolveActionTarget(for: action, state: appState) else {
             return false
@@ -88,9 +83,6 @@ final class TerminalActionRouter {
 
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: resolution.workspaceID))
-
-        case .acknowledgeScrollbar:
-            handled = true
 
         case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             handled = false
