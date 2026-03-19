@@ -26,7 +26,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
-- **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. See ([terminal profile spec](docs/terminal-profiles.md)) for more details.
+- **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, with UI changes remembered locally
@@ -63,15 +63,7 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 3. `~/.config/ghostty/config`
 4. Ghostty defaults
 
-Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally.
-
-For isolated dev/test runs, either set `TOASTTY_RUNTIME_HOME=/path/to/runtime-home` directly or set `TOASTTY_DEV_WORKTREE_ROOT=/path/to/worktree` and let Toastty derive a stable runtime home under `artifacts/dev-runs/` for that worktree. In either case, Toastty keeps config, terminal profiles, workspace persistence, logs, and UI-managed defaults inside that runtime home instead of using the shared user locations, and it derives the default automation socket from that sandbox identity. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set `TOASTTY_DEV_WORKTREE_ROOT=$(SRCROOT)`. For the full sandbox model, `instance.json`, and cleanup conventions, see [docs/runtime-sandboxing.md](docs/runtime-sandboxing.md).
-
-For a fresh linked worktree that should reuse the Ghostty artifact from another Toastty checkout, run `./scripts/dev/bootstrap-worktree.sh` once before building. The helper creates symlinks back to the source worktree's `Dependencies/GhosttyKit*` artifacts, so rebuilding or replacing Ghostty there immediately affects linked worktrees. The smoke, shortcut-trace, and check helpers already do this automatically.
-
-For local runtime validation, start with `./scripts/automation/smoke-ui.sh` when the change is covered by socket automation. Use `./scripts/automation/shortcut-hints-smoke.sh` when you only need a screenshot artifact for always-visible shortcut badges or hint text. When validation truly needs local Peekaboo, run `peekaboo permissions --json` first and stop for the user to grant Accessibility if it is missing. If the user does not want to grant local Accessibility, or if the validation needs real menus, real shortcuts, or any other foreground-capable UI interaction, prefer `TOASTTY_REMOTE_GUI_HOST=... ./scripts/remote/gui-validate.sh ...` so the focus-stealing work runs on a dedicated remote Mac instead of the current desktop. The remote Mac must be awake, unlocked, and logged into the GUI session where Peekaboo is permitted.
-
-Today that means:
+Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally. Today that means:
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
