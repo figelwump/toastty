@@ -162,10 +162,6 @@ final class TerminalWindowRuntimeStore {
         runtime(for: workspaceID, windowID: windowID, state: state).register(surface: surface, for: panelID)
     }
     #endif
-
-    func armCloseTransitionViewportDeferral(workspaceID: UUID, panelIDs: Set<UUID>) {
-        existingRuntime(for: workspaceID)?.armCloseTransitionViewportDeferral(for: panelIDs)
-    }
     #endif
 
     private func runtime(for workspaceID: UUID, windowID: UUID, state: AppState?) -> TerminalWorkspaceRuntime {

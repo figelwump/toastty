@@ -167,46 +167,45 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(requestCount, 1)
     }
 
-    func testVisibilityTraceSnapshotReportsTransparentAncestorWhileWindowAttached() {
+    func testSynchronizePresentationVisibilityTracksHiddenAncestorTransition() {
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
-        let outer = NSView(frame: contentView.bounds)
-        let inner = NSView(frame: outer.bounds)
+        let ancestor = NSView(frame: contentView.bounds)
         let hostView = TerminalHostView()
         window.forcedOcclusionState = [.visible]
         window.contentView = contentView
-        outer.alphaValue = 0.4
-        inner.alphaValue = 0
+        ancestor.isHidden = true
 
-        contentView.addSubview(outer)
-        outer.addSubview(inner)
-        inner.addSubview(hostView)
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(hostView)
 
-        let snapshot = hostView.visibilityTraceSnapshot()
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_hidden_ancestor"))
+        XCTAssertFalse(hostView.isEffectivelyVisible)
 
-        XCTAssertTrue(snapshot.hasWindow)
-        XCTAssertTrue(snapshot.windowVisible)
-        XCTAssertEqual(snapshot.selfAlphaThousandths, 1_000)
-        XCTAssertEqual(snapshot.minAncestorAlphaThousandths, 0)
-        XCTAssertEqual(snapshot.minChainAlphaThousandths, 0)
-        XCTAssertTrue(snapshot.visuallyTransparent)
-        XCTAssertTrue(snapshot.logicallyVisibleIgnoringTransparency)
-        XCTAssertFalse(snapshot.resolvedVisible)
+        ancestor.isHidden = false
+
+        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_revealed_ancestor"))
+        XCTAssertTrue(hostView.isEffectivelyVisible)
     }
 
-    func testVisibilityTraceSnapshotTreatsDetachedHostAsOpaqueChain() {
+    func testSynchronizePresentationVisibilityTracksWindowOcclusionTransition() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
         let hostView = TerminalHostView()
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        contentView.addSubview(hostView)
 
-        let snapshot = hostView.visibilityTraceSnapshot()
+        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_window_visible"))
+        XCTAssertTrue(hostView.isEffectivelyVisible)
 
-        XCTAssertEqual(snapshot.selfAlphaThousandths, 1_000)
-        XCTAssertEqual(snapshot.minAncestorAlphaThousandths, 1_000)
-        XCTAssertEqual(snapshot.minChainAlphaThousandths, 1_000)
-        XCTAssertFalse(snapshot.visuallyTransparent)
-        XCTAssertFalse(snapshot.resolvedVisible)
+        window.forcedOcclusionState = []
+
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_window_hidden"))
+        XCTAssertFalse(hostView.isEffectivelyVisible)
     }
 
-    func testSynchronizePresentationVisibilityTracksTransparentAncestorTransition() {
+    func testSynchronizePresentationVisibilityTreatsTransparentAncestorAsHidden() {
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
         let ancestor = NSView(frame: contentView.bounds)
@@ -218,36 +217,13 @@ final class TerminalHostViewTests: XCTestCase {
         contentView.addSubview(ancestor)
         ancestor.addSubview(hostView)
 
-        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_transparent"))
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_transparent_ancestor"))
         XCTAssertFalse(hostView.isEffectivelyVisible)
 
         ancestor.alphaValue = 1
 
-        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_opaque"))
+        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_opaque_ancestor"))
         XCTAssertTrue(hostView.isEffectivelyVisible)
-    }
-
-    func testVisibilityTraceSnapshotTransparencyThresholdBoundary() {
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let ancestor = NSView(frame: contentView.bounds)
-        let hostView = TerminalHostView()
-        window.forcedOcclusionState = [.visible]
-        window.contentView = contentView
-        contentView.addSubview(ancestor)
-        ancestor.addSubview(hostView)
-
-        ancestor.alphaValue = 0.01
-        var snapshot = hostView.visibilityTraceSnapshot()
-        XCTAssertEqual(snapshot.minChainAlphaThousandths, 10)
-        XCTAssertTrue(snapshot.visuallyTransparent)
-        XCTAssertFalse(snapshot.resolvedVisible)
-
-        ancestor.alphaValue = 0.011
-        snapshot = hostView.visibilityTraceSnapshot()
-        XCTAssertEqual(snapshot.minChainAlphaThousandths, 11)
-        XCTAssertFalse(snapshot.visuallyTransparent)
-        XCTAssertTrue(snapshot.resolvedVisible)
     }
 
     func testResolvedGhosttySurfaceFocusStateRequiresActiveKeyFocusedHost() {
