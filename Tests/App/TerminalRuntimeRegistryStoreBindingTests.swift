@@ -26,6 +26,25 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertFalse(removedSnapshot.controllerExists)
     }
 
+    func testFocusedPanelModeToggleDoesNotArmViewportBottomAlignment() throws {
+        let state = AppState.bootstrap()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let windowID = try XCTUnwrap(store.selectedWindow?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let controller = registry.controller(for: panelID, workspaceID: workspaceID, windowID: windowID)
+        controller.updateScrollbarState(TerminalScrollbarState(total: 120, offset: 90, visibleLength: 30))
+
+        XCTAssertFalse(controller.isFocusedPanelViewportBottomAlignmentPending)
+
+        XCTAssertTrue(store.send(.toggleFocusedPanelMode(workspaceID: workspaceID)))
+
+        XCTAssertFalse(controller.isFocusedPanelViewportBottomAlignmentPending)
+    }
+
     func testSurfaceLaunchConfigurationUsesProfileBindingAndRestoreReason() throws {
         let workspaceID = UUID()
         let panelID = UUID()

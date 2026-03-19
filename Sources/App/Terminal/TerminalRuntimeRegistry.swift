@@ -117,12 +117,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
                     panelIDs: panelIDs
                 )
             },
-            armFocusedPanelViewportBottomAlignment: { [weak self] workspaceID, panelID in
-                self?.runtimeStore.armFocusedPanelViewportBottomAlignment(
-                    workspaceID: workspaceID,
-                    panelID: panelID
-                )
-            },
             requestWorkspaceFocusRestore: { [weak self] workspaceID in
                 self?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
             }
