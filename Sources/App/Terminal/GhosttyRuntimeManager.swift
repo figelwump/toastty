@@ -73,7 +73,6 @@ private final class WeakTerminalHostViewBox {
 private enum GhosttyDirectHostViewAction: Sendable {
     case mouseShape(surfaceHandle: UInt, shape: ghostty_action_mouse_shape_e)
     case mouseVisibility(surfaceHandle: UInt, visibility: ghostty_action_mouse_visibility_e)
-    case mouseOverLink(surfaceHandle: UInt, url: String?)
 
     var logIntentName: String {
         switch self {
@@ -81,23 +80,8 @@ private enum GhosttyDirectHostViewAction: Sendable {
             return "mouse_shape"
         case .mouseVisibility:
             return "mouse_visibility"
-        case .mouseOverLink:
-            return "mouse_over_link"
         }
     }
-}
-
-private func ghosttyString(
-    pointer: UnsafePointer<CChar>?,
-    length: Int
-) -> String? {
-    guard let pointer, length > 0 else {
-        return nil
-    }
-
-    let bytePointer = UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self)
-    let buffer = UnsafeBufferPointer(start: bytePointer, count: length)
-    return String(bytes: buffer, encoding: .utf8)
 }
 
 private enum GhosttyMainThreadAction: Sendable {
@@ -254,16 +238,6 @@ private func makeGhosttyDirectHostViewAction(
         return .mouseVisibility(
             surfaceHandle: UInt(bitPattern: surface),
             visibility: action.action.mouse_visibility
-        )
-    case GHOSTTY_ACTION_MOUSE_OVER_LINK:
-        guard target.tag == GHOSTTY_TARGET_SURFACE,
-              let surface = target.target.surface else {
-            return nil
-        }
-        let hoverLink = action.action.mouse_over_link
-        return .mouseOverLink(
-            surfaceHandle: UInt(bitPattern: surface),
-            url: ghosttyString(pointer: hoverLink.url, length: Int(hoverLink.len))
         )
     default:
         return nil
@@ -1005,12 +979,6 @@ final class GhosttyRuntimeManager {
                 return false
             }
             hostView.setGhosttyMouseVisibility(visibility)
-            return true
-        case .mouseOverLink(let surfaceHandle, let url):
-            guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
-                return false
-            }
-            hostView.setGhosttyMouseOverLink(url)
             return true
         }
     }
