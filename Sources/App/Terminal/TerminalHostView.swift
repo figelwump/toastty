@@ -121,7 +121,26 @@ final class TerminalHostView: NSView {
         let isRepeat: Bool
     }
 
+    struct GhosttySurfaceHooks: Sendable {
+        var setFocus: @Sendable (ghostty_surface_t, Bool) -> Void
+        var setOcclusion: @Sendable (ghostty_surface_t, Bool) -> Void
+        var refresh: @Sendable (ghostty_surface_t) -> Void
+
+        static let live = GhosttySurfaceHooks(
+            setFocus: { surface, focused in
+                ghostty_surface_set_focus(surface, focused)
+            },
+            setOcclusion: { surface, visible in
+                ghostty_surface_set_occlusion(surface, visible)
+            },
+            refresh: { surface in
+                ghostty_surface_refresh(surface)
+            }
+        )
+    }
+
     private var ghosttySurface: ghostty_surface_t?
+    var ghosttySurfaceHooks = GhosttySurfaceHooks.live
     /// Tracks the last focus value sent to Ghostty to avoid redundant calls.
     /// Each `ghostty_surface_set_focus` call restarts the internal cursor blink
     /// timer; calling it on every layout pass causes irregular blinking and
@@ -268,18 +287,23 @@ final class TerminalHostView: NSView {
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     func setGhosttySurface(_ surface: ghostty_surface_t?) {
-        let surfaceChanged = ghosttySurface != surface
+        // SwiftUI re-renders panel chrome when terminal metadata changes.
+        // Reapplying the exact same live surface here would clear the cached
+        // focus/occlusion state and replay visibility restoration on the active
+        // terminal, which shows up as cursor jitter in TUIs like Claude Code.
+        guard ghosttySurface != surface else {
+            return
+        }
+
         ghosttySurface = surface
         lastAppliedSurfaceFocus = nil
         rightMousePressWasForwarded = false
         pendingImageFileDrop = nil
         lastKnownSurfaceVisibility = nil
-        if surfaceChanged {
-            ghosttyMouseCursorStyle = .horizontalText
-            ghosttyMouseCursorVisible = true
-            ghosttyMouseOverLinkURL = nil
-            syncGhosttyCursorOwner()
-        }
+        ghosttyMouseCursorStyle = .horizontalText
+        ghosttyMouseCursorVisible = true
+        ghosttyMouseOverLinkURL = nil
+        syncGhosttyCursorOwner()
         lastLoggedVisibilityTraceSnapshot = nil
         syncSurfaceVisibility(reason: "surface_assignment")
     }
@@ -304,7 +328,7 @@ final class TerminalHostView: NSView {
         // refresh here. Doing so injects extra render work into active typing
         // flows and regressed cursor stability in terminal UIs like Codex and
         // Claude Code. Ghostty's normal render loop picks up the focus change.
-        ghostty_surface_set_focus(ghosttySurface, focused)
+        ghosttySurfaceHooks.setFocus(ghosttySurface, focused)
         let nowNanoseconds = Self.currentUptimeNanoseconds()
         var metadata: [String: String] = [
             "focused": focused ? "true" : "false",
@@ -449,7 +473,7 @@ final class TerminalHostView: NSView {
         }
 
         lastKnownSurfaceVisibility = visible
-        ghostty_surface_set_occlusion(ghosttySurface, visible)
+        ghosttySurfaceHooks.setOcclusion(ghosttySurface, visible)
         if visible {
             let shouldRestoreFocus = applicationIsActiveProvider() &&
                 window?.isKeyWindow == true &&
@@ -459,7 +483,7 @@ final class TerminalHostView: NSView {
                 reason: "visibility_restoration"
             )
             GhosttyRuntimeManager.shared.requestImmediateTick()
-            ghostty_surface_refresh(ghosttySurface)
+            ghosttySurfaceHooks.refresh(ghosttySurface)
         } else {
             syncSurfaceFocus(
                 false,

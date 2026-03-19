@@ -48,6 +48,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - For remote GUI validation, use `scripts/remote/gui-validate.sh` with `TOASTTY_REMOTE_GUI_HOST`. It creates a disposable remote worktree, syncs the requested change scope into it, launches an isolated instance there, runs the remote validation command, and copies the artifacts back into `artifacts/remote-gui/<run-label>/`.
 - Capture the launched app PID and use PID-targeted tooling for validation whenever possible. Prefer `peekaboo ... --pid <pid>` and avoid generic `osascript` or app-name-only targeting when more than one Toastty instance may be running.
 - When runtime isolation is enabled, Toastty writes `instance.json` inside that runtime home. Use it to find the exact sandbox, log path, socket path, derived path, and worktree root for the running instance you launched.
+- For Xcode-launched Toastty runs, assume runtime isolation is active unless you have evidence otherwise. Start debugging from `artifacts/dev-runs/worktree-*/runtime-home/instance.json`, and use its `logFilePath`, `runtimeHomePath`, `bundlePath`, and `pid` as the source of truth before checking global defaults under `~/Library/Logs/Toastty/`.
 - Before any `peekaboo` call, get the PID from `instance.json` and confirm it is still alive. If the PID is stale, relaunch instead of guessing.
 - Shell integration installation is intentionally disabled when runtime isolation is enabled. Sandboxed dev/test runs must not rewrite the user's login shell files.
 - When a run is finished, clean up only its own per-run directories. Use `./scripts/automation/cleanup-dev-runs.sh` for stale run cleanup, and never delete paths for a still-running PID.
@@ -82,6 +83,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 
 ## Logging
 - Default log: `~/Library/Logs/Toastty/toastty.log` for ordinary runs, or `<runtime-home>/logs/toastty.log` when runtime isolation is enabled (rotates at 5 MB to `toastty.previous.log`)
+- For debugging a specific dev/Xcode instance, resolve `instance.json` first and read `logFilePath` from there instead of guessing between the global log and a per-run log. Treat `instance.json` as authoritative for the active run's log, runtime home, socket path, and bundle path.
 - Tail: `tail -f ~/Library/Logs/Toastty/toastty.log` or `tail -f "<runtime-home>/logs/toastty.log"` (pipe to `jq` for pretty JSON)
 - Env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` to disable), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`
 - Key instrumentation points: `TerminalHostView` (key events), `GhosttyRuntimeManager` (action routing), `TerminalRuntimeRegistry` (dispatch), `AppReducer` (split resize/equalize)

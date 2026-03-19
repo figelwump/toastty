@@ -281,6 +281,80 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertFalse(hostView.resolvedGhosttySurfaceFocusState())
     }
+
+    func testSetGhosttySurfaceSkipsRepeatedAssignmentForSameSurface() {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var requestCount = 0
+        let focusHookCount = HookCallCounter()
+        let occlusionHookCount = HookCallCounter()
+        let refreshHookCount = HookCallCounter()
+        let surface = fakeSurfaceHandle(0x1234)
+
+        hostView.applicationIsActiveProvider = { true }
+        hostView.requestFirstResponderIfNeeded = {
+            requestCount += 1
+        }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in
+                focusHookCount.increment()
+            },
+            setOcclusion: { _, _ in
+                occlusionHookCount.increment()
+            },
+            refresh: { _ in
+                refreshHookCount.increment()
+            }
+        )
+        window.forcedOcclusionState = [.visible]
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+
+        contentView.addSubview(hostView)
+        _ = hostView.synchronizePresentationVisibility(reason: "test_surface_assignment_visible")
+        _ = window.makeFirstResponder(hostView)
+        requestCount = 0
+
+        hostView.setGhosttySurface(surface)
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(focusHookCount.value, 1)
+        XCTAssertEqual(occlusionHookCount.value, 1)
+        XCTAssertEqual(refreshHookCount.value, 1)
+
+        requestCount = 0
+        hostView.setGhosttySurface(surface)
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertEqual(focusHookCount.value, 1)
+        XCTAssertEqual(occlusionHookCount.value, 1)
+        XCTAssertEqual(refreshHookCount.value, 1)
+    }
+}
+
+private func fakeSurfaceHandle(_ rawValue: UInt) -> ghostty_surface_t {
+    guard let surface = ghostty_surface_t(bitPattern: rawValue) else {
+        fatalError("expected fake Ghostty surface handle")
+    }
+    return surface
+}
+
+private final class HookCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    func increment() {
+        lock.lock()
+        storage += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
+    }
 }
 
 private final class TestWindow: NSWindow {
