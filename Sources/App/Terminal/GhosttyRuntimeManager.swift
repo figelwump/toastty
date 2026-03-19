@@ -19,7 +19,7 @@ struct GhosttyRuntimeAction: Sendable {
         case resizeSplit(SplitResizeDirection, amount: Int)
         case equalizeSplits
         case toggleFocusedPanelMode
-        case scrollbar(TerminalScrollbarState)
+        case acknowledgeScrollbar
         case setTerminalTitle(String)
         case setTerminalCWD(String)
         case showChildExited(exitCode: Int)
@@ -42,7 +42,7 @@ struct GhosttyRuntimeAction: Sendable {
             return "equalize_splits"
         case .toggleFocusedPanelMode:
             return "toggle_focused_panel_mode"
-        case .scrollbar:
+        case .acknowledgeScrollbar:
             return "scrollbar"
         case .setTerminalTitle:
             return "set_terminal_title"
@@ -201,14 +201,7 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
         intent = .toggleFocusedPanelMode
 
     case GHOSTTY_ACTION_SCROLLBAR:
-        let scrollbar = action.action.scrollbar
-        intent = .scrollbar(
-            TerminalScrollbarState(
-                total: scrollbar.total,
-                offset: scrollbar.offset,
-                visibleLength: scrollbar.len
-            )
-        )
+        intent = .acknowledgeScrollbar
 
     case GHOSTTY_ACTION_SET_TITLE:
         let title = action.action.set_title.title.map { String(cString: $0) } ?? ""

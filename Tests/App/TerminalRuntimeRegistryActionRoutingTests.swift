@@ -85,32 +85,6 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
         }
     }
 
-    @MainActor
-    func testSurfaceTargetScrollbarActionUpdatesOwningControllerScrollbarState() throws {
-        let state = AppState.bootstrap()
-        let (store, registry) = makeStoreAndRegistry(state: state)
-        let windowID = try XCTUnwrap(store.state.windows.first?.id)
-        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
-        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
-        let controller = registry.controller(for: panelID, workspaceID: workspaceID, windowID: windowID)
-        registry.registerSurfaceHandleForTesting(0x5150, for: panelID)
-
-        let handled = registry.handleGhosttyRuntimeAction(
-            GhosttyRuntimeAction(
-                surfaceHandle: 0x5150,
-                intent: .scrollbar(
-                    TerminalScrollbarState(total: 100, offset: 75, visibleLength: 25)
-                )
-            )
-        )
-
-        XCTAssertTrue(handled)
-        XCTAssertEqual(
-            controller.currentScrollbarState,
-            TerminalScrollbarState(total: 100, offset: 75, visibleLength: 25)
-        )
-    }
-
     func testAppTargetTitleMetadataActionUpdatesFocusedPanelWithoutChangingFocus() async throws {
         try await MainActor.run {
             let state = AppState.bootstrap()
@@ -173,6 +147,67 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
                 return
             }
             XCTAssertEqual(terminalState.cwd, "/tmp/toastty/runtime-router")
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testSurfaceTargetTitleMetadataActionUpdatesResolvedPanel() async throws {
+        try await MainActor.run {
+            let state = try makeSplitState()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let workspaceBefore = try XCTUnwrap(store.selectedWorkspace)
+            let windowID = try XCTUnwrap(store.selectedWindow?.id)
+            let workspaceID = workspaceBefore.id
+            let initiallyFocusedPanelID = try XCTUnwrap(workspaceBefore.focusedPanelID)
+            let targetPanelID = try XCTUnwrap(
+                workspaceBefore.panels.keys.first(where: { $0 != initiallyFocusedPanelID })
+            )
+            let surface = fakeSurfaceHandle(0x404)
+            registry.registerSurfaceHandleForTesting(
+                surface,
+                for: targetPanelID,
+                workspaceID: workspaceID,
+                windowID: windowID,
+                state: store.state
+            )
+
+            defer {
+                registry.unregisterSurfaceHandle(surface, for: targetPanelID)
+            }
+
+            let handled = registry.handleGhosttyRuntimeAction(
+                GhosttyRuntimeAction(
+                    surfaceHandle: UInt(bitPattern: surface),
+                    intent: .setTerminalTitle("Background Task")
+                )
+            )
+
+            XCTAssertTrue(handled)
+            XCTAssertEqual(registry.panelID(forSurfaceHandle: UInt(bitPattern: surface)), targetPanelID)
+
+            let workspaceAfter = try XCTUnwrap(store.selectedWorkspace)
+            XCTAssertEqual(workspaceAfter.focusedPanelID, initiallyFocusedPanelID)
+            guard case .terminal(let terminalState) = workspaceAfter.panels[targetPanelID] else {
+                XCTFail("expected resolved panel to remain terminal")
+                return
+            }
+            XCTAssertEqual(terminalState.title, "Background Task")
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testScrollbarAcknowledgementBypassesSurfaceResolution() async throws {
+        try await MainActor.run {
+            let state = try makeSplitState()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let focusedPanelIDBefore = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+            let handled = registry.handleGhosttyRuntimeAction(
+                GhosttyRuntimeAction(surfaceHandle: 0xDEADBEEF, intent: .acknowledgeScrollbar)
+            )
+
+            XCTAssertTrue(handled)
+            XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, focusedPanelIDBefore)
             try StateValidator.validate(store.state)
         }
     }
@@ -333,5 +368,12 @@ private func makeSplitState(rootRatio: Double = 0.5) throws -> AppState {
     )
     state.workspacesByID[workspaceID] = workspace
     return state
+}
+
+private func fakeSurfaceHandle(_ rawValue: UInt) -> ghostty_surface_t {
+    guard let surface = ghostty_surface_t(bitPattern: rawValue) else {
+        fatalError("expected fake Ghostty surface handle")
+    }
+    return surface
 }
 #endif

@@ -15,14 +15,6 @@ final class TerminalActionRouter {
     func handle(_ action: GhosttyRuntimeAction) -> Bool {
         let appState = store.state
 
-        if case .scrollbar(let scrollbarState) = action.intent {
-            return registry.handleScrollbarAction(
-                action: action,
-                scrollbarState: scrollbarState,
-                state: appState
-            )
-        }
-
         if case .desktopNotification(let title, let body) = action.intent {
             return registry.handleDesktopNotificationAction(
                 action: action,
@@ -31,6 +23,11 @@ final class TerminalActionRouter {
                 state: appState,
                 store: store
             )
+        }
+        if case .acknowledgeScrollbar = action.intent {
+            // Ghostty expects scrollbar callbacks to be acknowledged even
+            // though Toastty no longer routes or stores that state.
+            return true
         }
 
         guard let resolution = registry.resolveActionTarget(for: action, state: appState) else {
@@ -92,13 +89,13 @@ final class TerminalActionRouter {
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: resolution.workspaceID))
 
+        case .acknowledgeScrollbar:
+            handled = true
+
         case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             handled = false
 
         case .desktopNotification:
-            handled = false
-
-        case .scrollbar:
             handled = false
         }
 

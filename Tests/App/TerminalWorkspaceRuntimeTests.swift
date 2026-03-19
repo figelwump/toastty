@@ -38,29 +38,6 @@ final class TerminalWorkspaceRuntimeTests: XCTestCase {
         }
     }
 
-    func testArmFocusedPanelViewportBottomAlignmentOnlyTouchesRequestedWorkspaceController() {
-        let workspaceID = UUID()
-        let runtime = TerminalWorkspaceRuntime(workspaceID: workspaceID)
-        let bottomPinnedPanelID = UUID()
-        let otherPanelID = UUID()
-        let delegate = TestTerminalSurfaceControllerDelegate()
-
-        let bottomPinnedController = runtime.controller(for: bottomPinnedPanelID, delegate: delegate)
-        let otherController = runtime.controller(for: otherPanelID, delegate: delegate)
-        runtime.updateScrollbarState(
-            TerminalScrollbarState(total: 80, offset: 60, visibleLength: 20),
-            for: bottomPinnedPanelID
-        )
-        runtime.updateScrollbarState(
-            TerminalScrollbarState(total: 80, offset: 10, visibleLength: 20),
-            for: otherPanelID
-        )
-
-        runtime.armFocusedPanelViewportBottomAlignment(for: bottomPinnedPanelID)
-
-        XCTAssertTrue(bottomPinnedController.isFocusedPanelViewportBottomAlignmentPending)
-        XCTAssertFalse(otherController.isFocusedPanelViewportBottomAlignmentPending)
-    }
 }
 
 @MainActor

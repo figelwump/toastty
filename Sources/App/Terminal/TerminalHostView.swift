@@ -41,7 +41,6 @@ final class TerminalHostView: NSView {
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var lastLoggedVisibilityTraceSnapshot: VisibilityTraceSnapshot?
-    private var lastTypingEventTrace: TypingEventTrace?
 
     enum GhosttyMouseCursorStyle: Equatable {
         case `default`
@@ -112,13 +111,6 @@ final class TerminalHostView: NSView {
                 return .operationNotAllowed
             }
         }
-    }
-
-    private struct TypingEventTrace {
-        let uptimeNanoseconds: UInt64
-        let keyCode: UInt16
-        let actionName: String
-        let isRepeat: Bool
     }
 
     struct GhosttySurfaceHooks: Sendable {
@@ -329,19 +321,14 @@ final class TerminalHostView: NSView {
         // flows and regressed cursor stability in terminal UIs like Codex and
         // Claude Code. Ghostty's normal render loop picks up the focus change.
         ghosttySurfaceHooks.setFocus(ghosttySurface, focused)
-        let nowNanoseconds = Self.currentUptimeNanoseconds()
-        var metadata: [String: String] = [
-            "focused": focused ? "true" : "false",
-            "reason": reason,
-            "host_effectively_visible": isEffectivelyVisible ? "true" : "false",
-        ]
-        for (key, value) in recentTypingTraceMetadata(nowNanoseconds: nowNanoseconds) {
-            metadata[key] = value
-        }
         ToasttyLog.debug(
             "Updated Ghostty surface focus",
             category: .ghostty,
-            metadata: metadata
+            metadata: [
+                "focused": focused ? "true" : "false",
+                "reason": reason,
+                "host_effectively_visible": isEffectivelyVisible ? "true" : "false",
+            ]
         )
         return true
     }
@@ -490,31 +477,25 @@ final class TerminalHostView: NSView {
                 reason: "visibility_hidden"
             )
         }
-        let nowNanoseconds = Self.currentUptimeNanoseconds()
-        var metadata: [String: String] = [
-            "previous_visible": previousVisible.map { $0 ? "true" : "false" } ?? "nil",
-            "visible": visible ? "true" : "false",
-            "reason": reason,
-            "restored_focus": visible &&
-                applicationIsActiveProvider() &&
-                window?.isKeyWindow == true &&
-                window?.firstResponder === self ? "true" : "false",
-            "has_window": traceSnapshot.hasWindow ? "true" : "false",
-            "is_hidden": traceSnapshot.isHidden ? "true" : "false",
-            "has_hidden_ancestor": traceSnapshot.hasHiddenAncestor ? "true" : "false",
-            "window_visible": traceSnapshot.windowVisible ? "true" : "false",
-            "self_alpha_thousandths": String(traceSnapshot.selfAlphaThousandths),
-            "min_ancestor_alpha_thousandths": String(traceSnapshot.minAncestorAlphaThousandths),
-            "min_chain_alpha_thousandths": String(traceSnapshot.minChainAlphaThousandths),
-        ]
-        for (key, value) in recentTypingTraceMetadata(nowNanoseconds: nowNanoseconds) {
-            metadata[key] = value
-        }
-
         ToasttyLog.debug(
             "Updated Ghostty surface occlusion",
             category: .ghostty,
-            metadata: metadata
+            metadata: [
+                "previous_visible": previousVisible.map { $0 ? "true" : "false" } ?? "nil",
+                "visible": visible ? "true" : "false",
+                "reason": reason,
+                "restored_focus": visible &&
+                    applicationIsActiveProvider() &&
+                    window?.isKeyWindow == true &&
+                    window?.firstResponder === self ? "true" : "false",
+                "has_window": traceSnapshot.hasWindow ? "true" : "false",
+                "is_hidden": traceSnapshot.isHidden ? "true" : "false",
+                "has_hidden_ancestor": traceSnapshot.hasHiddenAncestor ? "true" : "false",
+                "window_visible": traceSnapshot.windowVisible ? "true" : "false",
+                "self_alpha_thousandths": String(traceSnapshot.selfAlphaThousandths),
+                "min_ancestor_alpha_thousandths": String(traceSnapshot.minAncestorAlphaThousandths),
+                "min_chain_alpha_thousandths": String(traceSnapshot.minChainAlphaThousandths),
+            ]
         )
     }
 
@@ -547,47 +528,6 @@ final class TerminalHostView: NSView {
 
     private static func alphaThousandths(_ alpha: CGFloat) -> Int {
         Int((max(0, min(1, alpha)) * 1_000).rounded())
-    }
-
-    private static func currentUptimeNanoseconds() -> UInt64 {
-        DispatchTime.now().uptimeNanoseconds
-    }
-
-    private static func deltaMillisecondsString(from earlierNanoseconds: UInt64, to laterNanoseconds: UInt64) -> String {
-        let deltaNanoseconds = laterNanoseconds > earlierNanoseconds
-            ? laterNanoseconds - earlierNanoseconds
-            : 0
-        return String(format: "%.3f", Double(deltaNanoseconds) / 1_000_000)
-    }
-
-    private func recordTypingTraceIfNeeded(_ event: NSEvent, action: ghostty_input_action_e) {
-        guard event.type == .keyDown else {
-            return
-        }
-        lastTypingEventTrace = TypingEventTrace(
-            uptimeNanoseconds: Self.currentUptimeNanoseconds(),
-            keyCode: event.keyCode,
-            actionName: Self.ghosttyInputActionName(action),
-            isRepeat: event.isARepeat
-        )
-    }
-
-    func recentTypingTraceMetadata(nowNanoseconds: UInt64) -> [String: String] {
-        guard let lastTypingEventTrace else {
-            return [:]
-        }
-        let deltaNanoseconds = nowNanoseconds > lastTypingEventTrace.uptimeNanoseconds
-            ? nowNanoseconds - lastTypingEventTrace.uptimeNanoseconds
-            : 0
-        guard deltaNanoseconds <= 30_000_000_000 else {
-            return [:]
-        }
-        return [
-            "delta_ms_since_last_key_down": String(format: "%.3f", Double(deltaNanoseconds) / 1_000_000),
-            "last_key_down_key_code": String(lastTypingEventTrace.keyCode),
-            "last_key_down_action": lastTypingEventTrace.actionName,
-            "last_key_down_repeat": lastTypingEventTrace.isRepeat ? "true" : "false",
-        ]
     }
 
     private func logVisibilityTraceIfNeeded(_ traceSnapshot: VisibilityTraceSnapshot, reason: String) {
@@ -987,8 +927,6 @@ final class TerminalHostView: NSView {
             )
             return false
         }
-        recordTypingTraceIfNeeded(event, action: action)
-
         let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
         // Translation mods are only for keyboard-layout text translation (for example
         // option-as-alt) and should not strip control/command from the actual key event.

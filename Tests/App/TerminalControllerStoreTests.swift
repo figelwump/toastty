@@ -24,32 +24,6 @@ final class TerminalControllerStoreTests: XCTestCase {
         untouchedController.invalidate()
     }
 
-    func testArmFocusedPanelViewportBottomAlignmentOnlyMarksBottomPinnedRequestedController() {
-        let store = TerminalControllerStore()
-        let bottomPinnedPanelID = UUID()
-        let scrolledPanelID = UUID()
-        let delegate = TestTerminalSurfaceControllerDelegate()
-
-        let bottomPinnedController = store.controller(for: bottomPinnedPanelID, delegate: delegate)
-        let scrolledController = store.controller(for: scrolledPanelID, delegate: delegate)
-        store.updateScrollbarState(
-            TerminalScrollbarState(total: 120, offset: 90, visibleLength: 30),
-            for: bottomPinnedPanelID
-        )
-        store.updateScrollbarState(
-            TerminalScrollbarState(total: 120, offset: 70, visibleLength: 30),
-            for: scrolledPanelID
-        )
-
-        store.armFocusedPanelViewportBottomAlignment(for: bottomPinnedPanelID)
-        store.armFocusedPanelViewportBottomAlignment(for: scrolledPanelID)
-
-        XCTAssertTrue(bottomPinnedController.isFocusedPanelViewportBottomAlignmentPending)
-        XCTAssertFalse(scrolledController.isFocusedPanelViewportBottomAlignmentPending)
-        bottomPinnedController.invalidate()
-        scrolledController.invalidate()
-    }
-
     func testInvalidateControllersRemovesMissingPanelsAndPrunesSurfaceMappings() {
         let store = TerminalControllerStore()
         let livePanelID = UUID()

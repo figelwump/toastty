@@ -182,20 +182,6 @@ final class TerminalControllerStore {
         }
     }
 
-    func updateScrollbarState(_ state: TerminalScrollbarState, for panelID: UUID) {
-        controllers[panelID]?.updateScrollbarState(state)
-    }
-
-    func armFocusedPanelViewportBottomAlignment(for panelID: UUID) {
-        controllers[panelID]?.armFocusedPanelViewportBottomAlignmentIfNeeded()
-    }
-
-    #if DEBUG
-    func registerSurfaceHandleForTesting(_ surfaceHandle: UInt, for panelID: UUID) {
-        panelIDBySurfaceHandle[surfaceHandle] = panelID
-    }
-    #endif
-
     private static func resolveSplitSourcePanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
            workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil,

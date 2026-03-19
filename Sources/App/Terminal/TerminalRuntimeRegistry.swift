@@ -533,8 +533,20 @@ extension TerminalRuntimeRegistry {
     }
 
     #if DEBUG
-    func registerSurfaceHandleForTesting(_ surfaceHandle: UInt, for panelID: UUID) {
-        runtimeStore.registerSurfaceHandleForTesting(surfaceHandle, for: panelID)
+    func registerSurfaceHandleForTesting(
+        _ surface: ghostty_surface_t,
+        for panelID: UUID,
+        workspaceID: UUID,
+        windowID: UUID,
+        state: AppState
+    ) {
+        runtimeStore.registerSurfaceHandleForTesting(
+            surface,
+            for: panelID,
+            workspaceID: workspaceID,
+            windowID: windowID,
+            state: state
+        )
     }
     #endif
 
@@ -858,32 +870,6 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         }
 
         return (resolvedPanelID, selection.workspaceID)
-    }
-
-    func handleScrollbarAction(
-        action: GhosttyRuntimeAction,
-        scrollbarState: TerminalScrollbarState,
-        state: AppState
-    ) -> Bool {
-        guard let resolution = resolveActionTarget(for: action, state: state) else {
-            return false
-        }
-        ToasttyLog.debug(
-            "Routed Ghostty scrollbar action to terminal controller",
-            category: .ghostty,
-            metadata: [
-                "workspace_id": resolution.workspaceID.uuidString,
-                "panel_id": resolution.panelID.uuidString,
-                "surface_handle": action.surfaceHandle.map(String.init) ?? "nil",
-                "scrollbar_total": String(scrollbarState.total),
-                "scrollbar_offset": String(scrollbarState.offset),
-                "scrollbar_visible_length": String(scrollbarState.visibleLength),
-                "scrollbar_trailing_edge": String(scrollbarState.trailingEdge),
-                "scrollbar_pinned_to_bottom": scrollbarState.isPinnedToBottom ? "true" : "false",
-            ]
-        )
-        runtimeStore.updateScrollbarState(scrollbarState, for: resolution.panelID)
-        return true
     }
 
     func handleDesktopNotificationAction(

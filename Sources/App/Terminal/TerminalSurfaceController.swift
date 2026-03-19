@@ -39,18 +39,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var closeTransitionViewportDeferralArmed = false
     private var closeTransitionViewportUpdatePending = false
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
-    private var latestScrollbarState: TerminalScrollbarState?
-    private var lastScrollbarUpdateUptimeNanoseconds: UInt64?
-    private var focusedPanelViewportBottomAlignmentPending = false
-    private var lastBottomAlignmentArmUptimeNanoseconds: UInt64?
-    private var lastImmediateSurfaceRefreshTrace: ImmediateSurfaceRefreshTrace?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
     private let requiredStableViewportResumePasses = 2
     private let requiredAutomationInputStabilityInterval: TimeInterval = 0.5
-    private static let scrollToBottomBindingAction = "scroll_to_bottom"
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -90,11 +84,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let attachment: PanelHostAttachmentToken
     }
 
-    private struct ImmediateSurfaceRefreshTrace {
-        let uptimeNanoseconds: UInt64
-        let reason: String
-    }
-
     private enum SurfaceCreationDeferralReason: String {
         case noWindow = "no_window"
         case hiddenHost = "hidden_host"
@@ -112,16 +101,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         var viewportDeferredCount = 0
     }
 
-    private static func currentUptimeNanoseconds() -> UInt64 {
-        DispatchTime.now().uptimeNanoseconds
-    }
-
-    private static func deltaMillisecondsString(from earlierNanoseconds: UInt64, to laterNanoseconds: UInt64) -> String {
-        let deltaNanoseconds = laterNanoseconds > earlierNanoseconds
-            ? laterNanoseconds - earlierNanoseconds
-            : 0
-        return String(format: "%.3f", Double(deltaNanoseconds) / 1_000_000)
-    }
     #endif
 
     private let fallbackView = TerminalFallbackView()
@@ -528,36 +507,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let presentationChanged = presentationSignature != lastPresentationSignature
         lastPresentationSignature = presentationSignature
 
-        let didApplyFocusedPanelViewportBottomAlignment = applyFocusedPanelViewportBottomAlignmentIfNeeded(
-            on: ghosttySurface,
-            logicalWidth: logicalWidth,
-            logicalHeight: logicalHeight
-        )
         if hostVisible && (resumedFromViewportDeferral || presentationChanged) {
-            requestImmediateSurfaceRefresh(
-                ghosttySurface,
-                reason: resumedFromViewportDeferral ? "viewport_resume" : "presentation_change",
-                extra: [
-                    "focused": resolvedFocused ? "true" : "false",
-                    "logical_width": String(logicalWidth),
-                    "logical_height": String(logicalHeight),
-                    "pixel_width": String(pixelWidth),
-                    "pixel_height": String(pixelHeight),
-                ]
-            )
-        }
-        if didApplyFocusedPanelViewportBottomAlignment {
-            requestImmediateSurfaceRefresh(
-                ghosttySurface,
-                reason: "focused_panel_viewport_bottom_alignment",
-                extra: [
-                    "logical_width": String(logicalWidth),
-                    "logical_height": String(logicalHeight),
-                    "scrollbar_total": latestScrollbarState.map { String($0.total) } ?? "nil",
-                    "scrollbar_offset": latestScrollbarState.map { String($0.offset) } ?? "nil",
-                    "scrollbar_visible_length": latestScrollbarState.map { String($0.visibleLength) } ?? "nil",
-                ]
-            )
+            requestImmediateSurfaceRefresh(ghosttySurface)
         }
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
@@ -603,11 +554,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         closeTransitionViewportReplayTask = nil
         closeTransitionViewportDeferralArmed = false
         closeTransitionViewportUpdatePending = false
-        latestScrollbarState = nil
-        lastScrollbarUpdateUptimeNanoseconds = nil
-        focusedPanelViewportBottomAlignmentPending = false
-        lastBottomAlignmentArmUptimeNanoseconds = nil
-        lastImmediateSurfaceRefreshTrace = nil
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -1131,112 +1077,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ToasttyLog.debug(message, category: .ghostty, metadata: metadata)
     }
 
-    func updateScrollbarState(_ state: TerminalScrollbarState) {
-        let previousState = latestScrollbarState
-        let previousUpdateUptimeNanoseconds = lastScrollbarUpdateUptimeNanoseconds
-        latestScrollbarState = state
-        let nowNanoseconds = Self.currentUptimeNanoseconds()
-        lastScrollbarUpdateUptimeNanoseconds = nowNanoseconds
-        guard previousState != state else {
-            return
-        }
-        var metadata: [String: String] = [
-            "panel_id": panelID.uuidString,
-            "scrollbar_total": String(state.total),
-            "scrollbar_offset": String(state.offset),
-            "scrollbar_visible_length": String(state.visibleLength),
-            "scrollbar_trailing_edge": String(state.trailingEdge),
-            "scrollbar_pinned_to_bottom": state.isPinnedToBottom ? "true" : "false",
-        ]
-        if let previousState {
-            metadata["previous_scrollbar_total"] = String(previousState.total)
-            metadata["previous_scrollbar_offset"] = String(previousState.offset)
-            metadata["previous_scrollbar_visible_length"] = String(previousState.visibleLength)
-            metadata["previous_scrollbar_pinned_to_bottom"] = previousState.isPinnedToBottom ? "true" : "false"
-        }
-        if let previousUpdateUptimeNanoseconds {
-            metadata["delta_ms_since_last_scrollbar_update"] = Self.deltaMillisecondsString(
-                from: previousUpdateUptimeNanoseconds,
-                to: nowNanoseconds
-            )
-        }
-        ToasttyLog.debug(
-            "Updated terminal scrollbar state",
-            category: .ghostty,
-            metadata: metadata
-        )
-    }
-
-    var currentScrollbarState: TerminalScrollbarState? {
-        latestScrollbarState
-    }
-
-    func armFocusedPanelViewportBottomAlignmentIfNeeded() {
-        let nowNanoseconds = Self.currentUptimeNanoseconds()
-        guard let latestScrollbarState else {
-            focusedPanelViewportBottomAlignmentPending = false
-            lastBottomAlignmentArmUptimeNanoseconds = nil
-            ToasttyLog.debug(
-                "Skipped focused panel viewport bottom alignment",
-                category: .ghostty,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                    "reason": "missing_scrollbar_state",
-                ]
-            )
-            return
-        }
-        guard latestScrollbarState.isPinnedToBottom else {
-            focusedPanelViewportBottomAlignmentPending = false
-            lastBottomAlignmentArmUptimeNanoseconds = nil
-            var metadata: [String: String] = [
-                "panel_id": panelID.uuidString,
-                "reason": "scrollbar_not_pinned_to_bottom",
-                "scrollbar_total": String(latestScrollbarState.total),
-                "scrollbar_offset": String(latestScrollbarState.offset),
-                "scrollbar_visible_length": String(latestScrollbarState.visibleLength),
-                "scrollbar_trailing_edge": String(latestScrollbarState.trailingEdge),
-                "scrollbar_pinned_to_bottom": "false",
-            ]
-            if let lastScrollbarUpdateUptimeNanoseconds {
-                metadata["delta_ms_since_last_scrollbar_update"] = Self.deltaMillisecondsString(
-                    from: lastScrollbarUpdateUptimeNanoseconds,
-                    to: nowNanoseconds
-                )
-            }
-            ToasttyLog.debug(
-                "Skipped focused panel viewport bottom alignment",
-                category: .ghostty,
-                metadata: metadata
-            )
-            return
-        }
-        focusedPanelViewportBottomAlignmentPending = true
-        lastBottomAlignmentArmUptimeNanoseconds = nowNanoseconds
-        var metadata: [String: String] = [
-            "panel_id": panelID.uuidString,
-            "scrollbar_total": String(latestScrollbarState.total),
-            "scrollbar_offset": String(latestScrollbarState.offset),
-            "scrollbar_visible_length": String(latestScrollbarState.visibleLength),
-            "scrollbar_trailing_edge": String(latestScrollbarState.trailingEdge),
-            "scrollbar_pinned_to_bottom": "true",
-        ]
-        if let lastScrollbarUpdateUptimeNanoseconds {
-            metadata["delta_ms_since_last_scrollbar_update"] = Self.deltaMillisecondsString(
-                from: lastScrollbarUpdateUptimeNanoseconds,
-                to: nowNanoseconds
-            )
-        }
-        ToasttyLog.debug(
-            "Armed focused panel viewport bottom alignment",
-            category: .ghostty,
-            metadata: metadata
-        )
-    }
-
-    var isFocusedPanelViewportBottomAlignmentPending: Bool {
-        focusedPanelViewportBottomAlignmentPending
-    }
     #endif
 }
 
@@ -1246,17 +1086,7 @@ extension TerminalSurfaceController {
     private func refreshSurfaceAfterContainerMove(sourceContainer: NSView) {
         guard let ghosttySurface else { return }
         updateDisplayIDIfNeeded(surface: ghosttySurface, sourceContainer: sourceContainer)
-        requestImmediateSurfaceRefresh(
-            ghosttySurface,
-            reason: "container_move",
-            extra: [
-                "container_has_window": sourceContainer.window == nil ? "false" : "true",
-                "container_hidden": sourceContainer.isHidden ? "true" : "false",
-                "container_hidden_ancestor": sourceContainer.hasHiddenAncestor ? "true" : "false",
-                "container_width": String(format: "%.1f", sourceContainer.bounds.width),
-                "container_height": String(format: "%.1f", sourceContainer.bounds.height),
-            ]
-        )
+        requestImmediateSurfaceRefresh(ghosttySurface)
     }
 
     private func updateDisplayIDIfNeeded(surface: ghostty_surface_t, sourceContainer: NSView) {
@@ -1372,14 +1202,7 @@ extension TerminalSurfaceController {
         guard terminalHostView.synchronizePresentationVisibility(reason: "visibility_pulse") else {
             return
         }
-        requestImmediateSurfaceRefresh(
-            ghosttySurface,
-            reason: "visibility_pulse",
-            extra: [
-                "host_effectively_visible": terminalHostView.isEffectivelyVisible ? "true" : "false",
-                "lifecycle_state": lifecycleState.automationLabel,
-            ]
-        )
+        requestImmediateSurfaceRefresh(ghosttySurface)
     }
 
     // Closing a split can briefly produce an intermediate resize before the
@@ -1407,57 +1230,7 @@ extension TerminalSurfaceController {
         closeTransitionViewportDeferralArmed
     }
 
-    private func requestImmediateSurfaceRefresh(
-        _ surface: ghostty_surface_t,
-        reason: String,
-        extra: [String: String] = [:]
-    ) {
-        let nowNanoseconds = Self.currentUptimeNanoseconds()
-        var metadata: [String: String] = [
-            "panel_id": panelID.uuidString,
-            "reason": reason,
-            "host_effectively_visible": terminalHostView.isEffectivelyVisible ? "true" : "false",
-        ]
-        if let latestScrollbarState {
-            metadata["scrollbar_total"] = String(latestScrollbarState.total)
-            metadata["scrollbar_offset"] = String(latestScrollbarState.offset)
-            metadata["scrollbar_visible_length"] = String(latestScrollbarState.visibleLength)
-            metadata["scrollbar_pinned_to_bottom"] = latestScrollbarState.isPinnedToBottom ? "true" : "false"
-        }
-        if let lastScrollbarUpdateUptimeNanoseconds {
-            metadata["delta_ms_since_last_scrollbar_update"] = Self.deltaMillisecondsString(
-                from: lastScrollbarUpdateUptimeNanoseconds,
-                to: nowNanoseconds
-            )
-        }
-        if let lastBottomAlignmentArmUptimeNanoseconds {
-            metadata["delta_ms_since_bottom_alignment_arm"] = Self.deltaMillisecondsString(
-                from: lastBottomAlignmentArmUptimeNanoseconds,
-                to: nowNanoseconds
-            )
-        }
-        if let lastImmediateSurfaceRefreshTrace {
-            metadata["delta_ms_since_last_immediate_refresh"] = Self.deltaMillisecondsString(
-                from: lastImmediateSurfaceRefreshTrace.uptimeNanoseconds,
-                to: nowNanoseconds
-            )
-            metadata["previous_immediate_refresh_reason"] = lastImmediateSurfaceRefreshTrace.reason
-        }
-        for (key, value) in terminalHostView.recentTypingTraceMetadata(nowNanoseconds: nowNanoseconds) {
-            metadata[key] = value
-        }
-        for (key, value) in extra {
-            metadata[key] = value
-        }
-        ToasttyLog.debug(
-            "Requesting immediate Ghostty surface refresh",
-            category: .ghostty,
-            metadata: metadata
-        )
-        lastImmediateSurfaceRefreshTrace = ImmediateSurfaceRefreshTrace(
-            uptimeNanoseconds: nowNanoseconds,
-            reason: reason
-        )
+    private func requestImmediateSurfaceRefresh(_ surface: ghostty_surface_t) {
         ghosttyManager.requestImmediateTick()
         ghostty_surface_refresh(surface)
     }
@@ -1484,52 +1257,6 @@ extension TerminalSurfaceController {
             backingScaleFactor: backingScaleFactor,
             attachment: attachment
         )
-    }
-
-    private func applyFocusedPanelViewportBottomAlignmentIfNeeded(
-        on surface: ghostty_surface_t,
-        logicalWidth: Int,
-        logicalHeight: Int
-    ) -> Bool {
-        guard focusedPanelViewportBottomAlignmentPending else {
-            return false
-        }
-        focusedPanelViewportBottomAlignmentPending = false
-        let nowNanoseconds = Self.currentUptimeNanoseconds()
-        let handled = invokeGhosttyBindingAction(Self.scrollToBottomBindingAction, on: surface)
-        var metadata: [String: String] = [
-            "panel_id": panelID.uuidString,
-            "logical_width": String(logicalWidth),
-            "logical_height": String(logicalHeight),
-            "handled": handled ? "true" : "false",
-            "scrollbar_total": latestScrollbarState.map { String($0.total) } ?? "nil",
-            "scrollbar_offset": latestScrollbarState.map { String($0.offset) } ?? "nil",
-            "scrollbar_visible_length": latestScrollbarState.map { String($0.visibleLength) } ?? "nil",
-            "scrollbar_pinned_to_bottom": latestScrollbarState.map { $0.isPinnedToBottom ? "true" : "false" } ?? "nil",
-        ]
-        if let lastScrollbarUpdateUptimeNanoseconds {
-            metadata["delta_ms_since_last_scrollbar_update"] = Self.deltaMillisecondsString(
-                from: lastScrollbarUpdateUptimeNanoseconds,
-                to: nowNanoseconds
-            )
-        }
-        if let lastBottomAlignmentArmUptimeNanoseconds {
-            metadata["delta_ms_since_bottom_alignment_arm"] = Self.deltaMillisecondsString(
-                from: lastBottomAlignmentArmUptimeNanoseconds,
-                to: nowNanoseconds
-            )
-        }
-        for (key, value) in terminalHostView.recentTypingTraceMetadata(nowNanoseconds: nowNanoseconds) {
-            metadata[key] = value
-        }
-        ToasttyLog.debug(
-            handled
-                ? "Aligned focused panel viewport to the terminal bottom after focus-mode toggle"
-                : "Focused panel viewport bottom alignment binding was not handled",
-            category: .ghostty,
-            metadata: metadata
-        )
-        return handled
     }
 
     private func shouldDeferCloseTransitionViewportResize(
