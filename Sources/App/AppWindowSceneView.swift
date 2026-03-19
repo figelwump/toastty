@@ -5,9 +5,11 @@ import SwiftUI
 struct AppWindowSceneView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let agentLaunchService: AgentLaunchService
     let disableAnimations: Bool
 
     @State private var fontHUDPoints: Double?
@@ -30,9 +32,11 @@ struct AppWindowSceneView: View {
                 AppWindowView(
                     windowID: windowID,
                     store: store,
+                    agentCatalogStore: agentCatalogStore,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
+                    agentLaunchService: agentLaunchService,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {

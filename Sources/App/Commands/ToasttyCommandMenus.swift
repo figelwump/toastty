@@ -1,4 +1,3 @@
-import AppKit
 import CoreState
 import SwiftUI
 
@@ -316,19 +315,11 @@ struct ToasttyCommandMenus: Commands {
     }
 
     private func launchAgentFromCommandSelection(_ profileID: String) {
-        do {
-            _ = try agentLaunchService.launch(
-                profileID: profileID,
-                workspaceID: commandWorkspace?.id
-            )
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Run Agent"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-        }
+        AgentLaunchUI.launch(
+            profileID: profileID,
+            workspaceID: commandWorkspace?.id,
+            agentLaunchService: agentLaunchService
+        )
     }
 
     @ViewBuilder

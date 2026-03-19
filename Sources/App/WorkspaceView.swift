@@ -5,9 +5,11 @@ import SwiftUI
 struct WorkspaceView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let agentLaunchService: AgentLaunchService
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -15,6 +17,10 @@ struct WorkspaceView: View {
     @State private var appIsActive = NSApplication.shared.isActive
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+
+    private var agentTopBarModel: WorkspaceAgentTopBarModel {
+        WorkspaceAgentTopBarModel(catalog: agentCatalogStore.catalog)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -54,9 +60,22 @@ struct WorkspaceView: View {
             Text(selectedWorkspace?.title ?? "")
                 .font(ToastyTheme.fontTitle)
                 .foregroundStyle(ToastyTheme.primaryText)
+                .lineLimit(1)
+                .truncationMode(.tail)
                 .accessibilityIdentifier("topbar.workspace.title")
 
-            Spacer()
+            Spacer(minLength: 12)
+
+            if !agentTopBarModel.actions.isEmpty {
+                ForEach(agentTopBarModel.actions) { action in
+                    topBarFlashTextButton(title: action.title) {
+                        launchAgent(profileID: action.profileID)
+                    }
+                    .disabled(canLaunchAgent(profileID: action.profileID) == false)
+                    .help("Run \(action.title)")
+                    .accessibilityIdentifier("topbar.agent.\(action.profileID)")
+                }
+            }
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
@@ -89,6 +108,21 @@ struct WorkspaceView: View {
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = selectedWorkspace?.id else { return }
         terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
+    }
+
+    private func canLaunchAgent(profileID: String) -> Bool {
+        agentLaunchService.canLaunchAgent(
+            profileID: profileID,
+            workspaceID: selectedWorkspace?.id
+        )
+    }
+
+    private func launchAgent(profileID: String) {
+        AgentLaunchUI.launch(
+            profileID: profileID,
+            workspaceID: selectedWorkspace?.id,
+            agentLaunchService: agentLaunchService
+        )
     }
 
     private var createWorkspaceAction: (() -> Void)? {
@@ -323,6 +357,33 @@ struct WorkspaceView: View {
             Text(title)
         }
         .buttonStyle(TopBarFlashButtonStyle(title: title, icon: icon))
+    }
+
+    private func topBarFlashTextButton(
+        title: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(title)
+        }
+        .buttonStyle(TopBarFlashTextButtonStyle())
+    }
+}
+
+struct WorkspaceAgentTopBarModel: Equatable {
+    struct Action: Equatable, Identifiable {
+        let profileID: String
+        let title: String
+
+        var id: String { profileID }
+    }
+
+    let actions: [Action]
+
+    init(catalog: AgentCatalog) {
+        actions = catalog.profiles.map { profile in
+            Action(profileID: profile.id, title: profile.displayName)
+        }
     }
 }
 
@@ -751,5 +812,23 @@ private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
                 .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
         )
         .animation(.easeOut(duration: 0.15), value: highlighted)
+    }
+}
+
+private struct TopBarFlashTextButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        let highlighted = configuration.isPressed
+        configuration.label
+            .font(ToastyTheme.fontSubtext)
+            .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
+            .overlay(
+                Rectangle()
+                    .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+            )
+            .animation(.easeOut(duration: 0.15), value: highlighted)
     }
 }

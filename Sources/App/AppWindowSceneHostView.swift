@@ -2,9 +2,11 @@ import SwiftUI
 
 struct AppWindowSceneHostView: View {
     @ObservedObject var store: AppStore
+    @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let agentLaunchService: AgentLaunchService
     let sceneCoordinator: AppWindowSceneCoordinator
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
@@ -33,9 +35,11 @@ struct AppWindowSceneHostView: View {
                 AppWindowSceneView(
                     windowID: boundWindowID,
                     store: store,
+                    agentCatalogStore: agentCatalogStore,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
+                    agentLaunchService: agentLaunchService,
                     disableAnimations: disableAnimations
                 )
             } else {

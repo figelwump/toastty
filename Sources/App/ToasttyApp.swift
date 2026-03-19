@@ -479,9 +479,11 @@ struct ToasttyApp: App {
         WindowGroup(id: AppWindowSceneID.value) {
             AppWindowSceneHostView(
                 store: store,
+                agentCatalogStore: agentCatalogStore,
                 terminalProfileStore: terminalProfileStore,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
+                agentLaunchService: agentLaunchService,
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,

@@ -44,7 +44,7 @@ displayName = "Claude Code"
 argv = ["claude"]
 ```
 
-Configured profiles appear in the `Agent` menu and launch with Toastty's built-in session telemetry wiring.
+Configured profiles appear in the `Agent` menu and as top-bar buttons, and launch with Toastty's built-in session telemetry wiring.
 
 ## Requirements
 

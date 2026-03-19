@@ -3,9 +3,11 @@ import SwiftUI
 struct AppWindowView: View {
     let windowID: UUID
     @ObservedObject var store: AppStore
+    @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let agentLaunchService: AgentLaunchService
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
 
@@ -34,9 +36,11 @@ struct AppWindowView: View {
                 WorkspaceView(
                     windowID: windowID,
                     store: store,
+                    agentCatalogStore: agentCatalogStore,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
+                    agentLaunchService: agentLaunchService,
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible
                 )
