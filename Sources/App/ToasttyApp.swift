@@ -180,6 +180,13 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         #endif
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        _ = notification
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        GhosttyClipboardBridge.releaseSelectionPasteboardIfNeeded()
+        #endif
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard shouldConfirmQuit else { return .terminateNow }
 

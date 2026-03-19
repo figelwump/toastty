@@ -19,7 +19,6 @@ struct GhosttyRuntimeAction: Sendable {
         case resizeSplit(SplitResizeDirection, amount: Int)
         case equalizeSplits
         case toggleFocusedPanelMode
-        case acknowledgeScrollbar
         case setTerminalTitle(String)
         case setTerminalCWD(String)
         case showChildExited(exitCode: Int)
@@ -42,8 +41,6 @@ struct GhosttyRuntimeAction: Sendable {
             return "equalize_splits"
         case .toggleFocusedPanelMode:
             return "toggle_focused_panel_mode"
-        case .acknowledgeScrollbar:
-            return "scrollbar"
         case .setTerminalTitle:
             return "set_terminal_title"
         case .setTerminalCWD:
@@ -183,9 +180,6 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
 
     case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
         intent = .toggleFocusedPanelMode
-
-    case GHOSTTY_ACTION_SCROLLBAR:
-        intent = .acknowledgeScrollbar
 
     case GHOSTTY_ACTION_SET_TITLE:
         let title = action.action.set_title.title.map { String(cString: $0) } ?? ""
@@ -425,17 +419,37 @@ private struct GhosttyClipboardEntry {
     let value: String
 }
 
-private func ghosttyPasteboard(for location: ghostty_clipboard_e) -> NSPasteboard? {
-    switch location {
-    case GHOSTTY_CLIPBOARD_STANDARD:
-        return .general
-    case GHOSTTY_CLIPBOARD_SELECTION:
-        // macOS has no shared X11-style selection clipboard, so map this to
-        // the standard pasteboard instead of an app-private board.
-        return .general
-    default:
-        return nil
+enum GhosttyClipboardBridge {
+    nonisolated(unsafe) private static let selectionPasteboard = NSPasteboard.withUniqueName()
+    static var selectionPasteboardName: NSPasteboard.Name {
+        selectionPasteboard.name
     }
+    static let supportsSelectionClipboard = true
+    static var runtimeSupportsSelectionClipboard: Bool {
+        makeGhosttyRuntimeConfig(userdata: nil).supports_selection_clipboard
+    }
+
+    static func pasteboard(for location: ghostty_clipboard_e) -> NSPasteboard? {
+        switch location {
+        case GHOSTTY_CLIPBOARD_STANDARD:
+            return .general
+        case GHOSTTY_CLIPBOARD_SELECTION:
+            // macOS has no shared X11-style selection clipboard. Keep Ghostty's
+            // selection buffer available for selection-paste semantics without
+            // treating every text selection as an implicit system clipboard copy.
+            return selectionPasteboard
+        default:
+            return nil
+        }
+    }
+
+    static func releaseSelectionPasteboardIfNeeded() {
+        selectionPasteboard.releaseGlobally()
+    }
+}
+
+private func ghosttyPasteboard(for location: ghostty_clipboard_e) -> NSPasteboard? {
+    GhosttyClipboardBridge.pasteboard(for: location)
 }
 
 private func ghosttyShellEscape(_ path: String) -> String {
@@ -711,10 +725,12 @@ private extension SplitResizeDirection {
     }
 }
 
-private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer) -> ghostty_runtime_config_s {
+private func makeGhosttyRuntimeConfig(userdata: UnsafeMutableRawPointer?) -> ghostty_runtime_config_s {
     ghostty_runtime_config_s(
         userdata: userdata,
-        supports_selection_clipboard: false,
+        // Ghostty only uses the selection-clipboard callbacks for selection
+        // copy/paste semantics when the embedder advertises support here.
+        supports_selection_clipboard: GhosttyClipboardBridge.supportsSelectionClipboard,
         wakeup_cb: { userdata in
             // Ghostty may invoke wakeup from a renderer thread; all app ticks must return to main.
             ghosttyWakeupCallback(userdata)

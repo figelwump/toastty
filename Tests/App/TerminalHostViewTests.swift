@@ -5,6 +5,25 @@ import XCTest
 #if TOASTTY_HAS_GHOSTTY_KIT
 import GhosttyKit
 
+final class GhosttyClipboardBridgeTests: XCTestCase {
+    func testStandardClipboardUsesSystemPasteboard() {
+        let pasteboard = GhosttyClipboardBridge.pasteboard(for: GHOSTTY_CLIPBOARD_STANDARD)
+
+        XCTAssertEqual(pasteboard?.name, NSPasteboard.general.name)
+    }
+
+    func testSelectionClipboardUsesToasttyPrivatePasteboard() {
+        let pasteboard = GhosttyClipboardBridge.pasteboard(for: GHOSTTY_CLIPBOARD_SELECTION)
+
+        XCTAssertEqual(pasteboard?.name, GhosttyClipboardBridge.selectionPasteboardName)
+        XCTAssertNotEqual(pasteboard?.name, NSPasteboard.general.name)
+    }
+
+    func testGhosttyRuntimeAdvertisesSelectionClipboardSupport() {
+        XCTAssertTrue(GhosttyClipboardBridge.runtimeSupportsSelectionClipboard)
+    }
+}
+
 @MainActor
 final class TerminalHostViewTests: XCTestCase {
     func testFlagsChangedReturnsPressForLeftCommandPress() {

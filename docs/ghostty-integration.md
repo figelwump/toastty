@@ -126,6 +126,12 @@ Toastty resolves Ghostty config in this order:
 
 Recursive includes are loaded through Ghostty's normal recursive config loading.
 
+On macOS, when Ghostty's `copy-on-select` behavior is enabled by its config or
+platform defaults, Toastty routes the Ghostty selection clipboard through a
+Toastty-private pasteboard instead of the shared system clipboard. That preserves
+Ghostty's selection-paste behavior without overwriting the normal macOS clipboard;
+explicit copy actions still target the system clipboard.
+
 By default Toastty does not ask Ghostty to parse Toastty's own CLI args. To re-enable that behavior:
 
 ```bash
