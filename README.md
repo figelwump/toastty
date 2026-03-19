@@ -14,7 +14,7 @@ There are also little features throughout. For example, keyboard shortcuts to na
 
 <p align="center">
   <a href="https://github.com/figelwump/toastty/releases/latest">
-    <img src="https://img.shields.io/badge/Download_for_Mac-Latest_Release-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Mac">
+    <img src="docs/assets/download-macos.png" alt="Download app for macOS" height="56">
   </a>
 </p>
 
