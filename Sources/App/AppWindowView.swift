@@ -254,12 +254,16 @@ private struct SidebarResizeHandle: View {
     let onEnded: (CGFloat) -> Void
 
     @State private var isHovering = false
+    @State private var isDragging = false
 
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(width: 1)
+                .fill(backgroundColor)
+
+            Capsule()
+                .fill(indicatorColor)
+                .frame(width: indicatorWidth, height: indicatorHeight)
         }
         .frame(width: ToastyTheme.sidebarResizeHandleWidth)
         .contentShape(Rectangle())
@@ -269,17 +273,46 @@ private struct SidebarResizeHandle: View {
                 isHovering = false
                 NSCursor.pop()
             }
+            isDragging = false
         }
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { value in
+                    isDragging = true
                     onChanged(value.translation.width)
                 }
                 .onEnded { value in
+                    isDragging = false
                     onEnded(value.translation.width)
                 }
         )
         .accessibilityIdentifier("sidebar.resize-handle")
+        .accessibilityLabel("Resize sidebar")
+    }
+
+    private var backgroundColor: Color {
+        if isDragging {
+            return ToastyTheme.sidebarResizeHandleDragBackground
+        }
+        if isHovering {
+            return ToastyTheme.sidebarResizeHandleHoverBackground
+        }
+        return .clear
+    }
+
+    private var indicatorColor: Color {
+        if isDragging || isHovering {
+            return ToastyTheme.sidebarResizeHandleActiveIndicator
+        }
+        return ToastyTheme.hairline
+    }
+
+    private var indicatorWidth: CGFloat {
+        (isDragging || isHovering) ? 2 : 1
+    }
+
+    private var indicatorHeight: CGFloat {
+        isDragging ? 52 : (isHovering ? 40 : 28)
     }
 
     private func updateHoverState(_ hovering: Bool) {

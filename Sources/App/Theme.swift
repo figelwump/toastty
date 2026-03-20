@@ -52,7 +52,10 @@ enum ToastyTheme {
 
     static let sidebarWidthBeforeAgentLaunch = CGFloat(WindowState.defaultSidebarWidthBeforeAgentLaunch)
     static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidthAfterAgentLaunch)
-    static let sidebarResizeHandleWidth: CGFloat = 10
+    static let sidebarResizeHandleWidth: CGFloat = 18
+    static let sidebarResizeHandleHoverBackground = accent.opacity(0.08)
+    static let sidebarResizeHandleDragBackground = accent.opacity(0.14)
+    static let sidebarResizeHandleActiveIndicator = accent.opacity(0.85)
     static let sidebarMinimumWorkspaceWidth: CGFloat = 320
     // Slightly taller than the native compact titlebar so the custom
     // title/buttons don't sit flush against the window edge.

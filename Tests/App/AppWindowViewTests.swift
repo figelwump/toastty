@@ -56,9 +56,13 @@ final class AppWindowViewTests: XCTestCase {
     }
 
     func testClampedSidebarWidthLeavesRoomForWorkspace() {
+        let expectedMaximumWidth = 700
+            - ToastyTheme.sidebarMinimumWorkspaceWidth
+            - ToastyTheme.sidebarResizeHandleWidth
+
         XCTAssertEqual(
             AppWindowView.clampedSidebarWidth(400, availableWidth: 700),
-            370
+            expectedMaximumWidth
         )
     }
 }
