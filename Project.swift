@@ -379,16 +379,6 @@ let project = Project(
                 executable: .project(path: .relativeToRoot("."), target: "ToasttyApp"),
                 arguments: .arguments(
                     environmentVariables: [
-                        // Temporary debug isolation for worktree notification validation.
-                        "TOASTTY_LOG_FILE": .environmentVariable(
-                            value: "\(NSHomeDirectory())/Library/Logs/Toastty/manual/xcode-worktree.log",
-                            isEnabled: true
-                        ),
-                        "TOASTTY_SOCKET_PATH": .environmentVariable(
-                            value: "/tmp/toastty-xcode-worktree.sock",
-                            isEnabled: true
-                        ),
-                        "TOASTTY_LOG_STDERR": .environmentVariable(value: "1", isEnabled: true),
                         "TOASTTY_LOG_LEVEL": .environmentVariable(value: "debug", isEnabled: true),
                     ]
                 )
