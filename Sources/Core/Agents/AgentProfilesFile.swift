@@ -91,7 +91,7 @@ public enum AgentProfilesFile {
         #
         # Any other ID (e.g. [my-agent]) launches without agent-specific
         # instrumentation. You can still report session status manually
-        # via the `toastty` CLI (see docs/running-agents.md).
+        # via the bundled `toastty` CLI using the injected TOASTTY_CLI_PATH.
         #
         # Edit these examples to match your local setup.
         #

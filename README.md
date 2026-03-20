@@ -67,7 +67,7 @@ argv = ["/my/codex-wrapper"]  # (ID is "codex", regardless of argv)
 argv = ["codex"]              # (ID is "my-codex", not "codex")
 ```
 
-Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled `toastty` CLI — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
+Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
 ### Notifications and badges
 

@@ -92,7 +92,7 @@ When the profile ID is `claude`, Toastty:
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
 4. **Writes a temporary settings file** and passes `--settings <path>` to Claude
 
-These hooks report state changes that Toastty translates into sidebar status (working, needs approval, idle, error).
+These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready).
 
 ## Launch flow
 
@@ -135,15 +135,16 @@ While a managed agent session is active, Toastty suppresses overlapping terminal
 
 ## Custom and third-party agents
 
-For agents that are not `codex` or `claude`, Toastty still provides the base `TOASTTY_*` session context. The agent (or a wrapper script) can use the bundled `toastty` CLI to report status manually:
+For agents that are not `codex` or `claude`, Toastty still provides the base `TOASTTY_*` session context. Toastty has already created the session before your command starts, so the agent (or a wrapper script) should update and stop that existing session via the injected `TOASTTY_CLI_PATH`:
 
 ```bash
-toastty session start --session-id "$TOASTTY_SESSION_ID"
-toastty session status --session-id "$TOASTTY_SESSION_ID" --kind working --summary "Thinking"
-toastty session update-files --session-id "$TOASTTY_SESSION_ID" --files changed.txt
-toastty session stop --session-id "$TOASTTY_SESSION_ID"
-toastty notify --title "Done" --body "Agent finished"
+"$TOASTTY_CLI_PATH" session status --session "$TOASTTY_SESSION_ID" --kind working --summary "Thinking"
+"$TOASTTY_CLI_PATH" session update-files --session "$TOASTTY_SESSION_ID" --file changed.txt
+"$TOASTTY_CLI_PATH" session stop --session "$TOASTTY_SESSION_ID"
+"$TOASTTY_CLI_PATH" notify "Done" "Agent finished"
 ```
+
+Manual integrations can report any supported session state, including `error`, through `session status --kind ...`.
 
 The `toastty session ingest-agent-event` subcommand is a CLI-local helper for the built-in Claude/Codex instrumentation. It is not a general-purpose integration point.
 
