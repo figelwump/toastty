@@ -22,13 +22,11 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
-## Agent Telemetry
+## Running Agents
 
-Toastty keeps first-party agent session state current automatically when a run is launched through Toastty. The launch path injects `TOASTTY_*` session context and generated Claude/Codex wrappers report follow-up events through the bundled `toastty` CLI, so built-in launches do not require a separate agent skill to keep the sidebar up to date.
+Toastty can launch coding agents directly into terminal panels from the `Agent` menu or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
 
-For those built-in launches, actionable agent lifecycle updates such as `needs_approval`, `ready`, and `error` also drive Toastty's unread badges and local notifications directly. While a managed agent session remains active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel so the session status path stays authoritative.
-
-For custom wrappers and third-party agents, the manual integration surface remains available through `toastty session start`, `toastty session status`, `toastty session update-files`, `toastty session stop`, and `toastty notify`. Provider-specific `toastty session ingest-agent-event` is a CLI-local helper for Toastty-managed Claude/Codex instrumentation, not a general socket protocol entry point.
+For full details see [docs/running-agents.md](docs/running-agents.md).
 
 ### Agent profiles
 
@@ -47,7 +45,35 @@ displayName = "Claude Code"
 argv = ["claude"]
 ```
 
-Configured profiles appear in the `Agent` menu and as top-bar buttons, and launch with Toastty's built-in session telemetry wiring. `shortcutKey` is optional; when set, Toastty binds `Cmd+Ctrl+<key>` to launch that profile directly from the `Agent` menu.
+Configured profiles appear in the `Agent` menu and as top-bar buttons. `shortcutKey` is optional; when set, Toastty binds `Cmd+Ctrl+<key>` to launch that profile.
+
+### Profile IDs and special behavior
+
+The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes two well-known IDs that receive first-party instrumentation:
+
+- **`codex`** — Injects Codex session recording, notification hooks, and a log watcher that surfaces live status (working, needs approval, idle) in the sidebar
+- **`claude`** — Injects Claude Code lifecycle hooks that report session state back to the sidebar automatically
+
+This matching is keyed on **the profile ID**, not on the command in `argv`:
+
+```toml
+[codex]                       # gets Codex instrumentation (ID is "codex")
+argv = ["codex"]
+
+[codex]                       # still gets Codex instrumentation
+argv = ["/my/codex-wrapper"]  # (ID is "codex", regardless of argv)
+
+[my-codex]                    # no special handling
+argv = ["codex"]              # (ID is "my-codex", not "codex")
+```
+
+Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled `toastty` CLI — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
+
+### Notifications and badges
+
+Actionable agent lifecycle updates (`needs_approval`, `ready`, `error`) drive unread badges and macOS desktop notifications. While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel.
+
+### Shortcut conflicts
 
 If an agent shortcut conflicts with another agent shortcut or with a terminal-profile shortcut chord, Toastty disables the conflicting binding and reports a warning on startup or configuration reload.
 
@@ -435,6 +461,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 
 ## Documentation
 
+- [Running Agents](docs/running-agents.md) — agents.toml configuration, profile IDs, instrumentation, launch flow, and manual integration
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
 - [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
 - [Privacy and Local Data](docs/privacy-and-local-data.md) — local files, permissions, sockets, logging, and Ghostty crash-reporting notes
