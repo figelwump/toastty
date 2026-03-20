@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import Foundation
 
@@ -10,17 +11,21 @@ final class SessionRuntimeStore: ObservableObject {
         _ panelID: UUID,
         _ context: DesktopNotificationContext
     ) async -> Void
+    typealias ApplicationActiveHandler = @MainActor () -> Bool
 
     @Published private(set) var sessionRegistry = SessionRegistry()
 
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
+    private let isApplicationActive: ApplicationActiveHandler
 
     init(
-        sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification
+        sendSessionStatusNotification: @escaping SessionStatusNotificationHandler = SessionRuntimeStore.defaultSendSessionStatusNotification,
+        isApplicationActive: @escaping ApplicationActiveHandler = SessionRuntimeStore.defaultIsApplicationActive
     ) {
         self.sendSessionStatusNotification = sendSessionStatusNotification
+        self.isApplicationActive = isApplicationActive
     }
 
     func bind(store: AppStore) {
@@ -197,8 +202,10 @@ final class SessionRuntimeStore: ObservableObject {
             return
         }
         guard let currentRecord = sessionRegistry.sessionsByID[sessionID],
-              currentRecord.isActive,
-              isPanelCurrentlyFocused(currentRecord.panelID, state: store.state) == false else {
+              currentRecord.isActive else {
+            return
+        }
+        guard !isActionableStatusTransitionSuppressed(for: currentRecord, state: store.state) else {
             return
         }
 
@@ -237,6 +244,13 @@ final class SessionRuntimeStore: ObservableObject {
             return false
         }
         return selection.workspace.layoutTree.slotContaining(panelID: panelID) != nil
+    }
+
+    private func isActionableStatusTransitionSuppressed(
+        for record: SessionRecord,
+        state: AppState
+    ) -> Bool {
+        isApplicationActive() && isPanelCurrentlyFocused(record.panelID, state: state)
     }
 
     private static func locatePanel(
@@ -308,6 +322,11 @@ final class SessionRuntimeStore: ObservableObject {
             panelID: panelID,
             context: context
         )
+    }
+
+    @MainActor
+    private static func defaultIsApplicationActive() -> Bool {
+        NSApplication.shared.isActive
     }
 }
 

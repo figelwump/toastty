@@ -201,7 +201,7 @@ struct SessionRuntimeStoreTests {
     func updateStatusDoesNotMarkFocusedPanelUnreadWhenSessionNeedsAttention() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore()
+        let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let focusedPanelID = try #require(selection.workspace.focusedPanelID)
@@ -241,7 +241,8 @@ struct SessionRuntimeStoreTests {
                     panelID: panelID,
                     context: context
                 )
-            }
+            },
+            isApplicationActive: { true }
         )
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
@@ -271,6 +272,106 @@ struct SessionRuntimeStoreTests {
         #expect(notifications.isEmpty)
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func updateStatusSendsNotificationForFocusedManagedPanelWhenApplicationIsInactive() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            },
+            isApplicationActive: { false }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let focusedPanelID = try #require(selection.workspace.focusedPanelID)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-focused-backgrounded",
+            agent: .codex,
+            panelID: focusedPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-focused-backgrounded",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        let notification = try #require(await recorder.notifications().first)
+        #expect(notification.title == "Codex is ready")
+        #expect(notification.body == "Finished")
+
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [focusedPanelID])
+    }
+
+    @Test
+    func updateStatusSendsNotificationForUnfocusedManagedPanelWhenApplicationIsInactive() async throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let recorder = SessionNotificationRecorder()
+        let sessionStore = SessionRuntimeStore(
+            sendSessionStatusNotification: { title, body, workspaceID, panelID, context in
+                await recorder.record(
+                    title: title,
+                    body: body,
+                    workspaceID: workspaceID,
+                    panelID: panelID,
+                    context: context
+                )
+            },
+            isApplicationActive: { false }
+        )
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-background-backgrounded",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-background-backgrounded",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        await waitUntilNotificationCount(recorder, expectedCount: 1)
+
+        let notification = try #require(await recorder.notifications().first)
+        #expect(notification.title == "Codex is ready")
+        #expect(notification.body == "Finished")
+
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs == [backgroundPanelID])
     }
 
     @Test
