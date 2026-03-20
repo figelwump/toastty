@@ -2095,41 +2095,6 @@ struct AppReducerTests {
     // MARK: - Toggle Sidebar
 
     @Test
-    func setSidebarWidthStoresManualOverride() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let windowID = try #require(state.windows.first?.id)
-
-        #expect(reducer.send(.setSidebarWidth(windowID: windowID, width: 312), state: &state))
-        #expect(state.windows.first?.sidebarWidthOverride == 312)
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func setSidebarWidthClampsManualOverride() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let windowID = try #require(state.windows.first?.id)
-
-        #expect(reducer.send(.setSidebarWidth(windowID: windowID, width: 900), state: &state))
-        #expect(state.windows.first?.sidebarWidthOverride == WindowState.maximumSidebarWidthOverride)
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func setSidebarWidthRejectsInvalidWindowIDAndNoOpWidth() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let windowID = try #require(state.windows.first?.id)
-
-        #expect(reducer.send(.setSidebarWidth(windowID: UUID(), width: 260), state: &state) == false)
-        #expect(reducer.send(.setSidebarWidth(windowID: windowID, width: 260), state: &state))
-        #expect(reducer.send(.setSidebarWidth(windowID: windowID, width: 260), state: &state) == false)
-    }
-
-    @Test
     func toggleSidebarHidesAndShowsSidebar() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

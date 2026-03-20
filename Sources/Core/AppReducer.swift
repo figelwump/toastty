@@ -525,13 +525,6 @@ public struct AppReducer {
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
             state.windows[windowIndex].sidebarVisible.toggle()
             return true
-
-        case .setSidebarWidth(let windowID, let width):
-            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
-            let clampedWidth = WindowState.clampedSidebarWidthOverride(width)
-            guard state.windows[windowIndex].sidebarWidthOverride != clampedWidth else { return false }
-            state.windows[windowIndex].sidebarWidthOverride = clampedWidth
-            return true
         }
     }
 
