@@ -2,6 +2,23 @@
 import XCTest
 
 final class ToasttySettingsStoreTests: XCTestCase {
+    func testLoadDefaultsHasEverLaunchedAgentToFalse() {
+        let userDefaults = makeUserDefaults()
+
+        let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
+
+        XCTAssertFalse(settings.hasEverLaunchedAgent)
+    }
+
+    func testPersistHasEverLaunchedAgentStoresAndLoadsFlag() {
+        let userDefaults = makeUserDefaults()
+
+        ToasttySettingsStore.persistHasEverLaunchedAgent(true, userDefaults: userDefaults)
+        let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
+
+        XCTAssertTrue(settings.hasEverLaunchedAgent)
+    }
+
     func testPersistTerminalFontSizePointsStoresAndLoadsOverride() {
         let userDefaults = makeUserDefaults()
 

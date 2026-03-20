@@ -24,6 +24,7 @@ final class AppStore: ObservableObject {
     typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
 
     @Published private(set) var state: AppState
+    @Published private(set) var hasEverLaunchedAgent: Bool
 
     /// Set by workspace creation or rename commands; the sidebar observes this
     /// to enter inline-rename mode for the target workspace.
@@ -31,17 +32,20 @@ final class AppStore: ObservableObject {
     @Published var pendingCloseWorkspaceRequest: PendingWorkspaceCloseRequest?
 
     private let reducer = AppReducer()
-    private let persistTerminalFontPreference: Bool
+    private let persistUserSettings: Bool
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
 
     init(
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
+        initialHasEverLaunchedAgent: Bool = false,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame
     ) {
         self.state = state
-        self.persistTerminalFontPreference = persistTerminalFontPreference
+        hasEverLaunchedAgent = initialHasEverLaunchedAgent
+        // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
+        persistUserSettings = persistTerminalFontPreference
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
     }
 
@@ -241,8 +245,15 @@ final class AppStore: ObservableObject {
         actionAppliedObservers.removeValue(forKey: token)
     }
 
+    func recordSuccessfulAgentLaunch() {
+        guard hasEverLaunchedAgent == false else { return }
+        hasEverLaunchedAgent = true
+        guard persistUserSettings else { return }
+        ToasttySettingsStore.persistHasEverLaunchedAgent(true)
+    }
+
     private func persistTerminalFontPreferenceIfNeeded(action: AppAction, previousState: AppState, nextState: AppState) {
-        guard persistTerminalFontPreference else { return }
+        guard persistUserSettings else { return }
         guard abs(previousState.globalTerminalFontPoints - nextState.globalTerminalFontPoints) >=
             AppState.terminalFontComparisonEpsilon else {
             return

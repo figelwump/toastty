@@ -42,6 +42,7 @@ struct AgentLaunchServiceTests {
         #expect(activeSession.repoRoot == projectRoot.path)
         #expect(activeSession.usesSessionStatusNotifications)
         #expect(activeSession.status == SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"))
+        #expect(store.hasEverLaunchedAgent)
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
         #expect(injectedCommand.contains("TOASTTY_AGENT=codex"))
@@ -83,6 +84,7 @@ struct AgentLaunchServiceTests {
         #expect(throws: AgentLaunchError.panelBusy(runningCommand: "npm run dev")) {
             try service.launch(profileID: "claude")
         }
+        #expect(store.hasEverLaunchedAgent == false)
     }
 
     @Test

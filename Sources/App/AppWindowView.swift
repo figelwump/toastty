@@ -1,3 +1,5 @@
+import AppKit
+import CoreState
 import SwiftUI
 
 struct AppWindowView: View {
@@ -10,45 +12,56 @@ struct AppWindowView: View {
     let agentLaunchService: AgentLaunchService
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
+    @State private var sidebarDragStartWidth: CGFloat?
+    @State private var sidebarDragPreviewWidth: CGFloat?
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
     }
 
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            HStack(spacing: 0) {
-                if sidebarVisible {
-                    SidebarView(
+        GeometryReader { geometry in
+            let resolvedSidebarWidth = resolvedSidebarWidth(availableWidth: geometry.size.width)
+
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    if sidebarVisible {
+                        SidebarView(
+                            windowID: windowID,
+                            store: store,
+                            terminalRuntimeRegistry: terminalRuntimeRegistry,
+                            sessionRuntimeStore: sessionRuntimeStore,
+                            terminalRuntimeContext: terminalRuntimeContext
+                        )
+                        .frame(width: resolvedSidebarWidth)
+
+                        SidebarResizeHandle(
+                            onChanged: { translation in
+                                updateSidebarDrag(translation: translation, availableWidth: geometry.size.width)
+                            },
+                            onEnded: { translation in
+                                finishSidebarDrag(translation: translation, availableWidth: geometry.size.width)
+                            }
+                        )
+                    }
+
+                    WorkspaceView(
                         windowID: windowID,
                         store: store,
+                        agentCatalogStore: agentCatalogStore,
+                        terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         sessionRuntimeStore: sessionRuntimeStore,
-                        terminalRuntimeContext: terminalRuntimeContext
+                        agentLaunchService: agentLaunchService,
+                        terminalRuntimeContext: terminalRuntimeContext,
+                        sidebarVisible: sidebarVisible
                     )
-                        .frame(width: ToastyTheme.sidebarWidth)
-
-                    Rectangle()
-                        .fill(ToastyTheme.hairline)
-                        .frame(width: 1)
                 }
+                .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
 
-                WorkspaceView(
-                    windowID: windowID,
-                    store: store,
-                    agentCatalogStore: agentCatalogStore,
-                    terminalProfileStore: terminalProfileStore,
-                    terminalRuntimeRegistry: terminalRuntimeRegistry,
-                    sessionRuntimeStore: sessionRuntimeStore,
-                    agentLaunchService: agentLaunchService,
-                    terminalRuntimeContext: terminalRuntimeContext,
-                    sidebarVisible: sidebarVisible
-                )
+                // Sidebar toggle button in the title bar area, right of traffic lights
+                sidebarToggleButton
             }
-            .animation(.easeInOut(duration: 0.15), value: sidebarVisible)
-
-            // Sidebar toggle button in the title bar area, right of traffic lights
-            sidebarToggleButton
         }
         .alert(
             "Close this workspace?",
@@ -66,6 +79,11 @@ struct AppWindowView: View {
         }
         .onAppear {
             scheduleWindowFocusRestore()
+        }
+        .onChange(of: sidebarVisible) { _, isVisible in
+            if isVisible == false {
+                clearSidebarDragState()
+            }
         }
         .onChange(of: slotFocusSignature) { _, _ in
             scheduleWindowFocusRestore()
@@ -87,6 +105,29 @@ struct AppWindowView: View {
             )
         }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
+    }
+
+    static func effectiveSidebarWidth(
+        sidebarWidthOverride: Double?,
+        hasEverLaunchedAgent: Bool
+    ) -> CGFloat {
+        CGFloat(
+            sidebarWidthOverride
+                ?? (hasEverLaunchedAgent
+                    ? WindowState.defaultSidebarWidthAfterAgentLaunch
+                    : WindowState.defaultSidebarWidthBeforeAgentLaunch)
+        )
+    }
+
+    static func clampedSidebarWidth(_ width: CGFloat, availableWidth: CGFloat) -> CGFloat {
+        let absoluteMinWidth = ToastyTheme.sidebarWidthBeforeAgentLaunch
+        let absoluteMaxWidth = CGFloat(WindowState.maximumSidebarWidthOverride)
+        let windowScopedMaxWidth = max(
+            absoluteMinWidth,
+            availableWidth - ToastyTheme.sidebarMinimumWorkspaceWidth - ToastyTheme.sidebarResizeHandleWidth
+        )
+        let maximumWidth = min(absoluteMaxWidth, windowScopedMaxWidth)
+        return min(max(width, absoluteMinWidth), maximumWidth)
     }
 
     private var sidebarToggleButton: some View {
@@ -118,6 +159,53 @@ struct AppWindowView: View {
             workspaceID: store.selectedWorkspaceID(in: windowID),
             focusedPanelID: store.selectedWorkspace(in: windowID)?.focusedPanelID
         )
+    }
+
+    private var effectiveSidebarWidth: CGFloat {
+        Self.effectiveSidebarWidth(
+            sidebarWidthOverride: store.window(id: windowID)?.sidebarWidthOverride,
+            hasEverLaunchedAgent: store.hasEverLaunchedAgent
+        )
+    }
+
+    private func resolvedSidebarWidth(availableWidth: CGFloat) -> CGFloat {
+        Self.clampedSidebarWidth(
+            sidebarDragPreviewWidth ?? effectiveSidebarWidth,
+            availableWidth: availableWidth
+        )
+    }
+
+    private func updateSidebarDrag(translation: CGFloat, availableWidth: CGFloat) {
+        let startWidth = sidebarDragStartWidth ?? resolvedSidebarWidth(availableWidth: availableWidth)
+        if sidebarDragStartWidth == nil {
+            sidebarDragStartWidth = startWidth
+        }
+
+        sidebarDragPreviewWidth = Self.clampedSidebarWidth(
+            startWidth + translation,
+            availableWidth: availableWidth
+        )
+    }
+
+    private func finishSidebarDrag(translation: CGFloat, availableWidth: CGFloat) {
+        let startWidth = sidebarDragStartWidth ?? resolvedSidebarWidth(availableWidth: availableWidth)
+        let finalWidth = sidebarDragPreviewWidth ?? Self.clampedSidebarWidth(
+            startWidth + translation,
+            availableWidth: availableWidth
+        )
+
+        clearSidebarDragState()
+
+        guard abs(finalWidth - startWidth) >= 0.5 else {
+            return
+        }
+
+        _ = store.send(.setSidebarWidth(windowID: windowID, width: Double(finalWidth)))
+    }
+
+    private func clearSidebarDragState() {
+        sidebarDragStartWidth = nil
+        sidebarDragPreviewWidth = nil
     }
 
     private func scheduleWindowFocusRestore(avoidStealingKeyboardFocus: Bool = true) {
@@ -159,4 +247,49 @@ private struct PendingWorkspaceClose: Identifiable {
     let workspaceID: UUID
 
     var id: UUID { workspaceID }
+}
+
+private struct SidebarResizeHandle: View {
+    let onChanged: (CGFloat) -> Void
+    let onEnded: (CGFloat) -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(width: 1)
+        }
+        .frame(width: ToastyTheme.sidebarResizeHandleWidth)
+        .contentShape(Rectangle())
+        .onHover(perform: updateHoverState)
+        .onDisappear {
+            if isHovering {
+                isHovering = false
+                NSCursor.pop()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    onChanged(value.translation.width)
+                }
+                .onEnded { value in
+                    onEnded(value.translation.width)
+                }
+        )
+        .accessibilityIdentifier("sidebar.resize-handle")
+    }
+
+    private func updateHoverState(_ hovering: Bool) {
+        guard hovering != isHovering else { return }
+        if hovering {
+            isHovering = true
+            NSCursor.resizeLeftRight.push()
+        } else {
+            isHovering = false
+            NSCursor.pop()
+        }
+    }
 }

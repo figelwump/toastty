@@ -190,6 +190,7 @@ final class AgentLaunchService {
             throw AgentLaunchError.terminalUnavailable(panelID: target.panelID)
         }
         registerManagedArtifacts(preparedLaunch.artifacts, sessionID: sessionID)
+        store?.recordSuccessfulAgentLaunch()
 
         return AgentLaunchResult(
             agent: agent,

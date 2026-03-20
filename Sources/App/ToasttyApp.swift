@@ -370,10 +370,11 @@ struct ToasttyApp: App {
             processInfo: processInfo,
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
-        let persistTerminalFontPreference = bootstrap.automationConfig == nil
+        let persistUserSettings = bootstrap.automationConfig == nil
         let store = AppStore(
             state: bootstrap.state,
-            persistTerminalFontPreference: persistTerminalFontPreference
+            persistTerminalFontPreference: persistUserSettings,
+            initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent
         )
         let agentCatalogStore = AgentCatalogStore()
         let initialProfileShortcutRegistry = Self.makeProfileShortcutRegistry(
@@ -398,7 +399,7 @@ struct ToasttyApp: App {
         )
         systemNotificationResponseCoordinator.installDelegate()
         let slotFocusRestoreCoordinator = SlotFocusRestoreCoordinator()
-        if persistTerminalFontPreference {
+        if persistUserSettings {
             Self.applyInitialToasttyConfigState(
                 to: store,
                 terminalProfileCatalog: terminalProfileStore.catalog,
