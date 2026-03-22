@@ -37,6 +37,8 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - If a validation flow would steal focus locally, prefer `TOASTTY_REMOTE_GUI_HOST=... ./scripts/remote/gui-validate.sh ...` so Peekaboo and shortcut-style checks run on the dedicated remote GUI machine instead of the current desktop.
 - For menu validation, target the exact built app instance by PID or full app bundle path. Multiple local `Toastty` builds may be running at once, and generic `osascript` checks can attach to the wrong process.
 - Prefer `peekaboo menu list --pid <pid> --json` for menu verification. It is more reliable than generic AppleScript enumeration for nested SwiftUI/AppKit menus.
+- For stubborn terminal scroll jitter, cursor jitter, or TUI animation stutter, profile a settled `Release` process with Time Profiler before assuming the hot path is in Ghostty or terminal view code. In March 2026 the real culprit was AppKit menu churn on the main thread, not terminal rendering.
+- When reading Time Profiler for terminal jank, inspect menu/AppKit stacks too. Hot frames in `HiddenSystemMenuItemsBridge`, dynamic menu bridges, `NSMenu`, `NSMenuItem`, `ICUCatalog`, or other menu validation/rendering paths can starve terminal redraws and input handling.
 
 ## Dev/Test Runs
 - For any local dev/debug/test Toastty run, use an isolated runtime home and per-run filesystem paths. Treat PID, bundle path, and per-run directories as required targeting data, not optional bookkeeping.
@@ -87,6 +89,14 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - Tail: `tail -f ~/Library/Logs/Toastty/toastty.log` or `tail -f "<runtime-home>/logs/toastty.log"` (pipe to `jq` for pretty JSON)
 - Env vars: `TOASTTY_LOG_LEVEL`, `TOASTTY_LOG_FILE` (`none` to disable), `TOASTTY_LOG_STDERR=1`, `TOASTTY_LOG_DISABLE=1`
 - Key instrumentation points: `TerminalHostView` (key events), `GhosttyRuntimeManager` (action routing), `TerminalRuntimeRegistry` (dispatch), `AppReducer` (split resize/equalize)
+
+## Menu Performance Gotchas
+- A March 2026 regression came from `HiddenSystemMenuItemsBridge` observing `NSMenu.didAddItem`, `didChangeItem`, `didRemoveItem`, and `didBeginTracking`, then recursively refreshing the whole menu tree and reinstalling dynamic bridges. That main-thread AppKit work caused visible terminal scroll/cursor/TUI stutter. Do not recreate that pattern.
+- Treat `NSMenu` mutation notifications as high-risk. Do not synchronously perform whole-tree refreshes plus dynamic bridge reinsertion from those observers. If a notification path is needed, keep it bounded, coalesced, and idempotent.
+- Keep hidden-item refresh separate from dynamic menu bridge reinstall. Mutation notifications may refresh delegate/visibility state, but dynamic bridge reinsertion should stay on explicit user-driven boundaries such as top-level menu open, not every menu mutation.
+- If a menu refresh path mutates menu items, assume it can trigger more menu notifications. Guard against recursive feedback loops and avoid wiring refresh callbacks that immediately re-mutate the same tree.
+- If hidden system menu items regress after a programmatic menu rebuild, do not revive the global observer pattern from `04ee174`. Prefer a bounded fix scoped to the opened menu or another non-observer path, even if the narrower fix needs separate follow-up work.
+- Preserve targeted tests for menu rebuild behavior when touching this area: hidden system items stay hidden after rebuild, and dynamic bridges still reattach where needed, without restoring a global recursive refresh loop.
 
 ## Manual Interaction Scripting
 Click into the target terminal panel before typing — activation alone is insufficient.
