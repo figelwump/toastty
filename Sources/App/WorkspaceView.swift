@@ -473,7 +473,7 @@ private struct PanelCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                let indicatorState = panelIndicatorState
+                let indicatorState = panelHeaderIndicatorState
                 if indicatorState != .hidden {
                     SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
                 }
@@ -497,11 +497,11 @@ private struct PanelCardView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
-            .background(ToastyTheme.elevatedBackground)
+            .background(panelHeaderBackgroundColor)
             .overlay(alignment: .bottom) {
                 Rectangle()
                     .fill(panelHeaderDividerColor)
-                    .frame(height: 1)
+                    .frame(height: panelHeaderDividerHeight)
             }
 
             switch panelState {
@@ -608,36 +608,51 @@ private struct PanelCardView: View {
     }
 
     private var panelHeaderDividerColor: Color {
-        guard isFocused else {
-            return ToastyTheme.hairline
-        }
-        guard case .terminal = panelState else {
+        guard let terminalHeaderAppearance else {
+            guard isFocused else {
+                return ToastyTheme.hairline
+            }
             return ToastyTheme.accent
         }
-        return appIsActive ? ToastyTheme.accent : ToastyTheme.accent.opacity(0.5)
+
+        return ToastyTheme.panelHeaderDividerColor(
+            for: terminalHeaderAppearance.treatment,
+            appIsActive: appIsActive
+        )
     }
 
-    private var panelIndicatorState: SessionStatusIndicatorState {
-        if let panelSessionStatus, panelSessionStatus.status.kind == .working {
-            return .spinner
+    private var panelHeaderBackgroundColor: Color {
+        guard let terminalHeaderAppearance else {
+            return ToastyTheme.elevatedBackground
         }
 
-        guard hasUnreadNotification && !isFocused else {
-            return .hidden
+        return ToastyTheme.panelHeaderBackgroundColor(
+            for: terminalHeaderAppearance.treatment,
+            appIsActive: appIsActive
+        )
+    }
+
+    private var panelHeaderDividerHeight: CGFloat {
+        guard let terminalHeaderAppearance else {
+            return 1
+        }
+        return CGFloat(terminalHeaderAppearance.dividerHeight)
+    }
+
+    private var panelHeaderIndicatorState: SessionStatusIndicatorState {
+        terminalHeaderAppearance?.indicatorState ?? .hidden
+    }
+
+    private var terminalHeaderAppearance: PanelHeaderAppearance? {
+        guard case .terminal = panelState else {
+            return nil
         }
 
-        guard let panelSessionStatus else {
-            return .dot
-        }
-
-        switch panelSessionStatus.status.kind {
-        case .needsApproval, .ready, .error:
-            return .dot
-        case .idle:
-            return .hidden
-        case .working:
-            return .spinner
-        }
+        return PanelHeaderAppearance.resolve(
+            isFocused: isFocused,
+            hasUnreadNotification: hasUnreadNotification,
+            sessionStatusKind: panelSessionStatus?.status.kind
+        )
     }
 
     @ViewBuilder

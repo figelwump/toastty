@@ -39,6 +39,14 @@ enum ToastyTheme {
     static let terminalProfileBadgeBackground = Color(hex: 0x5A3B14, alpha: 0.65)
     static let terminalProfileBadgeMissingText = Color(hex: 0xF4B183)
     static let terminalProfileBadgeMissingBackground = Color(hex: 0x5A2414, alpha: 0.65)
+    static let panelHeaderBellBackground = Color(hex: 0x3B82F6, alpha: 0.16)
+    static let panelHeaderBellDivider = Color(hex: 0x60A5FA)
+    static let panelHeaderNeedsApprovalBackground = Color(hex: 0xE8A849, alpha: 0.14)
+    static let panelHeaderNeedsApprovalDivider = Color(hex: 0xE8A849)
+    static let panelHeaderReadyBackground = Color(hex: 0x5DBB63, alpha: 0.14)
+    static let panelHeaderReadyDivider = Color(hex: 0x5DBB63)
+    static let panelHeaderErrorBackground = Color(hex: 0xD4553A, alpha: 0.14)
+    static let panelHeaderErrorDivider = Color(hex: 0xD4553A)
 
     // Empty state
     static let emptyStateToastCrust = Color(hex: 0x4A3425)
@@ -170,6 +178,60 @@ enum ToastyTheme {
             return Color(hex: 0xFFFFFF, alpha: 0.44)
         case .error:
             return Color(hex: 0xFFD8D0, alpha: 0.48)
+        }
+    }
+
+    static func panelHeaderBackgroundColor(
+        for treatment: PanelHeaderTreatment,
+        appIsActive: Bool
+    ) -> Color {
+        switch treatment {
+        case .neutral, .focused:
+            return elevatedBackground
+        case .unread(let reason):
+            let base = panelHeaderUnreadBackgroundColor(for: reason)
+            return appIsActive ? base : base.opacity(0.72)
+        }
+    }
+
+    static func panelHeaderDividerColor(
+        for treatment: PanelHeaderTreatment,
+        appIsActive: Bool
+    ) -> Color {
+        switch treatment {
+        case .neutral:
+            return hairline
+        case .focused:
+            return appIsActive ? accent : accent.opacity(0.5)
+        case .unread(let reason):
+            let base = panelHeaderUnreadDividerColor(for: reason)
+            return appIsActive ? base.opacity(0.82) : base.opacity(0.56)
+        }
+    }
+
+    private static func panelHeaderUnreadBackgroundColor(for reason: PanelHeaderUnreadReason) -> Color {
+        switch reason {
+        case .bell:
+            return panelHeaderBellBackground
+        case .needsApproval:
+            return panelHeaderNeedsApprovalBackground
+        case .ready:
+            return panelHeaderReadyBackground
+        case .error:
+            return panelHeaderErrorBackground
+        }
+    }
+
+    private static func panelHeaderUnreadDividerColor(for reason: PanelHeaderUnreadReason) -> Color {
+        switch reason {
+        case .bell:
+            return panelHeaderBellDivider
+        case .needsApproval:
+            return panelHeaderNeedsApprovalDivider
+        case .ready:
+            return panelHeaderReadyDivider
+        case .error:
+            return panelHeaderErrorDivider
         }
     }
 }
