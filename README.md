@@ -1,18 +1,19 @@
 # Toastty
 
 <p align="center">
-  <img src="docs/assets/toastty-hero.png" alt="Toastty — multiple workspaces with split panes, Claude Code, and live logs" width="1840">
+  <img src="docs/assets/toastty-hero.png" alt="Toastty — built for coding with agents" width="1840">
 </p>
 
 A native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
 
-Toastty builds on the the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, notifications and unread badges when agents are done working, and the performance and layout flexibility you're used to with Ghostty.
+Toastty builds on the the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, first-class support running agents and getting real-time status updates, and notifications and unread badges when agents are done working.
 
-There are also little features throughout. For example, keyboard shortcuts to jump directly to a panel and global font control (resize the font of all terminals at once, useful when switching between external monitors and your laptop for example).
+There are also little features throughout. For example, terminal profiles (to run things like `zmx`, `tmux` or `ssh` on terminal launch), keyboard shortcuts to jump directly to a panel and global font control (resize the font of all terminals at once, useful when switching between external monitors and your laptop for example).
 
 ## Features
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Cmd+1`–`Cmd+9`, and persist layouts across restarts
+- **Running agents** — Launch coding agents directly into terminal panels with automatic real-time sidebar status, unread badges, and desktop notifications
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, SSH, or other scripted environments from the menu, with a pill badge in each panel header
@@ -21,61 +22,6 @@ There are also little features throughout. For example, keyboard shortcuts to ju
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
-
-## Running Agents
-
-Toastty can launch coding agents directly into terminal panels from the `Agent` menu or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
-
-For full details see [docs/running-agents.md](docs/running-agents.md).
-
-### Agent profiles
-
-Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file from `Agent > Manage Agents…`; Toastty creates a commented template automatically if the file does not exist yet.
-
-Each profile defines the menu label and the exact command Toastty should launch:
-
-```toml
-[codex]
-displayName = "Codex"
-argv = ["codex"]
-shortcutKey = "c"
-
-[claude]
-displayName = "Claude Code"
-argv = ["claude"]
-```
-
-Configured profiles appear in the `Agent` menu and as top-bar buttons. `shortcutKey` is optional; when set, Toastty binds `Cmd+Ctrl+<key>` to launch that profile.
-
-### Profile IDs and special behavior
-
-The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes two well-known IDs that receive first-party instrumentation:
-
-- **`codex`** — Injects Codex session recording, notification hooks, and a log watcher that surfaces live status (working, needs approval, idle) in the sidebar
-- **`claude`** — Injects Claude Code lifecycle hooks that report session state back to the sidebar automatically
-
-This matching is keyed on **the profile ID**, not on the command in `argv`:
-
-```toml
-[codex]                       # gets Codex instrumentation (ID is "codex")
-argv = ["codex"]
-
-[codex]                       # still gets Codex instrumentation
-argv = ["/my/codex-wrapper"]  # (ID is "codex", regardless of argv)
-
-[my-codex]                    # no special handling
-argv = ["codex"]              # (ID is "my-codex", not "codex")
-```
-
-Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
-
-### Notifications and badges
-
-Actionable agent lifecycle updates (`needs_approval`, `ready`, `error`) drive unread badges and macOS desktop notifications. While a managed agent session is active, Toastty suppresses overlapping terminal-originated desktop notifications for that panel.
-
-### Shortcut conflicts
-
-If an agent shortcut conflicts with another agent shortcut or with a terminal-profile shortcut chord, Toastty disables the conflicting binding and reports a warning on startup or configuration reload.
 
 ## Requirements
 
@@ -210,6 +156,53 @@ sv exec -- env \
 ```
 
 Add `--dry-run` to print the exact `git tag`, `git push`, and `gh release create ...` commands without creating anything. If `origin` is not a parseable GitHub remote, pass `--repo <owner/repo>` explicitly. Pass `--notes-file` only when you want to override the default notes path.
+
+## Running Agents
+
+Toastty can launch coding agents directly into terminal panels from the `Agent` menu or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
+
+For full details see [docs/running-agents.md](docs/running-agents.md).
+
+### Agent profiles
+
+Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file from `Agent > Manage Agents…`; Toastty creates a commented template automatically if the file does not exist yet.
+
+Each profile defines the menu label and the exact command Toastty should launch:
+
+```toml
+[codex]
+displayName = "Codex"
+argv = ["codex"]
+shortcutKey = "c"
+
+[claude]
+displayName = "Claude Code"
+argv = ["claude"]
+```
+
+Configured profiles appear in the `Agent` menu and as top-bar buttons. `shortcutKey` is optional; when set, Toastty binds `Cmd+Ctrl+<key>` to launch that profile.
+
+### Profile IDs and special behavior
+
+The TOML table name (the value in `[brackets]`) is the profile's internal ID. Toastty recognizes two well-known IDs that receive first-party instrumentation:
+
+- **`codex`** — Injects Codex session recording, notification hooks, and a log watcher that surfaces live status (working, needs approval, idle) in the sidebar
+- **`claude`** — Injects Claude Code lifecycle hooks that report session state back to the sidebar automatically
+
+This matching is keyed on **the profile ID**, not on the command in `argv`:
+
+```toml
+[codex]                       # gets Codex instrumentation (ID is "codex")
+argv = ["codex"]
+
+[codex]                       # still gets Codex instrumentation
+argv = ["/my/codex-wrapper"]  # (ID is "codex", regardless of argv)
+
+[my-codex]                    # no special handling
+argv = ["codex"]              # (ID is "my-codex", not "codex")
+```
+
+Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
 ## Configuration
 
