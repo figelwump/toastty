@@ -91,11 +91,13 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("error"))
     }
 
-    func testReadySessionOutlineColorUsesWhite() throws {
+    func testReadySessionOutlineColorUsesReadyGreen() throws {
         let outlineColor = try XCTUnwrap(
             NSColor(ToastyTheme.sessionStatusOutlineColor(for: .ready)).usingColorSpace(.deviceRGB)
         )
-        let expectedColor = try XCTUnwrap(NSColor.white.usingColorSpace(.deviceRGB))
+        let expectedColor = try XCTUnwrap(
+            NSColor(ToastyTheme.sessionReadyText).usingColorSpace(.deviceRGB)
+        )
 
         XCTAssertEqual(outlineColor.redComponent, expectedColor.redComponent, accuracy: 0.001)
         XCTAssertEqual(outlineColor.greenComponent, expectedColor.greenComponent, accuracy: 0.001)

@@ -1,5 +1,7 @@
 @testable import ToasttyApp
+import AppKit
 import CoreState
+import SwiftUI
 import XCTest
 
 final class PanelHeaderAppearanceTests: XCTestCase {
@@ -59,6 +61,38 @@ final class PanelHeaderAppearanceTests: XCTestCase {
 
         XCTAssertEqual(appearance.treatment, .unread(.ready))
         XCTAssertEqual(appearance.indicatorState, .dot)
+    }
+
+    func testUnreadReadyUsesGreenHeaderColors() throws {
+        let treatment = PanelHeaderAppearance.resolve(
+            isFocused: false,
+            hasUnreadNotification: true,
+            sessionStatusKind: .ready
+        ).treatment
+
+        let backgroundColor = try XCTUnwrap(
+            NSColor(ToastyTheme.panelHeaderBackgroundColor(for: treatment, appIsActive: true))
+                .usingColorSpace(.deviceRGB)
+        )
+        let expectedBackground = try XCTUnwrap(
+            NSColor(ToastyTheme.panelHeaderReadyBackground).usingColorSpace(.deviceRGB)
+        )
+        let dividerColor = try XCTUnwrap(
+            NSColor(ToastyTheme.panelHeaderDividerColor(for: treatment, appIsActive: true))
+                .usingColorSpace(.deviceRGB)
+        )
+        let expectedDivider = try XCTUnwrap(
+            NSColor(ToastyTheme.panelHeaderReadyDivider.opacity(0.82)).usingColorSpace(.deviceRGB)
+        )
+
+        XCTAssertEqual(backgroundColor.redComponent, expectedBackground.redComponent, accuracy: 0.001)
+        XCTAssertEqual(backgroundColor.greenComponent, expectedBackground.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(backgroundColor.blueComponent, expectedBackground.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(backgroundColor.alphaComponent, expectedBackground.alphaComponent, accuracy: 0.001)
+        XCTAssertEqual(dividerColor.redComponent, expectedDivider.redComponent, accuracy: 0.001)
+        XCTAssertEqual(dividerColor.greenComponent, expectedDivider.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(dividerColor.blueComponent, expectedDivider.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(dividerColor.alphaComponent, expectedDivider.alphaComponent, accuracy: 0.001)
     }
 
     func testUnreadErrorUsesErrorTreatment() {
