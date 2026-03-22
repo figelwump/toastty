@@ -521,7 +521,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         activeSourceContainer = nil
         activeAttachment = nil
         requestedFocus = false
+        #if TOASTTY_HAS_GHOSTTY_KIT
         terminalHostView.activatePanelIfNeeded = nil
+        #endif
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }

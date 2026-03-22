@@ -564,10 +564,15 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
         guard let store else { return false }
         let state = store.state
-        guard let workspaceID = workspaceID(containing: panelID, state: state) else {
-            return false
+        for window in state.windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = state.workspacesByID[workspaceID] else { continue }
+                guard workspace.panels[panelID] != nil else { continue }
+                guard workspace.layoutTree.slotContaining(panelID: panelID) != nil else { continue }
+                return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            }
         }
-        return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+        return false
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
