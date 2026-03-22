@@ -204,6 +204,28 @@ argv = ["codex"]              # (ID is "my-codex", not "codex")
 
 Any other profile ID launches the configured command with base `TOASTTY_*` session context but without agent-specific instrumentation. Custom agents can report status manually via the bundled CLI path exposed in `TOASTTY_CLI_PATH` — see the [full guide](docs/running-agents.md#custom-and-third-party-agents).
 
+## CLI
+
+Toastty bundles a `toastty` CLI for communicating with the running app over its automation socket. When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, and the CLI is how agents and wrapper scripts report status back to the sidebar.
+
+| Command | Description |
+|---|---|
+| `notify <title> <body>` | Emit a macOS desktop notification |
+| `session start` | Create a new agent session |
+| `session status` | Update session state (`idle`, `working`, `needs_approval`, `ready`, `error`) |
+| `session update-files` | Report files changed during a session |
+| `session stop` | End an active session |
+
+Most flags fall back to `TOASTTY_*` environment variables that Toastty injects automatically, so agents launched from Toastty can often call the CLI with minimal arguments:
+
+```bash
+"$TOASTTY_CLI_PATH" session status --session "$TOASTTY_SESSION_ID" --kind working --summary "Thinking"
+"$TOASTTY_CLI_PATH" session stop --session "$TOASTTY_SESSION_ID"
+"$TOASTTY_CLI_PATH" notify "Done" "Agent finished"
+```
+
+For the full command reference including all flags, environment variables, JSON output format, and exit codes, see [docs/cli-reference.md](docs/cli-reference.md).
+
 ## Configuration
 
 Toastty respects your Ghostty configuration. Config is loaded in this order:
@@ -455,6 +477,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 ## Documentation
 
 - [Running Agents](docs/running-agents.md) — agents.toml configuration, profile IDs, instrumentation, launch flow, and manual integration
+- [CLI Reference](docs/cli-reference.md) — `toastty` CLI commands, flags, environment variables, and integration examples
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
 - [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
 - [Privacy and Local Data](docs/privacy-and-local-data.md) — local files, permissions, sockets, logging, and Ghostty crash-reporting notes
