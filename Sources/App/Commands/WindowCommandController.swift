@@ -782,6 +782,7 @@ final class HelpMenuBridge: NSObject {
 final class SparkleMenuBridge: NSObject, NSMenuItemValidation {
     private static let menuItemTitle = "Check for Updates..."
     private static let menuItemSymbolName = "arrow.triangle.2.circlepath"
+    private static let menuItemImage = makeMenuItemImage()
 
     private let canCheckForUpdates: () -> Bool
     private let performCheckForUpdates: () -> Void
@@ -815,10 +816,20 @@ final class SparkleMenuBridge: NSObject, NSMenuItemValidation {
             appMenu.insertItem(menuItem, at: Self.insertionIndex(in: appMenu.items))
         }
 
-        menuItem.target = self
-        menuItem.action = #selector(checkForUpdates(_:))
-        menuItem.image = Self.makeMenuItemImage()
-        menuItem.isEnabled = canCheckForUpdates()
+        if menuItem.target !== self {
+            menuItem.target = self
+        }
+        if menuItem.action != #selector(checkForUpdates(_:)) {
+            menuItem.action = #selector(checkForUpdates(_:))
+        }
+        if menuItem.image !== Self.menuItemImage {
+            menuItem.image = Self.menuItemImage
+        }
+
+        let isCheckForUpdatesEnabled = canCheckForUpdates()
+        if menuItem.isEnabled != isCheckForUpdatesEnabled {
+            menuItem.isEnabled = isCheckForUpdatesEnabled
+        }
     }
 
     @objc

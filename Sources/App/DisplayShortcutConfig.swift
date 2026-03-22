@@ -50,10 +50,6 @@ enum DisplayShortcutConfig {
         shortcutLabel(for: number, scope: .panelFocus, limit: maxPanelFocusShortcutCount)
     }
 
-    static func workspaceSwitchMenuTitle(_ title: String, number: Int) -> String {
-        menuTitle(title, shortcutLabel: workspaceSwitchShortcutLabel(for: number))
-    }
-
     private static func shortcutNumber(forKeyCode keyCode: UInt16) -> Int? {
         switch Int(keyCode) {
         case Int(kVK_ANSI_1), Int(kVK_ANSI_Keypad1):
@@ -100,13 +96,5 @@ enum DisplayShortcutConfig {
         default:
             return nil
         }
-    }
-
-    private static func menuTitle(_ title: String, shortcutLabel: String?) -> String {
-        let sanitizedTitle = title
-            .replacingOccurrences(of: "\t", with: " ")
-            .replacingOccurrences(of: "\n", with: " ")
-        guard let shortcutLabel else { return sanitizedTitle }
-        return "\(sanitizedTitle)\t\(shortcutLabel)"
     }
 }

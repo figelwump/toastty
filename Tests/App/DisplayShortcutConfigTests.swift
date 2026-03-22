@@ -16,20 +16,6 @@ final class DisplayShortcutConfigTests: XCTestCase {
         XCTAssertNil(DisplayShortcutConfig.panelFocusShortcutLabel(for: 11))
     }
 
-    func testWorkspaceSwitchMenuTitleAppendsShortcutHint() {
-        XCTAssertEqual(
-            DisplayShortcutConfig.workspaceSwitchMenuTitle("Workspace 2", number: 2),
-            "Workspace 2\t⌥2"
-        )
-    }
-
-    func testWorkspaceSwitchMenuTitleSanitizesTabAndNewlineCharacters() {
-        XCTAssertEqual(
-            DisplayShortcutConfig.workspaceSwitchMenuTitle("Work\tspace\n2", number: 2),
-            "Work space 2\t⌥2"
-        )
-    }
-
     func testPanelFocusShortcutUsesKeyCodeInsteadOfShiftedCharacters() throws {
         let event = try XCTUnwrap(
             NSEvent.keyEvent(

@@ -116,10 +116,13 @@ final class WindowCommandControllerTests: XCTestCase {
         let bridge = CloseWorkspaceMenuBridge(closeWorkspaceCommandController: controller)
 
         let mainMenu = NSMenu(title: "Main")
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "File")
+        let fileItem = NSMenuItem(title: "Archivo", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Archivo")
+        let closeItem = NSMenuItem(title: "Cerrar", action: nil, keyEquivalent: "w")
+        closeItem.keyEquivalentModifierMask = [.command]
         let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         closeAllItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(closeItem)
         fileMenu.addItem(closeAllItem)
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -157,10 +160,13 @@ final class WindowCommandControllerTests: XCTestCase {
         let bridge = CloseWorkspaceMenuBridge(closeWorkspaceCommandController: controller)
 
         let mainMenu = NSMenu(title: "Main")
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "File")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Datei")
+        let closeItem = NSMenuItem(title: "Schließen", action: nil, keyEquivalent: "w")
+        closeItem.keyEquivalentModifierMask = [.command]
         let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         closeAllItem.keyEquivalentModifierMask = [.shift]
+        fileMenu.addItem(closeItem)
         fileMenu.addItem(closeAllItem)
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -194,10 +200,13 @@ final class WindowCommandControllerTests: XCTestCase {
         workspaceRootItem.submenu = workspaceMenu
         mainMenu.addItem(workspaceRootItem)
 
-        let fileRootItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "File")
+        let fileRootItem = NSMenuItem(title: "Archivo", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Archivo")
+        let closeItem = NSMenuItem(title: "Cerrar", action: nil, keyEquivalent: "w")
+        closeItem.keyEquivalentModifierMask = [.command]
         let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         closeAllItem.keyEquivalentModifierMask = [.shift]
+        fileMenu.addItem(closeItem)
         fileMenu.addItem(closeAllItem)
         fileRootItem.submenu = fileMenu
         mainMenu.addItem(fileRootItem)
@@ -297,6 +306,35 @@ final class WindowCommandControllerTests: XCTestCase {
         appMenu.removeItem(updaterItem)
         bridge.installIfNeeded()
         XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
+    }
+
+    func testSparkleMenuBridgeRestoresExpectedImageWhenExistingItemDrifts() {
+        let bridge = SparkleMenuBridge(
+            canCheckForUpdates: { true },
+            performCheckForUpdates: {}
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let appRootItem = NSMenuItem(title: "Toastty", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Toastty")
+        let aboutItem = NSMenuItem(title: "About Toastty", action: nil, keyEquivalent: "")
+        let updaterItem = NSMenuItem(title: "Check for Updates...", action: nil, keyEquivalent: "")
+        let replacementImage = NSImage(size: NSSize(width: 4, height: 4))
+        updaterItem.image = replacementImage
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(updaterItem)
+        appRootItem.submenu = appMenu
+        mainMenu.addItem(appRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertFalse(updaterItem.image === replacementImage)
+        XCTAssertEqual(updaterItem.image?.isTemplate, true)
     }
 
     func testHiddenSystemMenuItemsBridgeHidesRequestedItemsByAction() {
@@ -624,9 +662,9 @@ final class WindowCommandControllerTests: XCTestCase {
         )
 
         let mainMenu = NSMenu(title: "Main")
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let initialFileMenu = NSMenu(title: "File")
-        let initialCloseItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "Datei")
+        let initialCloseItem = NSMenuItem(title: "Schließen", action: nil, keyEquivalent: "w")
         initialCloseItem.keyEquivalentModifierMask = [.command]
         let initialCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         initialCloseAllItem.keyEquivalentModifierMask = [.shift]
@@ -651,8 +689,8 @@ final class WindowCommandControllerTests: XCTestCase {
             #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
         )
 
-        let rebuiltFileMenu = NSMenu(title: "File")
-        let rebuiltCloseItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        let rebuiltFileMenu = NSMenu(title: "Datei")
+        let rebuiltCloseItem = NSMenuItem(title: "Schließen", action: nil, keyEquivalent: "w")
         rebuiltCloseItem.keyEquivalentModifierMask = [.command]
         let rebuiltCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         rebuiltCloseAllItem.keyEquivalentModifierMask = [.shift]

@@ -111,6 +111,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
     private var sparkleMenuBridge: SparkleMenuBridge?
+    private var hasCompletedLaunch = false
     private var menuBridgeInstallationTask: Task<Void, Never>?
     let sparkleUpdaterBridge: SparkleUpdaterBridge
 
@@ -158,18 +159,21 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             sparkleMenuBridge = SparkleMenuBridge(sparkleUpdaterBridge: sparkleUpdaterBridge)
         }
 
+        guard hasCompletedLaunch else { return }
         scheduleMenuBridgeInstallations()
     }
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
         Task { @MainActor [weak self] in
+            self?.hasCompletedLaunch = true
             self?.scheduleMenuBridgeInstallations()
         }
     }
 
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
         Task { @MainActor [weak self] in
+            self?.hasCompletedLaunch = true
             self?.scheduleMenuBridgeInstallations()
         }
         _ = notification
@@ -251,7 +255,6 @@ private final class DisplayShortcutInterceptor {
     nonisolated(unsafe) private var eventMonitor: Any?
 
     private enum ShortcutAction {
-        case switchWorkspace(Int)
         case focusPanel(Int)
     }
 
@@ -276,32 +279,14 @@ private final class DisplayShortcutInterceptor {
         if let shortcutNumber = DisplayShortcutConfig.shortcutNumber(for: event, scope: .panelFocus) {
             return .focusPanel(shortcutNumber)
         }
-        if let shortcutNumber = DisplayShortcutConfig.shortcutNumber(for: event, scope: .workspaceSwitch) {
-            return .switchWorkspace(shortcutNumber)
-        }
         return nil
     }
 
     private func handle(_ action: ShortcutAction) -> Bool {
         switch action {
-        case .switchWorkspace(let shortcutNumber):
-            switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
             focusTerminalPanel(shortcutNumber: shortcutNumber)
         }
-    }
-
-    private func switchWorkspace(shortcutNumber: Int) -> Bool {
-        guard let store else { return false }
-        guard shortcutNumber > 0, shortcutNumber <= DisplayShortcutConfig.maxWorkspaceShortcutCount else {
-            return false
-        }
-        guard let window = store.selectedWindow else { return false }
-        let index = shortcutNumber - 1
-        guard window.workspaceIDs.indices.contains(index) else { return false }
-        let workspaceID = window.workspaceIDs[index]
-        guard store.state.workspacesByID[workspaceID] != nil else { return false }
-        return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
     }
 
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
@@ -522,6 +507,15 @@ struct ToasttyApp: App {
             automationSocketServer = nil
             automationStartupError = nil
         }
+
+        appLifecycleDelegate.configureMenuBridges(
+            fileSplitMenuBridge: fileSplitMenuBridge,
+            closeWindowMenuBridge: closeWindowMenuBridge,
+            closeWorkspaceMenuBridge: closeWorkspaceMenuBridge,
+            windowSplitMenuBridge: windowSplitMenuBridge,
+            helpMenuBridge: helpMenuBridge,
+            hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
+        )
     }
 
     var body: some Scene {
@@ -536,16 +530,6 @@ struct ToasttyApp: App {
                 disableAnimations: disableAnimations
             )
             .frame(minWidth: 980, minHeight: 620)
-            .onAppear {
-                appLifecycleDelegate.configureMenuBridges(
-                    fileSplitMenuBridge: fileSplitMenuBridge,
-                    closeWindowMenuBridge: closeWindowMenuBridge,
-                    closeWorkspaceMenuBridge: closeWorkspaceMenuBridge,
-                    windowSplitMenuBridge: windowSplitMenuBridge,
-                    helpMenuBridge: helpMenuBridge,
-                    hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
-                )
-            }
         }
         // Let SwiftUI remove the native titlebar container so our custom
         // workspace chrome can occupy that space without AppKit overlaying it.
