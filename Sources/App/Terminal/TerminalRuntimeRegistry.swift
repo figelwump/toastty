@@ -560,6 +560,16 @@ extension TerminalRuntimeRegistry {
 #endif
 
 extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
+    @discardableResult
+    func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
+        guard let store else { return false }
+        let state = store.state
+        guard let workspaceID = workspaceID(containing: panelID, state: state) else {
+            return false
+        }
+        return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
         splitSourceSurfaceState(for: panelID)

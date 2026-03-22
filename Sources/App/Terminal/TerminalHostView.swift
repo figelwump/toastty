@@ -20,6 +20,7 @@ private extension NSView {
 }
 
 final class TerminalHostView: NSView {
+    var activatePanelIfNeeded: (() -> Bool)?
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
@@ -156,6 +157,11 @@ final class TerminalHostView: NSView {
 
     override var acceptsFirstResponder: Bool {
         true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        _ = event
+        return true
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -552,6 +558,7 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        _ = activatePanelIfNeeded?()
         focusHostViewIfNeeded()
         guard forwardMouseButton(
             event,
@@ -579,12 +586,13 @@ final class TerminalHostView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        _ = activatePanelIfNeeded?()
+        focusHostViewIfNeeded()
         guard let ghosttySurface else {
             rightMousePressWasForwarded = false
             super.rightMouseDown(with: event)
             return
         }
-        focusHostViewIfNeeded()
         guard shouldForwardRawRightMouseEvents(surface: ghosttySurface) else {
             rightMousePressWasForwarded = false
             super.rightMouseDown(with: event)

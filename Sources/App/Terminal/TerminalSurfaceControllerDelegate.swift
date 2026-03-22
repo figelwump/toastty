@@ -5,6 +5,9 @@ import GhosttyKit
 
 @MainActor
 protocol TerminalSurfaceControllerDelegate: AnyObject {
+    @discardableResult
+    func activatePanelIfNeeded(_ panelID: UUID) -> Bool
+
     func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop?
 
     @discardableResult
@@ -28,6 +31,14 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
         source: String
     )
     #endif
+}
+
+extension TerminalSurfaceControllerDelegate {
+    @discardableResult
+    func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
+        _ = panelID
+        return false
+    }
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT

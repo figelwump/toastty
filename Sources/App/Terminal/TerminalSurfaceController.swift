@@ -105,6 +105,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 focused: self.requestedFocus && self.terminalHostView.isEffectivelyVisible
             )
         }
+        terminalHostView.activatePanelIfNeeded = { [weak self] in
+            guard let self else { return false }
+            return self.delegate?.activatePanelIfNeeded(self.panelID) ?? false
+        }
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
             return self.delegate?.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
@@ -517,6 +521,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         activeSourceContainer = nil
         activeAttachment = nil
         requestedFocus = false
+        terminalHostView.activatePanelIfNeeded = nil
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()
     }

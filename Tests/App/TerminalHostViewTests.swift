@@ -165,6 +165,56 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(requestCount, 1)
     }
 
+    func testHostViewAcceptsFirstMouse() {
+        let hostView = TerminalHostView()
+
+        XCTAssertTrue(hostView.acceptsFirstMouse(for: nil))
+    }
+
+    func testMouseDownActivatesPanelBeforeFocusingHostView() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var activationCount = 0
+        var firstResponderDuringActivation: NSResponder?
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.activatePanelIfNeeded = {
+            activationCount += 1
+            firstResponderDuringActivation = window.firstResponder
+            return true
+        }
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+
+        XCTAssertEqual(activationCount, 1)
+        XCTAssertNil(firstResponderDuringActivation)
+        XCTAssertTrue(window.firstResponder === hostView)
+    }
+
+    func testRightMouseDownActivatesPanelBeforeFocusingHostView() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var activationCount = 0
+        var firstResponderDuringActivation: NSResponder?
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.activatePanelIfNeeded = {
+            activationCount += 1
+            firstResponderDuringActivation = window.firstResponder
+            return true
+        }
+
+        hostView.rightMouseDown(with: try makeMouseEvent(type: .rightMouseDown, window: window))
+
+        XCTAssertEqual(activationCount, 1)
+        XCTAssertNil(firstResponderDuringActivation)
+        XCTAssertTrue(window.firstResponder === hostView)
+    }
+
     func testSynchronizePresentationVisibilityTracksHiddenAncestorTransition() {
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
@@ -310,6 +360,27 @@ private func fakeSurfaceHandle(_ rawValue: UInt) -> ghostty_surface_t {
         fatalError("expected fake Ghostty surface handle")
     }
     return surface
+}
+
+private func makeMouseEvent(
+    type: NSEvent.EventType,
+    window: NSWindow,
+    location: NSPoint = NSPoint(x: 12, y: 12)
+) throws -> NSEvent {
+    guard let event = NSEvent.mouseEvent(
+        with: type,
+        location: location,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: 1
+    ) else {
+        throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
+    }
+    return event
 }
 
 private final class HookCallCounter: @unchecked Sendable {
