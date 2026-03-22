@@ -63,7 +63,7 @@ final class PanelHeaderAppearanceTests: XCTestCase {
         XCTAssertEqual(appearance.indicatorState, .dot)
     }
 
-    func testUnreadReadyUsesGreenHeaderColors() throws {
+    func testUnreadReadyUsesWarmTealHeaderColors() throws {
         let treatment = PanelHeaderAppearance.resolve(
             isFocused: false,
             hasUnreadNotification: true,

@@ -23,30 +23,30 @@ enum ToastyTheme {
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
-    static let badgeBlue = Color(hex: 0x3B82F6)
+    static let badgeBlue = Color(hex: 0x5BA08A)
     static let sessionIndicatorSpinnerColor = Color(hex: 0xF5A623)
     static let sessionIdleText = Color(hex: 0xC1AA8A)
     static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)
     static let sessionWorkingText = Color(hex: 0x8B5E34)
     static let sessionWorkingBackground = Color(hex: 0x8B5E34, alpha: 0.12)
-    static let sessionNeedsApprovalText = Color(hex: 0xE8A849)
-    static let sessionNeedsApprovalBackground = Color(hex: 0xE8A849, alpha: 0.12)
-    static let sessionReadyText = Color(hex: 0x5DBB63)
-    static let sessionReadyBackground = Color(hex: 0x5DBB63, alpha: 0.12)
-    static let sessionErrorText = Color(hex: 0xD4553A)
-    static let sessionErrorBackground = Color(hex: 0xD4553A, alpha: 0.12)
+    static let sessionNeedsApprovalText = Color(hex: 0x5BA08A)
+    static let sessionNeedsApprovalBackground = Color(hex: 0x5BA08A, alpha: 0.12)
+    static let sessionReadyText = Color(hex: 0x5BA08A)
+    static let sessionReadyBackground = Color(hex: 0x5BA08A, alpha: 0.12)
+    static let sessionErrorText = Color(hex: 0x5BA08A)
+    static let sessionErrorBackground = Color(hex: 0x5BA08A, alpha: 0.12)
     static let terminalProfileBadgeText = Color(hex: 0xF5D6A0)
     static let terminalProfileBadgeBackground = Color(hex: 0x5A3B14, alpha: 0.65)
     static let terminalProfileBadgeMissingText = Color(hex: 0xF4B183)
     static let terminalProfileBadgeMissingBackground = Color(hex: 0x5A2414, alpha: 0.65)
-    static let panelHeaderBellBackground = Color(hex: 0x3B82F6, alpha: 0.16)
-    static let panelHeaderBellDivider = Color(hex: 0x60A5FA)
-    static let panelHeaderNeedsApprovalBackground = Color(hex: 0xE8A849, alpha: 0.14)
-    static let panelHeaderNeedsApprovalDivider = Color(hex: 0xE8A849)
-    static let panelHeaderReadyBackground = Color(hex: 0x5DBB63, alpha: 0.14)
-    static let panelHeaderReadyDivider = Color(hex: 0x5DBB63)
-    static let panelHeaderErrorBackground = Color(hex: 0xD4553A, alpha: 0.14)
-    static let panelHeaderErrorDivider = Color(hex: 0xD4553A)
+    static let panelHeaderBellBackground = Color(hex: 0x5BA08A, alpha: 0.16)
+    static let panelHeaderBellDivider = Color(hex: 0x5BA08A)
+    static let panelHeaderNeedsApprovalBackground = Color(hex: 0x5BA08A, alpha: 0.14)
+    static let panelHeaderNeedsApprovalDivider = Color(hex: 0x5BA08A)
+    static let panelHeaderReadyBackground = Color(hex: 0x5BA08A, alpha: 0.14)
+    static let panelHeaderReadyDivider = Color(hex: 0x5BA08A)
+    static let panelHeaderErrorBackground = Color(hex: 0x5BA08A, alpha: 0.14)
+    static let panelHeaderErrorDivider = Color(hex: 0x5BA08A)
 
     // Empty state
     static let emptyStateToastCrust = Color(hex: 0x4A3425)
@@ -140,11 +140,11 @@ enum ToastyTheme {
         case .working:
             colors = [Color(hex: 0x7D4927), Color(hex: 0xF5A623)]
         case .needsApproval:
-            colors = [Color(hex: 0xA16216), Color(hex: 0xF4C35A)]
+            colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
         case .ready:
-            colors = [Color(hex: 0x8B7F72), Color(hex: 0xF4EBDD)]
+            colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
         case .error:
-            colors = [Color(hex: 0x7F2F1F), Color(hex: 0xD4553A)]
+            colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
         }
         return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
     }
@@ -156,11 +156,11 @@ enum ToastyTheme {
         case .working:
             return Color(hex: 0xF5A623, alpha: 0.28)
         case .needsApproval:
-            return Color(hex: 0xF4C35A, alpha: 0.3)
+            return Color(hex: 0x5BA08A, alpha: 0.24)
         case .ready:
-            return Color(hex: 0xF4EBDD, alpha: 0.16)
+            return Color(hex: 0x5BA08A, alpha: 0.24)
         case .error:
-            return Color(hex: 0xD4553A, alpha: 0.24)
+            return Color(hex: 0x5BA08A, alpha: 0.24)
         }
     }
 
@@ -171,11 +171,11 @@ enum ToastyTheme {
         case .working:
             return Color(hex: 0xFFF4D6, alpha: 0.78)
         case .needsApproval:
-            return Color(hex: 0xFFF4D6, alpha: 0.72)
+            return Color(hex: 0xD7E9E2, alpha: 0.58)
         case .ready:
-            return Color(hex: 0xFFFFFF, alpha: 0.44)
+            return Color(hex: 0xD7E9E2, alpha: 0.58)
         case .error:
-            return Color(hex: 0xFFD8D0, alpha: 0.48)
+            return Color(hex: 0xD7E9E2, alpha: 0.58)
         }
     }
 

@@ -91,7 +91,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("error"))
     }
 
-    func testReadySessionOutlineColorUsesReadyGreen() throws {
+    func testReadySessionOutlineColorUsesWarmTeal() throws {
         let outlineColor = try XCTUnwrap(
             NSColor(ToastyTheme.sessionStatusOutlineColor(for: .ready)).usingColorSpace(.deviceRGB)
         )
@@ -103,6 +103,25 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(outlineColor.greenComponent, expectedColor.greenComponent, accuracy: 0.001)
         XCTAssertEqual(outlineColor.blueComponent, expectedColor.blueComponent, accuracy: 0.001)
         XCTAssertEqual(outlineColor.alphaComponent, expectedColor.alphaComponent, accuracy: 0.001)
+    }
+
+    func testUnreadAndAttentionStatusAccentsShareWarmTeal() throws {
+        let expectedColor = try XCTUnwrap(
+            NSColor(Color(hex: 0x5BA08A)).usingColorSpace(.deviceRGB)
+        )
+
+        for color in [
+            ToastyTheme.badgeBlue,
+            ToastyTheme.sessionNeedsApprovalText,
+            ToastyTheme.sessionReadyText,
+            ToastyTheme.sessionErrorText,
+        ] {
+            let resolvedColor = try XCTUnwrap(NSColor(color).usingColorSpace(.deviceRGB))
+            XCTAssertEqual(resolvedColor.redComponent, expectedColor.redComponent, accuracy: 0.001)
+            XCTAssertEqual(resolvedColor.greenComponent, expectedColor.greenComponent, accuracy: 0.001)
+            XCTAssertEqual(resolvedColor.blueComponent, expectedColor.blueComponent, accuracy: 0.001)
+            XCTAssertEqual(resolvedColor.alphaComponent, expectedColor.alphaComponent, accuracy: 0.001)
+        }
     }
 
     func testBusySubtitleUpdatesWhenRuntimeRegistryPublishesChange() throws {
