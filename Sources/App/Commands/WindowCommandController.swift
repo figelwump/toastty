@@ -350,30 +350,97 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
         "Show All Tabs"
     ]
 
-    private var onMenuTreeRefresh: (() -> Void)?
+    private var isObservingMenuMutations = false
+    private var isRefreshingMenuTree = false
+    private var needsMenuTreeRefresh = false
+    private var needsDynamicMenuBridgeRefresh = false
+    private var onDynamicMenuBridgeRefreshRequested: (() -> Void)?
 
-    init(onMenuTreeRefresh: (() -> Void)? = nil) {
-        self.onMenuTreeRefresh = onMenuTreeRefresh
+    init(onDynamicMenuBridgeRefreshRequested: (() -> Void)? = nil) {
+        self.onDynamicMenuBridgeRefreshRequested = onDynamicMenuBridgeRefreshRequested
     }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
 
-    func setOnMenuTreeRefresh(_ onMenuTreeRefresh: (() -> Void)?) {
-        self.onMenuTreeRefresh = onMenuTreeRefresh
+    func setOnDynamicMenuBridgeRefreshRequested(_ onDynamicMenuBridgeRefreshRequested: (() -> Void)?) {
+        self.onDynamicMenuBridgeRefreshRequested = onDynamicMenuBridgeRefreshRequested
     }
+
     func installIfNeeded() {
-        guard let mainMenu = NSApp.mainMenu else { return }
-        installDelegatesRecursively(on: mainMenu)
-        Self.updateMenuVisibility(in: mainMenu)
-        onMenuTreeRefresh?()
+        startObservingMenuMutationsIfNeeded()
+        refreshMenuTree(reinstallDynamicMenuBridges: true)
     }
 
     func menuWillOpen(_ menu: NSMenu) {
-        installDelegatesRecursively(on: menu)
-        Self.updateMenuVisibility(in: menu)
-        onMenuTreeRefresh?()
+        // SwiftUI/AppKit can replace sibling menus directly under the app's
+        // main menu during command updates, so opening one of those menus is
+        // an opportunity to refresh the entire tree. Nested submenus should
+        // not trigger bridge reinsertion while AppKit is tracking them.
+        let shouldReinstallDynamicMenuBridges = {
+            guard let mainMenu = NSApp.mainMenu else { return false }
+            return menu.supermenu === mainMenu
+        }()
+        refreshMenuTree(reinstallDynamicMenuBridges: shouldReinstallDynamicMenuBridges)
+    }
+
+    private func startObservingMenuMutationsIfNeeded() {
+        guard isObservingMenuMutations == false else { return }
+        isObservingMenuMutations = true
+
+        let notificationCenter = NotificationCenter.default
+        let observedNotifications: [Notification.Name] = [
+            NSMenu.didAddItemNotification,
+            NSMenu.didChangeItemNotification,
+            NSMenu.didRemoveItemNotification
+        ]
+        // Mutation notifications refresh hidden items and delegates, but must
+        // not reinstall dynamic bridges or recursively churn the menu tree.
+        for name in observedNotifications {
+            notificationCenter.addObserver(
+                self,
+                selector: #selector(handleMenuMutationNotification(_:)),
+                name: name,
+                object: nil
+            )
+        }
+    }
+
+    @objc
+    private nonisolated func handleMenuMutationNotification(_ notification: Notification) {
+        _ = notification
+
+        Task { @MainActor [weak self] in
+            self?.refreshMenuTree(reinstallDynamicMenuBridges: false)
+        }
+    }
+
+    private func refreshMenuTree(reinstallDynamicMenuBridges: Bool) {
+        if isRefreshingMenuTree {
+            needsMenuTreeRefresh = true
+            needsDynamicMenuBridgeRefresh = needsDynamicMenuBridgeRefresh || reinstallDynamicMenuBridges
+            return
+        }
+
+        isRefreshingMenuTree = true
+        defer {
+            isRefreshingMenuTree = false
+
+            if needsMenuTreeRefresh {
+                let shouldRefreshDynamicMenuBridges = needsDynamicMenuBridgeRefresh
+                needsMenuTreeRefresh = false
+                needsDynamicMenuBridgeRefresh = false
+                refreshMenuTree(reinstallDynamicMenuBridges: shouldRefreshDynamicMenuBridges)
+            }
+        }
+
+        guard let mainMenu = NSApp.mainMenu else { return }
+        installDelegatesRecursively(on: mainMenu)
+        Self.updateMenuVisibility(in: mainMenu)
+        if reinstallDynamicMenuBridges {
+            onDynamicMenuBridgeRefreshRequested?()
+        }
     }
 
     private static func updateMenuVisibility(in menu: NSMenu) {
@@ -383,7 +450,10 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
             }
 
             if item.isSeparatorItem == false {
-                item.isHidden = shouldHide(item)
+                let shouldHideItem = shouldHide(item)
+                if item.isHidden != shouldHideItem {
+                    item.isHidden = shouldHideItem
+                }
             }
         }
 
@@ -407,7 +477,10 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
             let visibleItemsAfter = menu.items.dropFirst(index + 1).contains(where: {
                 $0.isHidden == false && $0.isSeparatorItem == false
             })
-            item.isHidden = visibleItemsBefore == false || visibleItemsAfter == false
+            let shouldHideSeparator = visibleItemsBefore == false || visibleItemsAfter == false
+            if item.isHidden != shouldHideSeparator {
+                item.isHidden = shouldHideSeparator
+            }
         }
     }
 

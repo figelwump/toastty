@@ -141,7 +141,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         self.closeWorkspaceMenuBridge = closeWorkspaceMenuBridge
         self.helpMenuBridge = helpMenuBridge
         self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
-        hiddenSystemMenuItemsBridge.setOnMenuTreeRefresh { [weak self] in
+        hiddenSystemMenuItemsBridge.setOnDynamicMenuBridgeRefreshRequested { [weak self] in
             self?.installDynamicMenuBridges()
         }
 

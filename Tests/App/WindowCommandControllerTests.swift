@@ -391,6 +391,182 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(windowMenu.items[2].isHidden)
     }
 
+    func testHiddenSystemMenuItemsBridgeRehidesItemsAfterMenuMutation() async {
+        let bridge = HiddenSystemMenuItemsBridge()
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "Datei")
+        initialFileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
+        fileItem.submenu = initialFileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        let rebuiltFileMenu = NSMenu(title: "Datei")
+        let rebuiltNewWindowItem = NSMenuItem(title: "New Window", action: nil, keyEquivalent: "n")
+        let rebuiltOpenRecentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
+        rebuiltFileMenu.addItem(rebuiltNewWindowItem)
+        rebuiltFileMenu.addItem(rebuiltOpenRecentItem)
+        fileItem.submenu = rebuiltFileMenu
+
+        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
+        await flushMainActorTasks()
+
+        XCTAssertTrue(rebuiltNewWindowItem.isHidden)
+        XCTAssertFalse(rebuiltOpenRecentItem.isHidden)
+        XCTAssertTrue(rebuiltFileMenu.delegate === bridge)
+    }
+
+    func testHiddenSystemMenuItemsBridgeDoesNotReinstallDynamicBridgesForMenuMutationNotifications() async {
+        var refreshCount = 0
+        let bridge = HiddenSystemMenuItemsBridge(
+            onDynamicMenuBridgeRefreshRequested: {
+                refreshCount += 1
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "Datei")
+        initialFileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
+        fileItem.submenu = initialFileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+        XCTAssertEqual(refreshCount, 1)
+
+        let rebuiltFileMenu = NSMenu(title: "Datei")
+        rebuiltFileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
+        fileItem.submenu = rebuiltFileMenu
+
+        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
+        await flushMainActorTasks()
+
+        XCTAssertEqual(refreshCount, 1)
+
+        bridge.menuWillOpen(rebuiltFileMenu)
+        XCTAssertEqual(refreshCount, 2)
+    }
+
+    func testHiddenSystemMenuItemsBridgeDoesNotReinstallDynamicBridgesForNestedSubmenuOpen() {
+        var refreshCount = 0
+        let bridge = HiddenSystemMenuItemsBridge(
+            onDynamicMenuBridgeRefreshRequested: {
+                refreshCount += 1
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let windowItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Window")
+        let navigateItem = NSMenuItem(title: "Navigate Splits", action: nil, keyEquivalent: "")
+        let navigateMenu = NSMenu(title: "Navigate Splits")
+        let moreItem = NSMenuItem(title: "More Navigation", action: nil, keyEquivalent: "")
+        let moreMenu = NSMenu(title: "More Navigation")
+        moreMenu.addItem(NSMenuItem(title: "Navigate Diagonally", action: nil, keyEquivalent: ""))
+        moreItem.submenu = moreMenu
+        navigateMenu.addItem(moreItem)
+        navigateItem.submenu = navigateMenu
+        windowMenu.addItem(navigateItem)
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+        refreshCount = 0
+
+        bridge.menuWillOpen(windowMenu)
+        XCTAssertEqual(refreshCount, 1)
+
+        bridge.menuWillOpen(navigateMenu)
+        XCTAssertEqual(refreshCount, 1)
+
+        bridge.menuWillOpen(moreMenu)
+        XCTAssertEqual(refreshCount, 1)
+    }
+
+    func testHiddenSystemMenuItemsBridgeReinstallsCloseWorkspaceBridgeWhenMenuOpensAfterMutation() async {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let closeWorkspaceBridge = CloseWorkspaceMenuBridge(
+            closeWorkspaceCommandController: CloseWorkspaceCommandController(store: store)
+        )
+        let hiddenBridge = HiddenSystemMenuItemsBridge(
+            onDynamicMenuBridgeRefreshRequested: {
+                closeWorkspaceBridge.installIfNeeded()
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "File")
+        let initialCloseItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        initialCloseItem.keyEquivalentModifierMask = [.command]
+        let initialCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
+        initialCloseAllItem.keyEquivalentModifierMask = [.shift]
+        initialFileMenu.addItem(initialCloseItem)
+        initialFileMenu.addItem(initialCloseAllItem)
+        fileItem.submenu = initialFileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        hiddenBridge.installIfNeeded()
+
+        XCTAssertEqual(initialCloseAllItem.title, "Close Workspace")
+        XCTAssertEqual(initialCloseAllItem.keyEquivalent, "")
+        XCTAssertEqual(initialCloseAllItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(initialCloseAllItem.target === closeWorkspaceBridge)
+        XCTAssertEqual(
+            initialCloseAllItem.action,
+            #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
+        )
+
+        let rebuiltFileMenu = NSMenu(title: "File")
+        let rebuiltCloseItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        rebuiltCloseItem.keyEquivalentModifierMask = [.command]
+        let rebuiltCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
+        rebuiltCloseAllItem.keyEquivalentModifierMask = [.shift]
+        rebuiltFileMenu.addItem(rebuiltCloseItem)
+        rebuiltFileMenu.addItem(rebuiltCloseAllItem)
+        fileItem.submenu = rebuiltFileMenu
+
+        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
+        await flushMainActorTasks()
+
+        XCTAssertEqual(rebuiltCloseAllItem.title, "Close All")
+        XCTAssertNil(rebuiltCloseAllItem.target)
+        XCTAssertNil(rebuiltCloseAllItem.action)
+
+        hiddenBridge.menuWillOpen(rebuiltFileMenu)
+
+        XCTAssertEqual(rebuiltCloseAllItem.title, "Close Workspace")
+        XCTAssertEqual(rebuiltCloseAllItem.keyEquivalent, "")
+        XCTAssertEqual(rebuiltCloseAllItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(rebuiltCloseAllItem.target === closeWorkspaceBridge)
+        XCTAssertEqual(
+            rebuiltCloseAllItem.action,
+            #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
+        )
+    }
+
     func testTerminalProfilesMenuControllerSplitsFocusedSlotWithProfileBinding() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let runtimeRegistry = TerminalRuntimeRegistry()
@@ -464,6 +640,10 @@ final class WindowCommandControllerTests: XCTestCase {
             runtimeRegistry: runtimeRegistry,
             slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
         )
+    }
+
+    private func flushMainActorTasks() async {
+        await MainActor.run {}
     }
 }
 
