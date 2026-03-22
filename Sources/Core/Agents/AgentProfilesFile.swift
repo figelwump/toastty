@@ -58,6 +58,9 @@ public enum AgentProfilesFile {
         """
         # Toastty agent launch profiles
         #
+        # Point your agent to these instructions to set up your agents.toml file:
+        # https://github.com/figelwump/toastty/blob/main/docs/running-agents.md
+        #
         # Uncomment and edit profiles below to make them available in Toastty UI.
         #
         # Fields:

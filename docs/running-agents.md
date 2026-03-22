@@ -148,6 +148,72 @@ Manual integrations can report any supported session state, including `error`, t
 
 The `toastty session ingest-agent-event` subcommand is a CLI-local helper for the built-in Claude/Codex instrumentation. It is not a general-purpose integration point.
 
+## Instructions for agents
+
+If a user asks you to help configure Toastty agent profiles, your goal is to produce or update `~/.toastty/agents.toml` with valid launch profiles that match the user's local setup.
+
+### Recommended workflow
+
+1. Check whether `~/.toastty/agents.toml` already exists. If it does, inspect and preserve existing profiles unless the user explicitly wants a replacement.
+2. Try to detect locally installed coding agents using best-effort heuristics such as checking the user's `PATH`, common wrapper scripts, or explicit executable paths the user mentions.
+3. Prefer Toastty's well-known profile IDs when they apply:
+   - Use profile ID `codex` when the launch command is Codex
+   - Use profile ID `claude` when the launch command is Claude Code
+4. For any other agent, choose a lowercase ID that matches Toastty's ID rules and reflects the command being launched, such as `gemini`, `gemini-cli`, or `aider`.
+5. Propose the exact `agents.toml` contents to the user before writing the file. Confirm profile IDs, display names, launch commands, and optional shortcuts.
+6. Only create or update `~/.toastty/agents.toml` after the user confirms.
+
+### Discovery guidance
+
+Discovery is heuristic. Do not claim that Toastty can authoritatively identify every installed agent.
+
+When probing a system, prefer evidence in this order:
+
+1. Commands already mentioned by the user
+2. Existing `~/.toastty/agents.toml` entries that should be preserved or extended
+3. Executables available on the user's `PATH`
+4. User-specific wrapper scripts or absolute executable paths
+
+Common launch commands you may encounter include:
+
+| Agent | Typical command | Suggested profile ID |
+|---|---|---|
+| Codex | `codex` | `codex` |
+| Claude Code | `claude` | `claude` |
+| Gemini CLI | `gemini` or `gemini-cli` | match the executable name |
+| Aider | `aider` | `aider` |
+| Custom wrapper | absolute path or script name | stable lowercase ID that matches the wrapper |
+
+The command you detect should usually become the first element of `argv`. For agents other than `codex` and `claude`, prefer using the executable name as the profile ID when that produces a valid Toastty ID. Include additional fixed flags in later array entries only when the user wants them every time Toastty launches that profile.
+
+### Generation rules
+
+Generate TOML that follows the same schema documented above:
+
+- `displayName` should be a readable label for menus and toolbar buttons
+- `argv` must be a TOML string array
+- `shortcutKey` is optional and must be a single ASCII letter or digit
+
+Remember that only the profile IDs `codex` and `claude` receive first-party Toastty instrumentation. If you launch Codex or Claude Code under another ID, the command still runs, but Toastty will not inject the built-in session hooks for that agent.
+
+### Example suggestion
+
+If you detect both Codex and Claude Code on the user's `PATH`, a reasonable proposal is:
+
+```toml
+[codex]
+displayName = "Codex"
+argv = ["codex"]
+shortcutKey = "c"
+
+[claude]
+displayName = "Claude Code"
+argv = ["claude"]
+shortcutKey = "l"
+```
+
+If the user confirms, you can create or update `~/.toastty/agents.toml` with the agreed contents.
+
 ## Troubleshooting
 
 **"No agents configured"** — `~/.toastty/agents.toml` does not exist or has no uncommented profiles. Open `Agent > Manage Agents...` to create or edit it.

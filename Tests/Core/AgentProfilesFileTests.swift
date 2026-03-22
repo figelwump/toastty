@@ -15,6 +15,17 @@ struct AgentProfilesFileTests {
     }
 
     @Test
+    func templateContentsIncludesAgentSetupInstructionsLink() {
+        let contents = AgentProfilesFile.templateContents()
+
+        #expect(
+            contents.contains(
+                "# https://github.com/figelwump/toastty/blob/main/docs/running-agents.md"
+            )
+        )
+    }
+
+    @Test
     func loadParsesProfilesInFileOrder() throws {
         let contents = """
         [codex]
