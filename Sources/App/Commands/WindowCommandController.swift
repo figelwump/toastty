@@ -350,9 +350,6 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
         "Show All Tabs"
     ]
 
-    private var isObservingMenuMutations = false
-    private var isRefreshingMenuTree = false
-    private var needsMenuTreeRefresh = false
     private var onMenuTreeRefresh: (() -> Void)?
 
     init(onMenuTreeRefresh: (() -> Void)? = nil) {
@@ -366,69 +363,16 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
     func setOnMenuTreeRefresh(_ onMenuTreeRefresh: (() -> Void)?) {
         self.onMenuTreeRefresh = onMenuTreeRefresh
     }
-
     func installIfNeeded() {
-        startObservingMenuMutationsIfNeeded()
-        refreshMenuTree()
-    }
-
-    func menuWillOpen(_ menu: NSMenu) {
-        _ = menu
-        // SwiftUI/AppKit can replace sibling menus during command updates, so
-        // opening any menu is an opportunity to refresh the entire tree.
-        refreshMenuTree()
-    }
-
-    private func startObservingMenuMutationsIfNeeded() {
-        guard isObservingMenuMutations == false else { return }
-        isObservingMenuMutations = true
-
-        let notificationCenter = NotificationCenter.default
-        let observedNotifications: [Notification.Name] = [
-            NSMenu.didAddItemNotification,
-            NSMenu.didChangeItemNotification,
-            NSMenu.didRemoveItemNotification,
-            NSMenu.didBeginTrackingNotification
-        ]
-
-        for name in observedNotifications {
-            notificationCenter.addObserver(
-                self,
-                selector: #selector(handleMenuMutationNotification(_:)),
-                name: name,
-                object: nil
-            )
-        }
-    }
-
-    @objc
-    private nonisolated func handleMenuMutationNotification(_ notification: Notification) {
-        _ = notification
-
-        Task { @MainActor [weak self] in
-            self?.refreshMenuTree()
-        }
-    }
-
-    private func refreshMenuTree() {
-        if isRefreshingMenuTree {
-            needsMenuTreeRefresh = true
-            return
-        }
-
-        isRefreshingMenuTree = true
-        defer {
-            isRefreshingMenuTree = false
-
-            if needsMenuTreeRefresh {
-                needsMenuTreeRefresh = false
-                refreshMenuTree()
-            }
-        }
-
         guard let mainMenu = NSApp.mainMenu else { return }
         installDelegatesRecursively(on: mainMenu)
         Self.updateMenuVisibility(in: mainMenu)
+        onMenuTreeRefresh?()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
+        installDelegatesRecursively(on: menu)
+        Self.updateMenuVisibility(in: menu)
         onMenuTreeRefresh?()
     }
 
@@ -439,10 +383,7 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
             }
 
             if item.isSeparatorItem == false {
-                let shouldHideItem = shouldHide(item)
-                if item.isHidden != shouldHideItem {
-                    item.isHidden = shouldHideItem
-                }
+                item.isHidden = shouldHide(item)
             }
         }
 
@@ -466,10 +407,7 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
             let visibleItemsAfter = menu.items.dropFirst(index + 1).contains(where: {
                 $0.isHidden == false && $0.isSeparatorItem == false
             })
-            let shouldHideSeparator = visibleItemsBefore == false || visibleItemsAfter == false
-            if item.isHidden != shouldHideSeparator {
-                item.isHidden = shouldHideSeparator
-            }
+            item.isHidden = visibleItemsBefore == false || visibleItemsAfter == false
         }
     }
 
