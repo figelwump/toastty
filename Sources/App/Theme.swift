@@ -43,8 +43,8 @@ enum ToastyTheme {
     static let panelHeaderBellDivider = Color(hex: 0x60A5FA)
     static let panelHeaderNeedsApprovalBackground = Color(hex: 0xE8A849, alpha: 0.14)
     static let panelHeaderNeedsApprovalDivider = Color(hex: 0xE8A849)
-    static let panelHeaderReadyBackground = Color(hex: 0x5DBB63, alpha: 0.14)
-    static let panelHeaderReadyDivider = Color(hex: 0x5DBB63)
+    static let panelHeaderReadyBackground = Color(hex: 0xF4EBDD, alpha: 0.16)
+    static let panelHeaderReadyDivider = Color(hex: 0xF4EBDD)
     static let panelHeaderErrorBackground = Color(hex: 0xD4553A, alpha: 0.14)
     static let panelHeaderErrorDivider = Color(hex: 0xD4553A)
 
