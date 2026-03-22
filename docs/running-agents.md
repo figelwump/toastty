@@ -159,7 +159,7 @@ If a user asks you to help configure Toastty agent profiles, your goal is to pro
 3. Prefer Toastty's well-known profile IDs when they apply:
    - Use profile ID `codex` when the launch command is Codex
    - Use profile ID `claude` when the launch command is Claude Code
-4. For any other agent, choose a lowercase ID that matches Toastty's ID rules and reflects the command being launched, such as `gemini`, `gemini-cli`, or `aider`.
+4. For any other agent, choose a lowercase ID that matches Toastty's ID rules and reflects the command being launched, such as `gemini`, `pi`, or `amp`.
 5. Propose the exact `agents.toml` contents to the user before writing the file. Confirm profile IDs, display names, launch commands, and optional shortcuts.
 6. Only create or update `~/.toastty/agents.toml` after the user confirms.
 
@@ -181,7 +181,7 @@ Common launch commands you may encounter include:
 | Codex | `codex` | `codex` |
 | Claude Code | `claude` | `claude` |
 | Gemini CLI | `gemini` or `gemini-cli` | match the executable name |
-| Aider | `aider` | `aider` |
+| Aider | `pi` | `pi` |
 | Custom wrapper | absolute path or script name | stable lowercase ID that matches the wrapper |
 
 The command you detect should usually become the first element of `argv`. For agents other than `codex` and `claude`, prefer using the executable name as the profile ID when that produces a valid Toastty ID. Include additional fixed flags in later array entries only when the user wants them every time Toastty launches that profile.
