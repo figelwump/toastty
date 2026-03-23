@@ -306,6 +306,10 @@ final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     private static func isSystemCloseWorkspaceItem(_ item: NSMenuItem) -> Bool {
+        if item.title == "Close All" {
+            return true
+        }
+
         let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
         return item.keyEquivalent.lowercased() == "w" &&
             (modifiers == [.command, .shift] || modifiers == [.shift])

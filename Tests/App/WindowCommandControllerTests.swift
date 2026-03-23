@@ -386,6 +386,28 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(ownedCloseWorkspaceItem.action, #selector(FileCloseMenuBridge.performCloseWorkspace(_:)))
     }
 
+    func testFileCloseMenuBridgeRemovesLingeringCloseAllTitleWithoutShortcut() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let bridge = makeFileCloseMenuBridge(store: store)
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "")
+        fileMenu.addItem(closeAllItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(menuItemTitles(in: fileMenu), ["Close Panel", "Close Workspace"])
+    }
+
     func testFileCloseMenuBridgeDoesNotTouchNonFileShiftWItem() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let bridge = makeFileCloseMenuBridge(store: store)
