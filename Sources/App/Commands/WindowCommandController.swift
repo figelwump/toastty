@@ -171,6 +171,37 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
         return windowCommandController.canCloseWindow()
     }
 
+    func logCurrentCloseWindowRouting(pathSource: String, event: NSEvent) {
+        guard let mainMenu = NSApp.mainMenu,
+              let closeWindowItem = Self.findCloseWindowMenuItem(in: mainMenu.items) else {
+            ToasttyLog.warning(
+                "Cmd+W routing probe could not resolve the File close item",
+                category: .store,
+                metadata: [
+                    "path_source": pathSource,
+                    "event_characters": event.charactersIgnoringModifiers ?? "<nil>",
+                ]
+            )
+            return
+        }
+
+        let keyWindow = NSApp.keyWindow
+        ToasttyLog.info(
+            "Captured Cmd+W routing snapshot",
+            category: .store,
+            metadata: [
+                "path_source": pathSource,
+                "event_characters": event.charactersIgnoringModifiers ?? "<nil>",
+                "menu_item_title": closeWindowItem.title,
+                "menu_item_action": closeWindowItem.action.map(NSStringFromSelector) ?? "<nil>",
+                "menu_item_target_type": closeWindowItem.target.map { String(describing: type(of: $0)) } ?? "<nil>",
+                "menu_item_target_matches_bridge": closeWindowItem.target === self ? "true" : "false",
+                "key_window_title": keyWindow?.title ?? "<nil>",
+                "first_responder_type": keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "<nil>",
+            ]
+        )
+    }
+
     private static func findCloseWindowMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
         for item in items {
             if item.keyEquivalent.lowercased() == "w",
