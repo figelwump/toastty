@@ -343,11 +343,13 @@ archive_app() {
 }
 
 export_app() {
-  log "Exporting signed app bundle"
-  xcodebuild -exportArchive \
-    -archivePath "$ARCHIVE_PATH" \
-    -exportPath "$EXPORT_PATH" \
-    -exportOptionsPlist "$EXPORT_OPTIONS_PLIST_PATH"
+  local archived_app_path="$ARCHIVE_PATH/Products/Applications/$APP_BUNDLE_NAME"
+
+  [[ -d "$archived_app_path" ]] || fail "archived app not found at $archived_app_path"
+  log "Copying signed app bundle from archive"
+  rm -rf "$EXPORT_PATH"
+  mkdir -p "$EXPORT_PATH"
+  ditto "$archived_app_path" "$EXPORTED_APP_PATH"
 }
 
 verify_exported_app() {
