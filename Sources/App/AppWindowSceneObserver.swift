@@ -40,6 +40,7 @@ struct AppWindowSceneObserver: NSViewRepresentable {
         // attach(to:) handles the first window binding; keep reapplying here so
         // workspace selection and rename changes update the already attached window.
         context.coordinator.applyWindowTitleIfNeeded()
+        context.coordinator.installNativeCloseButtonOverrideIfNeeded()
     }
 
     static func dismantleNSView(_ nsView: WindowTrackingView, coordinator: AppWindowSceneObserverCoordinator) {
@@ -109,6 +110,11 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         observedWindow = window
 
         guard let window else { return }
+        let expectedIdentifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        if window.identifier != expectedIdentifier {
+            window.identifier = expectedIdentifier
+        }
+        installNativeCloseButtonOverrideIfNeeded()
         applyWindowTitleIfNeeded()
         let notificationCenter = NotificationCenter.default
         let scheduleOnMainActor = self.scheduleOnMainActor
@@ -157,6 +163,28 @@ final class AppWindowSceneObserverCoordinator: NSObject {
                 }
             }
         )
+        observerTokens.append(
+            notificationCenter.addObserver(
+                forName: NSWindow.didExitFullScreenNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                scheduleOnMainActor { [weak self] in
+                    self?.installNativeCloseButtonOverrideIfNeeded()
+                }
+            }
+        )
+        observerTokens.append(
+            notificationCenter.addObserver(
+                forName: NSWindow.didDeminiaturizeNotification,
+                object: window,
+                queue: .main
+            ) { [weak self] _ in
+                scheduleOnMainActor { [weak self] in
+                    self?.installNativeCloseButtonOverrideIfNeeded()
+                }
+            }
+        )
 
         applyDesiredFrameIfNeeded()
 
@@ -174,6 +202,20 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         }
         observerTokens.removeAll()
         observedWindow = nil
+    }
+
+    func installNativeCloseButtonOverrideIfNeeded() {
+        guard let closeButton = observedWindow?.standardWindowButton(.closeButton) else { return }
+        guard closeButton.target !== self ||
+            closeButton.action != #selector(handleNativeCloseButton(_:)) else {
+            return
+        }
+
+        // The red traffic-light button should dismiss the native window without
+        // tearing down Toastty's workspace/panel layout. Cmd+W and File close
+        // commands are handled separately by the app-owned menu paths.
+        closeButton.target = self
+        closeButton.action = #selector(handleNativeCloseButton(_:))
     }
 
     func applyDesiredFrameIfNeeded() {
@@ -194,6 +236,12 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private func publishWindowFrame() {
         guard let observedWindow else { return }
         onWindowFrameChange(CGRectCodable(observedWindow.frame))
+    }
+
+    @objc
+    private func handleNativeCloseButton(_ sender: Any?) {
+        guard let observedWindow else { return }
+        observedWindow.orderOut(sender)
     }
 
     private var normalizedWindowTitle: String? {

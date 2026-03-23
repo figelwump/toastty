@@ -164,6 +164,7 @@ final class TerminalHostView: NSView {
             logicallyVisibleIgnoringTransparency && visuallyTransparent == false
         }
     }
+    private var ghosttyMouseOverLinkURL: String?
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -296,6 +297,7 @@ final class TerminalHostView: NSView {
         lastKnownSurfaceVisibility = nil
         ghosttyMouseCursorStyle = .horizontalText
         ghosttyMouseCursorVisible = true
+        ghosttyMouseOverLinkURL = nil
         syncGhosttyCursorOwner()
         syncSurfaceVisibility(reason: "surface_assignment")
     }
@@ -545,14 +547,32 @@ final class TerminalHostView: NSView {
         syncGhosttyCursorOwner()
     }
 
+    func setGhosttyMouseOverLink(_ url: String?) {
+        assert(Thread.isMainThread)
+        let normalizedURL = url?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextURL = normalizedURL?.isEmpty == false ? normalizedURL : nil
+        guard nextURL != ghosttyMouseOverLinkURL else {
+            return
+        }
+        ghosttyMouseOverLinkURL = nextURL
+        syncGhosttyCursorOwner()
+    }
+
     func syncGhosttyCursorOwner() {
         guard let terminalSurfaceScrollView = enclosingScrollView as? TerminalSurfaceScrollView else {
             return
         }
         terminalSurfaceScrollView.applyGhosttyCursor(
-            style: ghosttyMouseCursorStyle,
+            style: effectiveGhosttyMouseCursorStyle(),
             visible: ghosttyMouseCursorVisible
         )
+    }
+
+    private func effectiveGhosttyMouseCursorStyle() -> GhosttyMouseCursorStyle {
+        if ghosttyMouseOverLinkURL != nil {
+            return .link
+        }
+        return ghosttyMouseCursorStyle
     }
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
@@ -699,6 +719,7 @@ final class TerminalHostView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        setGhosttyMouseOverLink(nil)
         if NSEvent.pressedMouseButtons == 0,
            let ghosttySurface {
             let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)

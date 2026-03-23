@@ -175,6 +175,13 @@ final class TerminalControllerStore {
         }
     }
 
+    func armCloseTransitionViewportDeferral(for panelIDs: Set<UUID>) {
+        guard panelIDs.isEmpty == false else { return }
+        for panelID in panelIDs {
+            controllers[panelID]?.armCloseTransitionViewportDeferral()
+        }
+    }
+
     private static func resolveSplitSourcePanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
            workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil,

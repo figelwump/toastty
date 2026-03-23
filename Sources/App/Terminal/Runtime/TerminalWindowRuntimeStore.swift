@@ -149,6 +149,10 @@ final class TerminalWindowRuntimeStore {
         existingRuntime(containing: panelID)?.unregister(surface: surface, for: panelID)
     }
 
+    func armCloseTransitionViewportDeferral(workspaceID: UUID, panelIDs: Set<UUID>) {
+        existingRuntime(for: workspaceID)?.armCloseTransitionViewportDeferral(for: panelIDs)
+    }
+
     #if DEBUG
     func registerSurfaceHandleForTesting(
         _ surface: ghostty_surface_t,

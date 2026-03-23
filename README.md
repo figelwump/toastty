@@ -30,6 +30,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
+- **Native window restore** — `Cmd+W` and `File > Close` close the focused panel, while the red window button hides the current Toastty window and preserves its layout for reopen
 - **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, with UI changes remembered locally
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
@@ -49,12 +50,14 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+[` | Focus previous pane |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Ctrl+Arrow` | Resize split |
-| `Cmd+W` | Close panel |
+| `Cmd+W` | Close focused panel |
 | `Cmd+Ctrl+=` | Equalize splits |
 | `Option+1`–`Option+9` | Switch workspace |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
 | `Cmd+Ctrl+<key>` | Launch agent profile (when profile defines `shortcutKey`) |
 | `Cmd+Ctrl+<key>` / `Cmd+Ctrl+Shift+<key>` | Profile split right / split down (when profile defines `shortcutKey`) |
+
+`Cmd+W` and `File > Close` use Toastty's panel-close behavior. The native red close button instead hides the current Toastty window without tearing down its workspace or panel layout; reopening Toastty from the Dock or app activation restores those hidden Toastty windows.
 
 ## Running Agents
 

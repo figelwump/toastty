@@ -3,46 +3,77 @@ import CoreState
 
 @MainActor
 final class WindowCommandController: NSObject {
+    private let store: AppStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let preferredWindowIDProvider: () -> UUID?
 
     init(
-        focusedPanelCommandController: FocusedPanelCommandController
+        store: AppStore,
+        focusedPanelCommandController: FocusedPanelCommandController,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
     ) {
+        self.store = store
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.preferredWindowIDProvider = preferredWindowIDProvider
     }
 
     @discardableResult
     func closeWindow() -> Bool {
-        // Toastty intentionally maps File > Close Panel and Cmd+W to panel close.
-        focusedPanelCommandController.closeFocusedPanel().consumesShortcut
+        guard let workspaceID = currentCommandSelection()?.workspace.id else {
+            return false
+        }
+        return focusedPanelCommandController.closeFocusedPanel(in: workspaceID).consumesShortcut
     }
 
     func canCloseWindow() -> Bool {
-        focusedPanelCommandController.canCloseFocusedPanel()
+        guard let workspaceID = currentCommandSelection()?.workspace.id else {
+            return false
+        }
+        return focusedPanelCommandController.canCloseFocusedPanel(in: workspaceID)
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
+    }
+
+    private func currentCommandSelection() -> WindowCommandSelection? {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return nil
+        }
+        return store.commandSelection(preferredWindowID: preferredWindowID)
     }
 }
 
 @MainActor
 final class CloseWorkspaceCommandController {
     private let store: AppStore
+    private let preferredWindowIDProvider: () -> UUID?
 
-    init(store: AppStore) {
+    init(
+        store: AppStore,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
+    ) {
         self.store = store
+        self.preferredWindowIDProvider = preferredWindowIDProvider
     }
 
     @discardableResult
     func closeWorkspace() -> Bool {
-        // Toastty intentionally maps the File > Close Workspace menu item to
-        // the selected workspace, while the Cmd+Shift+W shortcut is owned by
-        // the Workspace menu command in ToasttyCommandMenus. AppKit bridge
-        // actions do not carry SwiftUI's focused scene value, so File-menu
-        // invocations fall back to the store's selected window/workspace
-        // context and still route through the shared confirmation flow.
-        store.closeSelectedWorkspaceFromCommand(preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.closeSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
     }
 
     func canCloseWorkspace() -> Bool {
-        store.commandSelection(preferredWindowID: nil) != nil
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.commandSelection(preferredWindowID: preferredWindowID) != nil
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
     }
 }
 
@@ -110,28 +141,33 @@ final class SplitLayoutCommandController {
 }
 
 @MainActor
-final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
-    private static let closePanelMenuItemTitle = "Close Panel"
+final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     private let windowCommandController: WindowCommandController
+    private let closeWorkspaceCommandController: CloseWorkspaceCommandController
+    private lazy var closePanelItem = makeManagedItem(title: "Close Panel", action: #selector(performCloseWindow(_:)))
+    private lazy var closeWorkspaceItem = makeManagedItem(
+        title: "Close Workspace",
+        action: #selector(performCloseWorkspace(_:))
+    )
+    private lazy var ownedItems = [closePanelItem, closeWorkspaceItem]
 
-    init(windowCommandController: WindowCommandController) {
+    init(
+        windowCommandController: WindowCommandController,
+        closeWorkspaceCommandController: CloseWorkspaceCommandController
+    ) {
         self.windowCommandController = windowCommandController
+        self.closeWorkspaceCommandController = closeWorkspaceCommandController
     }
 
     func installIfNeeded() {
         guard let mainMenu = NSApp.mainMenu,
-              let closeWindowItem = Self.findCloseWindowMenuItem(in: mainMenu.items) else {
-            return
-        }
-        if closeWindowItem.title != Self.closePanelMenuItemTitle {
-            closeWindowItem.title = Self.closePanelMenuItemTitle
-        }
-        guard closeWindowItem.target !== self || closeWindowItem.action != #selector(performCloseWindow(_:)) else {
+              let fileMenu = Self.findFileMenu(in: mainMenu.items) else {
             return
         }
 
-        closeWindowItem.target = self
-        closeWindowItem.action = #selector(performCloseWindow(_:))
+        let insertionIndex = Self.insertionIndex(in: fileMenu)
+        restoreOwnedItems()
+        ensureOwnedItemsAttached(to: fileMenu, insertionIndex: insertionIndex)
     }
 
     @objc
@@ -145,30 +181,146 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
         }
     }
 
-    func validateMenuItem(_: NSMenuItem) -> Bool {
-        return windowCommandController.canCloseWindow()
+    @objc
+    func performCloseWorkspace(_: Any?) {
+        guard closeWorkspaceCommandController.closeWorkspace() == true else {
+            ToasttyLog.warning(
+                "Close Workspace menu action could not resolve a selected workspace",
+                category: .store
+            )
+            return
+        }
     }
 
-    private static func findCloseWindowMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
-        for item in items {
-            if item.keyEquivalent.lowercased() == "w",
-               item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command],
-               (
-                   item.action == #selector(NSWindow.performClose(_:)) ||
-                   item.action == #selector(CloseWindowMenuBridge.performCloseWindow(_:)) ||
-                   item.action == nil ||
-                   item.title == closePanelMenuItemTitle
-               ) {
-                return item
-            }
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(performCloseWindow(_:)):
+            return windowCommandController.canCloseWindow()
+        case #selector(performCloseWorkspace(_:)):
+            return closeWorkspaceCommandController.canCloseWorkspace()
+        default:
+            return true
+        }
+    }
 
-            if let submenu = item.submenu,
-               let nestedItem = findCloseWindowMenuItem(in: submenu.items) {
-                return nestedItem
-            }
+    private func restoreOwnedItems() {
+        configureManagedItem(closePanelItem, title: "Close Panel", action: #selector(performCloseWindow(_:)))
+        configureManagedItem(
+            closeWorkspaceItem,
+            title: "Close Workspace",
+            action: #selector(performCloseWorkspace(_:))
+        )
+    }
+
+    private func configureManagedItem(_ item: NSMenuItem, title: String, action: Selector) {
+        item.title = title
+        item.action = action
+        item.keyEquivalent = ""
+        item.keyEquivalentModifierMask = []
+        item.target = self
+        item.representedObject = ManagedMenuSectionMarker.fileClose.rawValue
+        item.submenu = nil
+        item.isEnabled = true
+    }
+
+    private func makeManagedItem(title: String, action: Selector) -> NSMenuItem {
+        let item = NSMenuItem.toasttyManagedItem(
+            title: title,
+            action: action,
+            keyEquivalent: "",
+            marker: .fileClose
+        )
+        item.target = self
+        item.isEnabled = true
+        return item
+    }
+
+    private func detachOwnedItemsFromCurrentMenus() {
+        for item in ownedItems {
+            item.menu?.removeItem(item)
+        }
+    }
+
+    private func ensureOwnedItemsAttached(to menu: NSMenu, insertionIndex: Int) {
+        guard menu.containsItemsIdentical(to: ownedItems, at: insertionIndex) == false ||
+                Self.containsUnmanagedCloseSlots(in: menu) else {
+            return
         }
 
-        return nil
+        detachOwnedItemsFromCurrentMenus()
+        menu.removeManagedItems(marker: .fileClose)
+        Self.removeSystemCloseItems(from: menu)
+        for (offset, item) in ownedItems.enumerated() {
+            menu.insertItem(item, at: min(insertionIndex + offset, menu.items.count))
+        }
+    }
+
+    private static func containsUnmanagedCloseSlots(in menu: NSMenu) -> Bool {
+        menu.items.contains { item in
+            item.representedObject as? String != ManagedMenuSectionMarker.fileClose.rawValue &&
+                (isSystemCloseWindowItem(item) || isSystemCloseWorkspaceItem(item) || isRetargetedCloseItem(item))
+        }
+    }
+
+    private static func removeSystemCloseItems(from menu: NSMenu) {
+        menu.items
+            .enumerated()
+            .reversed()
+            .filter { _, item in
+                // SwiftUI/AppKit may materialize File > Close / Close All with
+                // localized titles and system-owned or nil actions. Within the
+                // File menu, the reserved shortcut shapes are the most stable
+                // way to clear those native slots before inserting Toastty's
+                // owned Close Panel / Close Workspace items.
+                item.representedObject as? String != ManagedMenuSectionMarker.fileClose.rawValue &&
+                    (isSystemCloseWindowItem(item) || isSystemCloseWorkspaceItem(item) || isRetargetedCloseItem(item))
+            }
+            .forEach { index, _ in
+                menu.removeItem(at: index)
+            }
+    }
+
+    private static func insertionIndex(in menu: NSMenu) -> Int {
+        let items = menu.items
+        if let existingManagedIndex = items.firstIndex(where: {
+            $0.representedObject as? String == ManagedMenuSectionMarker.fileClose.rawValue
+        }) {
+            return existingManagedIndex
+        }
+        if let systemCloseIndex = items.firstIndex(where: { isSystemCloseWindowItem($0) || isRetargetedCloseItem($0) }) {
+            return systemCloseIndex
+        }
+        if let systemCloseWorkspaceIndex = items.firstIndex(where: isSystemCloseWorkspaceItem) {
+            return systemCloseWorkspaceIndex
+        }
+        return items.count
+    }
+
+    private static func isSystemCloseWindowItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(NSWindow.performClose(_:)) {
+            return true
+        }
+
+        return item.keyEquivalent.lowercased() == "w" &&
+            item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command]
+    }
+
+    private static func isSystemCloseWorkspaceItem(_ item: NSMenuItem) -> Bool {
+        if item.title == "Close All" {
+            return true
+        }
+
+        let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
+        return item.keyEquivalent.lowercased() == "w" &&
+            (modifiers == [.command, .shift] || modifiers == [.shift])
+    }
+
+    private static func isRetargetedCloseItem(_ item: NSMenuItem) -> Bool {
+        item.title == "Close Panel" || item.title == "Close Workspace"
+    }
+
+    private static func findFileMenu(in items: [NSMenuItem]) -> NSMenu? {
+        findToasttyFileMenu(in: items)
     }
 }
 
@@ -306,123 +458,28 @@ final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     private static func insertionIndex(in menu: NSMenu) -> Int {
-        let unmanagedItems = menu.items.filter {
-            $0.representedObject as? String != ManagedMenuSectionMarker.fileSplit.rawValue
+        if let existingManagedIndex = menu.items.firstIndex(where: {
+            $0.representedObject as? String == ManagedMenuSectionMarker.fileSplit.rawValue
+        }) {
+            return existingManagedIndex
         }
-        guard let closeItemIndex = unmanagedItems.firstIndex(where: { item in
-            item.keyEquivalent.lowercased() == "w" &&
-                item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command]
+
+        guard let closeItemIndex = menu.items.firstIndex(where: { item in
+            let marker = item.representedObject as? String
+            return marker == ManagedMenuSectionMarker.fileClose.rawValue ||
+                (
+                    item.keyEquivalent.lowercased() == "w" &&
+                        item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command]
+                )
         }) else {
-            return unmanagedItems.count
+            return menu.items.count
         }
 
         return closeItemIndex
     }
 
     private static func findFileMenu(in items: [NSMenuItem]) -> NSMenu? {
-        if let standardFileMenu = firstTopLevelMenu(in: items, where: { menu in
-            menu.items.contains { item in
-                item.keyEquivalent.lowercased() == "w" &&
-                    item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command]
-            }
-        }) {
-            return standardFileMenu
-        }
-
-        return items.first(where: { $0.title == "File" })?.submenu
-    }
-}
-
-@MainActor
-final class CloseWorkspaceMenuBridge: NSObject, NSMenuItemValidation {
-    private static let systemCloseAllMenuItemTitle = "Close All"
-    private static let closeWorkspaceMenuItemTitle = "Close Workspace"
-    private let closeWorkspaceCommandController: CloseWorkspaceCommandController
-
-    init(closeWorkspaceCommandController: CloseWorkspaceCommandController) {
-        self.closeWorkspaceCommandController = closeWorkspaceCommandController
-    }
-
-    func installIfNeeded() {
-        guard let mainMenu = NSApp.mainMenu,
-              let fileMenu = Self.findFileMenu(in: mainMenu.items),
-              let closeWorkspaceItem = Self.findCloseWorkspaceMenuItem(in: fileMenu.items) else {
-            return
-        }
-        if closeWorkspaceItem.title != Self.closeWorkspaceMenuItemTitle {
-            closeWorkspaceItem.title = Self.closeWorkspaceMenuItemTitle
-        }
-        // The actual Cmd+Shift+W binding lives on the Workspace menu command.
-        // Clear the File menu slot's key equivalent so it cannot steal the
-        // shortcut before SwiftUI resolves the focused workspace command.
-        if closeWorkspaceItem.keyEquivalent.isEmpty == false {
-            closeWorkspaceItem.keyEquivalent = ""
-        }
-        if closeWorkspaceItem.keyEquivalentModifierMask.isEmpty == false {
-            closeWorkspaceItem.keyEquivalentModifierMask = []
-        }
-        guard closeWorkspaceItem.target !== self ||
-            closeWorkspaceItem.action != #selector(performCloseWorkspace(_:)) else {
-            return
-        }
-
-        closeWorkspaceItem.target = self
-        closeWorkspaceItem.action = #selector(performCloseWorkspace(_:))
-    }
-
-    @objc
-    func performCloseWorkspace(_: Any?) {
-        guard closeWorkspaceCommandController.closeWorkspace() == true else {
-            ToasttyLog.warning(
-                "Close Workspace menu action could not resolve a selected workspace",
-                category: .store
-            )
-            return
-        }
-    }
-
-    func validateMenuItem(_: NSMenuItem) -> Bool {
-        closeWorkspaceCommandController.canCloseWorkspace()
-    }
-
-    private static func findCloseWorkspaceMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
-        for item in items {
-            // Menu titles and actions can vary across localized system menus, so
-            // identify the standard Close All slot by its keyboard equivalent
-            // inside the menu that already contains the standard Close/Close All
-            // slots. Once retargeted, continue to match the item by title even
-            // after its shortcut is cleared so refreshes can reattach the bridge.
-            let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
-            let matchesSystemCloseAllSlot = item.keyEquivalent.lowercased() == "w" &&
-                (modifiers == [.command, .shift] || modifiers == [.shift]) &&
-                (item.title == systemCloseAllMenuItemTitle || item.title == closeWorkspaceMenuItemTitle)
-            let matchesRetargetedCloseWorkspaceItem = item.title == closeWorkspaceMenuItemTitle &&
-                item.action == #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
-
-            if matchesSystemCloseAllSlot || matchesRetargetedCloseWorkspaceItem {
-                return item
-            }
-
-            if let submenu = item.submenu,
-               let nestedItem = findCloseWorkspaceMenuItem(in: submenu.items) {
-                return nestedItem
-            }
-        }
-
-        return nil
-    }
-
-    private static func findFileMenu(in items: [NSMenuItem]) -> NSMenu? {
-        if let standardFileMenu = firstTopLevelMenu(in: items, where: { menu in
-            menu.items.contains { item in
-                item.keyEquivalent.lowercased() == "w" &&
-                    item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command]
-            }
-        }) {
-            return standardFileMenu
-        }
-
-        return items.first(where: { $0.title == "File" })?.submenu
+        findToasttyFileMenu(in: items)
     }
 }
 
@@ -1056,7 +1113,45 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
 
 private enum ManagedMenuSectionMarker: String {
     case fileSplit = "toastty.file-split-menu"
+    case fileClose = "toastty.file-close-menu"
     case windowSplit = "toastty.window-split-menu"
+}
+
+@MainActor
+func currentToasttyKeyWindowID(in store: AppStore) -> UUID? {
+    guard let rawWindowID = NSApp.keyWindow?.identifier?.rawValue,
+          let windowID = UUID(uuidString: rawWindowID),
+          store.window(id: windowID) != nil else {
+        return nil
+    }
+    return windowID
+}
+
+private func findToasttyFileMenu(in items: [NSMenuItem]) -> NSMenu? {
+    if let titledFileMenu = items.first(where: { $0.title == "File" })?.submenu {
+        return titledFileMenu
+    }
+
+    if let managedFileMenu = NSObject.firstTopLevelMenu(in: items, where: { menu in
+        menu.items.contains { item in
+            let marker = item.representedObject as? String
+            return marker == ManagedMenuSectionMarker.fileSplit.rawValue ||
+                marker == ManagedMenuSectionMarker.fileClose.rawValue
+        }
+    }) {
+        return managedFileMenu
+    }
+
+    if let standardFileMenu = NSObject.firstTopLevelMenu(in: items, where: { menu in
+        menu.items.contains { item in
+            item.keyEquivalent.lowercased() == "w" &&
+                item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command]
+        }
+    }) {
+        return standardFileMenu
+    }
+
+    return nil
 }
 
 private extension NSMenu {

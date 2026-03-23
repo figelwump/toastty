@@ -48,6 +48,119 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.title, "Workspace 1")
     }
 
+    func testAttachPersistsWindowIdentifierFromWindowID() {
+        let windowID = UUID()
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: windowID,
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
+    }
+
+    func testAttachRetargetsNativeCloseButtonToOrderWindowOut() throws {
+        var willCloseCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {
+                willCloseCallCount += 1
+            },
+            scheduleOnMainActor: { operation in
+                Task { @MainActor in
+                    operation()
+                }
+            }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertTrue(window.didOrderOut)
+        XCTAssertEqual(willCloseCallCount, 0)
+    }
+
+    func testDidExitFullScreenReinstallsNativeCloseButtonOverride() throws {
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                Task { @MainActor in
+                    operation()
+                }
+            }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        closeButton.target = nil
+        closeButton.action = nil
+
+        NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: window)
+        let reinstallExpectation = expectation(description: "reinstall close button override after full-screen exit")
+        DispatchQueue.main.async {
+            reinstallExpectation.fulfill()
+        }
+        wait(for: [reinstallExpectation], timeout: 1)
+
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertTrue(window.didOrderOut)
+    }
+
+    func testDidDeminiaturizeReinstallsNativeCloseButtonOverride() throws {
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                Task { @MainActor in
+                    operation()
+                }
+            }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        closeButton.target = nil
+        closeButton.action = nil
+
+        NotificationCenter.default.post(name: NSWindow.didDeminiaturizeNotification, object: window)
+        let reinstallExpectation = expectation(description: "reinstall close button override after deminiaturize")
+        DispatchQueue.main.async {
+            reinstallExpectation.fulfill()
+        }
+        wait(for: [reinstallExpectation], timeout: 1)
+
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertTrue(window.didOrderOut)
+    }
+
     func testAttachLeavesWindowChromeConfigurationToSceneStyle() {
         // Window chrome is owned by the scene-level hidden-titlebar style.
         // The observer should stay neutral and only track lifecycle/frame events.
@@ -137,9 +250,14 @@ private final class ScheduledCallbackRecorder: @unchecked Sendable {
 
 private final class TestWindow: NSWindow {
     var forcedIsKeyWindow = false
+    var didOrderOut = false
 
     override var isKeyWindow: Bool {
         forcedIsKeyWindow
+    }
+
+    override func orderOut(_ sender: Any?) {
+        didOrderOut = true
     }
 
     init() {

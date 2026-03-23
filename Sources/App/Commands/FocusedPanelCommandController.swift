@@ -145,9 +145,10 @@ final class FocusedPanelCommandController {
         // Only restore AppKit focus when the close removed the currently
         // focused panel from the visible workspace.
         let shouldRestoreFocus = closedPanelWasFocused && selectedWorkspaceIDBeforeClose == resolvedWorkspaceID
+        let nextFocusedPanelID = store.state.workspacesByID[resolvedWorkspaceID]?.focusedPanelID
         guard shouldRestoreFocus,
               let runtimeRegistry,
-              let nextFocusedPanelID = store.state.workspacesByID[resolvedWorkspaceID]?.focusedPanelID else {
+              let nextFocusedPanelID else {
             return .closed
         }
 
