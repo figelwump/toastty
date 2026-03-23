@@ -121,24 +121,26 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
 
     func installIfNeeded() {
         guard let mainMenu = NSApp.mainMenu,
-              let closeWindowItem = Self.findCloseWindowMenuItem(in: mainMenu.items) else {
+              let fileMenu = Self.findFileMenu(in: mainMenu.items),
+              let closeWindowItem = Self.findCloseWindowMenuItem(in: fileMenu.items) else {
             return
         }
         if closeWindowItem.title != Self.closePanelMenuItemTitle {
             closeWindowItem.title = Self.closePanelMenuItemTitle
         }
+        if closeWindowItem.target !== self || closeWindowItem.action != #selector(performCloseWindow(_:)) {
+            closeWindowItem.target = self
+            closeWindowItem.action = #selector(performCloseWindow(_:))
+        }
+        // Retargeting the standard File > Close slot can cause AppKit to
+        // restore its default Cmd+W key equivalent. Clear it after the action
+        // change so the menu item stays click-only while the app owns Cmd+W.
         if closeWindowItem.keyEquivalent.isEmpty == false {
             closeWindowItem.keyEquivalent = ""
         }
         if closeWindowItem.keyEquivalentModifierMask.isEmpty == false {
             closeWindowItem.keyEquivalentModifierMask = []
         }
-        guard closeWindowItem.target !== self || closeWindowItem.action != #selector(performCloseWindow(_:)) else {
-            return
-        }
-
-        closeWindowItem.target = self
-        closeWindowItem.action = #selector(performCloseWindow(_:))
     }
 
     @objc
@@ -158,15 +160,11 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
 
     private static func findCloseWindowMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
         for item in items {
-            let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
-            let matchesSystemCloseSlot = item.keyEquivalent.lowercased() == "w" &&
-                modifiers == [.command] &&
-                (
-                    item.action == #selector(NSWindow.performClose(_:)) ||
-                    item.action == #selector(CloseWindowMenuBridge.performCloseWindow(_:)) ||
-                    item.action == nil ||
-                    item.title == closePanelMenuItemTitle
-                )
+            // Once we have already narrowed to the top-level File menu, the
+            // standard close slot is the item wired to performClose:. AppKit
+            // may clear its visible key equivalent after the menu is installed,
+            // so matching only on Cmd+W is not reliable here.
+            let matchesSystemCloseSlot = item.action == #selector(NSWindow.performClose(_:))
             let matchesRetargetedClosePanelItem = item.title == closePanelMenuItemTitle &&
                 item.action == #selector(CloseWindowMenuBridge.performCloseWindow(_:))
 
@@ -178,6 +176,23 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
                let nestedItem = findCloseWindowMenuItem(in: submenu.items) {
                 return nestedItem
             }
+        }
+
+        return nil
+    }
+
+    private static func findFileMenu(in items: [NSMenuItem]) -> NSMenu? {
+        if let titledFileMenu = items.first(where: { $0.title == "File" })?.submenu {
+            return titledFileMenu
+        }
+
+        if let standardFileMenu = firstTopLevelMenu(in: items, where: { menu in
+            menu.items.contains { item in
+                item.keyEquivalent.lowercased() == "w" &&
+                    item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command]
+            }
+        }) {
+            return standardFileMenu
         }
 
         return nil

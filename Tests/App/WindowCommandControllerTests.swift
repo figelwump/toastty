@@ -108,6 +108,95 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
     }
 
+    func testMenuBridgeRetargetsFileCloseItemInsteadOfEarlierNonFileCommandWItem() throws {
+        let fixture = try makeSplitWorkspaceFixture()
+        let store = fixture.store
+        let controller = fixture.controller
+        let bridge = CloseWindowMenuBridge(windowCommandController: controller)
+
+        let mainMenu = NSMenu(title: "Main")
+
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let workspaceCloseItem = NSMenuItem(title: "Workspace Toggle", action: nil, keyEquivalent: "w")
+        workspaceCloseItem.keyEquivalentModifierMask = [.command]
+        workspaceMenu.addItem(workspaceCloseItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let fileCloseItem = NSMenuItem(
+            title: "Close",
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w"
+        )
+        fileCloseItem.keyEquivalentModifierMask = [.command]
+        fileMenu.addItem(fileCloseItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertNil(workspaceCloseItem.target)
+        XCTAssertNil(workspaceCloseItem.action)
+        XCTAssertEqual(fileCloseItem.title, "Close Panel")
+        XCTAssertTrue(fileCloseItem.target === bridge)
+        XCTAssertEqual(fileCloseItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
+
+        bridge.performCloseWindow(nil)
+
+        let window = try XCTUnwrap(store.window(id: fixture.windowID))
+        XCTAssertEqual(store.state.windows.count, 1)
+        XCTAssertEqual(window.workspaceIDs, [fixture.workspaceID])
+        let workspace = try XCTUnwrap(store.state.workspacesByID[fixture.workspaceID])
+        XCTAssertEqual(workspace.panels.count, 1)
+        XCTAssertNil(workspace.panels[fixture.closedPanelID])
+    }
+
+    func testMenuBridgeReclearsShortcutWhenRetargetedFileCloseItemDrifts() throws {
+        let fixture = try makeSplitWorkspaceFixture()
+        let controller = fixture.controller
+        let bridge = CloseWindowMenuBridge(windowCommandController: controller)
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "File")
+        let closeItem = NSMenuItem(
+            title: "Close",
+            action: #selector(NSWindow.performClose(_:)),
+            keyEquivalent: "w"
+        )
+        closeItem.keyEquivalentModifierMask = [.command]
+        fileMenu.addItem(closeItem)
+        fileItem.submenu = fileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+        XCTAssertTrue(closeItem.target === bridge)
+        XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
+
+        closeItem.keyEquivalent = "w"
+        closeItem.keyEquivalentModifierMask = [.command]
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(closeItem.keyEquivalent, "")
+        XCTAssertEqual(closeItem.keyEquivalentModifierMask, [])
+        XCTAssertTrue(closeItem.target === bridge)
+        XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
+    }
+
     func testCloseWorkspaceMenuBridgeRetargetsDefaultCloseAllItemAndRequestsSelectedWorkspaceClose() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let firstWindowID = try XCTUnwrap(store.state.windows.first?.id)
