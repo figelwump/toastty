@@ -93,27 +93,8 @@ final class FocusedPanelCommandController {
     func closeFocusedPanel(in workspaceID: UUID? = nil) -> CloseResult {
         guard let workspace = resolvedWorkspace(preferredWorkspaceID: workspaceID),
               let focusedPanelID = workspace.focusedPanelID else {
-            ToasttyLog.info(
-                "Close path could not resolve a focused panel",
-                category: .store,
-                metadata: [
-                    "path_source": "focused_panel_command_controller",
-                    "preferred_workspace_id": workspaceID?.uuidString ?? "<nil>",
-                    "selected_workspace_id": store?.selectedWorkspace?.id.uuidString ?? "<nil>",
-                ]
-            )
             return .notHandled
         }
-        ToasttyLog.info(
-            "Resolved focused panel close request",
-            category: .store,
-            metadata: [
-                "path_source": "focused_panel_command_controller",
-                "preferred_workspace_id": workspaceID?.uuidString ?? "<nil>",
-                "resolved_workspace_id": workspace.id.uuidString,
-                "focused_panel_id": focusedPanelID.uuidString,
-            ]
-        )
         return closePanel(panelID: focusedPanelID, preferredWorkspaceID: workspace.id)
     }
 
@@ -127,36 +108,12 @@ final class FocusedPanelCommandController {
         guard let store else { return .notHandled }
         let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
         guard let workspace = resolvedWorkspace(containing: panelID, preferredWorkspaceID: preferredWorkspaceID) else {
-            ToasttyLog.warning(
-                "Close path could not resolve panel ownership",
-                category: .store,
-                metadata: [
-                    "path_source": "focused_panel_command_controller",
-                    "preferred_workspace_id": preferredWorkspaceID?.uuidString ?? "<nil>",
-                    "selected_workspace_id": selectedWorkspaceIDBeforeClose?.uuidString ?? "<nil>",
-                    "panel_id": panelID.uuidString,
-                ]
-            )
             return .notHandled
         }
 
         let resolvedWorkspaceID = workspace.id
         let closedPanelWasFocused = workspace.focusedPanelID == panelID
         let panelState = workspace.panels[panelID]
-        ToasttyLog.info(
-            "Evaluating panel close request",
-            category: .store,
-            metadata: [
-                "path_source": "focused_panel_command_controller",
-                "preferred_workspace_id": preferredWorkspaceID?.uuidString ?? "<nil>",
-                "selected_workspace_id_before_close": selectedWorkspaceIDBeforeClose?.uuidString ?? "<nil>",
-                "resolved_workspace_id": resolvedWorkspaceID.uuidString,
-                "panel_id": panelID.uuidString,
-                "workspace_focused_panel_id": workspace.focusedPanelID?.uuidString ?? "<nil>",
-                "closed_panel_was_focused": closedPanelWasFocused ? "true" : "false",
-                "panel_kind": panelState?.kind.rawValue ?? "<missing>",
-            ]
-        )
         var didPromptForConfirmation = false
         if shouldConfirmClose,
            panelState?.kind == .terminal {
@@ -182,16 +139,6 @@ final class FocusedPanelCommandController {
 
         let didClosePanel = store.send(.closePanel(panelID: panelID))
         guard didClosePanel else {
-            ToasttyLog.warning(
-                "Panel close request did not mutate state",
-                category: .store,
-                metadata: [
-                    "path_source": "focused_panel_command_controller",
-                    "resolved_workspace_id": resolvedWorkspaceID.uuidString,
-                    "panel_id": panelID.uuidString,
-                    "did_prompt_for_confirmation": didPromptForConfirmation ? "true" : "false",
-                ]
-            )
             return didPromptForConfirmation ? .canceled : .notHandled
         }
 
@@ -199,17 +146,6 @@ final class FocusedPanelCommandController {
         // focused panel from the visible workspace.
         let shouldRestoreFocus = closedPanelWasFocused && selectedWorkspaceIDBeforeClose == resolvedWorkspaceID
         let nextFocusedPanelID = store.state.workspacesByID[resolvedWorkspaceID]?.focusedPanelID
-        ToasttyLog.info(
-            "Panel close request mutated state",
-            category: .store,
-            metadata: [
-                "path_source": "focused_panel_command_controller",
-                "resolved_workspace_id": resolvedWorkspaceID.uuidString,
-                "panel_id": panelID.uuidString,
-                "should_restore_focus": shouldRestoreFocus ? "true" : "false",
-                "next_focused_panel_id": nextFocusedPanelID?.uuidString ?? "<nil>",
-            ]
-        )
         guard shouldRestoreFocus,
               let runtimeRegistry,
               let nextFocusedPanelID else {

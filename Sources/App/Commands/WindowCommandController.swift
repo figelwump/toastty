@@ -14,16 +14,7 @@ final class WindowCommandController: NSObject {
     @discardableResult
     func closeWindow() -> Bool {
         // Toastty intentionally maps File > Close Panel and Cmd+W to panel close.
-        let closeResult = focusedPanelCommandController.closeFocusedPanel()
-        ToasttyLog.info(
-            "Close path evaluated by WindowCommandController",
-            category: .store,
-            metadata: [
-                "path_source": "window_command_controller",
-                "close_result": String(describing: closeResult),
-            ]
-        )
-        return closeResult.consumesShortcut
+        focusedPanelCommandController.closeFocusedPanel().consumesShortcut
     }
 
     func canCloseWindow() -> Bool {
@@ -141,23 +132,10 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
 
         closeWindowItem.target = self
         closeWindowItem.action = #selector(performCloseWindow(_:))
-        ToasttyLog.info(
-            "Retargeted File close item to Close Panel bridge",
-            category: .store,
-            metadata: [
-                "path_source": "close_window_menu_bridge_install",
-                "menu_item_title": closeWindowItem.title,
-            ]
-        )
     }
 
     @objc
     func performCloseWindow(_: Any?) {
-        ToasttyLog.info(
-            "Close Panel bridge invoked",
-            category: .store,
-            metadata: ["path_source": "close_window_menu_bridge"]
-        )
         guard windowCommandController.closeWindow() == true else {
             ToasttyLog.warning(
                 "Close Panel menu action could not resolve a focused panel",
@@ -169,37 +147,6 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
 
     func validateMenuItem(_: NSMenuItem) -> Bool {
         return windowCommandController.canCloseWindow()
-    }
-
-    func logCurrentCloseWindowRouting(pathSource: String, event: NSEvent) {
-        guard let mainMenu = NSApp.mainMenu,
-              let closeWindowItem = Self.findCloseWindowMenuItem(in: mainMenu.items) else {
-            ToasttyLog.warning(
-                "Cmd+W routing probe could not resolve the File close item",
-                category: .store,
-                metadata: [
-                    "path_source": pathSource,
-                    "event_characters": event.charactersIgnoringModifiers ?? "<nil>",
-                ]
-            )
-            return
-        }
-
-        let keyWindow = NSApp.keyWindow
-        ToasttyLog.info(
-            "Captured Cmd+W routing snapshot",
-            category: .store,
-            metadata: [
-                "path_source": pathSource,
-                "event_characters": event.charactersIgnoringModifiers ?? "<nil>",
-                "menu_item_title": closeWindowItem.title,
-                "menu_item_action": closeWindowItem.action.map(NSStringFromSelector) ?? "<nil>",
-                "menu_item_target_type": closeWindowItem.target.map { String(describing: type(of: $0)) } ?? "<nil>",
-                "menu_item_target_matches_bridge": closeWindowItem.target === self ? "true" : "false",
-                "key_window_title": keyWindow?.title ?? "<nil>",
-                "first_responder_type": keyWindow?.firstResponder.map { String(describing: type(of: $0)) } ?? "<nil>",
-            ]
-        )
     }
 
     private static func findCloseWindowMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
@@ -421,23 +368,10 @@ final class CloseWorkspaceMenuBridge: NSObject, NSMenuItemValidation {
 
         closeWorkspaceItem.target = self
         closeWorkspaceItem.action = #selector(performCloseWorkspace(_:))
-        ToasttyLog.info(
-            "Retargeted File close-all item to Close Workspace bridge",
-            category: .store,
-            metadata: [
-                "path_source": "close_workspace_menu_bridge_install",
-                "menu_item_title": closeWorkspaceItem.title,
-            ]
-        )
     }
 
     @objc
     func performCloseWorkspace(_: Any?) {
-        ToasttyLog.info(
-            "Close Workspace bridge invoked",
-            category: .store,
-            metadata: ["path_source": "close_workspace_menu_bridge"]
-        )
         guard closeWorkspaceCommandController.closeWorkspace() == true else {
             ToasttyLog.warning(
                 "Close Workspace menu action could not resolve a selected workspace",

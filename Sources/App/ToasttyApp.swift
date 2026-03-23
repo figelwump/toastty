@@ -113,7 +113,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var sparkleMenuBridge: SparkleMenuBridge?
     private var hasCompletedLaunch = false
     private var menuBridgeInstallationTask: Task<Void, Never>?
-    nonisolated(unsafe) private var closeShortcutTraceMonitor: Any?
     let sparkleUpdaterBridge: SparkleUpdaterBridge
 
     override init() {
@@ -126,9 +125,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     deinit {
         menuBridgeInstallationTask?.cancel()
-        if let closeShortcutTraceMonitor {
-            NSEvent.removeMonitor(closeShortcutTraceMonitor)
-        }
     }
 
     static func isInteractiveSession(_ processInfo: ProcessInfo) -> Bool {
@@ -162,8 +158,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         if sparkleMenuBridge == nil {
             sparkleMenuBridge = SparkleMenuBridge(sparkleUpdaterBridge: sparkleUpdaterBridge)
         }
-
-        installCloseShortcutTraceMonitorIfNeeded()
 
         guard hasCompletedLaunch else { return }
         scheduleMenuBridgeInstallations()
@@ -261,25 +255,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         // scene appearances are safe because the bridge install path is
         // idempotent and cancels any prior retry task.
         scheduleMenuBridgeInstallations()
-    }
-
-    private func installCloseShortcutTraceMonitorIfNeeded() {
-        guard closeShortcutTraceMonitor == nil else { return }
-        closeShortcutTraceMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            guard Self.isCloseShortcutEvent(event) else { return event }
-            self.closeWindowMenuBridge?.logCurrentCloseWindowRouting(
-                pathSource: "close_shortcut_keydown",
-                event: event
-            )
-            return event
-        }
-    }
-
-    private static func isCloseShortcutEvent(_ event: NSEvent) -> Bool {
-        guard event.charactersIgnoringModifiers?.lowercased() == "w" else { return false }
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        return modifiers == [.command]
     }
 }
 
@@ -491,6 +466,9 @@ struct ToasttyApp: App {
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
+        terminalRuntimeRegistry.setClosePanelShortcutHandler { [weak focusedPanelCommandController] panelID in
+            focusedPanelCommandController?.closePanel(panelID: panelID).consumesShortcut ?? false
+        }
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
         fileSplitMenuBridge = FileSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController

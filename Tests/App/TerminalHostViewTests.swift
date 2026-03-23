@@ -171,6 +171,40 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(hostView.acceptsFirstMouse(for: nil))
     }
 
+    func testHostViewConsumesCommandWThroughClosePanelShortcutHandler() throws {
+        let hostView = TerminalHostView()
+        var invocationCount = 0
+        hostView.handleClosePanelShortcut = {
+            invocationCount += 1
+            return true
+        }
+
+        hostView.keyDown(with: try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D))
+
+        XCTAssertEqual(invocationCount, 1)
+    }
+
+    func testClosePanelShortcutMatchesPlainCommandWOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D)
+        let shiftedEvent = try makeKeyEvent(characters: "W", modifiers: [.command, .shift], keyCode: 0x0D)
+        let otherKeyEvent = try makeKeyEvent(characters: "q", modifiers: [.command], keyCode: 0x0C)
+
+        XCTAssertTrue(TerminalHostView.isClosePanelShortcut(matchingEvent))
+        XCTAssertFalse(TerminalHostView.isClosePanelShortcut(shiftedEvent))
+        XCTAssertFalse(TerminalHostView.isClosePanelShortcut(otherKeyEvent))
+    }
+
+    func testClosePanelShortcutIgnoresRepeatedCommandW() throws {
+        let repeatedEvent = try makeKeyEvent(
+            characters: "w",
+            modifiers: [.command],
+            keyCode: 0x0D,
+            isARepeat: true
+        )
+
+        XCTAssertFalse(TerminalHostView.isClosePanelShortcut(repeatedEvent))
+    }
+
     func testMouseDownActivatesPanelBeforeFocusingHostView() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -379,6 +413,29 @@ private func makeMouseEvent(
         pressure: 1
     ) else {
         throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
+    }
+    return event
+}
+
+private func makeKeyEvent(
+    characters: String,
+    modifiers: NSEvent.ModifierFlags,
+    keyCode: UInt16,
+    isARepeat: Bool = false
+) throws -> NSEvent {
+    guard let event = NSEvent.keyEvent(
+        with: .keyDown,
+        location: .zero,
+        modifierFlags: modifiers,
+        timestamp: 0,
+        windowNumber: 0,
+        context: nil,
+        characters: characters,
+        charactersIgnoringModifiers: characters,
+        isARepeat: isARepeat,
+        keyCode: keyCode
+    ) else {
+        throw NSError(domain: "TerminalHostViewTests", code: 2, userInfo: nil)
     }
     return event
 }

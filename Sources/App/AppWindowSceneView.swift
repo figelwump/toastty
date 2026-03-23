@@ -95,16 +95,6 @@ struct AppWindowSceneView: View {
 
     private func handleWindowWillClose() {
         guard windowState != nil else { return }
-        ToasttyLog.warning(
-            "Native window close callback fired",
-            category: .store,
-            metadata: [
-                "path_source": "window_will_close",
-                "window_id": windowID.uuidString,
-                "selected_workspace_id": store.selectedWorkspaceID(in: windowID)?.uuidString ?? "<nil>",
-                "focused_panel_id": store.selectedWorkspace(in: windowID)?.focusedPanelID?.uuidString ?? "<nil>",
-            ]
-        )
         _ = store.send(.closeWindow(windowID: windowID))
     }
 

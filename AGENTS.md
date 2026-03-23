@@ -98,6 +98,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - If hidden system menu items regress after a programmatic menu rebuild, do not revive the global observer pattern from `04ee174`. Prefer a bounded fix scoped to the opened menu or another non-observer path, even if the narrower fix needs separate follow-up work.
 - Preserve targeted tests for menu rebuild behavior when touching this area: hidden system items stay hidden after rebuild, and dynamic bridges still reattach where needed, without restoring a global recursive refresh loop.
 - In Toastty, menu-advertised `⌥digit` workspace shortcuts are not sufficient by themselves. The embedded terminal's key handling can consume those events before the menu-based workspace switch path runs reliably, so keep app-level interception for workspace switching even if the menu also shows the shortcut.
+- In Toastty, a retargeted File > Close Panel menu item is not sufficient by itself to own `Cmd+W`. When `TerminalHostView` is first responder, AppKit can bypass the menu item and invoke native window close directly, so terminal-focused `Cmd+W` handling must also be owned in the terminal/responder path.
 
 ## Manual Interaction Scripting
 Click into the target terminal panel before typing — activation alone is insufficient.
