@@ -247,6 +247,15 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    func sceneDidAppear() {
+        // SwiftUI can materialize the live main menu after launch callbacks
+        // have already fired, so scene appearance is the reliable point to
+        // retarget the AppKit-managed File menu items like Cmd+W. Repeated
+        // scene appearances are safe because the bridge install path is
+        // idempotent and cancels any prior retry task.
+        scheduleMenuBridgeInstallations()
+    }
 }
 
 @MainActor
@@ -255,6 +264,7 @@ private final class DisplayShortcutInterceptor {
     nonisolated(unsafe) private var eventMonitor: Any?
 
     private enum ShortcutAction {
+        case switchWorkspace(Int)
         case focusPanel(Int)
     }
 
@@ -263,6 +273,9 @@ private final class DisplayShortcutInterceptor {
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
             guard let action = Self.shortcutAction(for: event) else { return event }
+            // Keep workspace switching in the local monitor so the embedded
+            // terminal's key handling cannot swallow Option+digit before the
+            // menu-based workspace switch path can run reliably.
             let didHandleShortcut = self.handle(action)
             // If no workspace or panel is mapped to this shortcut, keep default key behavior.
             return didHandleShortcut ? nil : event
@@ -276,17 +289,36 @@ private final class DisplayShortcutInterceptor {
     }
 
     private static func shortcutAction(for event: NSEvent) -> ShortcutAction? {
-        if let shortcutNumber = DisplayShortcutConfig.shortcutNumber(for: event, scope: .panelFocus) {
+        switch DisplayShortcutConfig.action(for: event) {
+        case .workspaceSwitch(let shortcutNumber):
+            return .switchWorkspace(shortcutNumber)
+        case .panelFocus(let shortcutNumber):
             return .focusPanel(shortcutNumber)
+        case nil:
+            return nil
         }
-        return nil
     }
 
     private func handle(_ action: ShortcutAction) -> Bool {
         switch action {
+        case .switchWorkspace(let shortcutNumber):
+            switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
             focusTerminalPanel(shortcutNumber: shortcutNumber)
         }
+    }
+
+    private func switchWorkspace(shortcutNumber: Int) -> Bool {
+        guard let store else { return false }
+        guard shortcutNumber > 0, shortcutNumber <= DisplayShortcutConfig.maxWorkspaceShortcutCount else {
+            return false
+        }
+        guard let window = store.selectedWindow else { return false }
+        let index = shortcutNumber - 1
+        guard window.workspaceIDs.indices.contains(index) else { return false }
+        let workspaceID = window.workspaceIDs[index]
+        guard store.state.workspacesByID[workspaceID] != nil else { return false }
+        return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
     }
 
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
@@ -530,6 +562,9 @@ struct ToasttyApp: App {
                 disableAnimations: disableAnimations
             )
             .frame(minWidth: 980, minHeight: 620)
+            .onAppear {
+                appLifecycleDelegate.sceneDidAppear()
+            }
         }
         // Let SwiftUI remove the native titlebar container so our custom
         // workspace chrome can occupy that space without AppKit overlaying it.

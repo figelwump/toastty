@@ -2,6 +2,11 @@ import AppKit
 import Carbon.HIToolbox
 import Foundation
 
+enum DisplayShortcutAction: Equatable {
+    case workspaceSwitch(Int)
+    case panelFocus(Int)
+}
+
 enum DisplayShortcutScope {
     case workspaceSwitch
     case panelFocus
@@ -48,6 +53,16 @@ enum DisplayShortcutConfig {
 
     static func panelFocusShortcutLabel(for number: Int) -> String? {
         shortcutLabel(for: number, scope: .panelFocus, limit: maxPanelFocusShortcutCount)
+    }
+
+    static func action(for event: NSEvent) -> DisplayShortcutAction? {
+        if let shortcutNumber = shortcutNumber(for: event, scope: .panelFocus) {
+            return .panelFocus(shortcutNumber)
+        }
+        if let shortcutNumber = shortcutNumber(for: event, scope: .workspaceSwitch) {
+            return .workspaceSwitch(shortcutNumber)
+        }
+        return nil
     }
 
     private static func shortcutNumber(forKeyCode keyCode: UInt16) -> Int? {

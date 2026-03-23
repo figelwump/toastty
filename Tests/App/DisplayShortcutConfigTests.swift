@@ -72,4 +72,42 @@ final class DisplayShortcutConfigTests: XCTestCase {
 
         XCTAssertEqual(DisplayShortcutConfig.shortcutNumber(for: event, scope: .workspaceSwitch), 2)
     }
+
+    func testActionPrefersWorkspaceSwitchForOptionDigit() throws {
+        let event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.option],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "3",
+                charactersIgnoringModifiers: "3",
+                isARepeat: false,
+                keyCode: UInt16(kVK_ANSI_3)
+            )
+        )
+
+        XCTAssertEqual(DisplayShortcutConfig.action(for: event), .workspaceSwitch(3))
+    }
+
+    func testActionPrefersPanelFocusForOptionShiftDigit() throws {
+        let event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.option, .shift],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "£",
+                charactersIgnoringModifiers: "#",
+                isARepeat: false,
+                keyCode: UInt16(kVK_ANSI_3)
+            )
+        )
+
+        XCTAssertEqual(DisplayShortcutConfig.action(for: event), .panelFocus(3))
+    }
 }
