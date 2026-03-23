@@ -115,6 +115,19 @@ final class TerminalControllerStoreTests: XCTestCase {
             XCTFail("expected split source mapping to remain pending while both panels are live")
         }
     }
+
+    func testArmCloseTransitionViewportDeferralMarksLiveControllers() {
+        let store = TerminalControllerStore()
+        let livePanelID = UUID()
+        let delegate = TestTerminalSurfaceControllerDelegate()
+        let controller = store.controller(for: livePanelID, delegate: delegate)
+
+        XCTAssertFalse(controller.isCloseTransitionViewportDeferralArmed)
+
+        store.armCloseTransitionViewportDeferral(for: [livePanelID])
+
+        XCTAssertTrue(controller.isCloseTransitionViewportDeferralArmed)
+    }
 }
 
 @MainActor

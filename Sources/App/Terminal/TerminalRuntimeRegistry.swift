@@ -111,6 +111,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
                     nextState: nextState
                 )
             },
+            armCloseTransitionViewportDeferral: { [weak self] workspaceID, panelIDs in
+                self?.runtimeStore.armCloseTransitionViewportDeferral(
+                    workspaceID: workspaceID,
+                    panelIDs: panelIDs
+                )
+            },
             requestWorkspaceFocusRestore: { [weak self] workspaceID in
                 self?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
             }
