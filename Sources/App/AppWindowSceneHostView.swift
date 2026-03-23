@@ -1,3 +1,4 @@
+import CoreState
 import SwiftUI
 
 struct AppWindowSceneHostView: View {
@@ -6,7 +7,9 @@ struct AppWindowSceneHostView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
+    let openAgentProfilesConfiguration: () -> Void
     let sceneCoordinator: AppWindowSceneCoordinator
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
@@ -39,7 +42,9 @@ struct AppWindowSceneHostView: View {
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
+                    profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
+                    openAgentProfilesConfiguration: openAgentProfilesConfiguration,
                     disableAnimations: disableAnimations
                 )
             } else {

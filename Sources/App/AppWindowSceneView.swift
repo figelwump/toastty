@@ -9,7 +9,9 @@ struct AppWindowSceneView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
+    let openAgentProfilesConfiguration: () -> Void
     let disableAnimations: Bool
 
     @State private var fontHUDPoints: Double?
@@ -36,7 +38,9 @@ struct AppWindowSceneView: View {
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
+                    profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
+                    openAgentProfilesConfiguration: openAgentProfilesConfiguration,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {

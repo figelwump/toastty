@@ -9,7 +9,9 @@ struct WorkspaceView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
+    let openAgentProfilesConfiguration: () -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -19,7 +21,10 @@ struct WorkspaceView: View {
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
 
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
-        WorkspaceAgentTopBarModel(catalog: agentCatalogStore.catalog)
+        WorkspaceAgentTopBarModel(
+            catalog: agentCatalogStore.catalog,
+            profileShortcutRegistry: profileShortcutRegistry
+        )
     }
 
     var body: some View {
@@ -66,13 +71,18 @@ struct WorkspaceView: View {
 
             Spacer(minLength: 12)
 
-            if !agentTopBarModel.actions.isEmpty {
+            if agentTopBarModel.showsAddAgentsButton {
+                topBarFlashTextButton(title: WorkspaceAgentTopBarModel.addAgentsTitle) {
+                    openAgentProfilesConfiguration()
+                }
+                .accessibilityIdentifier("topbar.agent.add")
+            } else {
                 ForEach(agentTopBarModel.actions) { action in
                     topBarFlashTextButton(title: action.title) {
                         launchAgent(profileID: action.profileID)
                     }
                     .disabled(canLaunchAgent(profileID: action.profileID) == false)
-                    .help("Run \(action.title)")
+                    .help(action.helpText)
                     .accessibilityIdentifier("topbar.agent.\(action.profileID)")
                 }
             }
@@ -371,18 +381,37 @@ struct WorkspaceView: View {
 }
 
 struct WorkspaceAgentTopBarModel: Equatable {
+    static let addAgentsTitle = "Add Agents…"
+
     struct Action: Equatable, Identifiable {
         let profileID: String
         let title: String
+        let helpText: String
 
         var id: String { profileID }
     }
 
     let actions: [Action]
 
-    init(catalog: AgentCatalog) {
+    var showsAddAgentsButton: Bool {
+        actions.isEmpty
+    }
+
+    init(
+        catalog: AgentCatalog,
+        profileShortcutRegistry: ProfileShortcutRegistry
+    ) {
         actions = catalog.profiles.map { profile in
-            Action(profileID: profile.id, title: profile.displayName)
+            let helpTextBase = "Run \(profile.displayName)"
+            let helpText = profileShortcutRegistry.chord(
+                for: .agentProfileLaunch(profileID: profile.id)
+            ).map { "\(helpTextBase) (\($0.symbolLabel))" } ?? helpTextBase
+
+            return Action(
+                profileID: profile.id,
+                title: profile.displayName,
+                helpText: helpText
+            )
         }
     }
 }

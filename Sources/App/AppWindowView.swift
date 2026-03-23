@@ -8,7 +8,9 @@ struct AppWindowView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
+    let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
+    let openAgentProfilesConfiguration: () -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
 
@@ -41,7 +43,9 @@ struct AppWindowView: View {
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
+                    profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
+                    openAgentProfilesConfiguration: openAgentProfilesConfiguration,
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible
                 )
