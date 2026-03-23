@@ -381,6 +381,14 @@ verify_exported_app() {
   SPARKLE_PUBLIC_ED_KEY="$exported_public_ed_key"
 }
 
+resign_exported_app_for_distribution() {
+  # Copying the archived app preserves ad-hoc signatures on Sparkle's nested
+  # helper binaries, so re-sign the copied bundle recursively before packaging.
+  log "Re-signing exported app bundle for distribution"
+  codesign --force --deep --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$EXPORTED_APP_PATH"
+  codesign --verify --deep --strict --verbose=2 "$EXPORTED_APP_PATH"
+}
+
 stage_dmg_contents() {
   log "Staging DMG contents"
   mkdir -p "$DMG_STAGING_PATH"
@@ -624,6 +632,7 @@ generate_workspace
 archive_app
 export_app
 verify_exported_app
+resign_exported_app_for_distribution
 stage_dmg_contents
 create_dmg
 sign_dmg
