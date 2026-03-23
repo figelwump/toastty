@@ -68,34 +68,6 @@ public enum AgentProfilesFile {
         #   argv         — the exact command Toastty runs for that profile.
         #   shortcutKey  — (optional) single letter or digit; registers ⌘⌃<key>.
         #
-        # Profile IDs and special behavior
-        # --------------------------------
-        # The table name (the value in [brackets]) is the internal agent ID used
-        # for sessions and telemetry. Toastty recognizes two well-known IDs:
-        #
-        #   "codex"  — Toastty injects Codex session recording, notification
-        #              hooks, and a log watcher that surfaces live status
-        #              (working, needs approval, idle) in the sidebar.
-        #
-        #   "claude" — Toastty injects Claude Code lifecycle hooks that report
-        #              session state back to the sidebar automatically.
-        #
-        # This matching is based on the profile ID (the table name), not on
-        # what command argv actually runs. For example:
-        #
-        #   [codex]                      # ✓ gets Codex instrumentation
-        #   argv = ["codex"]
-        #
-        #   [codex]                      # ✓ still gets Codex instrumentation
-        #   argv = ["/my/wrapper"]       #   (ID is "codex", regardless of argv)
-        #
-        #   [my-codex]                   # ✗ no special handling
-        #   argv = ["codex"]             #   (ID is "my-codex", not "codex")
-        #
-        # Any other ID (e.g. [my-agent]) launches without agent-specific
-        # instrumentation. You can still report session status manually
-        # via the bundled `toastty` CLI using the injected TOASTTY_CLI_PATH.
-        #
         # Edit these examples to match your local setup.
         #
         # [codex]
