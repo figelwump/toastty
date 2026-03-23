@@ -316,7 +316,6 @@ prompt or the panel closes.
 
 Launch context environment:
 
-- `TOASTTY_AGENT`
 - `TOASTTY_SESSION_ID`
 - `TOASTTY_PANEL_ID`
 - `TOASTTY_SOCKET_PATH`

@@ -267,9 +267,6 @@ struct AutomationSocketServerTests {
 
         #expect(response.ok)
         let sessionID = try #require(response.result?.string("sessionID"))
-        let didInjectCodex = await MainActor.run {
-            terminalRouter.sentTextByPanelID[server.panelID]?.contains("TOASTTY_AGENT=codex") == true
-        }
         let command = try #require(response.result?.string("command"))
         #expect(response.result?.string("profileID") == AgentKind.codex.rawValue)
         #expect(response.result?.string("agent") == AgentKind.codex.rawValue)
@@ -280,7 +277,6 @@ struct AutomationSocketServerTests {
         #expect(command.contains("codex -c "))
         #expect(command.contains("notify=["))
         #expect(command.contains("codex-notify.sh"))
-        #expect(didInjectCodex)
         let activeAgent = await MainActor.run {
             server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)?.agent
         }

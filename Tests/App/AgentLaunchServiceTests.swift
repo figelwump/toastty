@@ -45,7 +45,6 @@ struct AgentLaunchServiceTests {
         #expect(store.hasEverLaunchedAgent)
 
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
-        #expect(injectedCommand.contains("TOASTTY_AGENT=codex"))
         #expect(injectedCommand.contains("TOASTTY_SESSION_ID=\(result.sessionID)"))
         #expect(injectedCommand.contains("TOASTTY_PANEL_ID=\(panelID.uuidString)"))
         #expect(injectedCommand.contains("TOASTTY_SOCKET_PATH=/tmp/toastty-tests.sock"))

@@ -77,7 +77,7 @@ struct TerminalVisibleTextInspectorTests {
     @Test
     func closeAssessmentTreatsEnvPrefixedAgentLaunchAsAgentCommand() {
         let visibleText = """
-        vishal@toastty ~/repo % TOASTTY_AGENT=codex TOASTTY_SESSION_ID=abc123 codex --model gpt-5
+        vishal@toastty ~/repo % TOASTTY_SESSION_ID=abc123 TOASTTY_PANEL_ID=def456 codex --model gpt-5
         """
 
         let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
@@ -85,7 +85,7 @@ struct TerminalVisibleTextInspectorTests {
         #expect(assessment.requiresConfirmation)
         #expect(
             assessment.runningCommand ==
-                "TOASTTY_AGENT=codex TOASTTY_SESSION_ID=abc123 codex --model gpt-5"
+                "TOASTTY_SESSION_ID=abc123 TOASTTY_PANEL_ID=def456 codex --model gpt-5"
         )
         #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
         #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
@@ -96,7 +96,7 @@ struct TerminalVisibleTextInspectorTests {
             TerminalVisibleTextInspector.inferredRunningCommand(
                 visibleText,
                 includeAgentLaunchCommands: true
-            ) == "TOASTTY_AGENT=codex TOASTTY_SESSION_ID=abc123 codex --model gpt-5"
+            ) == "TOASTTY_SESSION_ID=abc123 TOASTTY_PANEL_ID=def456 codex --model gpt-5"
         )
     }
 

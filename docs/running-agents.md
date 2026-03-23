@@ -114,7 +114,6 @@ Every agent launched through Toastty receives these environment variables, set i
 
 | Variable | Description |
 |---|---|
-| `TOASTTY_AGENT` | Profile ID (e.g. `codex`, `claude`, `my-agent`) |
 | `TOASTTY_SESSION_ID` | Unique session UUID |
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
 | `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket |

@@ -472,7 +472,6 @@ private enum ShellCommandRenderer {
         additionalEnvironment: [String: String]
     ) -> String {
         var command = [
-            assignment(ToasttyLaunchContextEnvironment.agentKey, agentID),
             assignment(ToasttyLaunchContextEnvironment.sessionIDKey, sessionID),
             assignment(ToasttyLaunchContextEnvironment.panelIDKey, panelID.uuidString),
             assignment(ToasttyLaunchContextEnvironment.socketPathKey, socketPath),

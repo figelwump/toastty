@@ -156,7 +156,6 @@ When Toastty launches an agent, these variables are injected into the agent's en
 | `TOASTTY_CLI_PATH` | Absolute path to the bundled `toastty` CLI |
 | `TOASTTY_SESSION_ID` | Session ID for the current agent run |
 | `TOASTTY_PANEL_ID` | Terminal panel UUID |
-| `TOASTTY_AGENT` | Agent profile ID |
 | `TOASTTY_SOCKET_PATH` | Automation socket path |
 | `TOASTTY_CWD` | Panel working directory (if available) |
 | `TOASTTY_REPO_ROOT` | Git repository root (if available) |
