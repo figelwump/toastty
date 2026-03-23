@@ -243,7 +243,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 
 ## Privacy and Local State
 
-Toastty is local-first. The app itself does not send usage analytics or cloud telemetry.
+Toastty is local-first. The app itself does not send usage analytics or cloud telemetry. The only outbound network connection is Sparkle's update check against `https://updates.toastty.dev/appcast.xml`.
 
 - Toastty writes user-authored config to `~/.toastty/config`, or to `TOASTTY_RUNTIME_HOME/config` for isolated dev/test runs. `TOASTTY_DEV_WORKTREE_ROOT` also enables that isolated runtime-home behavior by deriving a stable sandbox under the worktree.
 - Toastty stores UI-managed font overrides in the app's `UserDefaults` domain, or in an isolated defaults suite derived from the active runtime home.
