@@ -6,6 +6,39 @@ import Testing
 @MainActor
 struct AgentLaunchServiceTests {
     @Test
+    func defaultCLIExecutablePathPrefersBundledCLIOverSiblingFallback() throws {
+        let fixture = try makeCLIResolutionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        try makeExecutableFile(at: fixture.bundledCLIURL)
+        try makeExecutableFile(at: fixture.siblingCLIURL)
+
+        let resolvedPath = AgentLaunchService.resolvedDefaultCLIExecutablePath(
+            fileManager: .default,
+            bundleURL: fixture.bundleURL,
+            executableURL: fixture.executableURL
+        )
+
+        #expect(resolvedPath == fixture.bundledCLIURL.path)
+    }
+
+    @Test
+    func defaultCLIExecutablePathFallsBackToSiblingCLIWhenBundleCopyIsMissing() throws {
+        let fixture = try makeCLIResolutionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        try makeExecutableFile(at: fixture.siblingCLIURL)
+
+        let resolvedPath = AgentLaunchService.resolvedDefaultCLIExecutablePath(
+            fileManager: .default,
+            bundleURL: fixture.bundleURL,
+            executableURL: fixture.executableURL
+        )
+
+        #expect(resolvedPath == fixture.siblingCLIURL.path)
+    }
+
+    @Test
     func launchInjectsToasttyContextAndStartsSession() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -143,5 +176,37 @@ struct AgentLaunchServiceTests {
             contents: Data("gitdir: /tmp/fake-worktree".utf8)
         )
         return projectRoot
+    }
+
+    private func makeCLIResolutionFixture() throws -> (
+        rootURL: URL,
+        bundleURL: URL,
+        executableURL: URL,
+        bundledCLIURL: URL,
+        siblingCLIURL: URL
+    ) {
+        let rootURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-cli-resolution-\(UUID().uuidString)", isDirectory: true)
+        let bundleURL = rootURL.appendingPathComponent("Toastty.app", isDirectory: true)
+        let executableURL = bundleURL
+            .appendingPathComponent("Contents/MacOS", isDirectory: true)
+            .appendingPathComponent("Toastty", isDirectory: false)
+        let bundledCLIURL = executableURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("toastty", isDirectory: false)
+        let siblingCLIURL = rootURL.appendingPathComponent("toastty", isDirectory: false)
+
+        try FileManager.default.createDirectory(
+            at: executableURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        return (rootURL, bundleURL, executableURL, bundledCLIURL, siblingCLIURL)
+    }
+
+    private func makeExecutableFile(at url: URL) throws {
+        let contents = Data("#!/bin/sh\nexit 0\n".utf8)
+        FileManager.default.createFile(atPath: url.path, contents: contents)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
     }
 }

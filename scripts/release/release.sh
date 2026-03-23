@@ -6,6 +6,9 @@ SCHEME="ToasttyApp-Release"
 WORKSPACE_PATH="$ROOT_DIR/toastty.xcworkspace"
 APP_NAME="Toastty"
 APP_BUNDLE_NAME="${APP_NAME}.app"
+CLI_NAME="toastty"
+ARCHIVED_CLI_RELATIVE_PATH="usr/local/bin/${CLI_NAME}"
+BUNDLED_CLI_RELATIVE_PATH="Contents/MacOS/${CLI_NAME}"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_RELEASE_METADATA_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.metadata.env"
 SPARKLE_TOOLS_DIRECTORY=""
@@ -352,6 +355,17 @@ export_app() {
   ditto "$archived_app_path" "$EXPORTED_APP_PATH"
 }
 
+bundle_cli_into_exported_app() {
+  local archived_cli_path="$ARCHIVE_PATH/Products/$ARCHIVED_CLI_RELATIVE_PATH"
+  local bundled_cli_path="$EXPORTED_APP_PATH/$BUNDLED_CLI_RELATIVE_PATH"
+
+  [[ -x "$archived_cli_path" ]] || fail "archived CLI not found at $archived_cli_path"
+  log "Bundling ${CLI_NAME} CLI into exported app"
+  ditto "$archived_cli_path" "$bundled_cli_path"
+  chmod 755 "$bundled_cli_path"
+  [[ -x "$bundled_cli_path" ]] || fail "failed to bundle CLI into exported app at $bundled_cli_path"
+}
+
 verify_exported_app() {
   local exported_build_number=""
   local exported_feed_url=""
@@ -382,6 +396,9 @@ verify_exported_app() {
 }
 
 resign_exported_app_for_distribution() {
+  local bundled_cli_path="$EXPORTED_APP_PATH/$BUNDLED_CLI_RELATIVE_PATH"
+
+  [[ -x "$bundled_cli_path" ]] || fail "exported app is missing bundled CLI at $bundled_cli_path"
   # Copying the archived app preserves ad-hoc signatures on Sparkle's nested
   # helper binaries, so re-sign the copied bundle recursively before packaging.
   log "Re-signing exported app bundle for distribution"
@@ -632,6 +649,7 @@ generate_workspace
 archive_app
 export_app
 verify_exported_app
+bundle_cli_into_exported_app
 resign_exported_app_for_distribution
 stage_dmg_contents
 create_dmg

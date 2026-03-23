@@ -64,7 +64,7 @@ enum AgentLaunchError: LocalizedError, Equatable {
             return "The target terminal is not at an interactive prompt."
         case .cliUnavailable(let path):
             if let path {
-                return "Toastty could not find its CLI at \(path). Build the toastty target alongside the app and try again."
+                return "Toastty could not find its CLI at \(path). Reinstall the app or rebuild the toastty target and try again."
             }
             return "Toastty could not resolve its CLI path."
         case .terminalUnavailable(let panelID):
@@ -437,11 +437,54 @@ final class AgentLaunchService {
         state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id
     }
 
-    nonisolated private static func defaultCLIExecutablePath() -> String? {
-        Bundle.main.bundleURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("toastty")
-            .path
+    nonisolated static func defaultCLIExecutablePath() -> String? {
+        resolvedDefaultCLIExecutablePath(
+            fileManager: .default,
+            bundleURL: Bundle.main.bundleURL,
+            executableURL: Bundle.main.executableURL
+        )
+    }
+
+    nonisolated static func resolvedDefaultCLIExecutablePath(
+        fileManager: FileManager,
+        bundleURL: URL,
+        executableURL: URL?
+    ) -> String? {
+        let candidates = defaultCLIExecutablePathCandidates(
+            bundleURL: bundleURL,
+            executableURL: executableURL
+        )
+        return candidates.first(where: { fileManager.isExecutableFile(atPath: $0) }) ?? candidates.first
+    }
+
+    nonisolated static func defaultCLIExecutablePathCandidates(
+        bundleURL: URL,
+        executableURL: URL?
+    ) -> [String] {
+        var candidates: [String] = []
+
+        func appendCandidate(_ path: String) {
+            guard candidates.contains(path) == false else { return }
+            candidates.append(path)
+        }
+
+        if let executableURL {
+            appendCandidate(
+                executableURL
+                    .deletingLastPathComponent()
+                    .appendingPathComponent("toastty")
+                    .path
+            )
+        }
+
+        appendCandidate(
+            bundleURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("toastty")
+                .path
+        )
+
+        return candidates
     }
 
     nonisolated private static func defaultSocketPath() -> String {
