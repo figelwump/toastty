@@ -168,7 +168,7 @@ ensure_ghostty_release_artifact() {
       library_path="$candidate"
       break
     fi
-  done < <(find "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH" -type f \( -path '*/macos-*/*.a' \) | sort)
+  done < <(find -L "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH" -type f \( -path '*/macos-*/*.a' \) | sort)
 
   [[ -n "$library_path" ]] || fail "Ghostty release XCFramework does not include a universal macOS static library slice (arm64 and x86_64)"
   log "Using Ghostty release library: $library_path"
