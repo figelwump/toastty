@@ -199,7 +199,8 @@ final class TerminalActivityInferenceService {
             return
         }
 
-        if TerminalVisibleTextInspector.appearsBusy(visibleText) {
+        let appearsBusy = TerminalVisibleTextInspector.appearsBusy(visibleText)
+        if appearsBusy {
             busyPanelStateByPanelID[panelID] = PanelBusyState(
                 workspaceID: workspaceID,
                 updatedAt: now
@@ -208,7 +209,18 @@ final class TerminalActivityInferenceService {
             busyPanelStateByPanelID.removeValue(forKey: panelID)
         }
 
-        if Self.visibleTextShowsIdleShellPrompt(visibleText) {
+        let showsIdlePrompt = Self.visibleTextShowsIdleShellPrompt(visibleText)
+        if showsIdlePrompt {
+            ToasttyLog.debug(
+                "Visible terminal text looked like an idle shell prompt; attempting prompt-based session stop",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "appears_busy": appearsBusy ? "true" : "false",
+                    "recent_prompt_command_token": TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) ?? "none",
+                ]
+            )
             _ = sessionLifecycleTracker?.stopSessionForPanelIfOlderThan(
                 panelID: panelID,
                 minimumRuntime: Self.sessionAutoStopShellPromptGraceInterval,

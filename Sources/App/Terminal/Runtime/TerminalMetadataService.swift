@@ -817,6 +817,15 @@ final class TerminalMetadataService {
         state: AppState
     ) -> Bool {
         let now = Date()
+        ToasttyLog.debug(
+            "Received Ghostty command-finished metadata update",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "exit_code": exitCode.map(String.init) ?? "none",
+            ]
+        )
         _ = sessionLifecycleTracker?.stopSessionForPanelIfActive(panelID: panelID, at: now)
 
         guard prefersNativeCWDSignal(panelID: panelID) == false else {

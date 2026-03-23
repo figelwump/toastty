@@ -103,6 +103,20 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     func stopSession(sessionID: String, at now: Date) {
+        if let record = sessionRegistry.sessionsByID[sessionID], record.isActive {
+            ToasttyLog.debug(
+                "Stopping managed session",
+                category: .terminal,
+                metadata: [
+                    "session_id": record.sessionID,
+                    "agent": record.agent.rawValue,
+                    "panel_id": record.panelID.uuidString,
+                    "window_id": record.windowID.uuidString,
+                    "workspace_id": record.workspaceID.uuidString,
+                    "status_kind": record.status?.kind.rawValue ?? "none",
+                ]
+            )
+        }
         var nextRegistry = sessionRegistry
         nextRegistry.stopSession(sessionID: sessionID, at: now)
         publish(nextRegistry)
@@ -168,6 +182,18 @@ final class SessionRuntimeStore: ObservableObject {
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
             guard let location = Self.locatePanel(record.panelID, in: state) else {
+                ToasttyLog.debug(
+                    "Stopping active session because its panel is no longer present in app state",
+                    category: .terminal,
+                    metadata: [
+                        "session_id": record.sessionID,
+                        "agent": record.agent.rawValue,
+                        "panel_id": record.panelID.uuidString,
+                        "window_id": record.windowID.uuidString,
+                        "workspace_id": record.workspaceID.uuidString,
+                        "status_kind": record.status?.kind.rawValue ?? "none",
+                    ]
+                )
                 nextRegistry.stopSession(sessionID: record.sessionID, at: now)
                 continue
             }
@@ -362,9 +388,21 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     }
 
     func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool {
-        guard sessionRegistry.activeSession(for: panelID) != nil else {
+        guard let record = sessionRegistry.activeSession(for: panelID) else {
             return false
         }
+        ToasttyLog.debug(
+            "Stopping active session for panel",
+            category: .terminal,
+            metadata: [
+                "session_id": record.sessionID,
+                "agent": record.agent.rawValue,
+                "panel_id": record.panelID.uuidString,
+                "window_id": record.windowID.uuidString,
+                "workspace_id": record.workspaceID.uuidString,
+                "status_kind": record.status?.kind.rawValue ?? "none",
+            ]
+        )
         stopSessionForPanel(panelID: panelID, at: now)
         return true
     }
@@ -379,6 +417,20 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return false
         }
 
+        ToasttyLog.debug(
+            "Stopping active session for panel after minimum runtime gate passed",
+            category: .terminal,
+            metadata: [
+                "session_id": record.sessionID,
+                "agent": record.agent.rawValue,
+                "panel_id": record.panelID.uuidString,
+                "window_id": record.windowID.uuidString,
+                "workspace_id": record.workspaceID.uuidString,
+                "status_kind": record.status?.kind.rawValue ?? "none",
+                "minimum_runtime_seconds": String(format: "%.3f", minimumRuntime),
+                "elapsed_runtime_seconds": String(format: "%.3f", now.timeIntervalSince(record.startedAt)),
+            ]
+        )
         stopSessionForPanel(panelID: panelID, at: now)
         return true
     }
