@@ -13,29 +13,29 @@ final class TerminalActionRouter {
     }
 
     func handle(_ action: GhosttyRuntimeAction) -> Bool {
-        let state = store.state
+        let appState = store.state
 
         if case .desktopNotification(let title, let body) = action.intent {
             return registry.handleDesktopNotificationAction(
                 action: action,
                 title: title,
                 body: body,
-                state: state,
+                state: appState,
                 store: store
             )
         }
 
-        guard let resolution = registry.resolveActionTarget(for: action, state: state) else {
+        guard let resolution = registry.resolveActionTarget(for: action, state: appState) else {
             return false
         }
 
         switch action.intent {
-        case .setTerminalTitle, .setTerminalCWD, .commandFinished:
+        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             return registry.handleRuntimeMetadataAction(
                 action.intent,
                 workspaceID: resolution.workspaceID,
                 panelID: resolution.panelID,
-                state: state,
+                state: appState,
                 store: store
             )
 
@@ -84,7 +84,7 @@ final class TerminalActionRouter {
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: resolution.workspaceID))
 
-        case .setTerminalTitle, .setTerminalCWD, .commandFinished:
+        case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             handled = false
 
         case .desktopNotification:

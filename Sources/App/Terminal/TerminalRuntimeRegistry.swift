@@ -65,8 +65,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
+    private var exitedTerminalPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
+    private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -113,12 +115,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
                     workspaceID: workspaceID,
                     previousState: previousState,
                     nextState: nextState
-                )
-            },
-            armCloseTransitionViewportDeferral: { [weak self] workspaceID, panelIDs in
-                self?.runtimeStore.armCloseTransitionViewportDeferral(
-                    workspaceID: workspaceID,
-                    panelIDs: panelIDs
                 )
             },
             requestWorkspaceFocusRestore: { [weak self] workspaceID in
@@ -222,6 +218,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDsAwaitingLaunch.intersection(livePanelIDs)
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
             .intersection(livePanelIDs)
+        exitedTerminalPanelIDs = exitedTerminalPanelIDs.intersection(livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
             state: state,
@@ -257,6 +254,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
+        if exitedTerminalPanelIDs.contains(panelID) {
+            return TerminalCloseConfirmationAssessment(requiresConfirmation: false)
+        }
         guard let controller = runtimeStore.existingController(for: panelID) else {
             ToasttyLog.warning(
                 "Skipping terminal close confirmation because the surface controller is unavailable",
@@ -507,6 +507,13 @@ private extension TerminalRuntimeRegistry {
             }
         }
     }
+
+}
+
+extension TerminalRuntimeRegistry {
+    func setGhosttyCloseSurfaceHandler(_ handler: @escaping (UUID, Bool) -> Bool) {
+        ghosttyCloseSurfaceHandler = handler
+    }
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -541,6 +548,24 @@ extension TerminalRuntimeRegistry {
         runtimeStore.panelID(forSurfaceHandle: surfaceHandle)
     }
 
+    #if DEBUG
+    func registerSurfaceHandleForTesting(
+        _ surface: ghostty_surface_t,
+        for panelID: UUID,
+        workspaceID: UUID,
+        windowID: UUID,
+        state: AppState
+    ) {
+        runtimeStore.registerSurfaceHandleForTesting(
+            surface,
+            for: panelID,
+            workspaceID: workspaceID,
+            windowID: windowID,
+            state: state
+        )
+    }
+    #endif
+
     func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
@@ -563,6 +588,21 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             kind: kind,
             at: Date()
         )
+    }
+
+    @discardableResult
+    func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
+        guard let store else { return false }
+        let state = store.state
+        for window in state.windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = state.workspacesByID[workspaceID] else { continue }
+                guard workspace.panels[panelID] != nil else { continue }
+                guard workspace.layoutTree.slotContaining(panelID: panelID) != nil else { continue }
+                return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            }
+        }
+        return false
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -821,6 +861,25 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
         actionRouter?.handle(action) ?? false
     }
 
+    func handleGhosttyCloseSurfaceRequest(surfaceHandle: UInt?, confirmed: Bool) -> Bool {
+        guard let surfaceHandle else {
+            ToasttyLog.warning(
+                "Ignoring Ghostty close-surface request without a resolved surface handle",
+                category: .ghostty
+            )
+            return false
+        }
+        guard let panelID = panelID(forSurfaceHandle: surfaceHandle) else {
+            ToasttyLog.warning(
+                "Ignoring Ghostty close-surface request for an unknown surface handle",
+                category: .ghostty,
+                metadata: ["surface_handle": String(surfaceHandle)]
+            )
+            return false
+        }
+        return ghosttyCloseSurfaceHandler?(panelID, confirmed) ?? false
+    }
+
     func resolveActionTarget(
         for action: GhosttyRuntimeAction,
         state: AppState
@@ -882,6 +941,19 @@ extension TerminalRuntimeRegistry {
         store: AppStore
     ) -> Bool {
         _ = store
+        if case .showChildExited(let exitCode) = intent {
+            exitedTerminalPanelIDs.insert(panelID)
+            ToasttyLog.debug(
+                "Marked terminal panel as exited",
+                category: .terminal,
+                metadata: [
+                    "workspace_id": workspaceID.uuidString,
+                    "panel_id": panelID.uuidString,
+                    "exit_code": String(exitCode),
+                ]
+            )
+            return true
+        }
         let metadataHandled = metadataService?.handleRuntimeMetadataAction(
             intent,
             workspaceID: workspaceID,

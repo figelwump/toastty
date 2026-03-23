@@ -2,15 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-shortcut-trace-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-split-workspace}"
-DERIVED_PATH="${DERIVED_PATH:-$ROOT_DIR/Derived}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts/automation}"
-SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock}"
+DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
+DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$DEV_RUN_ROOT/artifacts}"
+TOASTTY_RUNTIME_HOME="${TOASTTY_RUNTIME_HOME:-$DEV_RUN_ROOT/runtime-home}"
+SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-${RUN_ID}.sock}"
 ARCH="${ARCH:-$(uname -m)}"
 CLICK_X="${CLICK_X:-760}"
 CLICK_Y="${CLICK_Y:-420}"
-TRACE_LOG_PATH="${TRACE_LOG_PATH:-$HOME/Library/Logs/Toastty/shortcut-trace.log}"
+TRACE_LOG_PATH="${TRACE_LOG_PATH:-$TOASTTY_RUNTIME_HOME/logs/shortcut-trace.log}"
 SPLIT_KEY_CODE="${SPLIT_KEY_CODE:-2}"
 FOCUS_NEXT_KEY_CODE="${FOCUS_NEXT_KEY_CODE:-30}"
 FOCUS_PREVIOUS_KEY_CODE="${FOCUS_PREVIOUS_KEY_CODE:-33}"
@@ -27,17 +30,12 @@ APP_LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 
-mkdir -p "$ARTIFACTS_DIR"
+mkdir -p "$ARTIFACTS_DIR" "$TOASTTY_RUNTIME_HOME" "$(dirname "$SOCKET_PATH")" "$(dirname "$TRACE_LOG_PATH")"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$APP_LOG_FILE"
 rm -f "$TRACE_LOG_PATH"
 
 if [[ "${TUIST_DISABLE_GHOSTTY:-0}" == "1" || "${TOASTTY_DISABLE_GHOSTTY:-0}" == "1" ]]; then
   echo "error: shortcut trace requires Ghostty-enabled build (disable flags are set)" >&2
-  exit 1
-fi
-
-if [[ ! -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" && ! -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
-  echo "error: Ghostty xcframework missing or invalid: expected $GHOSTTY_DEBUG_XCFRAMEWORK_PATH or $GHOSTTY_RELEASE_XCFRAMEWORK_PATH" >&2
   exit 1
 fi
 
@@ -56,18 +54,6 @@ if ! command -v osascript >/dev/null 2>&1; then
   exit 1
 fi
 
-run_tuist() {
-  if command -v sv >/dev/null 2>&1; then
-    sv exec -- tuist "$@"
-  else
-    tuist "$@"
-  fi
-}
-
-ensure_tuist_dependencies() {
-  run_tuist install >/dev/null
-}
-
 cleanup() {
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" >/dev/null 2>&1 || true
@@ -75,6 +61,15 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+
+if ! "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null; then
+  exit 1
+fi
+
+if [[ ! -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" && ! -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  echo "error: Ghostty xcframework missing or invalid after bootstrap: expected $GHOSTTY_DEBUG_XCFRAMEWORK_PATH or $GHOSTTY_RELEASE_XCFRAMEWORK_PATH" >&2
+  exit 1
+fi
 
 send_request() {
   local command="$1"
@@ -184,7 +179,12 @@ send_equalize_shortcut() {
 
 send_workspace_shortcut() {
   local index="$1"
-  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {command down}"
+  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {option down}"
+}
+
+send_panel_focus_shortcut() {
+  local index="$1"
+  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {option down, shift down}"
 }
 
 send_close_shortcut() {
@@ -320,8 +320,6 @@ capture_close_outcome() {
 
 cd "$ROOT_DIR"
 
-ensure_tuist_dependencies
-run_tuist generate --no-open >/dev/null
 xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \
@@ -332,7 +330,9 @@ xcodebuild \
 
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
+TOASTTY_RUNTIME_HOME="$TOASTTY_RUNTIME_HOME" \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
+TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
 TOASTTY_LOG_LEVEL=debug \
 TOASTTY_LOG_FILE="$TRACE_LOG_PATH" \
 "$APP_BINARY" \
@@ -605,7 +605,7 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" || "$WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID" != "$WORKSPACE_SWITCH_FIRST_WORKSPACE_ID" ]]; then
-  echo "error: workspace-switch regression did not select workspace 1 via Cmd+1" >&2
+  echo "error: workspace-switch regression did not select workspace 1 via Option+1" >&2
   echo "expected workspace ID: ${WORKSPACE_SWITCH_FIRST_WORKSPACE_ID}" >&2
   echo "observed workspace ID: ${WORKSPACE_SWITCH_SELECTED_FIRST_WORKSPACE_ID:-<missing>}" >&2
   echo "snapshot response: ${WORKSPACE_SWITCH_SELECTED_FIRST_SNAPSHOT}" >&2
@@ -628,7 +628,7 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" || "$WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT" -lt "$EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT" ]]; then
-  echo "error: Cmd+D after workspace switch did not split the visible workspace" >&2
+  echo "error: Cmd+D after Option+1 workspace switch did not split the visible workspace" >&2
   echo "workspace 1 baseline slot count: ${WORKSPACE_SWITCH_FIRST_SLOT_COUNT}" >&2
   echo "expected workspace 1 slot count after split: ${EXPECTED_WORKSPACE_SWITCH_FIRST_AFTER_SPLIT}" >&2
   echo "observed workspace 1 slot count: ${WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT:-<missing>}" >&2
@@ -648,7 +648,7 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" || "$WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID" != "$WORKSPACE_SWITCH_SECOND_WORKSPACE_ID" ]]; then
-  echo "error: workspace-switch regression did not return to workspace 2 via Cmd+2" >&2
+  echo "error: workspace-switch regression did not return to workspace 2 via Option+2" >&2
   echo "expected workspace ID: ${WORKSPACE_SWITCH_SECOND_WORKSPACE_ID}" >&2
   echo "observed workspace ID: ${WORKSPACE_SWITCH_SELECTED_SECOND_WORKSPACE_ID:-<missing>}" >&2
   echo "snapshot response: ${WORKSPACE_SWITCH_SELECTED_SECOND_SNAPSHOT}" >&2
@@ -669,10 +669,84 @@ for _ in $(seq 1 20); do
   sleep 0.1
 done
 if [[ -z "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" || "$WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT" != "$WORKSPACE_SWITCH_SECOND_SLOT_COUNT" ]]; then
-  echo "error: Cmd+D after workspace switch mutated the hidden workspace instead of the visible one" >&2
+  echo "error: Cmd+D after Option+2 workspace switch mutated the hidden workspace instead of the visible one" >&2
   echo "workspace 2 baseline slot count: ${WORKSPACE_SWITCH_SECOND_SLOT_COUNT}" >&2
   echo "observed workspace 2 slot count after returning: ${WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT:-<missing>}" >&2
   echo "snapshot response: ${WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+PANEL_FOCUS_BASELINE_SNAPSHOT=""
+PANEL_FOCUS_BASELINE_FIRST_PANEL_ID=""
+PANEL_FOCUS_BASELINE_SECOND_PANEL_ID=""
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_BASELINE_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_BASELINE_FIRST_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_BASELINE_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+  echo "error: missing baseline focused panel for panel-focus regression" >&2
+  echo "workspace snapshot response: ${PANEL_FOCUS_BASELINE_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.focus-slot.next"}' >/dev/null
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_BASELINE_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_BASELINE_SECOND_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_BASELINE_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" && -n "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" || -z "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+  echo "error: missing panel IDs for panel-focus regression" >&2
+  echo "workspace snapshot response: ${PANEL_FOCUS_BASELINE_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_request "automation.perform_action" '{"action":"workspace.focus-slot.previous"}' >/dev/null
+
+focus_app_terminal
+send_panel_focus_shortcut 2
+PANEL_FOCUS_SECOND_SNAPSHOT=""
+PANEL_FOCUS_SECOND_PANEL_ID=""
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_SECOND_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_SECOND_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_SECOND_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_SECOND_PANEL_ID" && "$PANEL_FOCUS_SECOND_PANEL_ID" == "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_SECOND_PANEL_ID" || "$PANEL_FOCUS_SECOND_PANEL_ID" != "$PANEL_FOCUS_BASELINE_SECOND_PANEL_ID" ]]; then
+  echo "error: panel-focus regression did not focus panel 2 via Option+Shift+2" >&2
+  echo "expected panel ID: ${PANEL_FOCUS_BASELINE_SECOND_PANEL_ID}" >&2
+  echo "observed panel ID: ${PANEL_FOCUS_SECOND_PANEL_ID:-<missing>}" >&2
+  echo "snapshot response: ${PANEL_FOCUS_SECOND_SNAPSHOT}" >&2
+  exit 1
+fi
+
+send_panel_focus_shortcut 1
+PANEL_FOCUS_FIRST_SNAPSHOT=""
+PANEL_FOCUS_FIRST_PANEL_ID=""
+for _ in $(seq 1 20); do
+  PANEL_FOCUS_FIRST_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+  PANEL_FOCUS_FIRST_PANEL_ID="$(extract_string_field "$PANEL_FOCUS_FIRST_SNAPSHOT" "focusedPanelID")"
+  if [[ -n "$PANEL_FOCUS_FIRST_PANEL_ID" && "$PANEL_FOCUS_FIRST_PANEL_ID" == "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+    break
+  fi
+  sleep 0.1
+done
+if [[ -z "$PANEL_FOCUS_FIRST_PANEL_ID" || "$PANEL_FOCUS_FIRST_PANEL_ID" != "$PANEL_FOCUS_BASELINE_FIRST_PANEL_ID" ]]; then
+  echo "error: panel-focus regression did not return to panel 1 via Option+Shift+1" >&2
+  echo "expected panel ID: ${PANEL_FOCUS_BASELINE_FIRST_PANEL_ID}" >&2
+  echo "observed panel ID: ${PANEL_FOCUS_FIRST_PANEL_ID:-<missing>}" >&2
+  echo "snapshot response: ${PANEL_FOCUS_FIRST_SNAPSHOT}" >&2
   exit 1
 fi
 
@@ -757,8 +831,12 @@ echo "workspace 1 ID: $WORKSPACE_SWITCH_FIRST_WORKSPACE_ID"
 echo "workspace 2 ID: $WORKSPACE_SWITCH_SECOND_WORKSPACE_ID"
 echo "workspace 1 baseline slot count: $WORKSPACE_SWITCH_FIRST_SLOT_COUNT"
 echo "workspace 2 baseline slot count: $WORKSPACE_SWITCH_SECOND_SLOT_COUNT"
-echo "workspace 1 slot count after Cmd+1 then Cmd+D: $WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT"
-echo "workspace 2 slot count after returning with Cmd+2: $WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT"
+echo "workspace 1 slot count after Option+1 then Cmd+D: $WORKSPACE_SWITCH_FIRST_AFTER_SPLIT_SLOT_COUNT"
+echo "workspace 2 slot count after returning with Option+2: $WORKSPACE_SWITCH_SECOND_AFTER_RETURN_SLOT_COUNT"
+echo "panel 1 baseline ID: $PANEL_FOCUS_BASELINE_FIRST_PANEL_ID"
+echo "panel 2 baseline ID: $PANEL_FOCUS_BASELINE_SECOND_PANEL_ID"
+echo "focused panel after Option+Shift+2: $PANEL_FOCUS_SECOND_PANEL_ID"
+echo "focused panel after returning with Option+Shift+1: $PANEL_FOCUS_FIRST_PANEL_ID"
 echo "action close structure: $ACTION_CLOSE_STRUCTURE"
 echo "menu close structure: $MENU_CLOSE_STRUCTURE"
 echo "shortcut close structure: $SHORTCUT_CLOSE_STRUCTURE"

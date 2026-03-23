@@ -104,11 +104,14 @@ private enum ToasttyMenuActions {
 @MainActor
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
+    private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var closeWindowMenuBridge: CloseWindowMenuBridge?
     private var closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge?
+    private var windowSplitMenuBridge: WindowSplitMenuBridge?
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
     private var sparkleMenuBridge: SparkleMenuBridge?
+    private var hasCompletedLaunch = false
     private var menuBridgeInstallationTask: Task<Void, Never>?
     let sparkleUpdaterBridge: SparkleUpdaterBridge
 
@@ -132,16 +135,23 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     func configureMenuBridges(
+        fileSplitMenuBridge: FileSplitMenuBridge,
         closeWindowMenuBridge: CloseWindowMenuBridge,
         closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge,
+        windowSplitMenuBridge: WindowSplitMenuBridge,
         helpMenuBridge: HelpMenuBridge,
         hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     ) {
+        self.fileSplitMenuBridge = fileSplitMenuBridge
         self.closeWindowMenuBridge = closeWindowMenuBridge
         self.closeWorkspaceMenuBridge = closeWorkspaceMenuBridge
+        self.windowSplitMenuBridge = windowSplitMenuBridge
         self.helpMenuBridge = helpMenuBridge
         self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
-        hiddenSystemMenuItemsBridge.setOnMenuTreeRefresh { [weak self] in
+        hiddenSystemMenuItemsBridge.setOnOwnedMenuSectionRefreshRequested { [weak self] in
+            self?.installOwnedMenuSections()
+        }
+        hiddenSystemMenuItemsBridge.setOnDynamicMenuBridgeRefreshRequested { [weak self] in
             self?.installDynamicMenuBridges()
         }
 
@@ -149,18 +159,21 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             sparkleMenuBridge = SparkleMenuBridge(sparkleUpdaterBridge: sparkleUpdaterBridge)
         }
 
+        guard hasCompletedLaunch else { return }
         scheduleMenuBridgeInstallations()
     }
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         _ = notification
         Task { @MainActor [weak self] in
+            self?.hasCompletedLaunch = true
             self?.scheduleMenuBridgeInstallations()
         }
     }
 
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
         Task { @MainActor [weak self] in
+            self?.hasCompletedLaunch = true
             self?.scheduleMenuBridgeInstallations()
         }
         _ = notification
@@ -177,6 +190,13 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             GhosttyRuntimeManager.shared.setAppFocus(false)
         }
+        #endif
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        _ = notification
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        GhosttyClipboardBridge.releaseSelectionPasteboardIfNeeded()
         #endif
     }
 
@@ -198,8 +218,14 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         if let hiddenSystemMenuItemsBridge {
             hiddenSystemMenuItemsBridge.installIfNeeded()
         } else {
+            installOwnedMenuSections()
             installDynamicMenuBridges()
         }
+    }
+
+    private func installOwnedMenuSections() {
+        fileSplitMenuBridge?.installIfNeeded()
+        windowSplitMenuBridge?.installIfNeeded()
     }
 
     private func installDynamicMenuBridges() {
@@ -221,20 +247,38 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             }
         }
     }
+
+    func sceneDidAppear() {
+        // SwiftUI can materialize the live main menu after launch callbacks
+        // have already fired, so scene appearance is the reliable point to
+        // retarget the AppKit-managed File menu items like Cmd+W. Repeated
+        // scene appearances are safe because the bridge install path is
+        // idempotent and cancels any prior retry task.
+        scheduleMenuBridgeInstallations()
+    }
 }
 
 @MainActor
-private final class FocusTerminalShortcutInterceptor {
+private final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
     nonisolated(unsafe) private var eventMonitor: Any?
+
+    private enum ShortcutAction {
+        case switchWorkspace(Int)
+        case focusPanel(Int)
+    }
 
     init(store: AppStore) {
         self.store = store
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            guard let shortcutNumber = Self.shortcutNumber(for: event) else { return event }
-            let didFocusPanel = self.focusTerminalPanel(shortcutNumber: shortcutNumber)
-            return didFocusPanel ? nil : event
+            guard let action = Self.shortcutAction(for: event) else { return event }
+            // Keep workspace switching in the local monitor so the embedded
+            // terminal's key handling cannot swallow Option+digit before the
+            // menu-based workspace switch path can run reliably.
+            let didHandleShortcut = self.handle(action)
+            // If no workspace or panel is mapped to this shortcut, keep default key behavior.
+            return didHandleShortcut ? nil : event
         }
     }
 
@@ -244,10 +288,37 @@ private final class FocusTerminalShortcutInterceptor {
         }
     }
 
-    private static func shortcutNumber(for event: NSEvent) -> Int? {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard flags == [.option] else { return nil }
-        return TerminalShortcutConfig.shortcutNumber(from: event.charactersIgnoringModifiers)
+    private static func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+        switch DisplayShortcutConfig.action(for: event) {
+        case .workspaceSwitch(let shortcutNumber):
+            return .switchWorkspace(shortcutNumber)
+        case .panelFocus(let shortcutNumber):
+            return .focusPanel(shortcutNumber)
+        case nil:
+            return nil
+        }
+    }
+
+    private func handle(_ action: ShortcutAction) -> Bool {
+        switch action {
+        case .switchWorkspace(let shortcutNumber):
+            switchWorkspace(shortcutNumber: shortcutNumber)
+        case .focusPanel(let shortcutNumber):
+            focusTerminalPanel(shortcutNumber: shortcutNumber)
+        }
+    }
+
+    private func switchWorkspace(shortcutNumber: Int) -> Bool {
+        guard let store else { return false }
+        guard shortcutNumber > 0, shortcutNumber <= DisplayShortcutConfig.maxWorkspaceShortcutCount else {
+            return false
+        }
+        guard let window = store.selectedWindow else { return false }
+        let index = shortcutNumber - 1
+        guard window.workspaceIDs.indices.contains(index) else { return false }
+        let workspaceID = window.workspaceIDs[index]
+        guard store.state.workspacesByID[workspaceID] != nil else { return false }
+        return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
     }
 
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
@@ -331,13 +402,15 @@ struct ToasttyApp: App {
     private let appResignActiveObserver: AppResignActiveObserver
     private let agentLaunchService: AgentLaunchService
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
+    private let fileSplitMenuBridge: FileSplitMenuBridge
     private let closeWindowMenuBridge: CloseWindowMenuBridge
     private let closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge
+    private let windowSplitMenuBridge: WindowSplitMenuBridge
     private let helpMenuBridge: HelpMenuBridge
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let focusedPanelCommandController: FocusedPanelCommandController
-    private let focusTerminalShortcutInterceptor: FocusTerminalShortcutInterceptor
+    private let displayShortcutInterceptor: DisplayShortcutInterceptor
 
     private var profileShortcutRegistry: ProfileShortcutRegistry {
         Self.makeProfileShortcutRegistry(
@@ -350,6 +423,7 @@ struct ToasttyApp: App {
 
     init() {
         let processInfo = ProcessInfo.processInfo
+        Self.prepareRuntimeEnvironment(processInfo: processInfo)
         Self.ensureTerminalProfilesTemplateExists()
         Self.configureWindowPersistenceDefaults()
         let usesPersistentPreferences = AutomationConfig.parse(
@@ -370,6 +444,7 @@ struct ToasttyApp: App {
             processInfo: processInfo,
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
+        Self.recordRuntimeInstance(processInfo: processInfo, automationConfig: bootstrap.automationConfig)
         let persistUserSettings = bootstrap.automationConfig == nil
         let store = AppStore(
             state: bootstrap.state,
@@ -415,6 +490,10 @@ struct ToasttyApp: App {
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
+        let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        fileSplitMenuBridge = FileSplitMenuBridge(
+            splitLayoutCommandController: splitLayoutCommandController
+        )
         closeWindowMenuBridge = CloseWindowMenuBridge(
             windowCommandController: WindowCommandController(
                 focusedPanelCommandController: focusedPanelCommandController
@@ -423,6 +502,9 @@ struct ToasttyApp: App {
         closeWorkspaceMenuBridge = CloseWorkspaceMenuBridge(
             closeWorkspaceCommandController: CloseWorkspaceCommandController(store: store)
         )
+        windowSplitMenuBridge = WindowSplitMenuBridge(
+            splitLayoutCommandController: splitLayoutCommandController
+        )
         helpMenuBridge = HelpMenuBridge()
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         terminalProfilesMenuController = TerminalProfilesMenuController(
@@ -430,7 +512,7 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             installShellIntegrationAction: ToasttyMenuActions.installShellIntegration
         )
-        focusTerminalShortcutInterceptor = FocusTerminalShortcutInterceptor(store: store)
+        displayShortcutInterceptor = DisplayShortcutInterceptor(store: store)
         _store = StateObject(wrappedValue: store)
         _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
         _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
@@ -490,6 +572,15 @@ struct ToasttyApp: App {
                 FileHandle.standardError.write(messageData)
             }
         }
+
+        appLifecycleDelegate.configureMenuBridges(
+            fileSplitMenuBridge: fileSplitMenuBridge,
+            closeWindowMenuBridge: closeWindowMenuBridge,
+            closeWorkspaceMenuBridge: closeWorkspaceMenuBridge,
+            windowSplitMenuBridge: windowSplitMenuBridge,
+            helpMenuBridge: helpMenuBridge,
+            hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
+        )
     }
 
     var body: some Scene {
@@ -508,12 +599,7 @@ struct ToasttyApp: App {
             )
             .frame(minWidth: 980, minHeight: 620)
             .onAppear {
-                appLifecycleDelegate.configureMenuBridges(
-                    closeWindowMenuBridge: closeWindowMenuBridge,
-                    closeWorkspaceMenuBridge: closeWorkspaceMenuBridge,
-                    helpMenuBridge: helpMenuBridge,
-                    hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
-                )
+                appLifecycleDelegate.sceneDidAppear()
             }
         }
         .windowStyle(.hiddenTitleBar)
@@ -735,9 +821,28 @@ struct ToasttyApp: App {
     private static func configureWindowPersistenceDefaults() {
         NSWindow.allowsAutomaticWindowTabbing = false
 
-        let defaults = UserDefaults.standard
+        // Toastty persists window/workspace state explicitly, so AppKit's
+        // saved-state restoration only adds stale SwiftUI scene identifiers.
+        let defaults = ToasttyAppDefaults.current
         defaults.set(true, forKey: "ApplePersistenceIgnoreState")
         defaults.set(false, forKey: "NSQuitAlwaysKeepsWindows")
+    }
+
+    private static func prepareRuntimeEnvironment(processInfo: ProcessInfo) {
+        do {
+            try ToasttyRuntimePaths.resolve(environment: processInfo.environment).prepare()
+        } catch {
+            if let errorData = "toastty runtime preparation failed: \(error.localizedDescription)\n".data(using: .utf8) {
+                FileHandle.standardError.write(errorData)
+            }
+        }
+    }
+
+    private static func recordRuntimeInstance(processInfo: ProcessInfo, automationConfig: AutomationConfig?) {
+        ToasttyRuntimeInstanceRecorder.recordLaunch(
+            processInfo: processInfo,
+            automationConfig: automationConfig
+        )
     }
 
     private static func ensureTerminalProfilesTemplateExists() {

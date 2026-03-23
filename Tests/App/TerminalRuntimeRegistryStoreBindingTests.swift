@@ -171,6 +171,23 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         XCTAssertEqual(registry.surfaceLaunchConfiguration(for: panelID), .empty)
     }
+
+    func testActivatePanelIfNeededFocusesResolvedPanel() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let originalPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+        XCTAssertTrue(store.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal)))
+
+        let splitFocusedPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        XCTAssertNotEqual(splitFocusedPanelID, originalPanelID)
+
+        XCTAssertTrue(registry.activatePanelIfNeeded(originalPanelID))
+        XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
+    }
 }
 
 final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {

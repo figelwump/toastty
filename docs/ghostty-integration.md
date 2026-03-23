@@ -73,11 +73,19 @@ Release DMG builds require a complete release sidecar with a clean Ghostty sourc
 After installing an artifact, regenerate the workspace:
 
 ```bash
-tuist install
-tuist generate
+./scripts/dev/bootstrap-worktree.sh
 ```
 
 Keeping `Dependencies/` gitignored is intentional. The source repository documents how to build Ghostty, but does not vendor the built binaries.
+
+For a fresh linked Toastty worktree that should reuse an already-installed Ghostty artifact from another Toastty checkout, run:
+
+```bash
+./scripts/dev/bootstrap-worktree.sh
+```
+
+The helper links ignored `Dependencies/GhosttyKit*` entries into the current worktree when needed, then runs `tuist install` and `tuist generate --no-open`.
+Those links are symlinks back to the source Toastty worktree, not copied xcframeworks.
 
 ## Toastty build behavior
 
@@ -118,6 +126,12 @@ Toastty resolves Ghostty config in this order:
 
 Recursive includes are loaded through Ghostty's normal recursive config loading.
 
+On macOS, when Ghostty's `copy-on-select` behavior is enabled by its config or
+platform defaults, Toastty routes the Ghostty selection clipboard through a
+Toastty-private pasteboard instead of the shared system clipboard. That preserves
+Ghostty's selection-paste behavior without overwriting the normal macOS clipboard;
+explicit copy actions still target the system clipboard.
+
 By default Toastty does not ask Ghostty to parse Toastty's own CLI args. To re-enable that behavior:
 
 ```bash
@@ -142,7 +156,9 @@ Toastty reads these additional keys from Ghostty config:
 - `~/.toastty/config` is user-authored and can set:
   - `terminal-font-size` as Toastty's preferred baseline
   - `default-terminal-profile` for newly created terminals and ordinary splits only
+- `terminal-profiles.toml` defines named launch profiles, optional profile-specific split shortcuts, and startup commands; see [Terminal Profiles](terminal-profiles.md) for the schema and examples
 - UI-driven terminal font changes are stored in macOS `UserDefaults`, not by rewriting `~/.toastty/config`
+- When runtime isolation is enabled for an isolated dev/test run, Toastty uses the active runtime home's `config`, `terminal-profiles.toml`, and isolated defaults suite instead of the shared user locations
 - `Reset Terminal Font` clears the UI override and returns to the configured baseline
 
 ## Action parity
@@ -168,4 +184,5 @@ Recommended validation commands:
 ./scripts/automation/check.sh
 TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh
 ./scripts/automation/smoke-ui.sh
+./scripts/automation/shortcut-hints-smoke.sh
 ```

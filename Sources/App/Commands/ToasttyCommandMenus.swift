@@ -96,8 +96,6 @@ struct TerminalProfileMenuModel: Equatable {
 
 @MainActor
 struct ToasttyCommandMenus: Commands {
-    private static let workspaceShortcutKeys: [KeyEquivalent] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
-
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
@@ -166,7 +164,7 @@ struct ToasttyCommandMenus: Commands {
             }
         }
 
-        CommandMenu("View") {
+        CommandGroup(replacing: .sidebar) {
             Button(sidebarVisibleForCommand ? "Hide Sidebar" : "Show Sidebar") {
                 toggleSidebarFromCommandSelection()
             }
@@ -221,20 +219,20 @@ struct ToasttyCommandMenus: Commands {
 
             if let window = commandWindow {
                 ForEach(
-                    Array(window.workspaceIDs.prefix(Self.workspaceShortcutKeys.count).enumerated()),
-                    id: \.offset
+                    Array(window.workspaceIDs.prefix(DisplayShortcutConfig.maxWorkspaceShortcutCount).enumerated()),
+                    id: \.element
                 ) { index, workspaceID in
                     let workspace = store.state.workspacesByID[workspaceID]
                     let title = workspace?.title ?? "Missing Workspace \(index + 1)"
-                    Button(title) {
-                        selectWorkspaceFromShortcutIndex(index)
-                    }
-                    .keyboardShortcut(Self.workspaceShortcutKeys[index], modifiers: [.command])
-                    .disabled(workspace == nil)
+                    workspaceSelectionMenuButton(
+                        title: title,
+                        workspaceID: workspaceID,
+                        shortcutNumber: index + 1,
+                        isDisabled: workspace == nil
+                    )
                 }
             }
         }
-
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
                 Button("No Agents Configured") {}
@@ -249,51 +247,11 @@ struct ToasttyCommandMenus: Commands {
 
             Button("Manage Agents…", action: openAgentProfilesConfiguration)
         }
-
-        #if !TOASTTY_HAS_GHOSTTY_KIT
-        CommandMenu("Pane") {
-            Button("Split Right") {
-                guard let workspaceID = commandWorkspace?.id else { return }
-                store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .right))
-            }
-            .keyboardShortcut(
-                ToasttyKeyboardShortcuts.splitHorizontal.key,
-                modifiers: ToasttyKeyboardShortcuts.splitHorizontal.modifiers
-            )
-
-            Button("Split Down") {
-                guard let workspaceID = commandWorkspace?.id else { return }
-                store.send(.splitFocusedSlotInDirection(workspaceID: workspaceID, direction: .down))
-            }
-            .keyboardShortcut(
-                ToasttyKeyboardShortcuts.splitVertical.key,
-                modifiers: ToasttyKeyboardShortcuts.splitVertical.modifiers
-            )
-
-            Button("Focus Previous Pane") {
-                guard let workspaceID = commandWorkspace?.id else { return }
-                store.send(.focusSlot(workspaceID: workspaceID, direction: .previous))
-            }
-            .keyboardShortcut(
-                ToasttyKeyboardShortcuts.focusPreviousPane.key,
-                modifiers: ToasttyKeyboardShortcuts.focusPreviousPane.modifiers
-            )
-
-            Button("Focus Next Pane") {
-                guard let workspaceID = commandWorkspace?.id else { return }
-                store.send(.focusSlot(workspaceID: workspaceID, direction: .next))
-            }
-            .keyboardShortcut(
-                ToasttyKeyboardShortcuts.focusNextPane.key,
-                modifiers: ToasttyKeyboardShortcuts.focusNextPane.modifiers
-            )
-        }
-        #endif
     }
-    private func selectWorkspaceFromShortcutIndex(_ index: Int) {
+
+    private func selectWorkspaceFromCommandSelection(workspaceID: UUID) {
         guard let commandSelection else { return }
-        guard commandSelection.window.workspaceIDs.indices.contains(index) else { return }
-        let workspaceID = commandSelection.window.workspaceIDs[index]
+        guard commandSelection.window.workspaceIDs.contains(workspaceID) else { return }
         guard store.state.workspacesByID[workspaceID] != nil else { return }
         store.selectWorkspace(
             windowID: commandSelection.windowID,
@@ -324,6 +282,27 @@ struct ToasttyCommandMenus: Commands {
             workspaceID: commandWorkspace?.id,
             agentLaunchService: agentLaunchService
         )
+    }
+
+    @ViewBuilder
+    private func workspaceSelectionMenuButton(
+        title: String,
+        workspaceID: UUID,
+        shortcutNumber: Int,
+        isDisabled: Bool
+    ) -> some View {
+        if let shortcutKey = workspaceShortcutKeyEquivalent(for: shortcutNumber) {
+            Button(title) {
+                selectWorkspaceFromCommandSelection(workspaceID: workspaceID)
+            }
+            .disabled(isDisabled)
+            .keyboardShortcut(shortcutKey, modifiers: [.option])
+        } else {
+            Button(title) {
+                selectWorkspaceFromCommandSelection(workspaceID: workspaceID)
+            }
+            .disabled(isDisabled)
+        }
     }
 
     @ViewBuilder
@@ -396,6 +375,14 @@ struct ToasttyCommandMenus: Commands {
     private func toggleSidebarFromCommandSelection() {
         guard let windowID = commandSelection?.windowID else { return }
         store.send(.toggleSidebar(windowID: windowID))
+    }
+
+    private func workspaceShortcutKeyEquivalent(for number: Int) -> KeyEquivalent? {
+        guard (1 ... DisplayShortcutConfig.maxWorkspaceShortcutCount).contains(number),
+              let digit = Character(String(number)).unicodeScalars.first.map({ Character($0) }) else {
+            return nil
+        }
+        return KeyEquivalent(digit)
     }
 }
 

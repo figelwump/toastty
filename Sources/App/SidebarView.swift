@@ -19,7 +19,7 @@ struct SidebarView: View {
                         workspaceRow(
                             workspaceID: workspaceID,
                             workspace: workspace,
-                            shortcutLabel: "⌘\(index + 1)",
+                            shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
                             isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
                             index: index + 1
                         )
@@ -89,7 +89,7 @@ struct SidebarView: View {
     private func workspaceRow(
         workspaceID: UUID,
         workspace: WorkspaceState,
-        shortcutLabel: String,
+        shortcutLabel: String?,
         isSelected: Bool,
         index: Int
     ) -> some View {
@@ -125,7 +125,7 @@ struct SidebarView: View {
     private func workspaceButton(
         workspaceID: UUID,
         workspace: WorkspaceState,
-        shortcutLabel: String,
+        shortcutLabel: String?,
         isSelected: Bool
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
@@ -160,7 +160,7 @@ struct SidebarView: View {
     private func workspaceRenameRow(
         workspaceID: UUID,
         workspace: WorkspaceState,
-        shortcutLabel: String,
+        shortcutLabel: String?,
         isSelected: Bool
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
@@ -214,7 +214,7 @@ struct SidebarView: View {
 
     private func workspacePrimaryContent<Title: View>(
         workspace: WorkspaceState,
-        shortcutLabel: String,
+        shortcutLabel: String?,
         selectionSubtitle: String?,
         isSelected: Bool,
         @ViewBuilder titleView: () -> Title
@@ -232,7 +232,10 @@ struct SidebarView: View {
 
                 Spacer(minLength: 0)
 
-                shortcutBadge(shortcutLabel)
+                // Keyboard shortcut badge pill
+                if let shortcutLabel {
+                    shortcutBadge(shortcutLabel)
+                }
             }
 
             if let selectionSubtitle {
@@ -526,6 +529,7 @@ struct SidebarView: View {
         return pathString.abbreviatingWithTildeInPath
     }
 
+    /// Reusable keyboard shortcut badge pill (e.g. "⌥1", "⌘⇧N").
     private func shortcutBadge(_ label: String) -> some View {
         Text(label)
             .font(ToastyTheme.fontShortcutBadge)

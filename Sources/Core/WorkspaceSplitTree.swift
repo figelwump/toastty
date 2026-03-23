@@ -219,8 +219,57 @@ private extension WorkspaceSplitTree {
 
     struct SlotFrame {
         let slotID: UUID
-        let centerX: Double
-        let centerY: Double
+        let minX: Double
+        let minY: Double
+        let maxX: Double
+        let maxY: Double
+
+        var centerX: Double { minX + ((maxX - minX) * 0.5) }
+        var centerY: Double { minY + ((maxY - minY) * 0.5) }
+
+        func horizontalOverlap(with other: SlotFrame) -> Double {
+            max(0, min(maxX, other.maxX) - max(minX, other.minX))
+        }
+
+        func verticalOverlap(with other: SlotFrame) -> Double {
+            max(0, min(maxY, other.maxY) - max(minY, other.minY))
+        }
+
+        func horizontalGap(to other: SlotFrame) -> Double {
+            if horizontalOverlap(with: other) > 0 {
+                return 0
+            }
+            if maxX <= other.minX {
+                return other.minX - maxX
+            }
+            if other.maxX <= minX {
+                return minX - other.maxX
+            }
+            return 0
+        }
+
+        func verticalGap(to other: SlotFrame) -> Double {
+            if verticalOverlap(with: other) > 0 {
+                return 0
+            }
+            if maxY <= other.minY {
+                return other.minY - maxY
+            }
+            if other.maxY <= minY {
+                return minY - other.maxY
+            }
+            return 0
+        }
+    }
+
+    struct DirectionalFocusCandidate {
+        let frame: SlotFrame
+        let primaryDistance: Double
+        let perpendicularOverlap: Double
+        let perpendicularDistance: Double
+        let perpendicularCenterDistance: Double
+
+        var isAligned: Bool { perpendicularOverlap > 0 }
     }
 
     // Suppresses floating-point noise near clamp bounds; this must stay well below the
@@ -237,8 +286,10 @@ private extension WorkspaceSplitTree {
             let frame = placement.frame
             return SlotFrame(
                 slotID: placement.slotID,
-                centerX: frame.midX,
-                centerY: frame.midY
+                minX: frame.minX,
+                minY: frame.minY,
+                maxX: frame.maxX,
+                maxY: frame.maxY
             )
         }
     }
@@ -248,27 +299,55 @@ private extension WorkspaceSplitTree {
         direction: SlotFocusDirection,
         frames: [SlotFrame]
     ) -> UUID? {
-        let directionalCandidates: [(frame: SlotFrame, primaryDistance: Double, secondaryDistance: Double)] = frames.compactMap { candidate in
+        let directionalCandidates: [DirectionalFocusCandidate] = frames.compactMap { candidate in
             guard candidate.slotID != source.slotID else {
                 return nil
             }
 
             switch direction {
             case .left:
-                guard candidate.centerX < source.centerX else { return nil }
-                return (candidate, source.centerX - candidate.centerX, abs(candidate.centerY - source.centerY))
+                guard candidate.maxX <= source.minX else { return nil }
+                let overlap = source.verticalOverlap(with: candidate)
+                return DirectionalFocusCandidate(
+                    frame: candidate,
+                    primaryDistance: source.minX - candidate.maxX,
+                    perpendicularOverlap: overlap,
+                    perpendicularDistance: source.verticalGap(to: candidate),
+                    perpendicularCenterDistance: abs(candidate.centerY - source.centerY)
+                )
 
             case .right:
-                guard candidate.centerX > source.centerX else { return nil }
-                return (candidate, candidate.centerX - source.centerX, abs(candidate.centerY - source.centerY))
+                guard candidate.minX >= source.maxX else { return nil }
+                let overlap = source.verticalOverlap(with: candidate)
+                return DirectionalFocusCandidate(
+                    frame: candidate,
+                    primaryDistance: candidate.minX - source.maxX,
+                    perpendicularOverlap: overlap,
+                    perpendicularDistance: source.verticalGap(to: candidate),
+                    perpendicularCenterDistance: abs(candidate.centerY - source.centerY)
+                )
 
             case .up:
-                guard candidate.centerY < source.centerY else { return nil }
-                return (candidate, source.centerY - candidate.centerY, abs(candidate.centerX - source.centerX))
+                guard candidate.maxY <= source.minY else { return nil }
+                let overlap = source.horizontalOverlap(with: candidate)
+                return DirectionalFocusCandidate(
+                    frame: candidate,
+                    primaryDistance: source.minY - candidate.maxY,
+                    perpendicularOverlap: overlap,
+                    perpendicularDistance: source.horizontalGap(to: candidate),
+                    perpendicularCenterDistance: abs(candidate.centerX - source.centerX)
+                )
 
             case .down:
-                guard candidate.centerY > source.centerY else { return nil }
-                return (candidate, candidate.centerY - source.centerY, abs(candidate.centerX - source.centerX))
+                guard candidate.minY >= source.maxY else { return nil }
+                let overlap = source.horizontalOverlap(with: candidate)
+                return DirectionalFocusCandidate(
+                    frame: candidate,
+                    primaryDistance: candidate.minY - source.maxY,
+                    perpendicularOverlap: overlap,
+                    perpendicularDistance: source.horizontalGap(to: candidate),
+                    perpendicularCenterDistance: abs(candidate.centerX - source.centerX)
+                )
 
             case .previous, .next:
                 return nil
@@ -276,11 +355,20 @@ private extension WorkspaceSplitTree {
         }
 
         let sorted = directionalCandidates.sorted { lhs, rhs in
+            if lhs.isAligned != rhs.isAligned {
+                return lhs.isAligned && rhs.isAligned == false
+            }
             if lhs.primaryDistance != rhs.primaryDistance {
                 return lhs.primaryDistance < rhs.primaryDistance
             }
-            if lhs.secondaryDistance != rhs.secondaryDistance {
-                return lhs.secondaryDistance < rhs.secondaryDistance
+            if lhs.perpendicularOverlap != rhs.perpendicularOverlap {
+                return lhs.perpendicularOverlap > rhs.perpendicularOverlap
+            }
+            if lhs.perpendicularDistance != rhs.perpendicularDistance {
+                return lhs.perpendicularDistance < rhs.perpendicularDistance
+            }
+            if lhs.perpendicularCenterDistance != rhs.perpendicularCenterDistance {
+                return lhs.perpendicularCenterDistance < rhs.perpendicularCenterDistance
             }
             return lhs.frame.slotID.uuidString < rhs.frame.slotID.uuidString
         }

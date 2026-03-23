@@ -5,11 +5,14 @@ import Foundation
 struct WorkspaceLayoutPersistenceContext {
     let profileID: String
     let fileURL: URL
+    let shouldMigrateLegacyStore: Bool
 
     static func resolve(processInfo: ProcessInfo = .processInfo) -> WorkspaceLayoutPersistenceContext {
-        WorkspaceLayoutPersistenceContext(
+        let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
+        return WorkspaceLayoutPersistenceContext(
             profileID: WorkspaceLayoutProfileResolver.resolve(processInfo: processInfo),
-            fileURL: WorkspaceLayoutPersistenceLocation.fileURL()
+            fileURL: WorkspaceLayoutPersistenceLocation.fileURL(environment: processInfo.environment),
+            shouldMigrateLegacyStore: runtimePaths.isRuntimeHomeEnabled == false
         )
     }
 
@@ -26,6 +29,7 @@ struct WorkspaceLayoutPersistenceContext {
     }
 
     private func migrateLegacyStoreIfNeeded() {
+        guard shouldMigrateLegacyStore else { return }
         let legacyURL = WorkspaceLayoutPersistenceLocation.legacyFileURL()
         guard legacyURL.standardizedFileURL != fileURL.standardizedFileURL else { return }
         guard FileManager.default.fileExists(atPath: fileURL.path) == false else { return }
@@ -128,10 +132,14 @@ enum WorkspaceLayoutPersistenceLocation {
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let fileName = "workspace-layout-profiles.json"
 
-    static func fileURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {
-        URL(filePath: homeDirectoryPath)
-            .appending(path: configDirectoryName, directoryHint: .isDirectory)
-            .appending(path: fileName, directoryHint: .notDirectory)
+    static func fileURL(
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        ).workspaceLayoutsFileURL
     }
 
     static func legacyFileURL(homeDirectoryPath: String = NSHomeDirectory()) -> URL {

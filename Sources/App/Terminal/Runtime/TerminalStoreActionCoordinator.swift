@@ -8,18 +8,15 @@ final class TerminalStoreActionCoordinator {
     private var storeActionObserverToken: UUID?
     private let metadataService: TerminalMetadataService
     private let registerPendingSplitSourceIfNeeded: (UUID, AppState, AppState) -> Void
-    private let armCloseTransitionViewportDeferral: (UUID, Set<UUID>) -> Void
     private let requestWorkspaceFocusRestore: (UUID) -> Void
 
     init(
         metadataService: TerminalMetadataService,
         registerPendingSplitSourceIfNeeded: @escaping (UUID, AppState, AppState) -> Void,
-        armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void,
         requestWorkspaceFocusRestore: @escaping (UUID) -> Void
     ) {
         self.metadataService = metadataService
         self.registerPendingSplitSourceIfNeeded = registerPendingSplitSourceIfNeeded
-        self.armCloseTransitionViewportDeferral = armCloseTransitionViewportDeferral
         self.requestWorkspaceFocusRestore = requestWorkspaceFocusRestore
     }
 
@@ -67,13 +64,11 @@ final class TerminalStoreActionCoordinator {
             registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
         case .splitFocusedSlotInDirection(workspaceID: let workspaceID, direction: _):
             registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
-        case .closePanel(panelID: let panelID):
-            armCloseTransitionViewportDeferralIfNeeded(
-                closedPanelID: panelID,
-                previousState: previousState,
-                nextState: nextState
-            )
         case .toggleFocusedPanelMode(workspaceID: let workspaceID):
+            // Let Ghostty's normal relayout handle focus-mode resizes. An
+            // explicit scroll-to-bottom correction makes TUIs like Claude Code
+            // redraw their entire scrollback on both enter and exit, so do
+            // not reintroduce it without validating against that flow.
             scheduleFocusedPanelFocusRestoreIfNeeded(
                 workspaceID: workspaceID,
                 previousState: previousState,
@@ -103,22 +98,6 @@ final class TerminalStoreActionCoordinator {
             panelID: sourcePanelID,
             source: "pre_split_refresh"
         )
-    }
-
-    private func armCloseTransitionViewportDeferralIfNeeded(
-        closedPanelID: UUID,
-        previousState: AppState,
-        nextState: AppState
-    ) {
-        guard let workspaceID = Self.workspaceID(containing: closedPanelID, state: previousState),
-              let nextWorkspace = nextState.workspacesByID[workspaceID] else {
-            return
-        }
-        let liveTerminalPanelIDs = Self.liveTerminalPanelIDs(in: nextWorkspace)
-        guard liveTerminalPanelIDs.isEmpty == false else {
-            return
-        }
-        armCloseTransitionViewportDeferral(workspaceID, liveTerminalPanelIDs)
     }
 
     private func scheduleFocusedPanelFocusRestoreIfNeeded(
@@ -153,26 +132,5 @@ final class TerminalStoreActionCoordinator {
         return nil
     }
 
-    private static func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
-        for (workspaceID, workspace) in state.workspacesByID {
-            guard workspace.panels[panelID] != nil,
-                  workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
-                continue
-            }
-            return workspaceID
-        }
-        return nil
-    }
-
-    private static func liveTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
-        workspace.layoutTree.allSlotInfos.reduce(into: Set<UUID>()) { panelIDs, slot in
-            let panelID = slot.panelID
-            guard let panelState = workspace.panels[panelID],
-                  case .terminal = panelState else {
-                return
-            }
-            panelIDs.insert(panelID)
-        }
-    }
 }
 #endif

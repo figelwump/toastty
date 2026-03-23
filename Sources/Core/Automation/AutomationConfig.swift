@@ -95,7 +95,17 @@ public struct AutomationConfig: Equatable, Sendable {
         environment: [String: String],
         processID: Int32 = getpid()
     ) -> String {
-        AutomationSocketLocator.resolveServerSocketPath(
+        if let explicitSocketPath = environment[ToasttyLaunchContextEnvironment.socketPathKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           explicitSocketPath.isEmpty == false {
+            return explicitSocketPath
+        }
+
+        if let runtimeSocketFileURL = ToasttyRuntimePaths.resolve(environment: environment).automationSocketFileURL {
+            return runtimeSocketFileURL.path
+        }
+
+        return AutomationSocketLocator.resolveServerSocketPath(
             environment: environment,
             processID: processID
         )

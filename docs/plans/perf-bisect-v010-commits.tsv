@@ -1,0 +1,93 @@
+sha	action	reason	subject
+116a046bff54dde909ee37d68646c5965d7e4e79	skip	docs-only	Narrow app state contract documentation
+035e523b40934543790bba675996fb09b80f1689	test	project-or-build-code-touched	Fix Tuist release version propagation
+69222559efbb662c5122e0de90a8997a8fda92ca	skip	docs-only	Update socket protocol docs and drop DMG plan
+7860b8bd82c36f392538b4a73f8e28b0c86e0942	skip	release-automation-only	Use version-only DMG release names
+e984af8c7060579951d0eb9590da36d7fbc52ee2	skip	docs-only	readme edits
+89931eba2403793c20828309becac1f64fcb306d	test	app-runtime-code-touched	Handle Ghostty mouse-over-link cursor fallback
+d4ee4b3b0dbeee85da25a28dfe23bd93277be53a	skip	docs-only	Add hero screenshot to README
+c1f7222241c84e5fa82f01ac2c714b5d8cf27add	skip	release-automation-only	Record release provenance and automate publish tagging
+42431d3be24541f2f7bb9c8685eb6bdff5104f15	skip	release-automation-only	Move release notes authoring into Toastty release skill
+5ba08cd3d0afeafab83184746a16c4d543998fbb	skip	release-automation-only	Split Toastty release and publish skills
+742bd194c8efb55fe5e7c831eac8d2a48674cfb0	skip	release-automation-only	Move Toastty note drafting into release skill
+58252ef73e8d025d72e48fb0fc9fe82c17eb8f0d	test	app-runtime-code-touched	Add configurable terminal profiles
+63da7cc690a9bf135a790126b2d6be70aba8d130	skip	tests-only	Fix Ghostty-enabled test coverage
+c8c8b5d826e4798af09df7f6300ef5f70827ac9d	test	app-runtime-code-touched	Add profiled terminal automation coverage
+cecbc88d821ab81f509b28e76ab9f4f12af94363	test	app-runtime-code-touched	Suppress restored startup command titles until live metadata arrives
+fe8acf30c8d2e5b28de794a292aee1b622c6f950	test	app-runtime-code-touched	Make restored cwd registration converge without launch-dir hints
+6e7d2b64906af6a85a42c9304833bcac8dbfbbc4	test	app-runtime-code-touched	Suppress transient profile startup titles after launch
+dcee7a63ecb97b1aadf9670d25175863176e7c1e	test	app-runtime-code-touched	Infer running command titles for restored panes
+e1932108bc792bebdc8a9439f6a7ca0ae682b13e	test	app-runtime-code-touched	Persist semantic titles for restored profiled terminals
+0a499d8c08555145ca800eebbd6834088f337b5f	test	app-runtime-code-touched	Revert restored terminal title experiments
+3be7a71937ad93c6af247b9ea411f8462c125a3a	test	app-runtime-code-touched	Use restored launch cwd during profiled attach startup
+4ff7dffaea5ef187c0d528f27264fb2c2e9c66ce	test	app-runtime-code-touched	Enable title-based CWD inference for profiled terminals after bootstrap
+3cf3d1c1e236aa5772ebc328c953ff0ff3611dd5	test	app-runtime-code-touched	Narrow profiled terminal CWD fallback to path-like title inference only
+45eb42b6f52983f007560e3512f26626ab9f6889	test	app-runtime-code-touched	Move terminal profile badge to right side of title bar
+5f27d34011b2c0b01c82dcfb59640951cb44f77a	test	app-runtime-code-touched	Add optional shortcutKey to terminal profiles for split-with-profile shortcuts
+d682323891876a57b2311bbe41268269c6c5e3e3	test	app-runtime-code-touched	Defer Ghostty resize updates during close-panel transitions
+b499965c9a77108d2f2641da319e14a2d095d932	test	app-runtime-code-touched	Auto-rename on new workspace creation and add Cmd+Shift+E rename shortcut
+0e373770cd8186f7e9c2e62b563eff67532af83a	test	app-runtime-code-touched	Add sidebar toggle button and Cmd+Shift+W shortcut
+4d3e4f2d1970f476bf31271a57002ae63e88e003	test	app-runtime-code-touched	Persist semantic titles for restored profiled terminals
+3ffa30dff9e6b7da46b373dccc9fa621b98683c9	test	app-runtime-code-touched	Revert "Persist semantic titles for restored profiled terminals"
+04fe6b4316ded1cda1d636d1074432170257ac71	test	app-runtime-code-touched	Remove auto-rename on workspace creation
+8d89331ff2caeb5ffe408ff93b2f4a80d5b5d112	test	app-runtime-code-touched	Enlarge sidebar toggle icon, fix alignment, and invert colors
+73a492c3ce91ef87ef18c5cf37e1d02a6354f53f	test	app-runtime-code-touched	Nudge sidebar toggle icon up to vertically center with traffic lights
+346f53061f7abfd66a6249ab1cb72b273e8e5c48	test	app-runtime-code-touched	Fix sidebar toggle vertical alignment — move icon down to match traffic lights
+eb14b66856de2910fd58ca3e12d7012dc9eb4c7f	test	app-runtime-code-touched	Add tooltip and fix vertical alignment for sidebar toggle button
+898f6ac34e630f802dc9a119ccb018b97ea84b22	test	app-runtime-code-touched	Adapt Ghostty clipboard callback for v1.3.1
+9488bcac3d7d193312e3f87b788b7b1d7eb0929e	test	app-runtime-code-touched	Add installable shell integration for terminal profiles
+c41a6356163c55271bcf5f997687d16484d22615	test	app-runtime-code-touched	Detect existing shell integration before prompting
+5cdb6ccf73ff78f766e1a038b63b378d62a54be3	test	app-runtime-code-touched	Move terminal profile badge back to left side of title bar
+686bc48b3ddb731d9a368068bd8d750cc9104db8	test	app-runtime-code-touched	Move terminal profile badge before pane title
+26eece0e006e09f13e2d9a8c6a68282223d5ebed	skip	docs-only	Align Sparkle plan with release and publish workflow
+ed57509dff29881e19994ea813d34466be807f56	test	app-runtime-code-touched	Separate Toastty settings from user config
+d4102edb720610a35512a7fbd3205dd378f6d70a	test	app-runtime-code-touched	Improve generated Toastty config formatting
+e9d2b11a1de53813c065ac81177dd39649a05fe0	test	app-runtime-code-touched	Add Ghostty visibility tracing for remount debugging
+1f34087fe281f6623d294daa4d5e3c399bd3481e	test	app-runtime-code-touched	Hide transparent Ghostty hosts during workspace switches
+12072a9c2b44a96fd1d36ce8285fadc9def7c2cf	test	app-runtime-code-touched	Refresh Ghostty cursor on terminal focus changes
+650eb9419160c7347b63da84db71e004d3d7e45d	test	app-runtime-code-touched	Invert terminal profile menu hierarchy
+d1edaee909fa96af08624847358411b4d0e8c495	skip	docs-only	Document PID-targeted menu validation
+16ea9ba25f0ac9595e4c16374ffdf7cc3e6e3d3d	test	app-runtime-code-touched	Fix profiled split routing and shell integration detection
+6414f989d8c1af2527d6db0c7f02a8f193efeb3e	test	project-or-build-code-touched	Add Sparkle updater support and release publishing
+ccf7539d6603e1b73a4a3751409f1c97b7f93c83	skip	release-automation-only	Harden Sparkle appcast publishing validation
+63ca15e4b11f1fa0f76975a04d819c4a2d20f8f5	skip	tooling-only	add .claude symlink
+61169f9239f6fbe11207893a8cc3330af34d31de	test	app-runtime-code-touched	Add icon for Sparkle update menu item
+b7f842484f7e36a44bc1cd8052dee99958f5e43a	skip	docs-only	Document parallel Toastty dev run guidance
+f70b60cd66b7747e4464f3180b61525906299ea2	test	app-runtime-code-touched	Rewrite Toastty config to current template
+3d0ce942b57563fabe9cbe10cc522e53957e4669	test	app-runtime-code-touched	Revert "Rewrite Toastty config to current template"
+26e984f32d193788178bdb39ff5732878618c6bc	test	app-runtime-code-touched	Isolate dev runtime state with TOASTTY_RUNTIME_HOME
+f683f87a0e4a709d315fa6919d107e84637c94c8	test	app-runtime-code-touched	Add workspace shortcut hints to buttons and menus
+baa516d1fe2e886fccd7f65f57a914c4e1419325	test	app-runtime-code-touched	Add worktree-derived dev sandboxes and Toastty dev-run skill
+e8aec8efe3b7a4c56145e983d52862dc08d97496	test	project-or-build-code-touched	Set worktree runtime root in generated Xcode run schemes
+0325bcb6c830ca2789bb52a41a4e53f5b104fccb	skip	dev-bootstrap-only	Bootstrap Ghostty artifacts in fresh Toastty worktrees
+7e0059f1ec6c186b515ece8ac9e4c0417463a2df	test	app-runtime-code-touched	Reassign workspace shortcuts and unify close confirmation
+711d8573033f54211df3dedca15e7df272619c9b	test	app-runtime-code-touched	Bind close workspace shortcut directly
+4de9acdc6efe687f28c5390d0ea1ec86629e062c	test	project-or-build-code-touched	Enable mic and camera permissions for Toastty child apps
+834ccc645db907cf2414eb95f6021fd93bacfff1	skip	dev-automation-only	Reduce smoke focus theft and add remote GUI validation
+90073c067f7f84614208f4561958a662e0703a52	test	app-runtime-code-touched	Prefer aligned panes for directional focus
+5969a238c830f7923a6aa7f654227212071cb9b3	test	app-runtime-code-touched	Handle unavailable notifications without AppleScript fallback
+b7b9bc9fbd068f93e9f702ed64d682fd0afa11b2	test	app-runtime-code-touched	Handle exited terminal pane close requests
+c4e90d62d42c02416b1354c0a0d2a0d436399288	test	app-runtime-code-touched	Stabilize Ghostty close-surface callbacks
+0aab0beacfd6cdedc9433cf166a6d26d67f9c512	test	app-runtime-code-touched	Fix exited terminal pane close routing
+86812e3f5ae09d8e8d921e7bce4d21847288cd40	test	app-runtime-code-touched	Auto-align bottom-pinned panes after focus mode resize
+bc5d31888d4b8ec74b9e01b402d48003209f84d3	test	app-runtime-code-touched	Remap workspace switching to ⌥1-9, panel focus to ⌥⇧1-9
+ac86e988c52c49a0fc07d2e13ca08eb359b86897	test	app-runtime-code-touched	Keep Ghostty clipboard callback compatible across artifact versions
+e5a7b5564a823f8fc2d670a5c7d1fa86cb5cde4a	test	app-runtime-code-touched	Remap workspace and panel display shortcuts
+f3270ea66f207a741225ccf2537a31becb221892	skip	tooling-only	Add doc-review skill for documentation change proposals
+0b51b16fca70c654624f13d237d9d801acee83b2	skip	dev-automation-only	Add shortcut-hints smoke validation flow
+2d26ccea8820f2c1994f8b7bc0657e9eeebb8b98	skip	tooling-only	Move doc-review skill to global ~/.agents/skills
+8255183b4370bfaa4237cb37198c6605f713aa17	test	app-runtime-code-touched	Stop forcing Ghostty refreshes on focus changes
+ac5778bfab4f4f71a496e9ebf871a24076c1c63f	skip	docs-only	Refresh docs for terminal profiles and sandboxing
+36da01867b6a500340b9c6c874a6787e5e5b32a2	skip	docs-only	Fill doc gaps for privacy paths, shortcuts table, and Sparkle menu location
+2d5a437be8549c2f0f6789c9f99b56dbcfea41b0	test	app-runtime-code-touched	Improve Sparkle diagnostics and feed validation
+fa9fa79535ca915104488f0702c0e14bf406ec98	test	app-runtime-code-touched	Add refresh timing diagnostics for terminal jitter
+067c48c7d8f9b5f8e0f33a8384236ee49ff55e11	skip	docs-only	Restructure README for end-user focus
+18a9681c35bf507ed85984e65285bfc33a5ca091	skip	docs-only	Use local macOS download badge in README Getting Started section
+89696d204aecad4e05fbe692a169fd746af504a9	test	app-runtime-code-touched	Skip unchanged Ghostty surface reassignments
+570fc63332369d07744fd9e37006cc115503e177	skip	docs-only	Move dev/contributor sections out of README Configuration
+c663a8666757140ed435283dd12388262536f642	test	app-runtime-code-touched	Stop focus mode toggles from auto-scrolling terminals
+30c892bbd82110ce1b823073b0c7e70784996c48	test	app-runtime-code-touched	Remove terminal scrollbar plumbing and hot-path logging
+15e0063cb52c5297bc57de1a6ec1f0ec984916d6	test	app-runtime-code-touched	Rollback terminal host update churn
+35e7c70876f648c60becce5b48a9e8a8a1862c7b	test	app-runtime-code-touched	Disable Ghostty mouse-over-link cursor fallback
+94c37f860b4a835ea866ce8d0d5782c5e538ee33	test	app-runtime-code-touched	Isolate Ghostty selection clipboard from macOS clipboard
+0684989d0b7f48654a0ee49886d67157bccd9f67	test	app-runtime-code-touched	Remove dead Ghostty scrollbar routing

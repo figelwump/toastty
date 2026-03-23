@@ -116,10 +116,13 @@ final class WindowCommandControllerTests: XCTestCase {
         let bridge = CloseWorkspaceMenuBridge(closeWorkspaceCommandController: controller)
 
         let mainMenu = NSMenu(title: "Main")
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "File")
+        let fileItem = NSMenuItem(title: "Archivo", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Archivo")
+        let closeItem = NSMenuItem(title: "Cerrar", action: nil, keyEquivalent: "w")
+        closeItem.keyEquivalentModifierMask = [.command]
         let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         closeAllItem.keyEquivalentModifierMask = [.command, .shift]
+        fileMenu.addItem(closeItem)
         fileMenu.addItem(closeAllItem)
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -157,10 +160,13 @@ final class WindowCommandControllerTests: XCTestCase {
         let bridge = CloseWorkspaceMenuBridge(closeWorkspaceCommandController: controller)
 
         let mainMenu = NSMenu(title: "Main")
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "File")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Datei")
+        let closeItem = NSMenuItem(title: "Schließen", action: nil, keyEquivalent: "w")
+        closeItem.keyEquivalentModifierMask = [.command]
         let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         closeAllItem.keyEquivalentModifierMask = [.shift]
+        fileMenu.addItem(closeItem)
         fileMenu.addItem(closeAllItem)
         fileItem.submenu = fileMenu
         mainMenu.addItem(fileItem)
@@ -194,10 +200,13 @@ final class WindowCommandControllerTests: XCTestCase {
         workspaceRootItem.submenu = workspaceMenu
         mainMenu.addItem(workspaceRootItem)
 
-        let fileRootItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let fileMenu = NSMenu(title: "File")
+        let fileRootItem = NSMenuItem(title: "Archivo", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Archivo")
+        let closeItem = NSMenuItem(title: "Cerrar", action: nil, keyEquivalent: "w")
+        closeItem.keyEquivalentModifierMask = [.command]
         let closeAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         closeAllItem.keyEquivalentModifierMask = [.shift]
+        fileMenu.addItem(closeItem)
         fileMenu.addItem(closeAllItem)
         fileRootItem.submenu = fileMenu
         mainMenu.addItem(fileRootItem)
@@ -299,6 +308,35 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(appMenu.items.map(\.title), ["About Toastty", "Check for Updates...", "Reload Configuration"])
     }
 
+    func testSparkleMenuBridgeRestoresExpectedImageWhenExistingItemDrifts() {
+        let bridge = SparkleMenuBridge(
+            canCheckForUpdates: { true },
+            performCheckForUpdates: {}
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let appRootItem = NSMenuItem(title: "Toastty", action: nil, keyEquivalent: "")
+        let appMenu = NSMenu(title: "Toastty")
+        let aboutItem = NSMenuItem(title: "About Toastty", action: nil, keyEquivalent: "")
+        let updaterItem = NSMenuItem(title: "Check for Updates...", action: nil, keyEquivalent: "")
+        let replacementImage = NSImage(size: NSSize(width: 4, height: 4))
+        updaterItem.image = replacementImage
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(updaterItem)
+        appRootItem.submenu = appMenu
+        mainMenu.addItem(appRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertFalse(updaterItem.image === replacementImage)
+        XCTAssertEqual(updaterItem.image?.isTemplate, true)
+    }
+
     func testHiddenSystemMenuItemsBridgeHidesRequestedItemsByAction() {
         let bridge = HiddenSystemMenuItemsBridge()
 
@@ -391,12 +429,12 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(windowMenu.items[2].isHidden)
     }
 
-    func testHiddenSystemMenuItemsBridgeRehidesItemsAfterMenuMutation() {
+    func testHiddenSystemMenuItemsBridgeRehidesItemsAfterMenuMutation() async {
         let bridge = HiddenSystemMenuItemsBridge()
 
         let mainMenu = NSMenu(title: "Main")
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let initialFileMenu = NSMenu(title: "File")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "Datei")
         initialFileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
         fileItem.submenu = initialFileMenu
         mainMenu.addItem(fileItem)
@@ -408,7 +446,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
         bridge.installIfNeeded()
 
-        let rebuiltFileMenu = NSMenu(title: "File")
+        let rebuiltFileMenu = NSMenu(title: "Datei")
         let rebuiltNewWindowItem = NSMenuItem(title: "New Window", action: nil, keyEquivalent: "n")
         let rebuiltOpenRecentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         rebuiltFileMenu.addItem(rebuiltNewWindowItem)
@@ -416,33 +454,221 @@ final class WindowCommandControllerTests: XCTestCase {
         fileItem.submenu = rebuiltFileMenu
 
         NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
-        let refreshExpectation = expectation(description: "menu refresh")
-        DispatchQueue.main.async {
-            refreshExpectation.fulfill()
-        }
-        wait(for: [refreshExpectation], timeout: 1)
+        await flushMainActorTasks()
 
         XCTAssertTrue(rebuiltNewWindowItem.isHidden)
         XCTAssertFalse(rebuiltOpenRecentItem.isHidden)
         XCTAssertTrue(rebuiltFileMenu.delegate === bridge)
     }
 
-    func testHiddenSystemMenuItemsBridgeReinstallsCloseWorkspaceBridgeAfterMenuMutation() {
+    func testHiddenSystemMenuItemsBridgeDoesNotReinstallDynamicBridgesForMenuMutationNotifications() async {
+        var refreshCount = 0
+        let bridge = HiddenSystemMenuItemsBridge(
+            onDynamicMenuBridgeRefreshRequested: {
+                refreshCount += 1
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "Datei")
+        initialFileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
+        fileItem.submenu = initialFileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+        XCTAssertEqual(refreshCount, 1)
+
+        let rebuiltFileMenu = NSMenu(title: "Datei")
+        rebuiltFileMenu.addItem(NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: ""))
+        fileItem.submenu = rebuiltFileMenu
+
+        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
+        await flushMainActorTasks()
+
+        XCTAssertEqual(refreshCount, 1)
+
+        bridge.menuWillOpen(rebuiltFileMenu)
+        XCTAssertEqual(refreshCount, 2)
+    }
+
+    func testHiddenSystemMenuItemsBridgeDoesNotReinstallDynamicBridgesForNestedSubmenuOpen() {
+        var refreshCount = 0
+        let bridge = HiddenSystemMenuItemsBridge(
+            onDynamicMenuBridgeRefreshRequested: {
+                refreshCount += 1
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let windowItem = NSMenuItem(title: "Window", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Window")
+        let navigateItem = NSMenuItem(title: "Navigate Splits", action: nil, keyEquivalent: "")
+        let navigateMenu = NSMenu(title: "Navigate Splits")
+        let moreItem = NSMenuItem(title: "More Navigation", action: nil, keyEquivalent: "")
+        let moreMenu = NSMenu(title: "More Navigation")
+        moreMenu.addItem(NSMenuItem(title: "Navigate Diagonally", action: nil, keyEquivalent: ""))
+        moreItem.submenu = moreMenu
+        navigateMenu.addItem(moreItem)
+        navigateItem.submenu = navigateMenu
+        windowMenu.addItem(navigateItem)
+        windowItem.submenu = windowMenu
+        mainMenu.addItem(windowItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+        refreshCount = 0
+
+        bridge.menuWillOpen(windowMenu)
+        XCTAssertEqual(refreshCount, 1)
+
+        bridge.menuWillOpen(navigateMenu)
+        XCTAssertEqual(refreshCount, 1)
+
+        bridge.menuWillOpen(moreMenu)
+        XCTAssertEqual(refreshCount, 1)
+    }
+
+    func testHiddenSystemMenuItemsBridgeRefreshesOwnedFileSplitSectionForMenuTreeRefresh() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let fileSplitBridge = FileSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+        )
+        let hiddenBridge = HiddenSystemMenuItemsBridge(
+            onOwnedMenuSectionRefreshRequested: {
+                fileSplitBridge.installIfNeeded()
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "Datei")
+        let initialCloseItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        initialCloseItem.keyEquivalentModifierMask = [.command]
+        let initialCloseWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "")
+        initialFileMenu.addItem(initialCloseItem)
+        initialFileMenu.addItem(initialCloseWorkspaceItem)
+        fileItem.submenu = initialFileMenu
+        mainMenu.addItem(fileItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        hiddenBridge.installIfNeeded()
+
+        XCTAssertEqual(
+            menuItemTitles(in: initialFileMenu),
+            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+        )
+
+        let rebuiltFileMenu = NSMenu(title: "Datei")
+        let rebuiltCloseItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        rebuiltCloseItem.keyEquivalentModifierMask = [.command]
+        let rebuiltCloseWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "")
+        rebuiltFileMenu.addItem(rebuiltCloseItem)
+        rebuiltFileMenu.addItem(rebuiltCloseWorkspaceItem)
+        fileItem.submenu = rebuiltFileMenu
+
+        hiddenBridge.installIfNeeded()
+
+        XCTAssertEqual(
+            menuItemTitles(in: rebuiltFileMenu),
+            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+        )
+    }
+
+    func testHiddenSystemMenuItemsBridgeRefreshesOwnedWindowSplitSectionForMenuTreeRefresh() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowSplitBridge = WindowSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+        )
+        let hiddenBridge = HiddenSystemMenuItemsBridge(
+            onOwnedMenuSectionRefreshRequested: {
+                windowSplitBridge.installIfNeeded()
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let windowItem = NSMenuItem(title: "Fenster", action: nil, keyEquivalent: "")
+        let initialWindowMenu = NSMenu(title: "Fenster")
+        initialWindowMenu.addItem(NSMenuItem(title: "Minimize", action: nil, keyEquivalent: "m"))
+        initialWindowMenu.addItem(NSMenuItem(title: "Arrange in Front", action: nil, keyEquivalent: ""))
+        initialWindowMenu.addItem(.separator())
+        initialWindowMenu.addItem(NSMenuItem(title: "Window 1", action: nil, keyEquivalent: ""))
+        windowItem.submenu = initialWindowMenu
+        mainMenu.addItem(windowItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        hiddenBridge.installIfNeeded()
+
+        let rebuiltWindowMenu = NSMenu(title: "Fenster")
+        rebuiltWindowMenu.addItem(NSMenuItem(title: "Minimize", action: nil, keyEquivalent: "m"))
+        rebuiltWindowMenu.addItem(NSMenuItem(title: "Arrange in Front", action: nil, keyEquivalent: ""))
+        rebuiltWindowMenu.addItem(.separator())
+        rebuiltWindowMenu.addItem(NSMenuItem(title: "Window 1", action: nil, keyEquivalent: ""))
+        windowItem.submenu = rebuiltWindowMenu
+
+        hiddenBridge.installIfNeeded()
+
+        XCTAssertEqual(
+            menuItemTitles(in: rebuiltWindowMenu),
+            [
+                "Minimize",
+                "Arrange in Front",
+                "<separator>",
+                "Select Previous Split",
+                "Select Next Split",
+                "Navigate Splits",
+                "Resize Splits",
+                "<separator>",
+                "Window 1",
+            ]
+        )
+
+        let navigateMenu = try XCTUnwrap(rebuiltWindowMenu.items[5].submenu)
+        XCTAssertEqual(menuItemTitles(in: navigateMenu), ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"])
+
+        let resizeMenu = try XCTUnwrap(rebuiltWindowMenu.items[6].submenu)
+        XCTAssertEqual(
+            menuItemTitles(in: resizeMenu),
+            ["Equalize Splits", "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
+        )
+    }
+
+    func testHiddenSystemMenuItemsBridgeReinstallsCloseWorkspaceBridgeWhenMenuOpensAfterMutation() async {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let closeWorkspaceBridge = CloseWorkspaceMenuBridge(
             closeWorkspaceCommandController: CloseWorkspaceCommandController(store: store)
         )
         let hiddenBridge = HiddenSystemMenuItemsBridge(
-            onMenuTreeRefresh: {
+            onDynamicMenuBridgeRefreshRequested: {
                 closeWorkspaceBridge.installIfNeeded()
             }
         )
 
         let mainMenu = NSMenu(title: "Main")
-        let fileItem = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
-        let initialFileMenu = NSMenu(title: "File")
+        let fileItem = NSMenuItem(title: "Datei", action: nil, keyEquivalent: "")
+        let initialFileMenu = NSMenu(title: "Datei")
+        let initialCloseItem = NSMenuItem(title: "Schließen", action: nil, keyEquivalent: "w")
+        initialCloseItem.keyEquivalentModifierMask = [.command]
         let initialCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         initialCloseAllItem.keyEquivalentModifierMask = [.shift]
+        initialFileMenu.addItem(initialCloseItem)
         initialFileMenu.addItem(initialCloseAllItem)
         fileItem.submenu = initialFileMenu
         mainMenu.addItem(fileItem)
@@ -463,18 +689,23 @@ final class WindowCommandControllerTests: XCTestCase {
             #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
         )
 
-        let rebuiltFileMenu = NSMenu(title: "File")
+        let rebuiltFileMenu = NSMenu(title: "Datei")
+        let rebuiltCloseItem = NSMenuItem(title: "Schließen", action: nil, keyEquivalent: "w")
+        rebuiltCloseItem.keyEquivalentModifierMask = [.command]
         let rebuiltCloseAllItem = NSMenuItem(title: "Close All", action: nil, keyEquivalent: "w")
         rebuiltCloseAllItem.keyEquivalentModifierMask = [.shift]
+        rebuiltFileMenu.addItem(rebuiltCloseItem)
         rebuiltFileMenu.addItem(rebuiltCloseAllItem)
         fileItem.submenu = rebuiltFileMenu
 
         NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
-        let refreshExpectation = expectation(description: "menu refresh")
-        DispatchQueue.main.async {
-            refreshExpectation.fulfill()
-        }
-        wait(for: [refreshExpectation], timeout: 1)
+        await flushMainActorTasks()
+
+        XCTAssertEqual(rebuiltCloseAllItem.title, "Close All")
+        XCTAssertNil(rebuiltCloseAllItem.target)
+        XCTAssertNil(rebuiltCloseAllItem.action)
+
+        hiddenBridge.menuWillOpen(rebuiltFileMenu)
 
         XCTAssertEqual(rebuiltCloseAllItem.title, "Close Workspace")
         XCTAssertEqual(rebuiltCloseAllItem.keyEquivalent, "")
@@ -483,6 +714,212 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(
             rebuiltCloseAllItem.action,
             #selector(CloseWorkspaceMenuBridge.performCloseWorkspace(_:))
+        )
+    }
+
+    func testFileSplitMenuBridgeInsertsSplitSectionBeforeCloseCommands() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let bridge = FileSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileRootItem = NSMenuItem(title: "Archivo", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Archivo")
+        let closePanelItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        closePanelItem.keyEquivalentModifierMask = [.command]
+        let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "")
+        fileMenu.addItem(closePanelItem)
+        fileMenu.addItem(closeWorkspaceItem)
+        fileRootItem.submenu = fileMenu
+        mainMenu.addItem(fileRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(
+            menuItemTitles(in: fileMenu),
+            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+        )
+        XCTAssertEqual(fileMenu.items[0].keyEquivalent, "d")
+        XCTAssertEqual(fileMenu.items[0].keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(fileMenu.items[2].keyEquivalent, "d")
+        XCTAssertEqual(fileMenu.items[2].keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertTrue(bridge.validateMenuItem(fileMenu.items[0]))
+
+        bridge.installIfNeeded()
+        XCTAssertEqual(
+            menuItemTitles(in: fileMenu),
+            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+        )
+    }
+
+    func testFileSplitMenuBridgeReinstallsManagedItemsWhenConfigurationDrifts() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let bridge = FileSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let fileRootItem = NSMenuItem(title: "Archivo", action: nil, keyEquivalent: "")
+        let fileMenu = NSMenu(title: "Archivo")
+        let closePanelItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
+        closePanelItem.keyEquivalentModifierMask = [.command]
+        let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "")
+        fileMenu.addItem(closePanelItem)
+        fileMenu.addItem(closeWorkspaceItem)
+        fileRootItem.submenu = fileMenu
+        mainMenu.addItem(fileRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        fileMenu.items[0].target = nil
+        fileMenu.items[0].keyEquivalent = ""
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(fileMenu.items[0].target === bridge)
+        XCTAssertEqual(fileMenu.items[0].keyEquivalent, "d")
+        XCTAssertEqual(
+            menuItemTitles(in: fileMenu),
+            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+        )
+    }
+
+    func testWindowSplitMenuBridgeInsertsSectionBeforeWindowList() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let bridge = WindowSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let windowRootItem = NSMenuItem(title: "Fenster", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Fenster")
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: nil, keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Arrange in Front", action: nil, keyEquivalent: ""))
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(NSMenuItem(title: "Window 1", action: nil, keyEquivalent: ""))
+        windowRootItem.submenu = windowMenu
+        mainMenu.addItem(windowRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertEqual(
+            menuItemTitles(in: windowMenu),
+            [
+                "Minimize",
+                "Arrange in Front",
+                "<separator>",
+                "Select Previous Split",
+                "Select Next Split",
+                "Navigate Splits",
+                "Resize Splits",
+                "<separator>",
+                "Window 1",
+            ]
+        )
+
+        let previousItem = windowMenu.items[3]
+        XCTAssertEqual(previousItem.keyEquivalent, "[")
+        XCTAssertEqual(previousItem.keyEquivalentModifierMask, [.command])
+        XCTAssertTrue(bridge.validateMenuItem(previousItem))
+
+        let nextItem = windowMenu.items[4]
+        XCTAssertEqual(nextItem.keyEquivalent, "]")
+        XCTAssertEqual(nextItem.keyEquivalentModifierMask, [.command])
+
+        let navigateMenu = try XCTUnwrap(windowMenu.items[5].submenu)
+        XCTAssertEqual(menuItemTitles(in: navigateMenu), ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"])
+
+        let resizeMenu = try XCTUnwrap(windowMenu.items[6].submenu)
+        XCTAssertEqual(
+            menuItemTitles(in: resizeMenu),
+            ["Equalize Splits", "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
+        )
+        XCTAssertEqual(resizeMenu.items[0].keyEquivalent, "=")
+        XCTAssertEqual(resizeMenu.items[0].keyEquivalentModifierMask, [.command, .control])
+        XCTAssertEqual(
+            resizeMenu.items[2].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.resizeSplitLeft.key.character)
+        )
+        XCTAssertEqual(resizeMenu.items[2].keyEquivalentModifierMask, [.command, .control])
+        XCTAssertEqual(
+            resizeMenu.items[3].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.resizeSplitRight.key.character)
+        )
+        XCTAssertEqual(
+            resizeMenu.items[4].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.resizeSplitUp.key.character)
+        )
+        XCTAssertEqual(
+            resizeMenu.items[5].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.resizeSplitDown.key.character)
+        )
+
+        bridge.installIfNeeded()
+        XCTAssertEqual(
+            menuItemTitles(in: windowMenu),
+            [
+                "Minimize",
+                "Arrange in Front",
+                "<separator>",
+                "Select Previous Split",
+                "Select Next Split",
+                "Navigate Splits",
+                "Resize Splits",
+                "<separator>",
+                "Window 1",
+            ]
+        )
+    }
+
+    func testWindowSplitMenuBridgeReinstallsManagedItemsWhenSubmenuDrifts() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let bridge = WindowSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let windowRootItem = NSMenuItem(title: "Fenster", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Fenster")
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: nil, keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Arrange in Front", action: nil, keyEquivalent: ""))
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(NSMenuItem(title: "Window 1", action: nil, keyEquivalent: ""))
+        windowRootItem.submenu = windowMenu
+        mainMenu.addItem(windowRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        let navigateItem = windowMenu.items[5]
+        let driftedNavigateMenu = try XCTUnwrap(navigateItem.submenu)
+        driftedNavigateMenu.removeAllItems()
+
+        bridge.installIfNeeded()
+
+        let repairedNavigateMenu = try XCTUnwrap(windowMenu.items[5].submenu)
+        XCTAssertEqual(
+            menuItemTitles(in: repairedNavigateMenu),
+            ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"]
         )
     }
 
@@ -531,7 +968,6 @@ final class WindowCommandControllerTests: XCTestCase {
         controller.installShellIntegration()
         XCTAssertTrue(didInstallShellIntegration)
     }
-
     private func makeSplitWorkspaceFixture() throws -> SplitWorkspaceFixture {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
@@ -560,6 +996,16 @@ final class WindowCommandControllerTests: XCTestCase {
             runtimeRegistry: runtimeRegistry,
             slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
         )
+    }
+
+    private func flushMainActorTasks() async {
+        await MainActor.run {}
+    }
+
+    private func menuItemTitles(in menu: NSMenu) -> [String] {
+        menu.items.map { item in
+            item.isSeparatorItem ? "<separator>" : item.title
+        }
     }
 }
 

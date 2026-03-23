@@ -5,6 +5,25 @@ import XCTest
 #if TOASTTY_HAS_GHOSTTY_KIT
 import GhosttyKit
 
+final class GhosttyClipboardBridgeTests: XCTestCase {
+    func testStandardClipboardUsesSystemPasteboard() {
+        let pasteboard = GhosttyClipboardBridge.pasteboard(for: GHOSTTY_CLIPBOARD_STANDARD)
+
+        XCTAssertEqual(pasteboard?.name, NSPasteboard.general.name)
+    }
+
+    func testSelectionClipboardUsesToasttyPrivatePasteboard() {
+        let pasteboard = GhosttyClipboardBridge.pasteboard(for: GHOSTTY_CLIPBOARD_SELECTION)
+
+        XCTAssertEqual(pasteboard?.name, GhosttyClipboardBridge.selectionPasteboardName)
+        XCTAssertNotEqual(pasteboard?.name, NSPasteboard.general.name)
+    }
+
+    func testGhosttyRuntimeAdvertisesSelectionClipboardSupport() {
+        XCTAssertTrue(GhosttyClipboardBridge.runtimeSupportsSelectionClipboard)
+    }
+}
+
 @MainActor
 final class TerminalHostViewTests: XCTestCase {
     func testFlagsChangedReturnsPressForLeftCommandPress() {
@@ -115,27 +134,6 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(scrollView.ghosttyCursorVisible)
     }
 
-    func testSurfaceScrollViewUsesLinkCursorForMouseOverLinkFallback() {
-        let hostView = TerminalHostView()
-        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
-
-        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
-        hostView.setGhosttyMouseOverLink("https://example.com")
-
-        XCTAssertTrue(scrollView.documentCursor === NSCursor.pointingHand)
-    }
-
-    func testSurfaceScrollViewRestoresBaseCursorWhenMouseOverLinkClears() {
-        let hostView = TerminalHostView()
-        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
-
-        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
-        hostView.setGhosttyMouseOverLink("https://example.com")
-        hostView.setGhosttyMouseOverLink(nil)
-
-        XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
-    }
-
     func testSurfaceScrollViewDisablesNativeScrollbars() {
         let scrollView = TerminalSurfaceScrollView()
 
@@ -165,6 +163,12 @@ final class TerminalHostViewTests: XCTestCase {
         contentView.addSubview(hostView)
 
         XCTAssertEqual(requestCount, 1)
+    }
+
+    func testHostViewAcceptsFirstMouse() {
+        let hostView = TerminalHostView()
+
+        XCTAssertTrue(hostView.acceptsFirstMouse(for: nil))
     }
 
     func testLocalInterruptKeyRecognizesEscape() {
@@ -246,7 +250,89 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertFalse(snapshot.resolvedVisible)
     }
 
-    func testSynchronizePresentationVisibilityTracksTransparentAncestorTransition() {
+    func testMouseDownActivatesPanelBeforeFocusingHostView() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var activationCount = 0
+        var firstResponderDuringActivation: NSResponder?
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.activatePanelIfNeeded = {
+            activationCount += 1
+            firstResponderDuringActivation = window.firstResponder
+            return true
+        }
+
+        hostView.mouseDown(with: try makeMouseEvent(type: .leftMouseDown, window: window))
+
+        XCTAssertEqual(activationCount, 1)
+        XCTAssertNil(firstResponderDuringActivation)
+        XCTAssertTrue(window.firstResponder === hostView)
+    }
+
+    func testRightMouseDownActivatesPanelBeforeFocusingHostView() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var activationCount = 0
+        var firstResponderDuringActivation: NSResponder?
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.activatePanelIfNeeded = {
+            activationCount += 1
+            firstResponderDuringActivation = window.firstResponder
+            return true
+        }
+
+        hostView.rightMouseDown(with: try makeMouseEvent(type: .rightMouseDown, window: window))
+
+        XCTAssertEqual(activationCount, 1)
+        XCTAssertNil(firstResponderDuringActivation)
+        XCTAssertTrue(window.firstResponder === hostView)
+    }
+
+    func testSynchronizePresentationVisibilityTracksHiddenAncestorTransition() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let ancestor = NSView(frame: contentView.bounds)
+        let hostView = TerminalHostView()
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        ancestor.isHidden = true
+
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(hostView)
+
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_hidden_ancestor"))
+        XCTAssertFalse(hostView.isEffectivelyVisible)
+
+        ancestor.isHidden = false
+
+        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_revealed_ancestor"))
+        XCTAssertTrue(hostView.isEffectivelyVisible)
+    }
+
+    func testSynchronizePresentationVisibilityTracksWindowOcclusionTransition() {
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let hostView = TerminalHostView()
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+
+        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_window_visible"))
+        XCTAssertTrue(hostView.isEffectivelyVisible)
+
+        window.forcedOcclusionState = []
+
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_window_hidden"))
+        XCTAssertFalse(hostView.isEffectivelyVisible)
+    }
+
+    func testSynchronizePresentationVisibilityTreatsTransparentAncestorAsHidden() {
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
         let ancestor = NSView(frame: contentView.bounds)
@@ -258,36 +344,13 @@ final class TerminalHostViewTests: XCTestCase {
         contentView.addSubview(ancestor)
         ancestor.addSubview(hostView)
 
-        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_transparent"))
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_transparent_ancestor"))
         XCTAssertFalse(hostView.isEffectivelyVisible)
 
         ancestor.alphaValue = 1
 
-        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_opaque"))
+        XCTAssertTrue(hostView.synchronizePresentationVisibility(reason: "test_opaque_ancestor"))
         XCTAssertTrue(hostView.isEffectivelyVisible)
-    }
-
-    func testVisibilityTraceSnapshotTransparencyThresholdBoundary() {
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let ancestor = NSView(frame: contentView.bounds)
-        let hostView = TerminalHostView()
-        window.forcedOcclusionState = [.visible]
-        window.contentView = contentView
-        contentView.addSubview(ancestor)
-        ancestor.addSubview(hostView)
-
-        ancestor.alphaValue = 0.01
-        var snapshot = hostView.visibilityTraceSnapshot()
-        XCTAssertEqual(snapshot.minChainAlphaThousandths, 10)
-        XCTAssertTrue(snapshot.visuallyTransparent)
-        XCTAssertFalse(snapshot.resolvedVisible)
-
-        ancestor.alphaValue = 0.011
-        snapshot = hostView.visibilityTraceSnapshot()
-        XCTAssertEqual(snapshot.minChainAlphaThousandths, 11)
-        XCTAssertFalse(snapshot.visuallyTransparent)
-        XCTAssertTrue(snapshot.resolvedVisible)
     }
 
     func testResolvedGhosttySurfaceFocusStateRequiresActiveKeyFocusedHost() {
@@ -320,6 +383,101 @@ final class TerminalHostViewTests: XCTestCase {
         _ = window.makeFirstResponder(hostView)
 
         XCTAssertFalse(hostView.resolvedGhosttySurfaceFocusState())
+    }
+
+    func testSetGhosttySurfaceSkipsRepeatedAssignmentForSameSurface() {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var requestCount = 0
+        let focusHookCount = HookCallCounter()
+        let occlusionHookCount = HookCallCounter()
+        let refreshHookCount = HookCallCounter()
+        let surface = fakeSurfaceHandle(0x1234)
+
+        hostView.applicationIsActiveProvider = { true }
+        hostView.requestFirstResponderIfNeeded = {
+            requestCount += 1
+        }
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in
+                focusHookCount.increment()
+            },
+            setOcclusion: { _, _ in
+                occlusionHookCount.increment()
+            },
+            refresh: { _ in
+                refreshHookCount.increment()
+            }
+        )
+        window.forcedOcclusionState = [.visible]
+        window.forcedIsKeyWindow = true
+        window.contentView = contentView
+
+        contentView.addSubview(hostView)
+        _ = hostView.synchronizePresentationVisibility(reason: "test_surface_assignment_visible")
+        _ = window.makeFirstResponder(hostView)
+        requestCount = 0
+
+        hostView.setGhosttySurface(surface)
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(focusHookCount.value, 1)
+        XCTAssertEqual(occlusionHookCount.value, 1)
+        XCTAssertEqual(refreshHookCount.value, 1)
+
+        requestCount = 0
+        hostView.setGhosttySurface(surface)
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertEqual(focusHookCount.value, 1)
+        XCTAssertEqual(occlusionHookCount.value, 1)
+        XCTAssertEqual(refreshHookCount.value, 1)
+    }
+}
+
+private func fakeSurfaceHandle(_ rawValue: UInt) -> ghostty_surface_t {
+    guard let surface = ghostty_surface_t(bitPattern: rawValue) else {
+        fatalError("expected fake Ghostty surface handle")
+    }
+    return surface
+}
+
+private func makeMouseEvent(
+    type: NSEvent.EventType,
+    window: NSWindow,
+    location: NSPoint = NSPoint(x: 12, y: 12)
+) throws -> NSEvent {
+    guard let event = NSEvent.mouseEvent(
+        with: type,
+        location: location,
+        modifierFlags: [],
+        timestamp: 0,
+        windowNumber: window.windowNumber,
+        context: nil,
+        eventNumber: 0,
+        clickCount: 1,
+        pressure: 1
+    ) else {
+        throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
+    }
+    return event
+}
+
+private final class HookCallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage = 0
+
+    func increment() {
+        lock.lock()
+        storage += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
     }
 }
 

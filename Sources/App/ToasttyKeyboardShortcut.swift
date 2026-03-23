@@ -91,4 +91,29 @@ enum ToasttyKeyboardShortcuts {
         "]",
         modifiers: [.command]
     )
+
+    static let resizeSplitLeft = ToasttyKeyboardShortcut(
+        .leftArrow,
+        modifiers: [.command, .control]
+    )
+
+    static let resizeSplitRight = ToasttyKeyboardShortcut(
+        .rightArrow,
+        modifiers: [.command, .control]
+    )
+
+    static let resizeSplitUp = ToasttyKeyboardShortcut(
+        .upArrow,
+        modifiers: [.command, .control]
+    )
+
+    static let resizeSplitDown = ToasttyKeyboardShortcut(
+        .downArrow,
+        modifiers: [.command, .control]
+    )
+
+    static let equalizeSplits = ToasttyKeyboardShortcut(
+        "=",
+        modifiers: [.command, .control]
+    )
 }

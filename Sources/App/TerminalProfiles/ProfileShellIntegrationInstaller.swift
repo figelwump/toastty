@@ -1,3 +1,4 @@
+import CoreState
 import Darwin
 import Foundation
 
@@ -157,6 +158,7 @@ struct ProfileShellIntegrationInstallResult: Equatable {
 
 enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable {
     case unsupportedShell(shellPath: String?)
+    case runtimeHomeUnsupported(path: String)
     case unableToReadFile(path: String, reason: String)
     case unableToWriteFile(path: String, reason: String)
 
@@ -168,6 +170,12 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable {
             Toastty can install shell integration for zsh and bash only. Detected shell: \(resolvedShell)
 
             For other shells, add an equivalent OSC 2 title hook manually in your shell init file.
+            """
+        case .runtimeHomeUnsupported(let path):
+            return """
+            Shell integration is disabled while Toastty is running with runtime isolation enabled at \(path).
+
+            Sandboxed dev/test runs must not rewrite your login shell files.
             """
         case .unableToReadFile(let path, let reason):
             return "Unable to read \(path): \(reason)"
@@ -182,11 +190,13 @@ final class ProfileShellIntegrationInstaller {
 
     private let fileManager: FileManager
     private let homeDirectoryURL: URL
+    private let environment: [String: String]
     private let shellPathProvider: () -> String?
 
     init(
         homeDirectoryPath: String? = nil,
         fileManager: FileManager = .default,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
         shellPathProvider: @escaping () -> String? = ProfileShellIntegrationInstaller.defaultShellPath
     ) {
         self.fileManager = fileManager
@@ -195,10 +205,19 @@ final class ProfileShellIntegrationInstaller {
         } else {
             homeDirectoryURL = fileManager.homeDirectoryForCurrentUser
         }
+        self.environment = environment
         self.shellPathProvider = shellPathProvider
     }
 
     func installationPlan() throws -> ProfileShellIntegrationInstallPlan {
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: environment
+        )
+        if let runtimeHomeURL = runtimePaths.runtimeHomeURL {
+            throw ProfileShellIntegrationInstallerError.runtimeHomeUnsupported(path: runtimeHomeURL.path)
+        }
+
         let shellPath = shellPathProvider()
         guard let shell = Self.detectedShell(from: shellPath) else {
             throw ProfileShellIntegrationInstallerError.unsupportedShell(shellPath: shellPath)

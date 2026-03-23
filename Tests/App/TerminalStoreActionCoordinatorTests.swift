@@ -58,7 +58,6 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
                     nextState: nextState
                 )
             },
-            armCloseTransitionViewportDeferral: { _, _ in },
             requestWorkspaceFocusRestore: { _ in }
         )
         coordinator.bind(store: store)
@@ -81,28 +80,6 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(newTerminalState.profileBinding?.profileID, "zmx")
         XCTAssertEqual(newTerminalState.cwd, "/tmp/refreshed")
-    }
-
-    func testBindArmsCloseTransitionViewportDeferralWhenPanelCloses() throws {
-        var armedWorkspaceIDs: [UUID] = []
-        var armedPanelIDSets: [Set<UUID>] = []
-        let fixture = try makeStoreActionFixture(
-            armCloseTransitionViewportDeferral: { workspaceID, panelIDs in
-                armedWorkspaceIDs.append(workspaceID)
-                armedPanelIDSets.append(panelIDs)
-            }
-        )
-
-        XCTAssertTrue(
-            fixture.store.send(.splitFocusedSlot(workspaceID: fixture.workspaceID, orientation: .horizontal))
-        )
-        let panelToClose = try XCTUnwrap(fixture.store.selectedWorkspace?.focusedPanelID)
-
-        XCTAssertTrue(fixture.store.send(.closePanel(panelID: panelToClose)))
-
-        let workspace = try XCTUnwrap(fixture.store.selectedWorkspace)
-        XCTAssertEqual(armedWorkspaceIDs, [fixture.workspaceID])
-        XCTAssertEqual(armedPanelIDSets, [liveTerminalPanelIDs(in: workspace)])
     }
 
     func testBindRequestsFocusRestoreWhenSelectedWorkspaceFocusedModeToggles() throws {
@@ -133,7 +110,6 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
                     nextState: nextState
                 )
             },
-            armCloseTransitionViewportDeferral: { _, _ in },
             requestWorkspaceFocusRestore: { workspaceID in
                 restoredWorkspaceIDs.append(workspaceID)
             }
@@ -176,7 +152,6 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 
 @MainActor
 private func makeStoreActionFixture(
-    armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void = { _, _ in },
     requestWorkspaceFocusRestore: @escaping (UUID) -> Void = { _ in }
 ) throws -> (
     store: AppStore,
@@ -199,7 +174,6 @@ private func makeStoreActionFixture(
                 nextState: nextState
             )
         },
-        armCloseTransitionViewportDeferral: armCloseTransitionViewportDeferral,
         requestWorkspaceFocusRestore: requestWorkspaceFocusRestore
     )
     coordinator.bind(store: store)
@@ -218,14 +192,4 @@ private func stateWithNilFocusedPanelID() throws -> AppState {
     return state
 }
 
-private func liveTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
-    workspace.layoutTree.allSlotInfos.reduce(into: Set<UUID>()) { panelIDs, slot in
-        let panelID = slot.panelID
-        guard let panelState = workspace.panels[panelID],
-              case .terminal = panelState else {
-            return
-        }
-        panelIDs.insert(panelID)
-    }
-}
 #endif

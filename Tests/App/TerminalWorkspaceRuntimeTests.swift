@@ -37,6 +37,7 @@ final class TerminalWorkspaceRuntimeTests: XCTestCase {
             return
         }
     }
+
 }
 
 @MainActor

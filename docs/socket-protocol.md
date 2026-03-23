@@ -36,7 +36,8 @@ Default socket path resolution:
 
 1. `--socket-path <path>`
 2. `TOASTTY_SOCKET_PATH`
-3. `<TMPDIR-or-system-temp>/toastty-$UID/events-v1.sock`
+3. a temp socket path derived from the active runtime home when runtime isolation is enabled
+4. `<TMPDIR-or-system-temp>/toastty-$UID/events-v1.sock`
 
 Automation config defaults:
 

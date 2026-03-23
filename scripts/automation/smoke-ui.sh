@@ -2,11 +2,15 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-split-workspace}"
-DERIVED_PATH="${DERIVED_PATH:-$ROOT_DIR/Derived}"
-ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts/automation}"
-SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock}"
+RESTORE_FRONT_APP_AFTER_LAUNCH="${TOASTTY_SMOKE_RESTORE_FRONT_APP:-1}"
+DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
+DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-$DEV_RUN_ROOT/artifacts}"
+TOASTTY_RUNTIME_HOME="${TOASTTY_RUNTIME_HOME:-$DEV_RUN_ROOT/runtime-home}"
+SOCKET_PATH="${SOCKET_PATH:-${TMPDIR:-/tmp}/toastty-${RUN_ID}.sock}"
 ARCH="${ARCH:-$(uname -m)}"
 if [[ "$ARCH" != "arm64" && "$ARCH" != "x86_64" ]]; then
   ARCH="arm64"
@@ -18,27 +22,18 @@ LOG_FILE="$ARTIFACTS_DIR/app-${RUN_ID}.log"
 GHOSTTY_DEBUG_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Debug.xcframework"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_XCFRAMEWORK_PATH=""
-if [[ -d "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH" ]]; then
-  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_DEBUG_XCFRAMEWORK_PATH"
-elif [[ -d "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH" ]]; then
-  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_RELEASE_XCFRAMEWORK_PATH"
-fi
 GHOSTTY_INTEGRATION_DISABLED="${TUIST_DISABLE_GHOSTTY:-${TOASTTY_DISABLE_GHOSTTY:-0}}"
 GHOSTTY_INPUT_READINESS_REQUIRED=0
-if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
-  GHOSTTY_INPUT_READINESS_REQUIRED=1
-fi
 RESTORE_GHOSTTY_ENABLED_WORKSPACE=0
-if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
-  RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
-fi
 DROP_IMAGE_PATH_TO_CLEANUP=""
-TERMINAL_PROFILES_PATH="$ARTIFACTS_DIR/terminal-profiles-${RUN_ID}.toml"
+TERMINAL_PROFILES_PATH="$TOASTTY_RUNTIME_HOME/terminal-profiles.toml"
 PROFILE_SMOKE_PROFILE_ID="smoke-profile"
 PROFILE_SMOKE_TITLE="Profile Ready"
 PROFILE_SMOKE_VISIBLE_MARKER="PROFILE:${PROFILE_SMOKE_PROFILE_ID}:create"
+PREVIOUS_FRONT_BUNDLE_ID=""
+FRONT_APP_RESTORE_DONE=0
 
-mkdir -p "$ARTIFACTS_DIR"
+mkdir -p "$ARTIFACTS_DIR" "$TOASTTY_RUNTIME_HOME" "$(dirname "$SOCKET_PATH")"
 rm -f "$SOCKET_PATH" "$READY_FILE" "$LOG_FILE"
 
 if ! command -v nc >/dev/null 2>&1; then
@@ -46,20 +41,48 @@ if ! command -v nc >/dev/null 2>&1; then
   exit 1
 fi
 
-run_tuist() {
-  if command -v sv >/dev/null 2>&1; then
-    sv exec -- tuist "$@"
-  else
-    tuist "$@"
+frontmost_bundle_id() {
+  local front_asn
+  front_asn="$(lsappinfo front 2>/dev/null || true)"
+  if [[ -z "$front_asn" ]]; then
+    return 0
   fi
+
+  local info
+  info="$(lsappinfo info -only bundleID "$front_asn" 2>/dev/null || true)"
+  if [[ -z "$info" ]]; then
+    return 0
+  fi
+
+  printf '%s\n' "$info" | sed -n 's/^"CFBundleIdentifier"="\(.*\)"$/\1/p'
 }
 
-ensure_tuist_dependencies() {
-  run_tuist install >/dev/null
+restore_previous_front_app() {
+  local normalized_restore_flag
+  normalized_restore_flag="$(printf '%s' "$RESTORE_FRONT_APP_AFTER_LAUNCH" | tr '[:upper:]' '[:lower:]')"
+  case "$normalized_restore_flag" in
+    1|true|yes|on)
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+  if [[ "$FRONT_APP_RESTORE_DONE" == "1" ]]; then
+    return 0
+  fi
+  if [[ -z "$PREVIOUS_FRONT_BUNDLE_ID" || "$PREVIOUS_FRONT_BUNDLE_ID" == "com.GiantThings.toastty" ]]; then
+    return 0
+  fi
+
+  FRONT_APP_RESTORE_DONE=1
+  open -b "$PREVIOUS_FRONT_BUNDLE_ID" >/dev/null 2>&1 || true
 }
+
+PREVIOUS_FRONT_BUNDLE_ID="$(frontmost_bundle_id)"
 
 cleanup() {
   local exit_code=$?
+  restore_previous_front_app
   if [[ -n "$DROP_IMAGE_PATH_TO_CLEANUP" && -f "$DROP_IMAGE_PATH_TO_CLEANUP" ]]; then
     rm -f "$DROP_IMAGE_PATH_TO_CLEANUP"
   fi
@@ -73,7 +96,7 @@ cleanup() {
   if [[ "$RESTORE_GHOSTTY_ENABLED_WORKSPACE" == "1" ]]; then
     if ! (
       unset TUIST_DISABLE_GHOSTTY TOASTTY_DISABLE_GHOSTTY
-      run_tuist generate --no-open >/dev/null
+      "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null
     ); then
       echo "warning: failed to restore Ghostty-enabled workspace after fallback smoke run" >&2
     fi
@@ -92,8 +115,22 @@ badge = "SMOKE"
 startupCommand = "printf 'PROFILE:%s:%s\\\\n' \"\$TOASTTY_TERMINAL_PROFILE_ID\" \"\$TOASTTY_LAUNCH_REASON\"; printf '\\\\033]2;${PROFILE_SMOKE_TITLE}\\\\007'; sleep 2"
 EOF
 
-ensure_tuist_dependencies
-run_tuist generate --no-open >/dev/null
+if ! "$BOOTSTRAP_WORKTREE_SCRIPT" >/dev/null; then
+  exit 1
+fi
+
+if [[ -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_DEBUG_XCFRAMEWORK_PATH"
+elif [[ -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
+  GHOSTTY_XCFRAMEWORK_PATH="$GHOSTTY_RELEASE_XCFRAMEWORK_PATH"
+fi
+if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
+  GHOSTTY_INPUT_READINESS_REQUIRED=1
+fi
+if [[ "$GHOSTTY_INTEGRATION_DISABLED" == "1" && -n "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
+  RESTORE_GHOSTTY_ENABLED_WORKSPACE=1
+fi
+
 xcodebuild \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \
@@ -104,8 +141,9 @@ xcodebuild \
 
 TOASTTY_AUTOMATION=1 \
 TOASTTY_SKIP_QUIT_CONFIRMATION=1 \
+TOASTTY_RUNTIME_HOME="$TOASTTY_RUNTIME_HOME" \
 TOASTTY_SOCKET_PATH="$SOCKET_PATH" \
-TOASTTY_TERMINAL_PROFILES_PATH="$TERMINAL_PROFILES_PATH" \
+TOASTTY_DERIVED_PATH="$DERIVED_PATH" \
 "$APP_BINARY" \
   --automation \
   --skip-quit-confirmation \
@@ -130,6 +168,8 @@ if [[ ! -S "$SOCKET_PATH" ]]; then
   echo "error: socket not available: $SOCKET_PATH" >&2
   exit 1
 fi
+
+restore_previous_front_app
 
 send_request() {
   local command="$1"

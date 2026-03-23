@@ -172,6 +172,10 @@ if distributionSigning && developmentTeam == nil {
 
 var appTargetSettingsBase: SettingsDictionary = [
     "CODE_SIGNING_ALLOWED": "YES",
+    // Child processes launched from Toastty inherit the host app's TCC identity
+    // for terminal-style prompts, so the app bundle needs explicit camera/mic
+    // entitlements in addition to the usage descriptions below.
+    "CODE_SIGN_ENTITLEMENTS": "Tuist/Toastty.entitlements",
     "MARKETING_VERSION": SettingValue(stringLiteral: marketingVersion),
     "CURRENT_PROJECT_VERSION": SettingValue(stringLiteral: buildNumber),
     "ENABLE_HARDENED_RUNTIME[config=Debug]": "NO",
@@ -281,7 +285,9 @@ let project = Project(
                 "CFBundleVersion": .string("$(CURRENT_PROJECT_VERSION)"),
                 "LSApplicationCategoryType": .string("public.app-category.developer-tools"),
                 "LSMinimumSystemVersion": .string("14.0"),
+                "NSCameraUsageDescription": .string("A program running within Toastty would like to use the camera."),
                 "NSHumanReadableCopyright": .string("Copyright © 2026 Vishal Kapur. All rights reserved."),
+                "NSMicrophoneUsageDescription": .string("A program running within Toastty would like to use your microphone."),
                 "SUFeedURL": .string(sparkleFeedURL),
                 "SUPublicEDKey": .string(sparklePublicEDKey),
             ]),
@@ -379,6 +385,7 @@ let project = Project(
                 executable: .project(path: .relativeToRoot("."), target: "ToasttyApp"),
                 arguments: .arguments(
                     environmentVariables: [
+                        "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
                         "TOASTTY_LOG_LEVEL": .environmentVariable(value: "debug", isEnabled: true),
                     ]
                 )
@@ -394,7 +401,12 @@ let project = Project(
             ),
             runAction: .runAction(
                 configuration: .release,
-                executable: .project(path: .relativeToRoot("."), target: "ToasttyApp")
+                executable: .project(path: .relativeToRoot("."), target: "ToasttyApp"),
+                arguments: .arguments(
+                    environmentVariables: [
+                        "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
+                    ]
+                )
             ),
             archiveAction: .archiveAction(
                 configuration: .release
