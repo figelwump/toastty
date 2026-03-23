@@ -109,10 +109,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return false }
             return self.delegate?.activatePanelIfNeeded(self.panelID) ?? false
         }
-        terminalHostView.handleClosePanelShortcut = { [weak self] in
-            guard let self else { return false }
-            return self.delegate?.handleClosePanelShortcut(self.panelID) ?? false
-        }
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
             return self.delegate?.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)

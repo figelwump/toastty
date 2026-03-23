@@ -251,28 +251,31 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     func sceneDidAppear() {
         // SwiftUI can materialize the live main menu after launch callbacks
         // have already fired, so scene appearance is the reliable point to
-        // retarget the AppKit-managed File menu items like Cmd+W. Repeated
-        // scene appearances are safe because the bridge install path is
-        // idempotent and cancels any prior retry task.
+        // retarget the AppKit-managed File menu items. Repeated scene
+        // appearances are safe because the bridge install path is idempotent
+        // and cancels any prior retry task.
         scheduleMenuBridgeInstallations()
     }
 }
 
 @MainActor
-private final class DisplayShortcutInterceptor {
+final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
+    private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
 
     private enum ShortcutAction {
+        case closePanel
         case switchWorkspace(Int)
         case focusPanel(Int)
     }
 
-    init(store: AppStore) {
+    init(store: AppStore, focusedPanelCommandController: FocusedPanelCommandController) {
         self.store = store
+        self.focusedPanelCommandController = focusedPanelCommandController
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
-            guard let action = Self.shortcutAction(for: event) else { return event }
+            guard let action = self.shortcutAction(for: event) else { return event }
             // Keep workspace switching in the local monitor so the embedded
             // terminal's key handling cannot swallow Option+digit before the
             // menu-based workspace switch path can run reliably.
@@ -288,7 +291,12 @@ private final class DisplayShortcutInterceptor {
         }
     }
 
-    private static func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+    private func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+        if Self.isClosePanelShortcut(event),
+           closePanelShortcutWindowID() != nil {
+            return .closePanel
+        }
+
         switch DisplayShortcutConfig.action(for: event) {
         case .workspaceSwitch(let shortcutNumber):
             return .switchWorkspace(shortcutNumber)
@@ -301,11 +309,61 @@ private final class DisplayShortcutInterceptor {
 
     private func handle(_ action: ShortcutAction) -> Bool {
         switch action {
+        case .closePanel:
+            closeFocusedPanel()
         case .switchWorkspace(let shortcutNumber):
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
             focusTerminalPanel(shortcutNumber: shortcutNumber)
         }
+    }
+
+    static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "w" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func closePanelShortcutWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
+        guard modalWindow == nil else { return nil }
+        guard let keyWindow else { return nil }
+        guard keyWindow.sheetParent == nil else { return nil }
+        // Be conservative around active text input so Cmd+W stays with the
+        // field editor or text control rather than being reclaimed by Toastty.
+        if keyWindow.firstResponder is NSTextInputClient {
+            return nil
+        }
+        guard let rawWindowID = keyWindow.identifier?.rawValue else { return nil }
+        return UUID(uuidString: rawWindowID)
+    }
+
+    private func closePanelShortcutWindowID() -> UUID? {
+        guard let store else { return nil }
+        guard let windowID = Self.closePanelShortcutWindowID(
+            keyWindow: NSApp.keyWindow,
+            modalWindow: NSApp.modalWindow
+        ) else {
+            return nil
+        }
+        guard store.window(id: windowID) != nil else { return nil }
+        return windowID
+    }
+
+    private func closeFocusedPanel() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = closePanelShortcutWindowID() else { return false }
+        let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
+        guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
+            // Cmd+W is app-owned for normal workspace windows. If there is no
+            // panel to close in that context, swallow the shortcut rather than
+            // falling back to AppKit's native window-close path.
+            return preferredWorkspaceID != nil
+        }
+        return true
     }
 
     private func switchWorkspace(shortcutNumber: Int) -> Bool {
@@ -466,9 +524,6 @@ struct ToasttyApp: App {
             slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
-        terminalRuntimeRegistry.setClosePanelShortcutHandler { [weak focusedPanelCommandController] panelID in
-            focusedPanelCommandController?.closePanel(panelID: panelID).consumesShortcut ?? false
-        }
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
         fileSplitMenuBridge = FileSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
@@ -491,7 +546,10 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             installShellIntegrationAction: ToasttyMenuActions.installShellIntegration
         )
-        displayShortcutInterceptor = DisplayShortcutInterceptor(store: store)
+        displayShortcutInterceptor = DisplayShortcutInterceptor(
+            store: store,
+            focusedPanelCommandController: focusedPanelCommandController
+        )
         _store = StateObject(wrappedValue: store)
         _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
         appWindowSceneCoordinator = AppWindowSceneCoordinator()

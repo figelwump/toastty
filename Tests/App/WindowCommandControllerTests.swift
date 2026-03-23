@@ -82,12 +82,16 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.installIfNeeded()
 
         XCTAssertEqual(closeItem.title, "Close Panel")
+        XCTAssertEqual(closeItem.keyEquivalent, "")
+        XCTAssertEqual(closeItem.keyEquivalentModifierMask, [])
         XCTAssertTrue(closeItem.target === bridge)
         XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
         XCTAssertTrue(bridge.validateMenuItem(closeItem))
 
         bridge.installIfNeeded()
         XCTAssertEqual(closeItem.title, "Close Panel")
+        XCTAssertEqual(closeItem.keyEquivalent, "")
+        XCTAssertEqual(closeItem.keyEquivalentModifierMask, [])
         XCTAssertTrue(closeItem.target === bridge)
         XCTAssertEqual(closeItem.action, #selector(CloseWindowMenuBridge.performCloseWindow(_:)))
 

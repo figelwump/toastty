@@ -48,6 +48,22 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.title, "Workspace 1")
     }
 
+    func testAttachPersistsWindowIdentifierFromWindowID() {
+        let windowID = UUID()
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: windowID,
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
+    }
+
     func testAttachLeavesWindowChromeConfigurationToSceneStyle() {
         // Window chrome is owned by the scene-level hidden-titlebar style.
         // The observer should stay neutral and only track lifecycle/frame events.

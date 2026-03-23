@@ -68,7 +68,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
-    private var closePanelShortcutHandler: ((UUID) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -493,10 +492,6 @@ extension TerminalRuntimeRegistry {
     func setGhosttyCloseSurfaceHandler(_ handler: @escaping (UUID, Bool) -> Bool) {
         ghosttyCloseSurfaceHandler = handler
     }
-
-    func setClosePanelShortcutHandler(_ handler: @escaping (UUID) -> Bool) {
-        closePanelShortcutHandler = handler
-    }
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -578,11 +573,6 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             }
         }
         return false
-    }
-
-    @discardableResult
-    func handleClosePanelShortcut(_ panelID: UUID) -> Bool {
-        closePanelShortcutHandler?(panelID) ?? false
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT

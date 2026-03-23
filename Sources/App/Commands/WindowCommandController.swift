@@ -13,7 +13,8 @@ final class WindowCommandController: NSObject {
 
     @discardableResult
     func closeWindow() -> Bool {
-        // Toastty intentionally maps File > Close Panel and Cmd+W to panel close.
+        // Toastty maps the File > Close Panel menu item to panel close. The
+        // Cmd+W shortcut itself is owned by the app-level local monitor.
         focusedPanelCommandController.closeFocusedPanel().consumesShortcut
     }
 
@@ -126,6 +127,12 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
         if closeWindowItem.title != Self.closePanelMenuItemTitle {
             closeWindowItem.title = Self.closePanelMenuItemTitle
         }
+        if closeWindowItem.keyEquivalent.isEmpty == false {
+            closeWindowItem.keyEquivalent = ""
+        }
+        if closeWindowItem.keyEquivalentModifierMask.isEmpty == false {
+            closeWindowItem.keyEquivalentModifierMask = []
+        }
         guard closeWindowItem.target !== self || closeWindowItem.action != #selector(performCloseWindow(_:)) else {
             return
         }
@@ -151,14 +158,19 @@ final class CloseWindowMenuBridge: NSObject, NSMenuItemValidation {
 
     private static func findCloseWindowMenuItem(in items: [NSMenuItem]) -> NSMenuItem? {
         for item in items {
-            if item.keyEquivalent.lowercased() == "w",
-               item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask) == [.command],
-               (
-                   item.action == #selector(NSWindow.performClose(_:)) ||
-                   item.action == #selector(CloseWindowMenuBridge.performCloseWindow(_:)) ||
-                   item.action == nil ||
-                   item.title == closePanelMenuItemTitle
-               ) {
+            let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
+            let matchesSystemCloseSlot = item.keyEquivalent.lowercased() == "w" &&
+                modifiers == [.command] &&
+                (
+                    item.action == #selector(NSWindow.performClose(_:)) ||
+                    item.action == #selector(CloseWindowMenuBridge.performCloseWindow(_:)) ||
+                    item.action == nil ||
+                    item.title == closePanelMenuItemTitle
+                )
+            let matchesRetargetedClosePanelItem = item.title == closePanelMenuItemTitle &&
+                item.action == #selector(CloseWindowMenuBridge.performCloseWindow(_:))
+
+            if matchesSystemCloseSlot || matchesRetargetedClosePanelItem {
                 return item
             }
 

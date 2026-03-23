@@ -261,31 +261,6 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
         }
     }
 
-    func testClosePanelShortcutHandlerForwardsPanelID() async throws {
-        try await MainActor.run {
-            let (_, registry) = makeStoreAndRegistry(state: AppState.bootstrap())
-            let panelID = UUID()
-            var handledPanelID: UUID?
-            registry.setClosePanelShortcutHandler { routedPanelID in
-                handledPanelID = routedPanelID
-                return true
-            }
-
-            let handled = registry.handleClosePanelShortcut(panelID)
-
-            XCTAssertTrue(handled)
-            XCTAssertEqual(handledPanelID, panelID)
-        }
-    }
-
-    func testClosePanelShortcutHandlerReturnsFalseWhenUnset() async throws {
-        try await MainActor.run {
-            let (_, registry) = makeStoreAndRegistry(state: AppState.bootstrap())
-
-            XCTAssertFalse(registry.handleClosePanelShortcut(UUID()))
-        }
-    }
-
     func testClosePanelClosesExitedPanelInBackgroundWorkspaceWithoutChangingSelection() async throws {
         try await MainActor.run {
             var state = AppState.bootstrap()

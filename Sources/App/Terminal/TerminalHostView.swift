@@ -21,7 +21,6 @@ private extension NSView {
 
 final class TerminalHostView: NSView {
     var activatePanelIfNeeded: (() -> Bool)?
-    var handleClosePanelShortcut: (() -> Bool)?
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
@@ -787,14 +786,6 @@ final class TerminalHostView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
-        // Keep Cmd+W aligned with Toastty's menu semantics even when the
-        // embedded terminal view is first responder. AppKit can bypass the
-        // retargeted File > Close Panel menu item in this focus state and go
-        // straight to native window close, so Toastty owns the shortcut here.
-        if Self.isClosePanelShortcut(event),
-           handleClosePanelShortcut?() == true {
-            return
-        }
         guard handleKeyEvent(event, action: event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS) else {
             super.keyDown(with: event)
             return
@@ -886,16 +877,6 @@ final class TerminalHostView: NSView {
         )
 
         return handled
-    }
-
-    static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
-        guard event.type == .keyDown,
-              event.isARepeat == false,
-              event.charactersIgnoringModifiers?.lowercased() == "w" else {
-            return false
-        }
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        return modifiers == [.command]
     }
 
     private func focusHostViewIfNeeded() {

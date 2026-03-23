@@ -109,6 +109,10 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         observedWindow = window
 
         guard let window else { return }
+        let expectedIdentifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        if window.identifier != expectedIdentifier {
+            window.identifier = expectedIdentifier
+        }
         applyWindowTitleIfNeeded()
         let notificationCenter = NotificationCenter.default
         let scheduleOnMainActor = self.scheduleOnMainActor
