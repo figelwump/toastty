@@ -130,4 +130,26 @@ struct AgentEventParsersTests {
             )
         ])
     }
+
+    @Test
+    func codexTaskCompleteMapsToReadyStatusWithAssistantSummary() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .codexNotify,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"type":"task_complete","last_agent_message":"Finished updating the launch path."}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Finished updating the launch path."
+            )
+        ])
+    }
 }

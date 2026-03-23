@@ -4,6 +4,7 @@ struct CodexSessionLogEvent: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case turnStarted
         case approvalNeeded
+        case taskCompleted
         case turnAborted
     }
 
@@ -162,6 +163,14 @@ private extension CodexSessionLogWatcher {
                 return CodexSessionLogEvent(kind: .turnStarted, detail: "Running \(command)")
             }
             return CodexSessionLogEvent(kind: .turnStarted, detail: "Running a shell command")
+
+        case "task_complete":
+            let dedupeKey = "task_complete:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            return CodexSessionLogEvent(
+                kind: .taskCompleted,
+                detail: normalizedSummaryText(message["last_agent_message"], limit: 240) ?? "Turn complete"
+            )
 
         case "turn_aborted":
             let dedupeKey = "turn_aborted:\(eventIdentifier(from: payload, message: message, fallback: line))"

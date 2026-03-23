@@ -7,7 +7,8 @@ enum CodexNotifyEventParser {
         payload: Data
     ) throws -> [CLICommand] {
         let object = try decodeJSONObject(from: payload)
-        guard normalizedString(object["type"]) == "agent-turn-complete" else {
+        let type = normalizedString(object["type"])
+        guard type == "agent-turn-complete" || type == "task_complete" else {
             return []
         }
 
@@ -17,7 +18,9 @@ enum CodexNotifyEventParser {
                 panelID: panelID,
                 kind: .ready,
                 summary: "Ready",
-                detail: normalizedSummaryText(object["last-assistant-message"]) ?? "Turn complete"
+                detail: normalizedSummaryText(object["last-assistant-message"])
+                    ?? normalizedSummaryText(object["last_agent_message"])
+                    ?? "Turn complete"
             )
         ]
     }

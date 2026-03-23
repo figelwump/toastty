@@ -74,6 +74,7 @@ When the profile ID is `codex`, Toastty:
 4. **Starts a log watcher** that polls the session log file (every 250 ms) for structured JSON entries and maps them to sidebar status updates:
    - `user_message` / `task_started` / `exec_command_begin` → **Working** (with detail text)
    - `*_approval_request` / `request_user_input` → **Needs approval**
+   - `task_complete` → **Ready**
    - `turn_aborted` → **Idle**
 
 The log watcher is a temporary bridge; it will be replaced once Codex exposes stable start/approval hooks.

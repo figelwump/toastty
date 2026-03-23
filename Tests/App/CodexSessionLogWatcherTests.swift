@@ -98,6 +98,35 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesTaskCompleteEvents() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let completionEvent = expectation(description: "Task complete event arrives")
+        completionEvent.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            completionEvent.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-4","msg":{"type":"task_complete","last_agent_message":"Finished updating the launch path."}}}"# + "\n",
+            to: logURL
+        )
+
+        await fulfillment(of: [completionEvent], timeout: 1)
+        watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .taskCompleted, detail: "Finished updating the launch path.")
+        ])
+    }
+
     func testWatcherParsesUserPromptPreviewEvents() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
