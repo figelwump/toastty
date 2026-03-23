@@ -105,8 +105,7 @@ private enum ToasttyMenuActions {
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
     private var fileSplitMenuBridge: FileSplitMenuBridge?
-    private var closeWindowMenuBridge: CloseWindowMenuBridge?
-    private var closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge?
+    private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
@@ -136,15 +135,13 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func configureMenuBridges(
         fileSplitMenuBridge: FileSplitMenuBridge,
-        closeWindowMenuBridge: CloseWindowMenuBridge,
-        closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge,
+        fileCloseMenuBridge: FileCloseMenuBridge,
         windowSplitMenuBridge: WindowSplitMenuBridge,
         helpMenuBridge: HelpMenuBridge,
         hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     ) {
         self.fileSplitMenuBridge = fileSplitMenuBridge
-        self.closeWindowMenuBridge = closeWindowMenuBridge
-        self.closeWorkspaceMenuBridge = closeWorkspaceMenuBridge
+        self.fileCloseMenuBridge = fileCloseMenuBridge
         self.windowSplitMenuBridge = windowSplitMenuBridge
         self.helpMenuBridge = helpMenuBridge
         self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
@@ -225,12 +222,11 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     private func installOwnedMenuSections() {
         fileSplitMenuBridge?.installIfNeeded()
+        fileCloseMenuBridge?.installIfNeeded()
         windowSplitMenuBridge?.installIfNeeded()
     }
 
     private func installDynamicMenuBridges() {
-        closeWindowMenuBridge?.installIfNeeded()
-        closeWorkspaceMenuBridge?.installIfNeeded()
         helpMenuBridge?.installIfNeeded()
         sparkleMenuBridge?.installIfNeeded()
     }
@@ -250,10 +246,8 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func sceneDidAppear() {
         // SwiftUI can materialize the live main menu after launch callbacks
-        // have already fired, so scene appearance is the reliable point to
-        // retarget the AppKit-managed File menu items. Repeated scene
-        // appearances are safe because the bridge install path is idempotent
-        // and cancels any prior retry task.
+        // have already fired, so scene appearance remains the reliable point
+        // to refresh owned File/Window menu sections plus dynamic menu items.
         scheduleMenuBridgeInstallations()
     }
 }
@@ -458,8 +452,7 @@ struct ToasttyApp: App {
     private let appResignActiveObserver: AppResignActiveObserver
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
-    private let closeWindowMenuBridge: CloseWindowMenuBridge
-    private let closeWorkspaceMenuBridge: CloseWorkspaceMenuBridge
+    private let fileCloseMenuBridge: FileCloseMenuBridge
     private let windowSplitMenuBridge: WindowSplitMenuBridge
     private let helpMenuBridge: HelpMenuBridge
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
@@ -525,16 +518,20 @@ struct ToasttyApp: App {
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let closeWorkspaceCommandController = CloseWorkspaceCommandController(
+            store: store,
+            preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+        )
         fileSplitMenuBridge = FileSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
         )
-        closeWindowMenuBridge = CloseWindowMenuBridge(
+        fileCloseMenuBridge = FileCloseMenuBridge(
             windowCommandController: WindowCommandController(
-                focusedPanelCommandController: focusedPanelCommandController
-            )
-        )
-        closeWorkspaceMenuBridge = CloseWorkspaceMenuBridge(
-            closeWorkspaceCommandController: CloseWorkspaceCommandController(store: store)
+                store: store,
+                focusedPanelCommandController: focusedPanelCommandController,
+                preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+            ),
+            closeWorkspaceCommandController: closeWorkspaceCommandController
         )
         windowSplitMenuBridge = WindowSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
@@ -603,8 +600,7 @@ struct ToasttyApp: App {
 
         appLifecycleDelegate.configureMenuBridges(
             fileSplitMenuBridge: fileSplitMenuBridge,
-            closeWindowMenuBridge: closeWindowMenuBridge,
-            closeWorkspaceMenuBridge: closeWorkspaceMenuBridge,
+            fileCloseMenuBridge: fileCloseMenuBridge,
             windowSplitMenuBridge: windowSplitMenuBridge,
             helpMenuBridge: helpMenuBridge,
             hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
