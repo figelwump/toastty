@@ -102,8 +102,41 @@ private enum ToasttyMenuActions {
 }
 
 @MainActor
+func restoreHiddenToasttyWindows(
+    windows: [NSWindow],
+    store: AppStore,
+    activateApp: () -> Void = {},
+    makeKeyAndOrderFront: (NSWindow) -> Void = { $0.makeKeyAndOrderFront(nil) },
+    orderFront: (NSWindow) -> Void = { $0.orderFront(nil) }
+) -> Bool {
+    let hiddenToasttyWindows = windows.filter { window in
+        guard window.isVisible == false,
+              window.isMiniaturized == false,
+              let rawWindowID = window.identifier?.rawValue,
+              let windowID = UUID(uuidString: rawWindowID) else {
+            return false
+        }
+        return store.window(id: windowID) != nil
+    }
+
+    guard hiddenToasttyWindows.isEmpty == false else { return false }
+
+    activateApp()
+    for (index, window) in hiddenToasttyWindows.enumerated() {
+        if index == 0 {
+            makeKeyAndOrderFront(window)
+        } else {
+            orderFront(window)
+        }
+    }
+
+    return true
+}
+
+@MainActor
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
+    private weak var store: AppStore?
     private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
@@ -131,6 +164,10 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             arguments: processInfo.arguments,
             environment: processInfo.environment
         )
+    }
+
+    func configureStore(_ store: AppStore) {
+        self.store = store
     }
 
     func configureMenuBridges(
@@ -209,6 +246,22 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
         let response = confirmationAlert.runModal()
         return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        guard flag == false else { return true }
+        guard let store else { return true }
+
+        // If Toastty has nothing ordered out to restore, let AppKit continue
+        // with its default reopen handling (for example, miniaturized windows).
+        _ = restoreHiddenToasttyWindows(
+            windows: sender.windows,
+            store: store,
+            activateApp: {
+                sender.activate(ignoringOtherApps: true)
+            }
+        )
+        return true
     }
 
     private func installMenuBridges() {
@@ -605,6 +658,7 @@ struct ToasttyApp: App {
             helpMenuBridge: helpMenuBridge,
             hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
         )
+        appLifecycleDelegate.configureStore(store)
     }
 
     var body: some Scene {
