@@ -147,7 +147,10 @@ ensure_notarytool_available() {
 }
 
 ensure_developer_id_identity() {
-  if ! security find-identity -v -p codesigning 2>/dev/null | grep -Fq "Developer ID Application"; then
+  local identities=""
+
+  identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  if [[ "$identities" != *"Developer ID Application"* ]]; then
     fail "no Developer ID Application signing identity is installed in the local keychain"
   fi
 }
