@@ -209,6 +209,7 @@ final class TerminalActivityInferenceService {
             busyPanelStateByPanelID.removeValue(forKey: panelID)
         }
 
+        let recentPromptCommandToken = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText)
         let showsIdlePrompt = Self.visibleTextShowsIdleShellPrompt(visibleText)
         if showsIdlePrompt {
             ToasttyLog.debug(
@@ -218,12 +219,16 @@ final class TerminalActivityInferenceService {
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
                     "appears_busy": appearsBusy ? "true" : "false",
-                    "recent_prompt_command_token": TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) ?? "none",
+                    "recent_prompt_command_token": recentPromptCommandToken ?? "none",
                 ]
             )
             _ = sessionLifecycleTracker?.stopSessionForPanelIfOlderThan(
                 panelID: panelID,
                 minimumRuntime: Self.sessionAutoStopShellPromptGraceInterval,
+                reason: .idleShellPrompt(
+                    recentPromptCommandToken: recentPromptCommandToken,
+                    appearsBusy: appearsBusy
+                ),
                 at: now
             )
         }

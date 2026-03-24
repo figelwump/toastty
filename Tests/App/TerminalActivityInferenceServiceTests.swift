@@ -326,6 +326,10 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             XCTAssertEqual(tracker.stopOlderThanCalls.count, 1)
             XCTAssertEqual(tracker.stopOlderThanCalls.first?.panelID, panelID)
             XCTAssertEqual(tracker.stopOlderThanCalls.first?.minimumRuntime, 2)
+            XCTAssertEqual(
+                tracker.stopOlderThanCalls.first?.reason,
+                .idleShellPrompt(recentPromptCommandToken: nil, appearsBusy: false)
+            )
             try StateValidator.validate(store.state)
         }
     }
@@ -346,6 +350,10 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             XCTAssertEqual(tracker.stopOlderThanCalls.count, 1)
             XCTAssertEqual(tracker.stopOlderThanCalls.first?.panelID, panelID)
             XCTAssertEqual(tracker.stopOlderThanCalls.first?.minimumRuntime, 2)
+            XCTAssertEqual(
+                tracker.stopOlderThanCalls.first?.reason,
+                .idleShellPrompt(recentPromptCommandToken: nil, appearsBusy: false)
+            )
             try StateValidator.validate(store.state)
         }
     }
@@ -405,6 +413,7 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
     struct StopOlderThanCall: Equatable {
         let panelID: UUID
         let minimumRuntime: TimeInterval
+        let reason: ManagedSessionStopReason
     }
 
     private(set) var stopOlderThanCalls: [StopOlderThanCall] = []
@@ -425,17 +434,28 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         return false
     }
 
-    func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool {
+    func stopSessionForPanelIfActive(
+        panelID: UUID,
+        reason: ManagedSessionStopReason,
+        at now: Date
+    ) -> Bool {
         _ = now
+        _ = reason
         return false
     }
 
-    func stopSessionForPanelIfOlderThan(panelID: UUID, minimumRuntime: TimeInterval, at now: Date) -> Bool {
+    func stopSessionForPanelIfOlderThan(
+        panelID: UUID,
+        minimumRuntime: TimeInterval,
+        reason: ManagedSessionStopReason,
+        at now: Date
+    ) -> Bool {
         _ = now
         stopOlderThanCalls.append(
             StopOlderThanCall(
                 panelID: panelID,
-                minimumRuntime: minimumRuntime
+                minimumRuntime: minimumRuntime,
+                reason: reason
             )
         )
         return true

@@ -24,6 +24,7 @@ struct SessionRuntimeStoreTests {
 
         let didStop = store.stopSessionForPanelIfActive(
             panelID: panelID,
+            reason: .explicit,
             at: startedAt.addingTimeInterval(1)
         )
 
@@ -51,6 +52,7 @@ struct SessionRuntimeStoreTests {
         let didStop = store.stopSessionForPanelIfOlderThan(
             panelID: panelID,
             minimumRuntime: 2,
+            reason: .explicit,
             at: startedAt.addingTimeInterval(3)
         )
 
@@ -78,6 +80,7 @@ struct SessionRuntimeStoreTests {
         let didStop = store.stopSessionForPanelIfOlderThan(
             panelID: panelID,
             minimumRuntime: 2,
+            reason: .explicit,
             at: startedAt.addingTimeInterval(1)
         )
 

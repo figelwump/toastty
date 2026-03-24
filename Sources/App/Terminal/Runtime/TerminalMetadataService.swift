@@ -826,7 +826,11 @@ final class TerminalMetadataService {
                 "exit_code": exitCode.map(String.init) ?? "none",
             ]
         )
-        _ = sessionLifecycleTracker?.stopSessionForPanelIfActive(panelID: panelID, at: now)
+        _ = sessionLifecycleTracker?.stopSessionForPanelIfActive(
+            panelID: panelID,
+            reason: .ghosttyCommandFinished(exitCode: exitCode),
+            at: now
+        )
 
         guard prefersNativeCWDSignal(panelID: panelID) == false else {
             return true

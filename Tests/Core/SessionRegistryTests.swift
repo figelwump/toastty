@@ -667,4 +667,31 @@ struct SessionRegistryTests {
 
         #expect(registry.panelStatus(for: panelID) == nil)
     }
+
+    @Test
+    func panelStatusHidesStoppedWorkingSessions() {
+        var registry = SessionRegistry()
+        let panelID = UUID()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 1500)
+
+        registry.startSession(
+            sessionID: "working",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "working",
+            status: SessionStatus(kind: .working, summary: "Editing", detail: "Applying diff"),
+            at: now.addingTimeInterval(1)
+        )
+        registry.stopSession(sessionID: "working", at: now.addingTimeInterval(2))
+
+        #expect(registry.panelStatus(for: panelID) == nil)
+    }
 }

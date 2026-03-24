@@ -40,7 +40,13 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         XCTAssertTrue(handled)
         XCTAssertEqual(tracker.stopActiveCalls.count, 1)
-        XCTAssertEqual(tracker.stopActiveCalls.first, store.selectedWorkspace?.focusedPanelID)
+        XCTAssertEqual(
+            tracker.stopActiveCalls.first,
+            .init(
+                panelID: try XCTUnwrap(store.selectedWorkspace?.focusedPanelID),
+                reason: .ghosttyCommandFinished(exitCode: nil)
+            )
+        )
     }
 
     func testSurfaceLaunchConfigurationUsesProfileBindingAndRestoreReason() throws {
@@ -245,7 +251,12 @@ final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
 
 @MainActor
 private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking {
-    private(set) var stopActiveCalls: [UUID] = []
+    struct StopActiveCall: Equatable {
+        let panelID: UUID
+        let reason: ManagedSessionStopReason
+    }
+
+    private(set) var stopActiveCalls: [StopActiveCall] = []
 
     func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
         _ = panelID
@@ -263,15 +274,25 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         return false
     }
 
-    func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool {
+    func stopSessionForPanelIfActive(
+        panelID: UUID,
+        reason: ManagedSessionStopReason,
+        at now: Date
+    ) -> Bool {
         _ = now
-        stopActiveCalls.append(panelID)
+        stopActiveCalls.append(.init(panelID: panelID, reason: reason))
         return true
     }
 
-    func stopSessionForPanelIfOlderThan(panelID: UUID, minimumRuntime: TimeInterval, at now: Date) -> Bool {
+    func stopSessionForPanelIfOlderThan(
+        panelID: UUID,
+        minimumRuntime: TimeInterval,
+        reason: ManagedSessionStopReason,
+        at now: Date
+    ) -> Bool {
         _ = panelID
         _ = minimumRuntime
+        _ = reason
         _ = now
         return false
     }

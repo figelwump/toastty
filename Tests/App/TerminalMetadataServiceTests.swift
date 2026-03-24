@@ -809,7 +809,15 @@ final class TerminalMetadataServiceTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(tracker.stopActiveCalls, [panelID])
+        XCTAssertEqual(
+            tracker.stopActiveCalls,
+            [
+                .init(
+                    panelID: panelID,
+                    reason: .ghosttyCommandFinished(exitCode: nil)
+                ),
+            ]
+        )
         try StateValidator.validate(store.state)
     }
 
@@ -963,8 +971,13 @@ private enum TerminalMetadataServiceTestError: Error {
 
 @MainActor
 private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking {
+    struct StopActiveCall: Equatable {
+        let panelID: UUID
+        let reason: ManagedSessionStopReason
+    }
+
     var panelsUsingStatusNotifications: Set<UUID> = []
-    private(set) var stopActiveCalls: [UUID] = []
+    private(set) var stopActiveCalls: [StopActiveCall] = []
 
     func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
         panelsUsingStatusNotifications.contains(panelID)
@@ -981,15 +994,25 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         return false
     }
 
-    func stopSessionForPanelIfActive(panelID: UUID, at now: Date) -> Bool {
+    func stopSessionForPanelIfActive(
+        panelID: UUID,
+        reason: ManagedSessionStopReason,
+        at now: Date
+    ) -> Bool {
         _ = now
-        stopActiveCalls.append(panelID)
+        stopActiveCalls.append(.init(panelID: panelID, reason: reason))
         return true
     }
 
-    func stopSessionForPanelIfOlderThan(panelID: UUID, minimumRuntime: TimeInterval, at now: Date) -> Bool {
+    func stopSessionForPanelIfOlderThan(
+        panelID: UUID,
+        minimumRuntime: TimeInterval,
+        reason: ManagedSessionStopReason,
+        at now: Date
+    ) -> Bool {
         _ = panelID
         _ = minimumRuntime
+        _ = reason
         _ = now
         return false
     }

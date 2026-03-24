@@ -221,6 +221,8 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
               let status = record.status else {
             return false
         }
-        return status.kind != .idle
+        // Stopped sessions should not keep rendering a live working spinner in
+        // the panel header after the active sidebar entry disappears.
+        return status.kind != .idle && status.kind != .working
     }
 }
