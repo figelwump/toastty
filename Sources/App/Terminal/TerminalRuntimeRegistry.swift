@@ -230,7 +230,22 @@ final class TerminalRuntimeRegistry: ObservableObject {
             state: store?.state,
             delegate: self
         )
-        controller.applyViewportState(viewportState(for: panelID))
+        let cachedViewportState = viewportState(for: panelID)
+        if let cachedViewportState {
+            ToasttyLog.info(
+                "Replaying cached terminal viewport state into controller",
+                category: .terminal,
+                metadata: viewportLogMetadata(
+                    panelID: panelID,
+                    workspaceID: workspaceID,
+                    windowID: windowID,
+                    viewportState: cachedViewportState,
+                    state: store?.state,
+                    controller: controller
+                )
+            )
+        }
+        controller.applyViewportState(cachedViewportState)
         return controller
     }
 
@@ -815,6 +830,49 @@ extension TerminalRuntimeRegistry {
             viewportStateByPanelID = nextViewportStateByPanelID
         }
     }
+
+    func viewportLogMetadata(
+        panelID: UUID,
+        workspaceID: UUID,
+        windowID: UUID? = nil,
+        viewportState: TerminalViewportState,
+        previousViewportState: TerminalViewportState? = nil,
+        state: AppState?,
+        controller: TerminalSurfaceController? = nil
+    ) -> [String: String] {
+        let workspaceSelection = state?.workspaceSelection(containingWorkspaceID: workspaceID)
+        let selectedSelection = state?.selectedWorkspaceSelection()
+        let selectedWindowID = state.flatMap(\.selectedWindowID)
+        let resolvedWindowID = windowID ?? workspaceSelection?.windowID
+
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "workspace_id": workspaceID.uuidString,
+            "window_id": resolvedWindowID?.uuidString ?? "nil",
+            "selected_window_id": selectedWindowID?.uuidString ?? "nil",
+            "selected_workspace_id": selectedSelection?.workspaceID.uuidString ?? "nil",
+            "workspace_is_selected": selectedSelection?.workspaceID == workspaceID ? "true" : "false",
+            "window_is_selected": resolvedWindowID == selectedWindowID ? "true" : "false",
+            "panel_is_focused": workspaceSelection?.workspace.focusedPanelID == panelID ? "true" : "false",
+            "total_rows": String(viewportState.totalRows),
+            "offset_rows": String(viewportState.offsetRows),
+            "visible_rows": String(viewportState.visibleRows),
+            "is_at_bottom": viewportState.isAtBottom ? "true" : "false",
+        ]
+
+        if let previousViewportState {
+            metadata["previous_total_rows"] = String(previousViewportState.totalRows)
+            metadata["previous_offset_rows"] = String(previousViewportState.offsetRows)
+            metadata["previous_visible_rows"] = String(previousViewportState.visibleRows)
+            metadata["previous_is_at_bottom"] = previousViewportState.isAtBottom ? "true" : "false"
+        }
+
+        if let controller {
+            metadata["controller_lifecycle"] = controller.lifecycleState.automationLabel
+        }
+
+        return metadata
+    }
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -989,7 +1047,7 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
     ) -> Bool {
         guard let surfaceHandle = action.surfaceHandle,
               let panelID = panelID(forSurfaceHandle: surfaceHandle),
-              workspaceID(containing: panelID, state: state) != nil else {
+              let workspaceID = workspaceID(containing: panelID, state: state) else {
             ToasttyLog.debug(
                 "Ghostty scrollbar action could not resolve panel/workspace",
                 category: .terminal,
@@ -1001,17 +1059,33 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return false
         }
 
+        let previousViewportState = viewportState(for: panelID)
         let nextViewportState = TerminalViewportState(
             panelID: panelID,
             totalRows: scrollbarState.totalRows,
             offsetRows: scrollbarState.offsetRows,
             visibleRows: scrollbarState.visibleRows
         )
+        let controller = runtimeStore.existingController(for: panelID)
+        if previousViewportState != nextViewportState {
+            ToasttyLog.info(
+                "Persisting terminal viewport state from Ghostty scrollbar action",
+                category: .terminal,
+                metadata: viewportLogMetadata(
+                    panelID: panelID,
+                    workspaceID: workspaceID,
+                    viewportState: nextViewportState,
+                    previousViewportState: previousViewportState,
+                    state: state,
+                    controller: controller
+                )
+            )
+        }
         setViewportState(
             nextViewportState,
             for: panelID
         )
-        runtimeStore.existingController(for: panelID)?.applyViewportState(nextViewportState)
+        controller?.applyViewportState(nextViewportState)
         return true
     }
 }
