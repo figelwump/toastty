@@ -203,6 +203,42 @@ struct TerminalVisibleTextInspectorTests {
     }
 
     @Test
+    func closeAssessmentIgnoresTwoLineHostPromptWithPercentMarker() {
+        let visibleText = """
+        /Users/j/Documents/Code/conductor/workspaces/pop/san-antonio
+        mac:san-antonio j%
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation)
+        #expect(assessment.runningCommand == nil)
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText))
+    }
+
+    @Test
+    func closeAssessmentIgnoresTwoLineAtHostPrompt() {
+        let visibleText = """
+        /Users/j/Documents/Code/conductor/workspaces/pop/san-antonio
+        j@mac j$
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation)
+        #expect(assessment.runningCommand == nil)
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText))
+    }
+
+    @Test
     func closeAssessmentFallsBackToConfirmationWhenNoPromptIsVisible() {
         let visibleText = """
         [1]  + running    sleep 30
