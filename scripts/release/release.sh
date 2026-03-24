@@ -8,7 +8,7 @@ APP_NAME="Toastty"
 APP_BUNDLE_NAME="${APP_NAME}.app"
 CLI_NAME="toastty"
 ARCHIVED_CLI_RELATIVE_PATH="usr/local/bin/${CLI_NAME}"
-BUNDLED_CLI_RELATIVE_PATH="Contents/MacOS/${CLI_NAME}"
+BUNDLED_CLI_RELATIVE_PATH="Contents/Helpers/${CLI_NAME}"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_RELEASE_METADATA_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.metadata.env"
 SPARKLE_TOOLS_DIRECTORY=""
@@ -361,6 +361,9 @@ bundle_cli_into_exported_app() {
 
   [[ -x "$archived_cli_path" ]] || fail "archived CLI not found at $archived_cli_path"
   log "Bundling ${CLI_NAME} CLI into exported app"
+  # Keep the helper outside Contents/MacOS so the lowercase CLI name cannot
+  # collide with the app executable on case-insensitive volumes.
+  mkdir -p "$(dirname "$bundled_cli_path")"
   ditto "$archived_cli_path" "$bundled_cli_path"
   chmod 755 "$bundled_cli_path"
   [[ -x "$bundled_cli_path" ]] || fail "failed to bundle CLI into exported app at $bundled_cli_path"

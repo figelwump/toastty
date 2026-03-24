@@ -6,11 +6,12 @@ import Testing
 @MainActor
 struct AgentLaunchServiceTests {
     @Test
-    func defaultCLIExecutablePathPrefersBundledCLIOverSiblingFallback() throws {
+    func defaultCLIExecutablePathPrefersBundledHelperCLIOverOtherFallbacks() throws {
         let fixture = try makeCLIResolutionFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
 
-        try makeExecutableFile(at: fixture.bundledCLIURL)
+        try makeExecutableFile(at: fixture.bundledHelperCLIURL)
+        try makeExecutableFile(at: fixture.legacyBundledCLIURL)
         try makeExecutableFile(at: fixture.siblingCLIURL)
 
         let resolvedPath = AgentLaunchService.resolvedDefaultCLIExecutablePath(
@@ -19,7 +20,24 @@ struct AgentLaunchServiceTests {
             executableURL: fixture.executableURL
         )
 
-        #expect(resolvedPath == fixture.bundledCLIURL.path)
+        #expect(resolvedPath == fixture.bundledHelperCLIURL.path)
+    }
+
+    @Test
+    func defaultCLIExecutablePathFallsBackToLegacyBundledCLIWhenHelperCopyIsMissing() throws {
+        let fixture = try makeCLIResolutionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        try makeExecutableFile(at: fixture.legacyBundledCLIURL)
+        try makeExecutableFile(at: fixture.siblingCLIURL)
+
+        let resolvedPath = AgentLaunchService.resolvedDefaultCLIExecutablePath(
+            fileManager: .default,
+            bundleURL: fixture.bundleURL,
+            executableURL: fixture.executableURL
+        )
+
+        #expect(resolvedPath == fixture.legacyBundledCLIURL.path)
     }
 
     @Test
@@ -27,6 +45,40 @@ struct AgentLaunchServiceTests {
         let fixture = try makeCLIResolutionFixture()
         defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
 
+        try makeExecutableFile(at: fixture.siblingCLIURL)
+
+        let resolvedPath = AgentLaunchService.resolvedDefaultCLIExecutablePath(
+            fileManager: .default,
+            bundleURL: fixture.bundleURL,
+            executableURL: fixture.executableURL
+        )
+
+        #expect(resolvedPath == fixture.siblingCLIURL.path)
+    }
+
+    @Test
+    func defaultCLIExecutablePathDoesNotMistakeAppExecutableForLegacyCLI() throws {
+        let fixture = try makeCLIResolutionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        try makeExecutableFile(at: fixture.executableURL)
+        try makeExecutableFile(at: fixture.siblingCLIURL)
+
+        let resolvedPath = AgentLaunchService.resolvedDefaultCLIExecutablePath(
+            fileManager: .default,
+            bundleURL: fixture.bundleURL,
+            executableURL: fixture.executableURL
+        )
+
+        #expect(resolvedPath == fixture.siblingCLIURL.path)
+    }
+
+    @Test
+    func defaultCLIExecutablePathSkipsNonExecutableBundledHelper() throws {
+        let fixture = try makeCLIResolutionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        try makeFile(at: fixture.bundledHelperCLIURL, executable: false)
         try makeExecutableFile(at: fixture.siblingCLIURL)
 
         let resolvedPath = AgentLaunchService.resolvedDefaultCLIExecutablePath(
@@ -182,7 +234,8 @@ struct AgentLaunchServiceTests {
         rootURL: URL,
         bundleURL: URL,
         executableURL: URL,
-        bundledCLIURL: URL,
+        bundledHelperCLIURL: URL,
+        legacyBundledCLIURL: URL,
         siblingCLIURL: URL
     ) {
         let rootURL = FileManager.default.temporaryDirectory
@@ -191,7 +244,10 @@ struct AgentLaunchServiceTests {
         let executableURL = bundleURL
             .appendingPathComponent("Contents/MacOS", isDirectory: true)
             .appendingPathComponent("Toastty", isDirectory: false)
-        let bundledCLIURL = executableURL
+        let bundledHelperCLIURL = bundleURL
+            .appendingPathComponent("Contents/Helpers", isDirectory: true)
+            .appendingPathComponent("toastty", isDirectory: false)
+        let legacyBundledCLIURL = executableURL
             .deletingLastPathComponent()
             .appendingPathComponent("toastty", isDirectory: false)
         let siblingCLIURL = rootURL.appendingPathComponent("toastty", isDirectory: false)
@@ -200,13 +256,22 @@ struct AgentLaunchServiceTests {
             at: executableURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: bundledHelperCLIURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
 
-        return (rootURL, bundleURL, executableURL, bundledCLIURL, siblingCLIURL)
+        return (rootURL, bundleURL, executableURL, bundledHelperCLIURL, legacyBundledCLIURL, siblingCLIURL)
     }
 
     private func makeExecutableFile(at url: URL) throws {
+        try makeFile(at: url, executable: true)
+    }
+
+    private func makeFile(at url: URL, executable: Bool) throws {
         let contents = Data("#!/bin/sh\nexit 0\n".utf8)
         FileManager.default.createFile(atPath: url.path, contents: contents)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        let permissions: NSNumber = executable ? 0o755 : 0o644
+        try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
     }
 }

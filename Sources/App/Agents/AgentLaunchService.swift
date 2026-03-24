@@ -454,7 +454,7 @@ final class AgentLaunchService {
             bundleURL: bundleURL,
             executableURL: executableURL
         )
-        return candidates.first(where: { fileManager.isExecutableFile(atPath: $0) }) ?? candidates.first
+        return candidates.first(where: { isUsableCLIExecutable(atPath: $0, fileManager: fileManager) }) ?? candidates.first
     }
 
     nonisolated static func defaultCLIExecutablePathCandidates(
@@ -467,6 +467,13 @@ final class AgentLaunchService {
             guard candidates.contains(path) == false else { return }
             candidates.append(path)
         }
+
+        appendCandidate(
+            bundleURL
+                .appendingPathComponent("Contents/Helpers", isDirectory: true)
+                .appendingPathComponent("toastty", isDirectory: false)
+                .path
+        )
 
         if let executableURL {
             appendCandidate(
@@ -485,6 +492,22 @@ final class AgentLaunchService {
         )
 
         return candidates
+    }
+
+    nonisolated private static func isUsableCLIExecutable(
+        atPath path: String,
+        fileManager: FileManager
+    ) -> Bool {
+        guard fileManager.isExecutableFile(atPath: path) else {
+            return false
+        }
+
+        let url = URL(fileURLWithPath: path)
+        guard let siblingNames = try? fileManager.contentsOfDirectory(atPath: url.deletingLastPathComponent().path) else {
+            return false
+        }
+
+        return siblingNames.contains(url.lastPathComponent)
     }
 
     nonisolated private static func defaultSocketPath() -> String {
