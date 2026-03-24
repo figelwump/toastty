@@ -4,6 +4,31 @@ import SwiftUI
 
 @MainActor
 private enum ToasttyMenuActions {
+    static func openTerminalProfilesConfiguration() {
+        do {
+            try TerminalProfilesFile.ensureTemplateExists()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Terminal Profiles"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let fileURL = TerminalProfilesFile.fileURL()
+        guard NSWorkspace.shared.open(fileURL) else {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Terminal Profiles"
+            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+    }
+
     static func installShellIntegration() {
         let installer = ProfileShellIntegrationInstaller()
         let status: ProfileShellIntegrationInstallStatus
@@ -618,7 +643,8 @@ struct ToasttyApp: App {
         terminalProfilesMenuController = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            installShellIntegrationAction: ToasttyMenuActions.installShellIntegration
+            installShellIntegrationAction: ToasttyMenuActions.installShellIntegration,
+            openProfilesConfigurationAction: ToasttyMenuActions.openTerminalProfilesConfiguration
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
