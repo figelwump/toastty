@@ -53,6 +53,24 @@ struct TerminalPanelRenderAttachmentSnapshot {
     }
 }
 
+struct TerminalViewportState: Equatable, Sendable {
+    let panelID: UUID
+    let totalRows: Int
+    let offsetRows: Int
+    let visibleRows: Int
+
+    var isScrollable: Bool {
+        totalRows > visibleRows
+    }
+
+    var isAtBottom: Bool {
+        guard totalRows > 0, visibleRows > 0 else {
+            return true
+        }
+        return offsetRows + visibleRows >= totalRows
+    }
+}
+
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
     private let focusCoordinator = TerminalFocusCoordinator()
@@ -68,6 +86,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var exitedTerminalPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
+    @Published private(set) var viewportStateByPanelID: [UUID: TerminalViewportState] = [:]
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
@@ -227,6 +246,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
             .intersection(livePanelIDs)
         exitedTerminalPanelIDs = exitedTerminalPanelIDs.intersection(livePanelIDs)
+        pruneViewportState(livePanelIDs: livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
             state: state,
@@ -352,6 +372,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func panelDisplayTitleOverride(for panelID: UUID) -> String? {
         panelDisplayTitleOverrideByID[panelID]
+    }
+
+    func viewportState(for panelID: UUID) -> TerminalViewportState? {
+        viewportStateByPanelID[panelID]
     }
 
     func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
@@ -775,6 +799,22 @@ extension TerminalRuntimeRegistry {
             panelDisplayTitleOverrideByID = nextOverridesByPanelID
         }
     }
+
+    func setViewportState(_ nextViewportState: TerminalViewportState, for panelID: UUID) {
+        var nextViewportStateByPanelID = viewportStateByPanelID
+        nextViewportStateByPanelID[panelID] = nextViewportState
+        guard viewportStateByPanelID != nextViewportStateByPanelID else {
+            return
+        }
+        viewportStateByPanelID = nextViewportStateByPanelID
+    }
+
+    func pruneViewportState(livePanelIDs: Set<UUID>) {
+        let nextViewportStateByPanelID = viewportStateByPanelID.filter { livePanelIDs.contains($0.key) }
+        if viewportStateByPanelID != nextViewportStateByPanelID {
+            viewportStateByPanelID = nextViewportStateByPanelID
+        }
+    }
 }
 
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -961,16 +1001,11 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return false
         }
 
-        let previousViewportState = viewportState(for: panelID)
         let nextViewportState = TerminalViewportState(
             panelID: panelID,
             totalRows: scrollbarState.totalRows,
             offsetRows: scrollbarState.offsetRows,
             visibleRows: scrollbarState.visibleRows
-        )
-        reconcilePendingFocusedPanelViewportRestore(
-            previousViewportState: previousViewportState,
-            nextViewportState: nextViewportState
         )
         setViewportState(
             nextViewportState,
