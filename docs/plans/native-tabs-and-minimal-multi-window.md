@@ -255,6 +255,29 @@ Affected files:
 - `Sources/App/AppWindowSceneObserver.swift`
 - `Sources/App/WorkspaceView.swift`
 
+### 6. Follow up with window-local terminal font sizing
+
+Multi-window makes the current app-global font scope less appropriate.
+
+Desired behavior:
+
+- a new window inherits the source window's current terminal font size
+- font increase/decrease/reset commands affect only the active window's
+  terminals
+- config-level defaults still provide the baseline when a window has no local
+  override
+
+Likely shape:
+
+- move the runtime font override out of app-global state and into `WindowState`,
+  or add a window-level override that falls back to the configured global
+  default
+- keep menu/HUD/font persistence logic window-scoped instead of broadcasting to
+  every open window
+
+This is related to multi-window architecture, but it is not a blocker for the
+first `New Window` / native-tab delivery.
+
 ---
 
 ## Explicit Non-Goals For The First Pass
