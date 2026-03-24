@@ -477,6 +477,91 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func updateStatusClearsUnreadWhenManagedSessionReturnsToWorking() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-managed-working",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-managed-working",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Subagent finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let workspaceAfterReady = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterReady.unreadPanelIDs == [backgroundPanelID])
+
+        sessionStore.updateStatus(
+            sessionID: "sess-managed-working",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Continuing"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        let workspaceAfterWorking = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterWorking.unreadPanelIDs.isEmpty)
+        #expect(workspaceAfterWorking.unreadNotificationCount == 0)
+    }
+
+    @Test
+    func updateStatusKeepsUnreadWhenUnmanagedSessionReturnsToWorking() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-unmanaged-working",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-unmanaged-working",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Subagent finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let workspaceAfterReady = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterReady.unreadPanelIDs == [backgroundPanelID])
+
+        sessionStore.updateStatus(
+            sessionID: "sess-unmanaged-working",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Continuing"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        let workspaceAfterWorking = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterWorking.unreadPanelIDs == [backgroundPanelID])
+        #expect(workspaceAfterWorking.unreadNotificationCount == 1)
+    }
+
+    @Test
     func updateStatusFallsBackToTrimmedSummaryWhenDetailIsBlank() async throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)

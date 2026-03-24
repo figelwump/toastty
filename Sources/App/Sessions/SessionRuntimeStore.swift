@@ -95,6 +95,11 @@ final class SessionRuntimeStore: ObservableObject {
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: status, at: now)
         publish(nextRegistry)
+        clearUnreadForManagedSessionIfNeeded(
+            previousRecord: previousRecord,
+            sessionID: sessionID,
+            status: status
+        )
         handleActionableStatusTransitionIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,
@@ -299,6 +304,39 @@ final class SessionRuntimeStore: ObservableObject {
                 notificationContext
             )
         }
+    }
+
+    private func clearUnreadForManagedSessionIfNeeded(
+        previousRecord: SessionRecord?,
+        sessionID: String,
+        status: SessionStatus
+    ) {
+        guard status.kind == .working else {
+            return
+        }
+        guard let previousKind = previousRecord?.status?.kind,
+              isActionableStatusKind(previousKind) else {
+            return
+        }
+        guard let store,
+              let currentRecord = sessionRegistry.sessionsByID[sessionID],
+              currentRecord.isActive,
+              currentRecord.usesSessionStatusNotifications else {
+            return
+        }
+        guard store.state.workspacesByID[currentRecord.workspaceID]?.unreadPanelIDs.contains(currentRecord.panelID) == true else {
+            return
+        }
+
+        // `unreadPanelIDs` currently coalesces session-status and generic
+        // terminal notification unread. Only auto-clear the managed-session
+        // path, where session status is already the authoritative signal.
+        _ = store.send(
+            .markPanelNotificationsRead(
+                workspaceID: currentRecord.workspaceID,
+                panelID: currentRecord.panelID
+            )
+        )
     }
 
     private func isPanelCurrentlyFocused(_ panelID: UUID, state: AppState) -> Bool {
