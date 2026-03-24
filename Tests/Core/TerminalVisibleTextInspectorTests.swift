@@ -149,6 +149,60 @@ struct TerminalVisibleTextInspectorTests {
     }
 
     @Test
+    func closeAssessmentTreatsTwoLineHostPromptAsInteractive() {
+        let visibleText = """
+        /Users/j/Documents/Code/conductor/workspaces/pop/san-antonio
+        mac:san-antonio j$
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation == false)
+        #expect(assessment.runningCommand == nil)
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
+    }
+
+    @Test
+    func closeAssessmentTreatsTwoLineHostPromptCommandAsForegroundCommand() {
+        let visibleText = """
+        /Users/j/Documents/Code/conductor/workspaces/pop/san-antonio
+        mac:san-antonio j$ npm run dev
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation)
+        #expect(assessment.runningCommand == "npm run dev")
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText))
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == "npm")
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == "npm run dev")
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText) == false)
+    }
+
+    @Test
+    func closeAssessmentIgnoresHostLikeLineWhenPreviousLineIsNotSinglePathToken() {
+        let visibleText = """
+        /Users/j/project is missing
+        mac:san-antonio j$ npm run dev
+        """
+
+        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+
+        #expect(assessment.requiresConfirmation)
+        #expect(assessment.runningCommand == nil)
+        #expect(TerminalVisibleTextInspector.showsInteractiveShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false)
+        #expect(TerminalVisibleTextInspector.recentPromptCommandToken(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.inferredRunningCommand(visibleText) == nil)
+        #expect(TerminalVisibleTextInspector.appearsBusy(visibleText))
+    }
+
+    @Test
     func closeAssessmentFallsBackToConfirmationWhenNoPromptIsVisible() {
         let visibleText = """
         [1]  + running    sleep 30

@@ -127,13 +127,14 @@ public enum TerminalVisibleTextInspector {
         includeAgentLaunchCommands: Bool
     ) -> String? {
         guard visibleLines.isEmpty == false else { return nil }
-        let candidateLines = Array(visibleLines.suffix(promptScanLineWindow))
+        let firstCandidateIndex = max(0, visibleLines.count - promptScanLineWindow)
 
-        for (offset, line) in candidateLines.reversed().enumerated() {
+        for visibleLineIndex in stride(from: visibleLines.count - 1, through: firstCandidateIndex, by: -1) {
+            let offset = visibleLines.count - 1 - visibleLineIndex
             guard offset <= recentPromptLineMaxDistanceFromBottom else {
                 break
             }
-            guard let command = promptLineDetails(line)?.command else {
+            guard let command = promptLineDetails(at: visibleLineIndex, in: visibleLines)?.command else {
                 continue
             }
 
@@ -160,13 +161,14 @@ public enum TerminalVisibleTextInspector {
 
     private static func recentPromptObservation(from visibleLines: [String]) -> PromptObservation? {
         guard visibleLines.isEmpty == false else { return nil }
-        let candidateLines = Array(visibleLines.suffix(promptScanLineWindow))
+        let firstCandidateIndex = max(0, visibleLines.count - promptScanLineWindow)
 
-        for (offset, line) in candidateLines.reversed().enumerated() {
+        for visibleLineIndex in stride(from: visibleLines.count - 1, through: firstCandidateIndex, by: -1) {
+            let offset = visibleLines.count - 1 - visibleLineIndex
             guard offset <= recentPromptLineMaxDistanceFromBottom else {
                 break
             }
-            guard let promptLine = promptLineDetails(line) else {
+            guard let promptLine = promptLineDetails(at: visibleLineIndex, in: visibleLines) else {
                 continue
             }
 
@@ -187,13 +189,19 @@ public enum TerminalVisibleTextInspector {
         return nil
     }
 
-    private static func promptLineDetails(_ line: String) -> PromptLineDetails? {
+    private static func promptLineDetails(at visibleLineIndex: Int, in visibleLines: [String]) -> PromptLineDetails? {
+        let line = visibleLines[visibleLineIndex]
         if let strictPromptLine = parsedPromptLine(line) {
             return PromptLineDetails(command: normalizedPromptCommand(strictPromptLine.command))
         }
 
         if let loosePromptLine = parsedLoosePromptLine(line) {
             return loosePromptLine
+        }
+
+        let previousLine = visibleLineIndex > 0 ? visibleLines[visibleLineIndex - 1] : nil
+        if let hostPromptLine = parsedTwoLineHostPromptLine(line, previousLine: previousLine) {
+            return hostPromptLine
         }
 
         return nil
@@ -266,6 +274,42 @@ public enum TerminalVisibleTextInspector {
         return nil
     }
 
+    // Some users run two-line prompts that print the cwd above a host/user
+    // prompt line such as `mac:san-antonio j$`. Keep this matcher intentionally
+    // narrow so transcript lines do not get mistaken for prompt state.
+    private static func parsedTwoLineHostPromptLine(
+        _ line: String,
+        previousLine: String?
+    ) -> PromptLineDetails? {
+        guard previousLineLooksLikeTwoLinePromptDirectory(previousLine) else {
+            return nil
+        }
+
+        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.count >= 2 else {
+            return nil
+        }
+        guard looksLikeTwoLineHostPromptPrefix(parts[0]) else {
+            return nil
+        }
+
+        if promptMarkerAttachedUserToken(parts[1]) != nil {
+            return PromptLineDetails(
+                command: normalizedPromptCommand(commandText(in: parts, startingAt: 2))
+            )
+        }
+
+        guard parts.count >= 3,
+              isPromptUserToken(parts[1]),
+              parts[2] == "$" else {
+            return nil
+        }
+
+        return PromptLineDetails(
+            command: normalizedPromptCommand(commandText(in: parts, startingAt: 3))
+        )
+    }
+
     private static func normalizedPromptCommand(_ command: String?) -> String? {
         guard let command else { return nil }
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -325,6 +369,64 @@ public enum TerminalVisibleTextInspector {
             .path
     }
 
+    private static func previousLineLooksLikeTwoLinePromptDirectory(_ line: String?) -> Bool {
+        guard let line else { return false }
+        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard parts.count == 1 else {
+            return false
+        }
+        return normalizedPromptPathCandidate(parts[0]) != nil
+    }
+
+    private static func looksLikeTwoLineHostPromptPrefix(_ token: String) -> Bool {
+        guard token.contains("/") == false else {
+            return false
+        }
+
+        let parts = token.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2 else {
+            return false
+        }
+        return promptIdentitySegmentIsValid(String(parts[0]))
+            && promptIdentitySegmentIsValid(String(parts[1]))
+    }
+
+    private static func promptMarkerAttachedUserToken(_ token: String) -> String? {
+        guard token.count > 1,
+              let trailingCharacter = token.last,
+              trailingCharacter == "$" else {
+            return nil
+        }
+
+        let userToken = String(token.dropLast())
+        guard isPromptUserToken(userToken) else {
+            return nil
+        }
+        return userToken
+    }
+
+    private static func isPromptUserToken(_ token: String) -> Bool {
+        promptIdentitySegmentIsValid(token)
+    }
+
+    private static func promptIdentitySegmentIsValid(_ token: String) -> Bool {
+        guard token.isEmpty == false,
+              token.contains("/") == false else {
+            return false
+        }
+
+        return token.unicodeScalars.allSatisfy { scalar in
+            promptIdentityTokenCharacters.contains(scalar)
+        }
+    }
+
+    private static func commandText(in parts: [String], startingAt startIndex: Int) -> String? {
+        guard startIndex < parts.count else {
+            return nil
+        }
+        return parts[startIndex...].joined(separator: " ")
+    }
+
     private static func collapsedWhitespace(_ line: String) -> String {
         line.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     }
@@ -366,4 +468,6 @@ public enum TerminalVisibleTextInspector {
     private static let promptMarkerTokens: Set<String> = ["%", "#", "$", ">"]
     private static let promptPathWrapperCharacters = CharacterSet(charactersIn: "\"'`()[]{}<>")
     private static let promptPathTrailingPunctuationCharacters = CharacterSet(charactersIn: ",;")
+    private static let promptIdentityTokenCharacters = CharacterSet.alphanumerics
+        .union(CharacterSet(charactersIn: "._-"))
 }
