@@ -608,8 +608,8 @@ extension TerminalRuntimeRegistry {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                guard workspace.panels[panelID] != nil else { continue }
-                if workspace.layoutTree.slotContaining(panelID: panelID) != nil {
+                guard workspace.panelState(for: panelID) != nil else { continue }
+                if workspace.slotID(containingPanelID: panelID) != nil {
                     return workspaceID
                 }
             }
@@ -635,8 +635,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                guard workspace.panels[panelID] != nil else { continue }
-                guard workspace.layoutTree.slotContaining(panelID: panelID) != nil else { continue }
+                guard workspace.panelState(for: panelID) != nil else { continue }
+                guard workspace.slotID(containingPanelID: panelID) != nil else { continue }
                 return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
             }
         }
@@ -659,7 +659,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],
-              case .terminal(let terminalState)? = workspace.panels[panelID] else {
+              case .terminal(let terminalState)? = workspace.panelState(for: panelID) else {
             return .empty
         }
 
@@ -716,7 +716,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],
-              case .terminal(let terminalState)? = workspace.panels[panelID],
+              case .terminal(let terminalState)? = workspace.panelState(for: panelID),
               terminalState.profileBinding != nil else {
             return
         }
@@ -821,15 +821,17 @@ extension TerminalRuntimeRegistry {
 private extension TerminalRuntimeRegistry {
     func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
-           workspace.panels[focusedPanelID] != nil,
-           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil {
+           workspace.panelState(for: focusedPanelID) != nil,
+           workspace.slotID(containingPanelID: focusedPanelID) != nil {
             return focusedPanelID
         }
 
-        for leaf in workspace.layoutTree.allSlotInfos {
-            let panelID = leaf.panelID
-            if workspace.panels[panelID] != nil {
-                return panelID
+        for tab in workspace.orderedTabs {
+            for leaf in tab.layoutTree.allSlotInfos {
+                let panelID = leaf.panelID
+                if tab.panels[panelID] != nil {
+                    return panelID
+                }
             }
         }
 
@@ -839,9 +841,9 @@ private extension TerminalRuntimeRegistry {
     func isValidDropTargetPanel(_ panelID: UUID, state: AppState) -> Bool {
         guard let workspaceID = workspaceID(containing: panelID, state: state),
               let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal = panelState,
-              workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
+              workspace.slotID(containingPanelID: panelID) != nil else {
             return false
         }
         return true

@@ -142,15 +142,17 @@ final class TerminalStoreActionCoordinator {
 
     private static func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
-           workspace.panels[focusedPanelID] != nil,
-           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil {
+           workspace.panelState(for: focusedPanelID) != nil,
+           workspace.slotID(containingPanelID: focusedPanelID) != nil {
             return focusedPanelID
         }
 
-        for leaf in workspace.layoutTree.allSlotInfos {
-            let panelID = leaf.panelID
-            if workspace.panels[panelID] != nil {
-                return panelID
+        for tab in workspace.orderedTabs {
+            for leaf in tab.layoutTree.allSlotInfos {
+                let panelID = leaf.panelID
+                if tab.panels[panelID] != nil {
+                    return panelID
+                }
             }
         }
 
@@ -159,8 +161,8 @@ final class TerminalStoreActionCoordinator {
 
     private static func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {
         for (workspaceID, workspace) in state.workspacesByID {
-            guard workspace.panels[panelID] != nil,
-                  workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
+            guard workspace.panelState(for: panelID) != nil,
+                  workspace.slotID(containingPanelID: panelID) != nil else {
                 continue
             }
             return workspaceID
@@ -169,13 +171,15 @@ final class TerminalStoreActionCoordinator {
     }
 
     private static func liveTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
-        workspace.layoutTree.allSlotInfos.reduce(into: Set<UUID>()) { panelIDs, slot in
-            let panelID = slot.panelID
-            guard let panelState = workspace.panels[panelID],
-                  case .terminal = panelState else {
-                return
+        workspace.orderedTabs.reduce(into: Set<UUID>()) { panelIDs, tab in
+            for slot in tab.layoutTree.allSlotInfos {
+                let panelID = slot.panelID
+                guard let panelState = tab.panels[panelID],
+                      case .terminal = panelState else {
+                    continue
+                }
+                panelIDs.insert(panelID)
             }
-            panelIDs.insert(panelID)
         }
     }
 

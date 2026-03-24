@@ -213,6 +213,98 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func workspaceLayoutSnapshotRoundTripsMultipleTabsAndSelection() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let firstTabID = UUID()
+        let secondTabID = UUID()
+        let firstSlotID = UUID()
+        let secondSlotID = UUID()
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Infra",
+            selectedTabID: secondTabID,
+            tabIDs: [firstTabID, secondTabID],
+            tabsByID: [
+                firstTabID: WorkspaceTabState(
+                    id: firstTabID,
+                    layoutTree: .slot(slotID: firstSlotID, panelID: firstPanelID),
+                    panels: [
+                        firstPanelID: .terminal(
+                            TerminalPanelState(
+                                title: "First",
+                                shell: "zsh",
+                                cwd: "/tmp/first-tab",
+                                profileBinding: TerminalProfileBinding(profileID: "zmx")
+                            )
+                        ),
+                    ],
+                    focusedPanelID: firstPanelID
+                ),
+                secondTabID: WorkspaceTabState(
+                    id: secondTabID,
+                    layoutTree: .slot(slotID: secondSlotID, panelID: secondPanelID),
+                    panels: [
+                        secondPanelID: .terminal(
+                            TerminalPanelState(
+                                title: "Second",
+                                shell: "zsh",
+                                cwd: "/tmp/second-tab",
+                                profileBinding: TerminalProfileBinding(profileID: "ssh-prod")
+                            )
+                        ),
+                    ],
+                    focusedPanelID: secondPanelID,
+                    auxPanelVisibility: [.diff]
+                ),
+            ]
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        let encoded = try JSONEncoder().encode(snapshot)
+        let decodedSnapshot = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: encoded)
+        let restoredState = decodedSnapshot.makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+
+        #expect(restoredWorkspace.tabIDs == [firstTabID, secondTabID])
+        #expect(restoredWorkspace.selectedTabID == secondTabID)
+
+        guard case .terminal(let firstTerminalState) = try #require(restoredWorkspace.tab(id: firstTabID)?.panels[firstPanelID]) else {
+            Issue.record("Expected first restored tab panel to remain terminal")
+            return
+        }
+        guard case .terminal(let secondTerminalState) = try #require(restoredWorkspace.tab(id: secondTabID)?.panels[secondPanelID]) else {
+            Issue.record("Expected second restored tab panel to remain terminal")
+            return
+        }
+
+        #expect(firstTerminalState.launchWorkingDirectory == "/tmp/first-tab")
+        #expect(secondTerminalState.launchWorkingDirectory == "/tmp/second-tab")
+        #expect(firstTerminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+        #expect(secondTerminalState.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
+        #expect(restoredWorkspace.tab(id: secondTabID)?.auxPanelVisibility == [.diff])
+        try StateValidator.validate(restoredState)
+    }
+
+    @Test
     func snapshotPersistsLaunchWorkingDirectoryWhenLiveCWDIsBlank() {
         let workspace = WorkspaceState.bootstrap(title: "Restore")
         let panelID = workspace.layoutTree.allSlotInfos[0].panelID

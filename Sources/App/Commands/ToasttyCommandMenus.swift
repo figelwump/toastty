@@ -131,6 +131,15 @@ struct ToasttyCommandMenus: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
+            Button("New Tab") {
+                store.createWorkspaceTabFromCommand(preferredWindowID: focusedWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newTab.key,
+                modifiers: ToasttyKeyboardShortcuts.newTab.modifiers
+            )
+            .disabled(commandWorkspace == nil)
+
             Button("New Window") {
                 store.createWindowFromCommand(preferredWindowID: focusedWindowID)
             }
@@ -186,6 +195,13 @@ struct ToasttyCommandMenus: Commands {
         }
 
         CommandMenu("Workspace") {
+            Button("New Tab") {
+                store.createWorkspaceTabFromCommand(preferredWindowID: focusedWindowID)
+            }
+            .disabled(commandWorkspace == nil)
+
+            Divider()
+
             Button("New Workspace") {
                 store.createWorkspaceFromCommand(preferredWindowID: focusedWindowID)
             }
@@ -242,6 +258,23 @@ struct ToasttyCommandMenus: Commands {
                     )
                 }
             }
+
+            if let workspace = commandWorkspace,
+               workspace.tabIDs.count > 1 {
+                Divider()
+
+                ForEach(
+                    Array(workspace.orderedTabs.prefix(3).enumerated()),
+                    id: \.element.id
+                ) { index, tab in
+                    workspaceTabSelectionMenuButton(
+                        title: tab.displayTitle,
+                        workspaceID: workspace.id,
+                        tabID: tab.id,
+                        shortcutNumber: index + 1
+                    )
+                }
+            }
         }
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
@@ -273,6 +306,12 @@ struct ToasttyCommandMenus: Commands {
     private func toggleFocusedPanelFromCommandSelection() {
         guard let workspaceID = commandWorkspace?.id else { return }
         store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+    }
+
+    private func selectWorkspaceTabFromCommandSelection(workspaceID: UUID, tabID: UUID) {
+        guard let workspace = store.state.workspacesByID[workspaceID] else { return }
+        guard workspace.tabsByID[tabID] != nil else { return }
+        _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
     }
 
     private func closeFocusedPanelFromCommandSelection() {
@@ -327,6 +366,25 @@ struct ToasttyCommandMenus: Commands {
                         terminalProfileActionButton(section: section, action: action)
                     }
                 }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceTabSelectionMenuButton(
+        title: String,
+        workspaceID: UUID,
+        tabID: UUID,
+        shortcutNumber: Int
+    ) -> some View {
+        if let shortcutKey = workspaceShortcutKeyEquivalent(for: shortcutNumber) {
+            Button(title) {
+                selectWorkspaceTabFromCommandSelection(workspaceID: workspaceID, tabID: tabID)
+            }
+            .keyboardShortcut(shortcutKey, modifiers: [.command])
+        } else {
+            Button(title) {
+                selectWorkspaceTabFromCommandSelection(workspaceID: workspaceID, tabID: tabID)
             }
         }
     }

@@ -156,6 +156,154 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
 public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
     public var id: UUID
     public var title: String
+    public var selectedTabID: UUID?
+    public var tabIDs: [UUID]
+    public var tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
+
+    public init(
+        id: UUID,
+        title: String,
+        selectedTabID: UUID?,
+        tabIDs: [UUID],
+        tabsByID: [UUID: WorkspaceLayoutTabSnapshot]
+    ) {
+        self.id = id
+        self.title = title
+        self.selectedTabID = selectedTabID
+        self.tabIDs = tabIDs
+        self.tabsByID = tabsByID
+    }
+
+    init(workspace: WorkspaceState) {
+        id = workspace.id
+        title = workspace.title
+        selectedTabID = workspace.resolvedSelectedTabID
+        tabIDs = workspace.tabIDs
+        tabsByID = workspace.tabsByID.reduce(into: [:]) { partialResult, entry in
+            partialResult[entry.key] = WorkspaceLayoutTabSnapshot(tab: entry.value)
+        }
+    }
+
+    public var orderedTabs: [WorkspaceLayoutTabSnapshot] {
+        tabIDs.compactMap { tabsByID[$0] }
+    }
+
+    public var resolvedSelectedTabID: UUID? {
+        if let selectedTabID,
+           tabsByID[selectedTabID] != nil,
+           tabIDs.contains(selectedTabID) {
+            return selectedTabID
+        }
+
+        for tabID in tabIDs where tabsByID[tabID] != nil {
+            return tabID
+        }
+
+        return tabsByID.keys.sorted { $0.uuidString < $1.uuidString }.first
+    }
+
+    public var selectedTab: WorkspaceLayoutTabSnapshot? {
+        guard let resolvedSelectedTabID else { return nil }
+        return tabsByID[resolvedSelectedTabID]
+    }
+
+    // Legacy selected-tab mirrors kept for existing layout snapshot callers.
+    public var layoutTree: LayoutNode {
+        requiredSelectedTab.layoutTree
+    }
+
+    public var panels: [UUID: WorkspaceLayoutPanelSnapshot] {
+        requiredSelectedTab.panels
+    }
+
+    public var focusedPanelID: UUID? {
+        requiredSelectedTab.focusedPanelID
+    }
+
+    public var auxPanelVisibility: Set<PanelKind> {
+        requiredSelectedTab.auxPanelVisibility
+    }
+
+    func makeWorkspaceState() -> WorkspaceState {
+        return WorkspaceState(
+            id: id,
+            title: title,
+            selectedTabID: selectedTabID,
+            tabIDs: tabIDs,
+            tabsByID: tabsByID.reduce(into: [UUID: WorkspaceTabState]()) { partialResult, entry in
+                partialResult[entry.key] = entry.value.makeWorkspaceTabState()
+            },
+            unreadWorkspaceNotificationCount: 0
+        )
+    }
+}
+
+extension WorkspaceLayoutWorkspaceSnapshot {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case selectedTabID
+        case tabIDs
+        case tabsByID
+        case layoutTree
+        case panels
+        case focusedPanelID
+        case auxPanelVisibility
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+
+        let decodedSelectedTabID = try container.decodeIfPresent(UUID.self, forKey: .selectedTabID)
+        let decodedTabIDs = try container.decodeIfPresent([UUID].self, forKey: .tabIDs)
+        let decodedTabsByID = try container.decodeIfPresent([UUID: WorkspaceLayoutTabSnapshot].self, forKey: .tabsByID)
+
+        if let decodedTabIDs, let decodedTabsByID, decodedTabsByID.isEmpty == false {
+            selectedTabID = decodedSelectedTabID
+            tabIDs = decodedTabIDs
+            tabsByID = decodedTabsByID
+        } else {
+            let legacyTab = WorkspaceLayoutTabSnapshot(
+                id: UUID(),
+                layoutTree: try container.decode(LayoutNode.self, forKey: .layoutTree),
+                panels: try container.decode([UUID: WorkspaceLayoutPanelSnapshot].self, forKey: .panels),
+                focusedPanelID: try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID),
+                auxPanelVisibility: try container.decodeIfPresent(Set<PanelKind>.self, forKey: .auxPanelVisibility) ?? []
+            )
+            selectedTabID = legacyTab.id
+            tabIDs = [legacyTab.id]
+            tabsByID = [legacyTab.id: legacyTab]
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encodeIfPresent(selectedTabID, forKey: .selectedTabID)
+        try container.encode(tabIDs, forKey: .tabIDs)
+        try container.encode(tabsByID, forKey: .tabsByID)
+        // Preserve a selected-tab legacy mirror while older layout snapshots
+        // are still on disk in the field.
+        let legacyTab = selectedTabID.flatMap { tabsByID[$0] } ?? tabIDs.first.flatMap { tabsByID[$0] }
+        try container.encode(legacyTab?.layoutTree, forKey: .layoutTree)
+        try container.encode(legacyTab?.panels ?? [:], forKey: .panels)
+        try container.encodeIfPresent(legacyTab?.focusedPanelID, forKey: .focusedPanelID)
+        try container.encode(legacyTab?.auxPanelVisibility ?? [], forKey: .auxPanelVisibility)
+    }
+
+    private var requiredSelectedTab: WorkspaceLayoutTabSnapshot {
+        guard let selectedTab else {
+            preconditionFailure("Workspace layout snapshot \(id) must always resolve a selected tab")
+        }
+        return selectedTab
+    }
+}
+
+public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
     public var layoutTree: LayoutNode
     public var panels: [UUID: WorkspaceLayoutPanelSnapshot]
     public var focusedPanelID: UUID?
@@ -163,43 +311,38 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
 
     public init(
         id: UUID,
-        title: String,
         layoutTree: LayoutNode,
         panels: [UUID: WorkspaceLayoutPanelSnapshot],
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind>
     ) {
         self.id = id
-        self.title = title
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
         self.auxPanelVisibility = auxPanelVisibility
     }
 
-    init(workspace: WorkspaceState) {
-        id = workspace.id
-        title = workspace.title
-        layoutTree = workspace.layoutTree
-        panels = workspace.panels.reduce(into: [:]) { partialResult, entry in
+    init(tab: WorkspaceTabState) {
+        id = tab.id
+        layoutTree = tab.layoutTree
+        panels = tab.panels.reduce(into: [:]) { partialResult, entry in
             partialResult[entry.key] = WorkspaceLayoutPanelSnapshot(panelState: entry.value)
         }
-        focusedPanelID = workspace.focusedPanelID
-        auxPanelVisibility = workspace.auxPanelVisibility
+        focusedPanelID = tab.focusedPanelID
+        auxPanelVisibility = tab.auxPanelVisibility
     }
 
-    func makeWorkspaceState() -> WorkspaceState {
+    func makeWorkspaceTabState() -> WorkspaceTabState {
         let restoredPanels = makePanelsWithRestoredTerminalTitles()
-        return WorkspaceState(
+        return WorkspaceTabState(
             id: id,
-            title: title,
             layoutTree: layoutTree,
             panels: restoredPanels,
             focusedPanelID: focusedPanelID,
             auxPanelVisibility: auxPanelVisibility,
             focusedPanelModeActive: false,
             unreadPanelIDs: [],
-            unreadWorkspaceNotificationCount: 0,
             recentlyClosedPanels: []
         )
     }

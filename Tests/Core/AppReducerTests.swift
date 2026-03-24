@@ -458,6 +458,155 @@ struct AppReducerTests {
     }
 
     @Test
+    func createWorkspaceTabAppendsTabAndSelectsIt() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+
+        #expect(
+            reducer.send(
+                .createWorkspaceTab(
+                    workspaceID: workspaceID,
+                    seed: WindowLaunchSeed(
+                        terminalCWD: "/tmp/workspace-tab",
+                        terminalProfileBinding: TerminalProfileBinding(profileID: "ssh-prod")
+                    )
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.tabIDs.count == workspaceBefore.tabIDs.count + 1)
+        let selectedTabID = try #require(workspaceAfter.selectedTabID)
+        let selectedTab = try #require(workspaceAfter.tab(id: selectedTabID))
+        let panelID = try #require(selectedTab.focusedPanelID)
+        guard case .terminal(let terminalState) = selectedTab.panels[panelID] else {
+            Issue.record("Expected new tab bootstrap panel to be terminal")
+            return
+        }
+
+        #expect(terminalState.cwd == "/tmp/workspace-tab")
+        #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func selectWorkspaceTabChangesSelectedTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        let workspaceWithTwoTabs = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspaceWithTwoTabs.tabIDs.first)
+        let newTabID = try #require(workspaceWithTwoTabs.tabIDs.last)
+        #expect(newTabID != originalTabID)
+
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.selectedTabID == originalTabID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastPanelInSelectedTabRemovesOnlyThatTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        let workspaceWithTwoTabs = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspaceWithTwoTabs.tabIDs.first)
+        let selectedTabID = try #require(workspaceWithTwoTabs.selectedTabID)
+        let selectedTab = try #require(workspaceWithTwoTabs.tab(id: selectedTabID))
+        let panelID = try #require(selectedTab.focusedPanelID)
+
+        #expect(reducer.send(.closePanel(panelID: panelID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.tabIDs == [originalTabID])
+        #expect(updatedWorkspace.selectedTabID == originalTabID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastPanelInLastTabBootstrapsReplacementTab() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspaceBefore.selectedTabID)
+        let originalPanelID = try #require(workspaceBefore.focusedPanelID)
+
+        #expect(reducer.send(.closePanel(panelID: originalPanelID), state: &state))
+
+        let windowAfter = try #require(state.window(id: windowID))
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(windowAfter.workspaceIDs == [workspaceID])
+        #expect(windowAfter.selectedWorkspaceID == workspaceID)
+        #expect(workspaceAfter.tabIDs.count == 1)
+        let replacementTabID = try #require(workspaceAfter.selectedTabID)
+        #expect(replacementTabID != originalTabID)
+        let replacementTab = try #require(workspaceAfter.tab(id: replacementTabID))
+        let replacementPanelID = try #require(replacementTab.focusedPanelID)
+        #expect(replacementPanelID != originalPanelID)
+        guard case .terminal(let terminalState) = replacementTab.panels[replacementPanelID] else {
+            Issue.record("Expected replacement tab bootstrap panel to be terminal")
+            return
+        }
+
+        #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func updateTerminalPanelMetadataMutatesBackgroundTabWithoutSelectingIt() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspace.tabIDs.first)
+        let backgroundTabID = try #require(workspace.tabIDs.last)
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        let backgroundTab = try #require(workspace.tab(id: backgroundTabID))
+        let panelID = try #require(backgroundTab.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelMetadata(
+                    panelID: panelID,
+                    title: "Logs",
+                    cwd: "/tmp/background"
+                ),
+                state: &state
+            )
+        )
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let updatedBackgroundTab = try #require(updatedWorkspace.tab(id: backgroundTabID))
+        guard case .terminal(let terminalState) = updatedBackgroundTab.panels[panelID] else {
+            Issue.record("Expected background tab panel to remain terminal")
+            return
+        }
+
+        #expect(updatedWorkspace.selectedTabID == originalTabID)
+        #expect(terminalState.title == "Logs")
+        #expect(terminalState.cwd == "/tmp/background")
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func createWorkspaceDoesNotStealSelectedWindow() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -830,6 +979,31 @@ struct AppReducerTests {
 
         let sourceWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(sourceWorkspace.panels[panelToDetach] == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func detachOnlyPanelToNewWindowRemovesEmptySourceWorkspaceAndWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let sourceWindowID = try #require(state.windows.first?.id)
+        let sourceWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let panelToDetach = try #require(state.workspacesByID[sourceWorkspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.detachPanelToNewWindow(panelID: panelToDetach), state: &state))
+
+        #expect(state.windows.count == 1)
+        #expect(state.windows.contains(where: { $0.id == sourceWindowID }) == false)
+        #expect(state.workspacesByID[sourceWorkspaceID] == nil)
+
+        let detachedWindowID = try #require(state.selectedWindowID)
+        let detachedWindow = try #require(state.windows.first(where: { $0.id == detachedWindowID }))
+        let detachedWorkspaceID = try #require(detachedWindow.selectedWorkspaceID)
+        let detachedWorkspace = try #require(state.workspacesByID[detachedWorkspaceID])
+        #expect(detachedWorkspace.panels[panelToDetach] != nil)
+        #expect(detachedWorkspace.focusedPanelID == panelToDetach)
 
         try StateValidator.validate(state)
     }

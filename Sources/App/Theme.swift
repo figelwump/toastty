@@ -63,6 +63,7 @@ enum ToastyTheme {
     // Slightly taller than the native compact titlebar so the custom
     // title/buttons don't sit flush against the window edge.
     static let topBarHeight: CGFloat = 32
+    static let workspaceTabBarHeight: CGFloat = 30
     static let topBarContentTopPadding: CGFloat = 2
     static let fontHUDTopPadding: CGFloat = topBarHeight + 12
     /// Standard macOS compact titlebar height on current supported macOS releases.
@@ -76,6 +77,7 @@ enum ToastyTheme {
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)
     static let fontSubtext = Font.system(size: 11, weight: .medium)
+    static let fontWorkspaceTab = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontMonoHeader = Font.system(size: 12, weight: .semibold, design: .monospaced)
     static let fontMonoTerminalSlotTitle = Font.system(size: 12, weight: .regular, design: .monospaced)
 

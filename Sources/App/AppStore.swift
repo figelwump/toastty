@@ -161,6 +161,36 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
+    func createWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        return send(
+            .createWorkspaceTab(
+                workspaceID: selection.workspace.id,
+                seed: windowLaunchSeed(from: selection)
+            )
+        )
+    }
+
+    @discardableResult
+    func selectWorkspaceTabFromCommand(preferredWindowID: UUID?, shortcutNumber: Int) -> Bool {
+        guard shortcutNumber > 0 else { return false }
+        guard let workspace = commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
+        let tabIndex = shortcutNumber - 1
+        let orderedTabs = workspace.orderedTabs
+        guard orderedTabs.indices.contains(tabIndex) else { return false }
+        let targetTabID = orderedTabs[tabIndex].id
+        if workspace.resolvedSelectedTabID == targetTabID {
+            return true
+        }
+        return send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: targetTabID))
+    }
+
+    @discardableResult
     func createWindowFromCommand(preferredWindowID: UUID?) -> Bool {
         let selection = commandSelection(preferredWindowID: preferredWindowID)
         return send(

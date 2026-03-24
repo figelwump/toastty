@@ -5,6 +5,9 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case selectedWorkspaceMissing(windowID: UUID, workspaceID: UUID)
     case workspaceInMultipleWindows(workspaceID: UUID)
     case workspaceWithoutWindow(workspaceID: UUID)
+    case workspaceWithoutTab(workspaceID: UUID)
+    case missingTab(workspaceID: UUID, tabID: UUID)
+    case selectedTabMissing(workspaceID: UUID, tabID: UUID)
     case splitRatioOutOfBounds(workspaceID: UUID, nodeID: UUID, ratio: Double)
     case emptySlotLeaf(workspaceID: UUID, slotID: UUID)
     case missingPanel(workspaceID: UUID, panelID: UUID)
@@ -43,51 +46,66 @@ public enum StateValidator {
         }
 
         for workspace in state.workspacesByID.values {
-            let nodeIDs = workspace.layoutTree.allNodeIDs
+            guard workspace.tabIDs.isEmpty == false else {
+                throw StateInvariantViolation.workspaceWithoutTab(workspaceID: workspace.id)
+            }
+
+            for tabID in workspace.tabIDs where workspace.tabsByID[tabID] == nil {
+                throw StateInvariantViolation.missingTab(workspaceID: workspace.id, tabID: tabID)
+            }
+
+            if let selectedTabID = workspace.selectedTabID,
+               workspace.tabIDs.contains(selectedTabID) == false {
+                throw StateInvariantViolation.selectedTabMissing(workspaceID: workspace.id, tabID: selectedTabID)
+            }
+
+            let nodeIDs = workspace.orderedTabs.flatMap { $0.layoutTree.allNodeIDs }
             if let duplicate = firstDuplicate(in: nodeIDs) {
                 throw StateInvariantViolation.duplicateNodeID(workspaceID: workspace.id, nodeID: duplicate)
             }
 
-            for split in workspace.layoutTree.allSplitInfos {
-                if split.ratio <= 0 || split.ratio >= 1 {
-                    throw StateInvariantViolation.splitRatioOutOfBounds(
-                        workspaceID: workspace.id,
-                        nodeID: split.nodeID,
-                        ratio: split.ratio
-                    )
-                }
-            }
-
             var panelLayoutCounts: [UUID: Int] = [:]
 
-            for leaf in workspace.layoutTree.allSlotInfos {
-                guard workspace.panels[leaf.panelID] != nil else {
-                    throw StateInvariantViolation.missingPanel(workspaceID: workspace.id, panelID: leaf.panelID)
-                }
-                panelLayoutCounts[leaf.panelID, default: 0] += 1
-            }
-
-            for panelID in workspace.panels.keys {
-                let count = panelLayoutCounts[panelID, default: 0]
-                if count == 0 {
-                    throw StateInvariantViolation.panelMissingFromLayoutTree(workspaceID: workspace.id, panelID: panelID)
-                }
-                if count > 1 {
-                    throw StateInvariantViolation.panelReferencedMultipleTimes(workspaceID: workspace.id, panelID: panelID)
-                }
-            }
-
-            for unreadPanelID in workspace.unreadPanelIDs where workspace.panels[unreadPanelID] == nil {
-                throw StateInvariantViolation.unreadPanelMissing(workspaceID: workspace.id, panelID: unreadPanelID)
-            }
-
-            if let focusedPanelID = workspace.focusedPanelID {
-                guard workspace.panels[focusedPanelID] != nil else {
-                    throw StateInvariantViolation.focusedPanelMissing(workspaceID: workspace.id, panelID: focusedPanelID)
+            for tab in workspace.orderedTabs {
+                for split in tab.layoutTree.allSplitInfos {
+                    if split.ratio <= 0 || split.ratio >= 1 {
+                        throw StateInvariantViolation.splitRatioOutOfBounds(
+                            workspaceID: workspace.id,
+                            nodeID: split.nodeID,
+                            ratio: split.ratio
+                        )
+                    }
                 }
 
-                guard workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil else {
-                    throw StateInvariantViolation.focusedPanelNotInLayoutTree(workspaceID: workspace.id, panelID: focusedPanelID)
+                for leaf in tab.layoutTree.allSlotInfos {
+                    guard tab.panels[leaf.panelID] != nil else {
+                        throw StateInvariantViolation.missingPanel(workspaceID: workspace.id, panelID: leaf.panelID)
+                    }
+                    panelLayoutCounts[leaf.panelID, default: 0] += 1
+                }
+
+                for panelID in tab.panels.keys {
+                    let count = panelLayoutCounts[panelID, default: 0]
+                    if count == 0 {
+                        throw StateInvariantViolation.panelMissingFromLayoutTree(workspaceID: workspace.id, panelID: panelID)
+                    }
+                    if count > 1 {
+                        throw StateInvariantViolation.panelReferencedMultipleTimes(workspaceID: workspace.id, panelID: panelID)
+                    }
+                }
+
+                for unreadPanelID in tab.unreadPanelIDs where tab.panels[unreadPanelID] == nil {
+                    throw StateInvariantViolation.unreadPanelMissing(workspaceID: workspace.id, panelID: unreadPanelID)
+                }
+
+                if let focusedPanelID = tab.focusedPanelID {
+                    guard tab.panels[focusedPanelID] != nil else {
+                        throw StateInvariantViolation.focusedPanelMissing(workspaceID: workspace.id, panelID: focusedPanelID)
+                    }
+
+                    guard tab.layoutTree.slotContaining(panelID: focusedPanelID) != nil else {
+                        throw StateInvariantViolation.focusedPanelNotInLayoutTree(workspaceID: workspace.id, panelID: focusedPanelID)
+                    }
                 }
             }
         }

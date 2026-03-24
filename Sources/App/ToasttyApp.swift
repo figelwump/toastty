@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import CoreState
 import SwiftUI
 
@@ -310,9 +311,12 @@ final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
+    private static let maxWorkspaceTabShortcutCount = 3
 
     private enum ShortcutAction {
         case closePanel
+        case createWorkspaceTab
+        case selectWorkspaceTab(Int)
         case switchWorkspace(Int)
         case focusPanel(Int)
     }
@@ -339,8 +343,18 @@ final class DisplayShortcutInterceptor {
     }
 
     private func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+        if let shortcutNumber = Self.tabSelectionShortcutNumber(for: event),
+           appOwnedShortcutWindowID() != nil {
+            return .selectWorkspaceTab(shortcutNumber)
+        }
+
+        if Self.isNewTabShortcut(event),
+           appOwnedShortcutWindowID() != nil {
+            return .createWorkspaceTab
+        }
+
         if Self.isClosePanelShortcut(event),
-           closePanelShortcutWindowID() != nil {
+           appOwnedShortcutWindowID() != nil {
             return .closePanel
         }
 
@@ -358,11 +372,49 @@ final class DisplayShortcutInterceptor {
         switch action {
         case .closePanel:
             closeFocusedPanel()
+        case .createWorkspaceTab:
+            createWorkspaceTab()
+        case .selectWorkspaceTab(let shortcutNumber):
+            selectWorkspaceTab(shortcutNumber: shortcutNumber)
         case .switchWorkspace(let shortcutNumber):
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
             focusTerminalPanel(shortcutNumber: shortcutNumber)
         }
+    }
+
+    static func isNewTabShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "t" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func tabSelectionShortcutNumber(for event: NSEvent) -> Int? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command] else { return nil }
+
+        let shortcutNumber: Int?
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_1), Int(kVK_ANSI_Keypad1):
+            shortcutNumber = 1
+        case Int(kVK_ANSI_2), Int(kVK_ANSI_Keypad2):
+            shortcutNumber = 2
+        case Int(kVK_ANSI_3), Int(kVK_ANSI_Keypad3):
+            shortcutNumber = 3
+        default:
+            shortcutNumber = nil
+        }
+
+        guard let shortcutNumber,
+              shortcutNumber <= maxWorkspaceTabShortcutCount else {
+            return nil
+        }
+        return shortcutNumber
     }
 
     static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
@@ -388,7 +440,7 @@ final class DisplayShortcutInterceptor {
         return UUID(uuidString: rawWindowID)
     }
 
-    private func closePanelShortcutWindowID() -> UUID? {
+    private func appOwnedShortcutWindowID() -> UUID? {
         guard let store else { return nil }
         guard let windowID = Self.closePanelShortcutWindowID(
             keyWindow: NSApp.keyWindow,
@@ -402,7 +454,7 @@ final class DisplayShortcutInterceptor {
 
     private func closeFocusedPanel() -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = closePanelShortcutWindowID() else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
         guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
             // Cmd+W is app-owned for normal workspace windows. If there is no
@@ -413,12 +465,21 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
+    private func createWorkspaceTab() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
     private func switchWorkspace(shortcutNumber: Int) -> Bool {
         guard let store else { return false }
         guard shortcutNumber > 0, shortcutNumber <= DisplayShortcutConfig.maxWorkspaceShortcutCount else {
             return false
         }
-        guard let window = store.selectedWindow else { return false }
+        let preferredWindowID = currentToasttyKeyWindowID(in: store)
+        guard let window = store.commandSelection(preferredWindowID: preferredWindowID)?.window else {
+            return false
+        }
         let index = shortcutNumber - 1
         guard window.workspaceIDs.indices.contains(index) else { return false }
         let workspaceID = window.workspaceIDs[index]
@@ -426,9 +487,21 @@ final class DisplayShortcutInterceptor {
         return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
     }
 
+    private func selectWorkspaceTab(shortcutNumber: Int) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.selectWorkspaceTabFromCommand(
+            preferredWindowID: preferredWindowID,
+            shortcutNumber: shortcutNumber
+        )
+    }
+
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
         guard let store else { return false }
-        guard let workspace = store.selectedWorkspace else { return false }
+        let preferredWindowID = currentToasttyKeyWindowID(in: store)
+        guard let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
         guard let panelID = workspace.terminalPanelID(forDisplayShortcutNumber: shortcutNumber) else {
             return false
         }

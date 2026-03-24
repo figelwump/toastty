@@ -351,6 +351,60 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.selectedWindowID, window.id)
     }
 
+    func testCreateWorkspaceTabFromCommandSeedsFromFocusedTerminal() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "ssh-prod")
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var sourceWorkspace = try XCTUnwrap(state.workspacesByID[sourceWorkspaceID])
+        let focusedPanelID = try XCTUnwrap(sourceWorkspace.focusedPanelID)
+        guard case .terminal(var terminalState) = sourceWorkspace.panels[focusedPanelID] else {
+            XCTFail("expected focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = "/tmp/toastty/new-tab"
+        terminalState.profileBinding = TerminalProfileBinding(profileID: "zmx")
+        sourceWorkspace.panels[focusedPanelID] = .terminal(terminalState)
+        state.workspacesByID[sourceWorkspaceID] = sourceWorkspace
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(store.createWorkspaceTabFromCommand(preferredWindowID: sourceWindowID))
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let newTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let newTab = try XCTUnwrap(workspace.tabsByID[newTabID])
+        let newPanelID = try XCTUnwrap(newTab.focusedPanelID)
+        guard case .terminal(let newTerminalState) = newTab.panels[newPanelID] else {
+            XCTFail("expected new tab panel to be terminal")
+            return
+        }
+
+        XCTAssertEqual(workspace.tabIDs.count, 2)
+        XCTAssertEqual(newTerminalState.cwd, "/tmp/toastty/new-tab")
+        XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "zmx"))
+    }
+
+    func testSelectWorkspaceTabFromCommandUsesFocusedWindowOverGlobalSelection() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let firstWindowID = try XCTUnwrap(state.windows.first?.id)
+        let firstWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(reducer.send(.createWindow(seed: nil, initialFrame: nil), state: &state))
+        let secondWindowID = try XCTUnwrap(state.windows.last?.id)
+        let secondWorkspaceID = try XCTUnwrap(state.windows.last?.selectedWorkspaceID)
+        XCTAssertTrue(reducer.send(.createWorkspaceTab(workspaceID: secondWorkspaceID, seed: nil), state: &state))
+        XCTAssertTrue(reducer.send(.selectWorkspace(windowID: firstWindowID, workspaceID: firstWorkspaceID), state: &state))
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(store.selectWorkspaceTabFromCommand(preferredWindowID: secondWindowID, shortcutNumber: 2))
+
+        let firstWorkspace = try XCTUnwrap(store.state.workspacesByID[firstWorkspaceID])
+        let secondWorkspace = try XCTUnwrap(store.state.workspacesByID[secondWorkspaceID])
+        XCTAssertEqual(firstWorkspace.tabIDs.count, 1)
+        XCTAssertEqual(secondWorkspace.tabIDs.count, 2)
+        XCTAssertEqual(secondWorkspace.resolvedSelectedTabID, secondWorkspace.tabIDs[1])
+        XCTAssertEqual(store.state.selectedWindowID, firstWindowID)
+    }
+
     func testRenameSelectedWorkspaceFromCommandSetsPendingRename() throws {
         let workspace = WorkspaceState.bootstrap(title: "Dev")
         let windowID = UUID()

@@ -34,6 +34,13 @@ struct WorkspaceView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
 
+            if let workspace = selectedWorkspace {
+                workspaceTabBar(for: workspace)
+                Rectangle()
+                    .fill(ToastyTheme.hairline)
+                    .frame(height: 1)
+            }
+
             if let window = store.window(id: windowID) {
                 workspaceStack(for: window)
             } else {
@@ -115,6 +122,44 @@ struct WorkspaceView: View {
         .accessibilityIdentifier("topbar.container")
     }
 
+    private func workspaceTabBar(for workspace: WorkspaceState) -> some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(workspace.orderedTabs) { tab in
+                        workspaceTabButton(
+                            workspaceID: workspace.id,
+                            tab: tab,
+                            isSelected: workspace.resolvedSelectedTabID == tab.id
+                        )
+                    }
+                }
+                .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+                .padding(.vertical, 5)
+            }
+
+            Button(action: createTabInSelectedWorkspace) {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .frame(width: 20, height: 20)
+                    .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 12)
+            .disabled(selectedWorkspace == nil)
+            .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
+            .accessibilityIdentifier("workspace.tabs.new")
+        }
+        .frame(height: ToastyTheme.workspaceTabBarHeight)
+        .background(ToastyTheme.chromeBackground)
+        .accessibilityIdentifier("workspace.tabs.container")
+    }
+
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = selectedWorkspace?.id else { return }
         terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
@@ -140,6 +185,10 @@ struct WorkspaceView: View {
         return {
             _ = store.createWorkspaceFromCommand(preferredWindowID: windowID)
         }
+    }
+
+    private func createTabInSelectedWorkspace() {
+        _ = store.createWorkspaceTabFromCommand(preferredWindowID: windowID)
     }
 
     private func workspaceStack(for window: WindowState) -> some View {
@@ -168,18 +217,51 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState, isSelected: Bool) -> some View {
-        let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
-            limit: DisplayShortcutConfig.maxPanelFocusShortcutCount
+        ZStack {
+            ForEach(workspace.orderedTabs) { tab in
+                let isSelectedTab = workspace.resolvedSelectedTabID == tab.id
+                workspaceTabContent(
+                    workspace: workspace,
+                    tab: tab,
+                    isWorkspaceSelected: isSelected,
+                    isTabSelected: isSelectedTab
+                )
+                .opacity(isSelectedTab ? 1 : 0)
+                .allowsHitTesting(isSelected && isSelectedTab)
+                .accessibilityHidden(!(isSelected && isSelectedTab))
+                .zIndex(isSelectedTab ? 1 : 0)
+            }
+        }
+        // Keep the workspace subtree mounted across focused-layout toggles so
+        // terminal hosts preserve their runtime state instead of remounting.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func workspaceTabContent(
+        workspace: WorkspaceState,
+        tab: WorkspaceTabState,
+        isWorkspaceSelected: Bool,
+        isTabSelected: Bool
+    ) -> some View {
+        let terminalShortcutNumbersByPanelID = terminalShortcutNumbersByPanelID(
+            for: tab,
+            isSelectedTab: isWorkspaceSelected && isTabSelected
         )
         let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus] = Dictionary(
-            uniqueKeysWithValues: workspace.panels.keys.compactMap { panelID in
+            uniqueKeysWithValues: tab.panels.keys.compactMap { panelID in
                 guard let status = sessionRuntimeStore.panelStatus(for: panelID) else {
                     return nil
                 }
                 return (panelID, status)
             }
         )
-        let renderedLayout = workspace.renderedLayout
+        let renderedLayout = WorkspaceSplitTree(root: tab.layoutTree).renderedLayout(
+            workspaceID: workspace.id,
+            focusedPanelModeActive: tab.focusedPanelModeActive,
+            focusedPanelID: tab.focusedPanelID
+        )
+
         GeometryReader { geometry in
             let projection = renderedLayout.projectLayout(
                 in: LayoutFrame(
@@ -194,8 +276,10 @@ struct WorkspaceView: View {
                 ForEach(projection.slots) { placement in
                     SlotPlacementView(
                         placement: placement,
-                        workspace: workspace,
-                        isWorkspaceSelected: isSelected,
+                        workspaceID: workspace.id,
+                        tab: tab,
+                        isWorkspaceSelected: isWorkspaceSelected,
+                        isTabSelected: isTabSelected,
                         store: store,
                         terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -225,9 +309,6 @@ struct WorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
         }
-        // Keep the workspace subtree mounted across focused-layout toggles so
-        // terminal hosts preserve their runtime state instead of remounting.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -297,6 +378,65 @@ struct WorkspaceView: View {
 
     private var selectedWorkspace: WorkspaceState? {
         store.selectedWorkspace(in: windowID)
+    }
+
+    private func terminalShortcutNumbersByPanelID(
+        for tab: WorkspaceTabState,
+        isSelectedTab: Bool
+    ) -> [UUID: Int] {
+        guard isSelectedTab else { return [:] }
+        let terminalPanelIDs = tab.layoutTree.allSlotInfos.compactMap { slot -> UUID? in
+            guard case .terminal = tab.panels[slot.panelID] else {
+                return nil
+            }
+            return slot.panelID
+        }
+
+        return Dictionary(
+            uniqueKeysWithValues: terminalPanelIDs
+                .prefix(DisplayShortcutConfig.maxPanelFocusShortcutCount)
+                .enumerated()
+                .map { offset, panelID in
+                    (panelID, offset + 1)
+                }
+        )
+    }
+
+    private func workspaceTabButton(
+        workspaceID: UUID,
+        tab: WorkspaceTabState,
+        isSelected: Bool
+    ) -> some View {
+        Button {
+            _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
+        } label: {
+            HStack(spacing: 6) {
+                if tab.unreadPanelIDs.isEmpty == false {
+                    Circle()
+                        .fill(ToastyTheme.accent)
+                        .frame(width: 5, height: 5)
+                }
+
+                Text(tab.displayTitle)
+                    .font(ToastyTheme.fontWorkspaceTab)
+                    .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 22)
+            .background(
+                isSelected ? ToastyTheme.elevatedBackground : Color.clear,
+                in: RoundedRectangle(cornerRadius: 6)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(isSelected ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .help(tab.displayTitle)
+        .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
     }
 
     private func topBarButton(
@@ -424,8 +564,10 @@ private struct SelectedWorkspaceUnreadSignature: Equatable {
 
 private struct SlotPlacementView: View {
     let placement: LayoutSlotPlacement
-    let workspace: WorkspaceState
+    let workspaceID: UUID
+    let tab: WorkspaceTabState
     let isWorkspaceSelected: Bool
+    let isTabSelected: Bool
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -438,14 +580,15 @@ private struct SlotPlacementView: View {
 
     var body: some View {
         Group {
-            if let panelState = workspace.panels[placement.panelID] {
+            if let panelState = tab.panels[placement.panelID] {
                 PanelCardView(
-                    workspaceID: workspace.id,
+                    workspaceID: workspaceID,
                     panelID: placement.panelID,
                     panelState: panelState,
                     isWorkspaceSelected: isWorkspaceSelected,
-                    focusedPanelID: workspace.focusedPanelID,
-                    hasUnreadNotification: workspace.unreadPanelIDs.contains(placement.panelID),
+                    isTabSelected: isTabSelected,
+                    focusedPanelID: tab.focusedPanelID,
+                    hasUnreadNotification: tab.unreadPanelIDs.contains(placement.panelID),
                     panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
                     terminalDisplayTitleOverride: terminalRuntimeRegistry.panelDisplayTitleOverride(for: placement.panelID),
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
@@ -480,6 +623,7 @@ private struct PanelCardView: View {
     let panelID: UUID
     let panelState: PanelState
     let isWorkspaceSelected: Bool
+    let isTabSelected: Bool
     let focusedPanelID: UUID?
     let hasUnreadNotification: Bool
     let panelSessionStatus: WorkspaceSessionStatus?
@@ -496,7 +640,7 @@ private struct PanelCardView: View {
         // Only the selected workspace may present a focused terminal host.
         // Hidden-but-mounted workspaces still render for background runtime
         // updates, but they must not retain keyboard focus or route shortcuts.
-        isWorkspaceSelected && focusedPanelID == panelID
+        isWorkspaceSelected && isTabSelected && focusedPanelID == panelID
     }
 
     var body: some View {
