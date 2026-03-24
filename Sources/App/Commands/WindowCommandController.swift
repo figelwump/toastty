@@ -955,7 +955,6 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
     ]
 
     private static let hiddenMenuTitles: Set<String> = [
-        "New Window",
         "Show Tab Bar",
         "Show All Tabs"
     ]

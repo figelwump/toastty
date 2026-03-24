@@ -36,7 +36,7 @@ public struct AppReducer {
             let resolvedTitle = title ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state)
             let workspace = WorkspaceState.bootstrap(
                 title: resolvedTitle,
-                defaultTerminalProfileBinding: state.defaultTerminalProfileBinding
+                initialTerminalProfileBinding: state.defaultTerminalProfileBinding
             )
 
             state.workspacesByID[workspace.id] = workspace
@@ -44,10 +44,11 @@ public struct AppReducer {
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
             return true
 
-        case .createWindow(let initialWorkspaceTitle, let initialFrame):
+        case .createWindow(let seed, let initialFrame):
             let workspace = WorkspaceState.bootstrap(
-                title: initialWorkspaceTitle ?? "Workspace 1",
-                defaultTerminalProfileBinding: state.defaultTerminalProfileBinding
+                title: normalizedWorkspaceTitle(seed?.workspaceTitle) ?? "Workspace 1",
+                initialTerminalCWD: seed?.terminalCWD,
+                initialTerminalProfileBinding: seed?.terminalProfileBinding ?? state.defaultTerminalProfileBinding
             )
             let window = WindowState(
                 id: UUID(),
@@ -852,6 +853,10 @@ public struct AppReducer {
         }.max() ?? 0
 
         return "Workspace \(currentMax + 1)"
+    }
+
+    private static func normalizedWorkspaceTitle(_ value: String?) -> String? {
+        normalizedMetadataValue(value)
     }
 
     private static func normalizedMetadataValue(_ value: String?) -> String? {

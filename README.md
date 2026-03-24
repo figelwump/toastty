@@ -25,6 +25,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 ## Features
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
+- **Independent windows** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list, seeded from the active terminal's cwd and profile
 - **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu or top bar, with live sidebar status and notifications
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
@@ -40,6 +41,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 | Shortcut | Action |
 |---|---|
+| `Cmd+N` | New window |
 | `Cmd+B` | Show or hide sidebar |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |

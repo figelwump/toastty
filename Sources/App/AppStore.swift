@@ -22,6 +22,7 @@ private enum WorkspaceCommandTarget {
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
     typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
+    private static let newWindowCascadeOffset: Double = 30
 
     @Published private(set) var state: AppState
     @Published private(set) var hasEverLaunchedAgent: Bool
@@ -160,6 +161,17 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
+    func createWindowFromCommand(preferredWindowID: UUID?) -> Bool {
+        let selection = commandSelection(preferredWindowID: preferredWindowID)
+        return send(
+            .createWindow(
+                seed: windowLaunchSeed(from: selection),
+                initialFrame: commandCreateWindowFrame(cascadingFromSourceWindow: selection != nil)
+            )
+        )
+    }
+
+    @discardableResult
     func createWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
         guard let target = createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) else {
             return false
@@ -171,8 +183,8 @@ final class AppStore: ObservableObject {
         case .newWindow:
             return send(
                 .createWindow(
-                    initialWorkspaceTitle: nil,
-                    initialFrame: commandCreateWindowFrameProvider()
+                    seed: nil,
+                    initialFrame: commandCreateWindowFrame(cascadingFromSourceWindow: false)
                 )
             )
         }
@@ -289,6 +301,25 @@ final class AppStore: ObservableObject {
         return .newWindow
     }
 
+    private func windowLaunchSeed(from selection: WindowCommandSelection?) -> WindowLaunchSeed? {
+        guard let selection,
+              let focusedPanelID = selection.workspace.focusedPanelID,
+              case .terminal(let terminalState)? = selection.workspace.panels[focusedPanelID] else {
+            return nil
+        }
+
+        return WindowLaunchSeed(
+            terminalCWD: terminalState.workingDirectorySeed,
+            terminalProfileBinding: terminalState.profileBinding ?? state.defaultTerminalProfileBinding
+        )
+    }
+
+    private func commandCreateWindowFrame(cascadingFromSourceWindow: Bool) -> CGRectCodable? {
+        guard let frame = commandCreateWindowFrameProvider() else { return nil }
+        guard cascadingFromSourceWindow else { return frame }
+        return Self.cascadeWindowFrame(frame)
+    }
+
     private static func currentCommandCreateWindowFrame() -> CGRectCodable? {
         if let frame = NSApp.mainWindow?.frame {
             return CGRectCodable(frame)
@@ -297,6 +328,15 @@ final class AppStore: ObservableObject {
             return CGRectCodable(frame)
         }
         return nil
+    }
+
+    private static func cascadeWindowFrame(_ frame: CGRectCodable) -> CGRectCodable {
+        CGRectCodable(
+            x: frame.x + newWindowCascadeOffset,
+            y: frame.y - newWindowCascadeOffset,
+            width: frame.width,
+            height: frame.height
+        )
     }
 
     @discardableResult

@@ -642,7 +642,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
         bridge.installIfNeeded()
 
-        XCTAssertTrue(fileMenu.items[0].isHidden)
+        XCTAssertFalse(fileMenu.items[0].isHidden)
         XCTAssertFalse(fileMenu.items[1].isHidden)
         XCTAssertTrue(windowMenu.items[0].isHidden)
         XCTAssertTrue(windowMenu.items[1].isHidden)
@@ -667,7 +667,11 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.installIfNeeded()
 
         let rebuiltFileMenu = NSMenu(title: "Datei")
-        let rebuiltNewWindowItem = NSMenuItem(title: "New Window", action: nil, keyEquivalent: "n")
+        let rebuiltNewWindowItem = NSMenuItem(
+            title: "New Window",
+            action: #selector(NSResponder.newWindowForTab(_:)),
+            keyEquivalent: "n"
+        )
         let rebuiltOpenRecentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         rebuiltFileMenu.addItem(rebuiltNewWindowItem)
         rebuiltFileMenu.addItem(rebuiltOpenRecentItem)

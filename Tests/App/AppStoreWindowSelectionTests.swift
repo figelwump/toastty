@@ -257,6 +257,100 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.globalTerminalFontPoints, 15)
     }
 
+    func testCreateWindowFromCommandSeedsFromFocusedTerminalAndCascadesFrame() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "ssh-prod")
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var sourceWorkspace = try XCTUnwrap(state.workspacesByID[sourceWorkspaceID])
+        let focusedPanelID = try XCTUnwrap(sourceWorkspace.focusedPanelID)
+        guard case .terminal(var terminalState) = sourceWorkspace.panels[focusedPanelID] else {
+            XCTFail("expected focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = "/tmp/toastty/new-window"
+        terminalState.profileBinding = TerminalProfileBinding(profileID: "zmx")
+        sourceWorkspace.panels[focusedPanelID] = .terminal(terminalState)
+        state.workspacesByID[sourceWorkspaceID] = sourceWorkspace
+
+        let sourceFrame = CGRectCodable(x: 320, y: 240, width: 1600, height: 960)
+        let store = AppStore(
+            state: state,
+            persistTerminalFontPreference: false,
+            commandCreateWindowFrameProvider: { sourceFrame }
+        )
+
+        XCTAssertTrue(store.createWindowFromCommand(preferredWindowID: sourceWindowID))
+
+        XCTAssertEqual(store.state.windows.count, 2)
+        let newWindow = try XCTUnwrap(store.state.windows.last)
+        let newWorkspaceID = try XCTUnwrap(newWindow.selectedWorkspaceID)
+        let newWorkspace = try XCTUnwrap(store.state.workspacesByID[newWorkspaceID])
+        let newPanelID = try XCTUnwrap(newWorkspace.focusedPanelID)
+        guard case .terminal(let newTerminalState) = newWorkspace.panels[newPanelID] else {
+            XCTFail("expected new window panel to be terminal")
+            return
+        }
+
+        XCTAssertEqual(store.state.selectedWindowID, newWindow.id)
+        XCTAssertEqual(newWindow.frame, CGRectCodable(x: 350, y: 210, width: 1600, height: 960))
+        XCTAssertEqual(newTerminalState.cwd, "/tmp/toastty/new-window")
+        XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "zmx"))
+    }
+
+    func testCreateWindowFromCommandFallsBackToHomeDirectoryAndDefaultProfileFromNonTerminalFocus() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "ssh-prod")
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let reducer = AppReducer()
+
+        XCTAssertTrue(reducer.send(.toggleAuxPanel(workspaceID: sourceWorkspaceID, kind: .diff), state: &state))
+        let workspaceWithDiff = try XCTUnwrap(state.workspacesByID[sourceWorkspaceID])
+        let diffPanelID = try XCTUnwrap(workspaceWithDiff.panels.first(where: { $0.value.kind == .diff })?.key)
+        XCTAssertTrue(reducer.send(.focusPanel(workspaceID: sourceWorkspaceID, panelID: diffPanelID), state: &state))
+
+        let store = AppStore(
+            state: state,
+            persistTerminalFontPreference: false,
+            commandCreateWindowFrameProvider: { nil }
+        )
+
+        XCTAssertTrue(store.createWindowFromCommand(preferredWindowID: sourceWindowID))
+
+        let newWindow = try XCTUnwrap(store.state.windows.last)
+        let newWorkspaceID = try XCTUnwrap(newWindow.selectedWorkspaceID)
+        let newWorkspace = try XCTUnwrap(store.state.workspacesByID[newWorkspaceID])
+        let newPanelID = try XCTUnwrap(newWorkspace.focusedPanelID)
+        guard case .terminal(let newTerminalState) = newWorkspace.panels[newPanelID] else {
+            XCTFail("expected new window panel to be terminal")
+            return
+        }
+
+        XCTAssertEqual(newTerminalState.cwd, NSHomeDirectory())
+        XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "ssh-prod"))
+    }
+
+    func testCreateWindowFromCommandUsesProvidedFrameWithoutCascadeWhenNoSourceWindowExists() throws {
+        let expectedFrame = CGRectCodable(x: 320, y: 240, width: 1600, height: 960)
+        let state = AppState(
+            windows: [],
+            workspacesByID: [:],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: 13,
+            globalTerminalFontPoints: 15
+        )
+        let store = AppStore(
+            state: state,
+            persistTerminalFontPreference: false,
+            commandCreateWindowFrameProvider: { expectedFrame }
+        )
+
+        XCTAssertTrue(store.createWindowFromCommand(preferredWindowID: nil))
+
+        let window = try XCTUnwrap(store.state.windows.first)
+        XCTAssertEqual(window.frame, expectedFrame)
+        XCTAssertEqual(store.state.selectedWindowID, window.id)
+    }
+
     func testRenameSelectedWorkspaceFromCommandSetsPendingRename() throws {
         let workspace = WorkspaceState.bootstrap(title: "Dev")
         let windowID = UUID()

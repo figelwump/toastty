@@ -68,7 +68,7 @@ public struct AppState: Codable, Equatable, Sendable {
     public static func bootstrap(defaultTerminalProfileID: String? = nil) -> AppState {
         let normalizedDefaultTerminalProfileID = normalizedTerminalProfileID(defaultTerminalProfileID)
         let workspace = WorkspaceState.bootstrap(
-            defaultTerminalProfileBinding: normalizedDefaultTerminalProfileID.map { profileID in
+            initialTerminalProfileBinding: normalizedDefaultTerminalProfileID.map { profileID in
                 TerminalProfileBinding(profileID: profileID)
             }
         )

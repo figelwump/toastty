@@ -501,7 +501,7 @@ struct AppReducerTests {
         let reducer = AppReducer()
         let frame = CGRectCodable(x: 240, y: 180, width: 1440, height: 900)
 
-        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: frame), state: &state))
+        #expect(reducer.send(.createWindow(seed: nil, initialFrame: frame), state: &state))
 
         let window = try #require(state.windows.first)
         let workspaceID = try #require(window.selectedWorkspaceID)
@@ -528,7 +528,7 @@ struct AppReducerTests {
         )
         let reducer = AppReducer()
 
-        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: nil), state: &state))
+        #expect(reducer.send(.createWindow(seed: nil, initialFrame: nil), state: &state))
 
         let window = try #require(state.windows.first)
         let workspaceID = try #require(window.selectedWorkspaceID)
@@ -544,6 +544,40 @@ struct AppReducerTests {
     }
 
     @Test
+    func createWindowUsesLaunchSeedForInitialWorkspaceAndPane() throws {
+        var state = AppState(
+            windows: [],
+            workspacesByID: [:],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: 13,
+            defaultTerminalProfileID: "ssh-prod",
+            globalTerminalFontPoints: 15
+        )
+        let reducer = AppReducer()
+        let seed = WindowLaunchSeed(
+            workspaceTitle: "Client Logs",
+            terminalCWD: "~/src/../tmp/toastty",
+            terminalProfileBinding: TerminalProfileBinding(profileID: "zmx")
+        )
+
+        #expect(reducer.send(.createWindow(seed: seed, initialFrame: nil), state: &state))
+
+        let window = try #require(state.windows.first)
+        let workspaceID = try #require(window.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+        guard case .terminal(let terminalState) = workspace.panels[panelID] else {
+            Issue.record("Expected initial window panel to be terminal")
+            return
+        }
+
+        #expect(workspace.title == "Client Logs")
+        #expect(terminalState.cwd == ((NSHomeDirectory() + "/src/../tmp/toastty") as NSString).standardizingPath)
+        #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func createWindowFallsBackToDefaultFrameWhenNoInitialFrameIsProvided() throws {
         var state = AppState(
             windows: [],
@@ -554,7 +588,7 @@ struct AppReducerTests {
         )
         let reducer = AppReducer()
 
-        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: nil), state: &state))
+        #expect(reducer.send(.createWindow(seed: nil, initialFrame: nil), state: &state))
 
         let window = try #require(state.windows.first)
         #expect(window.frame == CGRectCodable(x: 120, y: 120, width: 1280, height: 760))

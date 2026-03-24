@@ -130,6 +130,16 @@ struct ToasttyCommandMenus: Commands {
     }
 
     var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Window") {
+                store.createWindowFromCommand(preferredWindowID: focusedWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newWindow.key,
+                modifiers: ToasttyKeyboardShortcuts.newWindow.modifiers
+            )
+        }
+
         CommandGroup(after: .appInfo) {
             Button(action: reloadConfiguration) {
                 Label("Reload Configuration", systemImage: "arrow.clockwise")

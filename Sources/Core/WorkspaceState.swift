@@ -53,7 +53,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
 
     public static func bootstrap(
         title: String = "Workspace 1",
-        defaultTerminalProfileBinding: TerminalProfileBinding? = nil
+        initialTerminalCWD: String? = nil,
+        initialTerminalProfileBinding: TerminalProfileBinding? = nil
     ) -> WorkspaceState {
         let panelID = UUID()
         let slotID = UUID()
@@ -66,13 +67,22 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
                     TerminalPanelState(
                         title: "Terminal 1",
                         shell: "zsh",
-                        cwd: NSHomeDirectory(),
-                        profileBinding: defaultTerminalProfileBinding
+                        cwd: normalizedInitialTerminalCWD(initialTerminalCWD) ?? NSHomeDirectory(),
+                        profileBinding: initialTerminalProfileBinding
                     )
                 ),
             ],
             focusedPanelID: panelID
         )
+    }
+
+    private static func normalizedInitialTerminalCWD(_ cwd: String?) -> String? {
+        guard let cwd else { return nil }
+        let trimmed = cwd.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let normalizedPath = (trimmed as NSString).standardizingPath
+        guard normalizedPath.isEmpty == false else { return nil }
+        return normalizedPath
     }
 
     private enum CodingKeys: String, CodingKey {

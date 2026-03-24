@@ -47,6 +47,11 @@ private extension EventModifiers {
 }
 
 enum ToasttyKeyboardShortcuts {
+    static let newWindow = ToasttyKeyboardShortcut(
+        "n",
+        modifiers: [.command]
+    )
+
     static let toggleSidebar = ToasttyKeyboardShortcut(
         "b",
         modifiers: [.command]
