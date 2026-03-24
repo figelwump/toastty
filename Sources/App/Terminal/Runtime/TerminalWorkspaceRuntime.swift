@@ -64,6 +64,12 @@ final class TerminalWorkspaceRuntime {
         #endif
     }
 
+    func applyGhosttyScrollbarPreferenceChange() {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        controllerStore.applyGhosttyScrollbarPreferenceChange()
+        #endif
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func registerPendingSplitSourceIfNeeded(previousState: AppState, nextState: AppState) {
         controllerStore.registerPendingSplitSourceIfNeeded(

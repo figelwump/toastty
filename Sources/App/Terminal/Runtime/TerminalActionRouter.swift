@@ -15,6 +15,14 @@ final class TerminalActionRouter {
     func handle(_ action: GhosttyRuntimeAction) -> Bool {
         let appState = store.state
 
+        if case .scrollbar(let scrollbarState) = action.intent {
+            return registry.handleScrollbarAction(
+                action: action,
+                scrollbarState: scrollbarState,
+                state: appState
+            )
+        }
+
         if case .desktopNotification(let title, let body) = action.intent {
             return registry.handleDesktopNotificationAction(
                 action: action,
@@ -83,6 +91,9 @@ final class TerminalActionRouter {
 
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: resolution.workspaceID))
+
+        case .scrollbar:
+            handled = false
 
         case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             handled = false

@@ -204,13 +204,15 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func controller(for panelID: UUID, workspaceID: UUID, windowID: UUID) -> TerminalSurfaceController {
-        runtimeStore.controller(
+        let controller = runtimeStore.controller(
             for: panelID,
             workspaceID: workspaceID,
             windowID: windowID,
             state: store?.state,
             delegate: self
         )
+        controller.applyViewportState(viewportState(for: panelID))
+        return controller
     }
 
     func synchronizeGhosttySurfaceFocusFromApplicationState() {
@@ -547,6 +549,12 @@ private extension TerminalRuntimeRegistry {
     func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
 }
 #endif
+
+extension TerminalRuntimeRegistry {
+    func applyGhosttyScrollbarPreferenceChange() {
+        runtimeStore.applyGhosttyScrollbarPreferenceChange()
+    }
+}
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry {
@@ -933,6 +941,43 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             body: body,
             state: state
         ) ?? false
+    }
+    func handleScrollbarAction(
+        action: GhosttyRuntimeAction,
+        scrollbarState: GhosttyScrollbarState,
+        state: AppState
+    ) -> Bool {
+        guard let surfaceHandle = action.surfaceHandle,
+              let panelID = panelID(forSurfaceHandle: surfaceHandle),
+              workspaceID(containing: panelID, state: state) != nil else {
+            ToasttyLog.debug(
+                "Ghostty scrollbar action could not resolve panel/workspace",
+                category: .terminal,
+                metadata: [
+                    "intent": action.logIntentName,
+                    "surface_handle": action.surfaceHandle.map(String.init) ?? "nil",
+                ]
+            )
+            return false
+        }
+
+        let previousViewportState = viewportState(for: panelID)
+        let nextViewportState = TerminalViewportState(
+            panelID: panelID,
+            totalRows: scrollbarState.totalRows,
+            offsetRows: scrollbarState.offsetRows,
+            visibleRows: scrollbarState.visibleRows
+        )
+        reconcilePendingFocusedPanelViewportRestore(
+            previousViewportState: previousViewportState,
+            nextViewportState: nextViewportState
+        )
+        setViewportState(
+            nextViewportState,
+            for: panelID
+        )
+        runtimeStore.existingController(for: panelID)?.applyViewportState(nextViewportState)
+        return true
     }
 }
 #endif

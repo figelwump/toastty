@@ -39,6 +39,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var closeTransitionViewportDeferralArmed = false
     private var closeTransitionViewportUpdatePending = false
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
+    private var lastViewportState: TerminalViewportState?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
@@ -113,6 +114,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         terminalSurfaceScrollView = surfaceScrollView
         terminalHostView = surfaceScrollView.terminalHostView
         hostedView = surfaceScrollView
+        surfaceScrollView.performBindingAction = { [weak self] action in
+            self?.performBindingActionIfPossible(action) ?? false
+        }
+        surfaceScrollView.applyScrollbarPreference(
+            Self.scrollbarPreference(from: ghosttyManager.configuredScrollbarPreference)
+        )
         terminalHostView.requestFirstResponderIfNeeded = { [weak self] in
             guard let self else { return }
             self.ensureFirstResponderIfNeeded(
@@ -557,6 +564,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         closeTransitionViewportReplayTask = nil
         closeTransitionViewportDeferralArmed = false
         closeTransitionViewportUpdatePending = false
+        lastViewportState = nil
+        terminalSurfaceScrollView.applyViewportState(nil)
+        terminalSurfaceScrollView.applyCellHeightPoints(nil)
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -789,6 +799,36 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ghosttySurface
     }
 
+    @discardableResult
+    func scrollToBottomIfPossible() -> Bool {
+        performBindingActionIfPossible("scroll_to_bottom")
+    }
+
+    @discardableResult
+    func scrollToRowIfPossible(_ row: Int) -> Bool {
+        performBindingActionIfPossible("scroll_to_row:\(max(row, 0))")
+    }
+
+    @discardableResult
+    func performBindingActionIfPossible(_ action: String) -> Bool {
+        guard let ghosttySurface else { return false }
+        return invokeGhosttyBindingAction(action, on: ghosttySurface)
+    }
+
+    #if DEBUG
+    var surfaceScrollViewForTesting: TerminalSurfaceScrollView {
+        terminalSurfaceScrollView
+    }
+    #endif
+
+    func applyViewportState(_ viewportState: TerminalViewportState?) {
+        lastViewportState = viewportState
+        synchronizeScrollbarPresentation()
+    }
+
+    func applyGhosttyScrollbarPreferenceChange() {
+        synchronizeScrollbarPresentation()
+    }
     private func resolvedGhosttyConfiguredFontBaselinePoints() -> Double {
         let configuredPoints = ghosttyManager.configuredTerminalFontPoints ?? AppState.defaultTerminalFontPoints
         return AppState.clampedTerminalFontPoints(configuredPoints)
@@ -1155,6 +1195,7 @@ extension TerminalSurfaceController {
         )
         guard metrics != lastRenderMetrics else { return }
         lastRenderMetrics = metrics
+        synchronizeScrollbarPresentation()
 
         ToasttyLog.debug(
             "Ghostty surface render metrics",
@@ -1173,6 +1214,34 @@ extension TerminalSurfaceController {
                 "pixel_sizing": metrics.pixelSizingEnabled ? "true" : "false",
             ]
         )
+    }
+
+    private func synchronizeScrollbarPresentation() {
+        terminalSurfaceScrollView.applyScrollbarPreference(
+            Self.scrollbarPreference(from: ghosttyManager.configuredScrollbarPreference)
+        )
+        terminalSurfaceScrollView.applyViewportState(lastViewportState)
+        terminalSurfaceScrollView.applyCellHeightPoints(currentCellHeightPoints())
+    }
+
+    private func currentCellHeightPoints() -> CGFloat? {
+        guard let lastRenderMetrics,
+              lastRenderMetrics.cellHeightPx > 0,
+              lastRenderMetrics.scaleThousandths > 0 else {
+            return nil
+        }
+        return CGFloat(lastRenderMetrics.cellHeightPx) * 1000 / CGFloat(lastRenderMetrics.scaleThousandths)
+    }
+
+    private static func scrollbarPreference(
+        from configuredPreference: GhosttyScrollbarPreference
+    ) -> TerminalSurfaceScrollView.ScrollbarPreference {
+        switch configuredPreference {
+        case .system:
+            return .system
+        case .never:
+            return .never
+        }
     }
 
     private func swapToFallbackIfNeeded() {

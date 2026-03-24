@@ -107,6 +107,12 @@ final class TerminalWindowRuntimeStore {
         }
     }
 
+    func applyGhosttyScrollbarPreferenceChange() {
+        for runtime in windowRuntimesByID.values {
+            runtime.applyGhosttyScrollbarPreferenceChange()
+        }
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func registerPendingSplitSourceIfNeeded(
         workspaceID: UUID,

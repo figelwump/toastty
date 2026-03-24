@@ -149,6 +149,10 @@ Toastty reads these additional keys from Ghostty config:
   - falls back to Ghostty `background` when unset
 - `font-size`
   - baseline terminal font size when no Toastty override is present
+- `scrollbar`
+  - controls Toastty's native vertical terminal scrollbar support
+  - `system` shows the macOS-hosted scrollbar when scrollback is available
+  - `never` keeps scrollbar UI hidden while preserving scrollback actions
 
 ## Toastty-owned config and settings
 

@@ -155,19 +155,106 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
     }
 
-    func testSurfaceScrollViewDisablesNativeScrollbars() {
+    func testSurfaceScrollViewWrapsHostViewInSeparateDocumentView() {
+        let scrollView = TerminalSurfaceScrollView()
+
+        XCTAssertNotNil(scrollView.documentView)
+        XCTAssertFalse(scrollView.documentView === scrollView.terminalHostView)
+        XCTAssertTrue(scrollView.terminalHostView.superview === scrollView.documentView)
+    }
+
+    func testSurfaceScrollViewStartsWithoutVisibleScrollbars() {
         let scrollView = TerminalSurfaceScrollView()
 
         XCTAssertFalse(scrollView.hasVerticalScroller)
         XCTAssertFalse(scrollView.hasHorizontalScroller)
     }
 
-    func testSurfaceScrollViewKeepsDocumentViewSizedToClipViewBounds() {
+    func testSurfaceScrollViewKeepsHostViewSizedToClipViewBounds() {
         let scrollView = TerminalSurfaceScrollView()
         scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 90)
         scrollView.layoutSubtreeIfNeeded()
 
         XCTAssertEqual(scrollView.terminalHostView.frame.size, scrollView.contentView.bounds.size)
+    }
+
+    func testSurfaceScrollViewShowsVerticalScrollerWhenViewportIsScrollable() {
+        let scrollView = TerminalSurfaceScrollView()
+
+        scrollView.applyViewportState(
+            TerminalViewportState(
+                panelID: UUID(),
+                totalRows: 100,
+                offsetRows: 70,
+                visibleRows: 20
+            )
+        )
+        scrollView.applyCellHeightPoints(10)
+
+        XCTAssertTrue(scrollView.hasVerticalScroller)
+        XCTAssertFalse(scrollView.hasHorizontalScroller)
+    }
+
+    func testSurfaceScrollViewHonorsNeverScrollbarPreference() {
+        let scrollView = TerminalSurfaceScrollView()
+
+        scrollView.applyViewportState(
+            TerminalViewportState(
+                panelID: UUID(),
+                totalRows: 100,
+                offsetRows: 70,
+                visibleRows: 20
+            )
+        )
+        scrollView.applyCellHeightPoints(10)
+        scrollView.applyScrollbarPreference(.never)
+
+        XCTAssertFalse(scrollView.hasVerticalScroller)
+    }
+
+    func testSurfaceScrollViewSizesDocumentFromViewportState() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyViewportState(
+            TerminalViewportState(
+                panelID: UUID(),
+                totalRows: 100,
+                offsetRows: 40,
+                visibleRows: 20
+            )
+        )
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(Double(scrollView.documentView?.frame.height ?? 0), 1000, accuracy: 0.001)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 400, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 400, accuracy: 0.001)
+    }
+
+    func testSurfaceScrollViewLiveScrollSendsScrollToRowBindingAction() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyViewportState(
+            TerminalViewportState(
+                panelID: UUID(),
+                totalRows: 100,
+                offsetRows: 40,
+                visibleRows: 20
+            )
+        )
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        var receivedAction: String?
+        scrollView.performBindingAction = { action in
+            receivedAction = action
+            return true
+        }
+
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: 500))
+        scrollView.performLiveScrollWritebackForTesting()
+
+        XCTAssertEqual(receivedAction, "scroll_to_row:30")
     }
 
     func testHostViewRequestsFirstResponderRestorationWhenAttachedToWindow() {
