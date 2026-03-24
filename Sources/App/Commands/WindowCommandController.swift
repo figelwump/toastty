@@ -79,6 +79,8 @@ final class CloseWorkspaceCommandController {
 
 @MainActor
 final class SplitLayoutCommandController {
+    private static let appOwnedResizeAmount = 5
+
     private let store: AppStore
 
     init(store: AppStore) {
@@ -124,7 +126,13 @@ final class SplitLayoutCommandController {
         guard let workspaceID = commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
-        return store.send(.resizeFocusedSlotSplit(workspaceID: workspaceID, direction: direction, amount: 1))
+        return store.send(
+            .resizeFocusedSlotSplit(
+                workspaceID: workspaceID,
+                direction: direction,
+                amount: Self.appOwnedResizeAmount
+            )
+        )
     }
 
     @discardableResult

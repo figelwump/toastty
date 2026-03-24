@@ -1137,6 +1137,31 @@ final class WindowCommandControllerTests: XCTestCase {
         )
     }
 
+    func testSplitLayoutCommandControllerResizeUsesAppOwnedStepAmount() throws {
+        let state = try XCTUnwrap(AutomationFixtureLoader.load(named: "split-workspace"))
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let controller = SplitLayoutCommandController(store: store)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let initialWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+
+        guard case .split(_, let orientation, let initialRatio, _, _) = initialWorkspace.layoutTree else {
+            XCTFail("expected split-workspace fixture to have split root")
+            return
+        }
+        XCTAssertEqual(orientation, .horizontal)
+
+        XCTAssertTrue(controller.resizeSplit(direction: .right, preferredWindowID: windowID))
+
+        let resizedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        guard case .split(_, _, let resizedRatio, _, _) = resizedWorkspace.layoutTree else {
+            XCTFail("expected split root after resize")
+            return
+        }
+
+        XCTAssertEqual(resizedRatio, initialRatio + 0.025, accuracy: 0.0001)
+    }
+
     func testTerminalProfilesMenuControllerSplitsFocusedSlotWithProfileBinding() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let runtimeRegistry = TerminalRuntimeRegistry()
