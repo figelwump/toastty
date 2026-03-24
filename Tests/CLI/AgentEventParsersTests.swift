@@ -110,6 +110,64 @@ struct AgentEventParsersTests {
     }
 
     @Test
+    func claudeNotificationIdlePromptMapsToReadyStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Notification","notification_type":"idle_prompt","message":"Claude is waiting for your response"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Claude is waiting for your response"
+            )
+        ])
+    }
+
+    @Test
+    func claudeNotificationIdlePromptFallsBackWithoutMessage() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Notification","notification_type":"idle_prompt"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .ready,
+                summary: "Ready",
+                detail: "Waiting for input"
+            )
+        ])
+    }
+
+    @Test
+    func claudeNotificationNonIdlePromptIsIgnored() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Notification","notification_type":"some_other_type","message":"Something happened"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
     func codexTurnCompleteMapsToReadyStatusWithAssistantSummary() throws {
         let commands = try AgentEventIngestor.commands(
             for: .codexNotify,

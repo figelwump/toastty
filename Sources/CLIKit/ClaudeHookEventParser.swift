@@ -67,9 +67,31 @@ enum ClaudeHookEventParser {
                 )
             ]
 
+        case "Notification":
+            return notificationCommands(sessionID: sessionID, panelID: panelID, from: object)
+
         default:
             return []
         }
+    }
+
+    private static func notificationCommands(
+        sessionID: String,
+        panelID: UUID?,
+        from object: [String: Any]
+    ) -> [CLICommand] {
+        guard normalizedString(object["notification_type"]) == "idle_prompt" else {
+            return []
+        }
+        return [
+            .sessionStatus(
+                sessionID: sessionID,
+                panelID: panelID,
+                kind: .ready,
+                summary: "Ready",
+                detail: normalizedSummaryText(object["message"]) ?? "Waiting for input"
+            )
+        ]
     }
 
     private static func approvalDetail(from object: [String: Any]) -> String? {

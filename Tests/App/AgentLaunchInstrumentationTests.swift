@@ -38,6 +38,13 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         XCTAssertNotNil(hooks["PostToolUse"])
         XCTAssertNotNil(hooks["PostToolUseFailure"])
         XCTAssertNotNil(hooks["PermissionRequest"])
+        XCTAssertNotNil(hooks["Notification"])
+
+        let notificationEntries = try XCTUnwrap(hooks["Notification"] as? [[String: Any]])
+        let matcherEntry = notificationEntries.first { entry in
+            (entry["matcher"] as? String) == "idle_prompt"
+        }
+        XCTAssertNotNil(matcherEntry, "Notification hook should have an idle_prompt matcher entry")
     }
 
     func testPrepareCodexLaunchFormatsNotifyOverrideAsTomlArray() throws {
