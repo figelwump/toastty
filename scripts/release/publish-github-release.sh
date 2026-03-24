@@ -521,21 +521,37 @@ create_release() {
 fetch_existing_appcast() {
   local output_path="$1"
   local appcast_payload=""
+  local payload_path=""
 
   appcast_payload="$(gh api "repos/$SPARKLE_FEED_REPO/contents/appcast.xml?ref=$SPARKLE_FEED_BRANCH" 2>/dev/null || true)"
   if [[ -n "$appcast_payload" ]]; then
-    APPCAST_CONTENT_SHA="$(printf '%s' "$appcast_payload" | /usr/bin/python3 -c 'import json, sys; print(json.load(sys.stdin)["sha"])')"
-    printf '%s' "$appcast_payload" \
-      | /usr/bin/python3 - "$output_path" <<'PY'
-import base64
+    payload_path="$(mktemp /tmp/toastty-appcast-payload.XXXXXX.json)"
+    printf '%s' "$appcast_payload" >"$payload_path"
+
+    APPCAST_CONTENT_SHA="$(/usr/bin/python3 - "$payload_path" <<'PY'
 import json
+import pathlib
 import sys
 
-payload = json.load(sys.stdin)
+payload_path = pathlib.Path(sys.argv[1])
+with payload_path.open("r", encoding="utf-8") as payload_file:
+    print(json.load(payload_file)["sha"])
+PY
+)"
+    /usr/bin/python3 - "$payload_path" "$output_path" <<'PY'
+import base64
+import json
+import pathlib
+import sys
 
-with open(sys.argv[1], "wb") as appcast_file:
+payload_path = pathlib.Path(sys.argv[1])
+with payload_path.open("r", encoding="utf-8") as payload_file:
+    payload = json.load(payload_file)
+
+with open(sys.argv[2], "wb") as appcast_file:
     appcast_file.write(base64.b64decode(payload["content"]))
 PY
+    rm -f "$payload_path"
     return 0
   fi
 
