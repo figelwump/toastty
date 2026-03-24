@@ -36,6 +36,156 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherUsesParsedReadCommandDetails() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"exec_command_begin","call_id":"call-read","command":["/bin/zsh","-lc","nl -ba Sources/App/Terminal/TerminalRuntimeRegistry.swift"],"parsed_cmd":[{"type":"read","name":"TerminalRuntimeRegistry.swift","path":"Sources/App/Terminal/TerminalRuntimeRegistry.swift"}]}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Reading TerminalRuntimeRegistry.swift")
+        ])
+    }
+
+    func testWatcherUsesParsedSearchCommandDetails() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"exec_command_begin","call_id":"call-search","command":["rg","-n","SidebarView"],"parsed_cmd":[{"type":"search","query":"SidebarView"}]}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Searching for SidebarView")
+        ])
+    }
+
+    func testWatcherUsesParsedListFilesCommandDetails() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"exec_command_begin","call_id":"call-list","command":["rg","--files","Sources/App"],"parsed_cmd":[{"type":"list_files","path":"Sources/App"}]}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Listing files")
+        ])
+    }
+
+    func testWatcherFallsBackToRawCommandWhenParsedCommandIsEmpty() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"exec_command_begin","call_id":"call-empty","command":["npm","test"],"parsed_cmd":[]}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Running npm test")
+        ])
+    }
+
+    func testWatcherFallsBackToRawCommandWhenParsedCommandTypeIsUnknown() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"exec_command_begin","call_id":"call-unknown","command":["npm","test"],"parsed_cmd":[{"type":"unknown","query":"SidebarView"}]}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Running npm test")
+        ])
+    }
+
+    func testWatcherFallsBackToGenericCommandDetailWhenExecCommandHasNoUsableDetails() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"exec_command_begin","call_id":"call-generic","parsed_cmd":[{"type":"unknown"}]}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Running a shell command")
+        ])
+    }
+
+    func testWatcherParsesPatchApplyBeginSingleFile() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"patch_apply_begin","call_id":"call-patch-single","changes":{"/Users/vishal/GiantThings/repos/toastty/Sources/App/Agents/CodexSessionLogWatcher.swift":{"type":"update","unified_diff":"@@ -1 +1 @@"}}}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Editing CodexSessionLogWatcher.swift")
+        ])
+    }
+
+    func testWatcherParsesPatchApplyBeginMultipleFiles() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"patch_apply_begin","call_id":"call-patch-multi","changes":{"/tmp/B.swift":{"type":"update","unified_diff":"@@ -1 +1 @@"},"/tmp/A.swift":{"type":"update","unified_diff":"@@ -1 +1 @@"}}}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Editing A.swift and 1 more file")
+        ])
+    }
+
+    func testWatcherFallsBackWhenPatchApplyChangesAreEmpty() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"patch_apply_begin","call_id":"call-patch-empty","changes":{}}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Editing files")
+        ])
+    }
+
+    func testWatcherFallsBackWhenPatchApplyChangesAreMalformed() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"patch_apply_begin","call_id":"call-patch-malformed","changes":[]}}}"#,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Editing files")
+        ])
+    }
+
+    func testWatcherDeduplicatesRepeatedPatchApplyBeginEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"patch_apply_begin","call_id":"call-patch-repeat","changes":{"/tmp/A.swift":{"type":"update","unified_diff":"@@ -1 +1 @@"}}}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"patch_apply_begin","call_id":"call-patch-repeat","changes":{"/tmp/A.swift":{"type":"update","unified_diff":"@@ -1 +1 @@"}}}}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Editing A.swift")
+        ])
+    }
+
+    func testWatcherTreatsExecAndPatchEventsWithSameCallIDAsDistinct() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"exec_command_begin","call_id":"call-shared","command":["npm","test"]}}}
+                {"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"patch_apply_begin","call_id":"call-shared","changes":{"/tmp/A.swift":{"type":"update","unified_diff":"@@ -1 +1 @@"}}}}}
+                """,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Running npm test"),
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Editing A.swift")
+        ])
+    }
+
+    func testWatcherIgnoresContextCompactedEvents() async throws {
+        let events = try await recordEvents(
+            from: #"{"dir":"to_tui","kind":"codex_event","payload":{"msg":{"type":"context_compacted"}}}"#,
+            expectedCount: 0
+        )
+
+        XCTAssertTrue(events.isEmpty)
+    }
+
     func testWatcherFlushesFinalBufferedLineOnStop() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -207,6 +357,39 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         defer { try? handle.close() }
         try handle.seekToEnd()
         try handle.write(contentsOf: Data(string.utf8))
+    }
+
+    private func recordEvents(
+        from contents: String,
+        expectedCount: Int,
+        pollIntervalNanoseconds: UInt64 = 10_000_000
+    ) async throws -> [CodexSessionLogEvent] {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let eventsExpectation = expectedCount > 0
+            ? expectation(description: "Expected watcher events arrive")
+            : nil
+        eventsExpectation?.expectedFulfillmentCount = expectedCount
+        eventsExpectation?.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(logURL: logURL, pollIntervalNanoseconds: pollIntervalNanoseconds) { event in
+            await recorder.append(event)
+            eventsExpectation?.fulfill()
+        }
+
+        watcher.start()
+        let terminatedContents = contents.hasSuffix("\n") ? contents : contents + "\n"
+        try append(terminatedContents, to: logURL)
+
+        if let eventsExpectation {
+            await fulfillment(of: [eventsExpectation], timeout: 1)
+        } else {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+        watcher.stop()
+        return await recorder.snapshot()
     }
 }
 

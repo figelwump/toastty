@@ -159,10 +159,18 @@ private extension CodexSessionLogWatcher {
         case "exec_command_begin":
             let dedupeKey = "exec_command_begin:\(eventIdentifier(from: payload, message: message, fallback: line))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
-            if let command = normalizedSummaryText(commandPreview(from: message), limit: 100) {
-                return CodexSessionLogEvent(kind: .turnStarted, detail: "Running \(command)")
-            }
-            return CodexSessionLogEvent(kind: .turnStarted, detail: "Running a shell command")
+            return CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: enrichedCommandDetail(from: message)
+            )
+
+        case "patch_apply_begin":
+            let dedupeKey = "patch_apply_begin:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            guard seenKeys.insert(dedupeKey).inserted else { return nil }
+            return CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: patchApplyDetail(from: message)
+            )
 
         case "task_complete":
             let dedupeKey = "task_complete:\(eventIdentifier(from: payload, message: message, fallback: line))"
@@ -176,6 +184,11 @@ private extension CodexSessionLogWatcher {
             let dedupeKey = "turn_aborted:\(eventIdentifier(from: payload, message: message, fallback: line))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+
+        case "context_compacted":
+            // Intentionally skipped: this internal event does not carry actionable
+            // status detail for the sidebar.
+            return nil
 
         default:
             guard type.hasSuffix("_approval_request") || type == "request_user_input" else {
@@ -200,6 +213,73 @@ private extension CodexSessionLogWatcher {
         }
 
         return "Codex is waiting for approval"
+    }
+
+    static func enrichedCommandDetail(from message: [String: Any]) -> String {
+        if let detail = parsedCommandDetail(from: message) {
+            return detail
+        }
+        if let command = normalizedSummaryText(commandPreview(from: message), limit: 100) {
+            return "Running \(command)"
+        }
+        return "Running a shell command"
+    }
+
+    static func parsedCommandDetail(from message: [String: Any]) -> String? {
+        guard let parsedCommands = message["parsed_cmd"] as? [Any] else {
+            return nil
+        }
+
+        for case let command as [String: Any] in parsedCommands {
+            guard let type = normalizedString(command["type"]) else {
+                continue
+            }
+
+            switch type {
+            case "read":
+                if let fileName = fileName(from: command) {
+                    return "Reading \(fileName)"
+                }
+                return "Reading files"
+
+            case "search":
+                if let query = normalizedSummaryText(command["query"], limit: 80) {
+                    return "Searching for \(query)"
+                }
+                return "Searching the workspace"
+
+            case "list_files":
+                return "Listing files"
+
+            default:
+                continue
+            }
+        }
+
+        return nil
+    }
+
+    static func patchApplyDetail(from message: [String: Any]) -> String {
+        guard let changes = message["changes"] as? [String: Any] else {
+            return "Editing files"
+        }
+
+        let sortedPaths = changes.keys
+            .compactMap(nonEmptyString(_:))
+            .sorted()
+        guard let firstPath = sortedPaths.first else {
+            return "Editing files"
+        }
+
+        let remainingCount = sortedPaths.count - 1
+        guard remainingCount > 0 else {
+            return "Editing \(lastPathComponent(firstPath))"
+        }
+
+        let remainder = remainingCount == 1
+            ? "1 more file"
+            : "\(remainingCount) more files"
+        return "Editing \(lastPathComponent(firstPath)) and \(remainder)"
     }
 
     static func commandPreview(from message: [String: Any]) -> String? {
@@ -228,6 +308,22 @@ private extension CodexSessionLogWatcher {
         return fallback
     }
 
+    static func fileName(from object: [String: Any]) -> String? {
+        if let name = normalizedSummaryText(object["name"], limit: 80) {
+            return name
+        }
+        if let path = nonEmptyString(object["path"]) {
+            return lastPathComponent(path)
+        }
+        return nil
+    }
+
+    static func nonEmptyString(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func normalizedString(_ value: Any?) -> String? {
         guard let string = value as? String else { return nil }
         let collapsed = string
@@ -242,6 +338,10 @@ private extension CodexSessionLogWatcher {
         guard string.count > limit else { return string }
         let endIndex = string.index(string.startIndex, offsetBy: limit - 3)
         return String(string[..<endIndex]) + "..."
+    }
+
+    static func lastPathComponent(_ path: String) -> String {
+        URL(fileURLWithPath: path).lastPathComponent
     }
 
     static func close(_ handle: inout FileHandle?) {
