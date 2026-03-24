@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 import XCTest
 @testable import ToasttyApp

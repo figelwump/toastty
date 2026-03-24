@@ -4,17 +4,46 @@ import CryptoKit
 import Darwin
 import Foundation
 
+struct AutomationSocketServerRecoveryPolicy {
+    let retryDelays: [TimeInterval]
+
+    static let `default` = AutomationSocketServerRecoveryPolicy(retryDelays: [0.25, 1.0, 3.0])
+}
+
+struct AutomationSocketServerTestHooks {
+    enum AcceptResult: Sendable {
+        case useSystemAccept
+        case fail(Int32)
+    }
+
+    var acceptOverride: (@Sendable (Int32) -> AcceptResult)?
+    var listenerDidStart: (@Sendable (_ fileDescriptor: Int32, _ recoveryAttempt: Int?) -> Void)?
+    var recoveryDidSchedule: (@Sendable (_ attempt: Int, _ errorNumber: Int32, _ delay: TimeInterval) -> Void)?
+
+    static let disabled = AutomationSocketServerTestHooks()
+}
+
 final class AutomationSocketServer: @unchecked Sendable {
+    private struct PendingListenerRecovery {
+        let attempt: Int
+        let triggeringErrno: Int32
+        let delay: TimeInterval
+    }
+
     private let socketPath: String
     private let processEnvironment: [String: String]
     private let publishesDiscoveryRecord: Bool
     private let commandExecutor: AutomationCommandExecutor
+    private let recoveryPolicy: AutomationSocketServerRecoveryPolicy
+    private let testHooks: AutomationSocketServerTestHooks
     private let queue = DispatchQueue(label: "toastty.automation.socket")
 
     private var listenFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var clients: [Int32: AutomationSocketClient] = [:]
     private var isStopping = false
+    private var pendingRecovery: PendingListenerRecovery?
+    private var recoveryAttemptCount = 0
 
     init(
         socketPath: String,
@@ -23,13 +52,17 @@ final class AutomationSocketServer: @unchecked Sendable {
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
-        agentLaunchService: AgentLaunchService
+        agentLaunchService: AgentLaunchService,
+        recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
+        testHooks: AutomationSocketServerTestHooks = .disabled
     ) throws {
         self.socketPath = socketPath
         self.processEnvironment = ProcessInfo.processInfo.environment
         self.publishesDiscoveryRecord = socketPath == AutomationConfig.resolveServerSocketPath(
             environment: ProcessInfo.processInfo.environment
         )
+        self.recoveryPolicy = recoveryPolicy
+        self.testHooks = testHooks
         self.commandExecutor = AutomationCommandExecutor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -59,7 +92,12 @@ final class AutomationSocketServer: @unchecked Sendable {
         guard fd >= 0 else {
             throw AutomationSocketError.internalError("socket() failed: \(errno)")
         }
-        try setNonBlocking(fd)
+        do {
+            try setNonBlocking(fd)
+        } catch {
+            close(fd)
+            throw error
+        }
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -97,32 +135,42 @@ final class AutomationSocketServer: @unchecked Sendable {
 
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in
-            self?.acceptConnections()
+            self?.acceptConnections(listenFD: fd)
         }
         source.setCancelHandler { [weak self] in
+            close(fd)
             guard let self else { return }
+            if self.listenFD == fd {
+                self.listenFD = -1
+            }
             ToasttyLog.info(
                 "Automation socket listener source cancelled",
                 category: .automation,
                 metadata: self.socketLogMetadata(
-                    additional: ["expected": self.isStopping ? "true" : "false"]
+                    additional: [
+                        "cancelled_fd": String(fd),
+                        "expected": self.isStopping ? "true" : "false",
+                        "recovery_pending": self.pendingRecovery == nil ? "false" : "true",
+                    ]
                 )
             )
-            if self.listenFD >= 0 {
-                close(self.listenFD)
-                self.listenFD = -1
-            }
+            self.beginPendingRecoveryIfNeeded()
         }
 
         listenFD = fd
         acceptSource = source
         source.resume()
+        let currentRecoveryAttempt = recoveryAttemptCount > 0 ? recoveryAttemptCount : nil
+        testHooks.listenerDidStart?(fd, currentRecoveryAttempt)
 
         ToasttyLog.info(
             "Automation socket listener started",
             category: .automation,
             metadata: socketLogMetadata(
-                fileDescriptor: fd
+                fileDescriptor: fd,
+                additional: [
+                    "recovery_attempt": currentRecoveryAttempt.map(String.init) ?? "0",
+                ]
             )
         )
 
@@ -148,6 +196,7 @@ final class AutomationSocketServer: @unchecked Sendable {
 
     private func stopListening() {
         isStopping = true
+        pendingRecovery = nil
         ToasttyLog.info(
             "Automation socket listener stopping",
             category: .automation,
@@ -155,16 +204,19 @@ final class AutomationSocketServer: @unchecked Sendable {
                 fileDescriptor: listenFD >= 0 ? listenFD : nil
             )
         )
-        acceptSource?.cancel()
+        let source = acceptSource
         acceptSource = nil
+        if let source {
+            listenFD = -1
+            source.cancel()
+        } else if listenFD >= 0 {
+            close(listenFD)
+            listenFD = -1
+        }
         for client in clients.values {
             client.close()
         }
         clients.removeAll()
-        if listenFD >= 0 {
-            close(listenFD)
-            listenFD = -1
-        }
 
         if publishesDiscoveryRecord {
             AutomationSocketLocator.removeDiscoveryRecordIfOwned(
@@ -176,12 +228,12 @@ final class AutomationSocketServer: @unchecked Sendable {
         _ = unlink(socketPath)
     }
 
-    private func acceptConnections() {
+    private func acceptConnections(listenFD: Int32) {
         while true {
-            let clientFD = accept(listenFD, nil, nil)
+            let clientFD = nextAcceptedClientFileDescriptor(listenFD: listenFD)
             guard clientFD >= 0 else {
                 let errorNumber = errno
-                if errorNumber == EAGAIN || errorNumber == EWOULDBLOCK {
+                if shouldIgnoreAcceptError(errorNumber) {
                     return
                 }
                 ToasttyLog.error(
@@ -195,6 +247,9 @@ final class AutomationSocketServer: @unchecked Sendable {
                         ]
                     )
                 )
+                if shouldRecoverFromAcceptError(errorNumber) {
+                    scheduleListenerRecovery(triggeringErrno: errorNumber)
+                }
                 return
             }
 
@@ -296,6 +351,166 @@ final class AutomationSocketServer: @unchecked Sendable {
         guard fcntl(fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
             throw AutomationSocketError.internalError("fcntl(F_SETFL) failed: \(errno)")
         }
+    }
+
+    private func nextAcceptedClientFileDescriptor(listenFD: Int32) -> Int32 {
+        if let override = testHooks.acceptOverride?(listenFD) {
+            switch override {
+            case .useSystemAccept:
+                break
+            case .fail(let errorNumber):
+                errno = errorNumber
+                return -1
+            }
+        }
+        return accept(listenFD, nil, nil)
+    }
+
+    private func shouldIgnoreAcceptError(_ errorNumber: Int32) -> Bool {
+        switch errorNumber {
+        case EAGAIN, EWOULDBLOCK, EINTR, ECONNABORTED, EPROTO:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func shouldRecoverFromAcceptError(_ errorNumber: Int32) -> Bool {
+        switch errorNumber {
+        case EBADF, EINVAL, ENOTSOCK, EOPNOTSUPP:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func scheduleListenerRecovery(
+        triggeringErrno errorNumber: Int32,
+        startErrorDescription: String? = nil,
+        cancelCurrentListener: Bool = true
+    ) {
+        guard isStopping == false else { return }
+        guard pendingRecovery == nil else { return }
+
+        let nextAttempt = recoveryAttemptCount + 1
+        guard let delay = recoveryDelay(forAttempt: nextAttempt) else {
+            ToasttyLog.error(
+                "Automation socket listener recovery exhausted",
+                category: .automation,
+                metadata: socketLogMetadata(
+                    fileDescriptor: listenFD >= 0 ? listenFD : nil,
+                    additional: [
+                        "errno": String(errorNumber),
+                        "error": socketErrorMessage(for: errorNumber),
+                        "attempts": String(recoveryAttemptCount),
+                        "last_start_error": startErrorDescription ?? "<none>",
+                    ]
+                )
+            )
+            return
+        }
+
+        let recovery = PendingListenerRecovery(
+            attempt: nextAttempt,
+            triggeringErrno: errorNumber,
+            delay: delay
+        )
+        pendingRecovery = recovery
+        recoveryAttemptCount = nextAttempt
+        testHooks.recoveryDidSchedule?(nextAttempt, errorNumber, delay)
+
+        ToasttyLog.warning(
+            "Automation socket listener scheduling recovery",
+            category: .automation,
+            metadata: socketLogMetadata(
+                fileDescriptor: listenFD >= 0 ? listenFD : nil,
+                additional: [
+                    "errno": String(errorNumber),
+                    "error": socketErrorMessage(for: errorNumber),
+                    "attempt": String(nextAttempt),
+                    "delay_ms": String(Int((delay * 1000).rounded())),
+                    "last_start_error": startErrorDescription ?? "<none>",
+                ]
+            )
+        )
+
+        let source = acceptSource
+        acceptSource = nil
+        if cancelCurrentListener, let source {
+            // DispatchSource cancellation is async; the cancel handler closes the old fd
+            // before we try to bind the replacement listener on the same socket path.
+            listenFD = -1
+            source.cancel()
+            return
+        }
+
+        if cancelCurrentListener, listenFD >= 0 {
+            close(listenFD)
+            listenFD = -1
+        }
+        beginPendingRecoveryIfNeeded()
+    }
+
+    private func beginPendingRecoveryIfNeeded() {
+        guard isStopping == false, let recovery = pendingRecovery else { return }
+        pendingRecovery = nil
+
+        if recovery.delay <= 0 {
+            queue.async { [weak self] in
+                self?.restartListening(after: recovery)
+            }
+        } else {
+            queue.asyncAfter(deadline: .now() + recovery.delay) { [weak self] in
+                self?.restartListening(after: recovery)
+            }
+        }
+    }
+
+    private func restartListening(after recovery: PendingListenerRecovery) {
+        guard isStopping == false else { return }
+
+        do {
+            try startListening()
+            recoveryAttemptCount = 0
+            ToasttyLog.info(
+                "Automation socket listener recovered",
+                category: .automation,
+                metadata: socketLogMetadata(
+                    fileDescriptor: listenFD >= 0 ? listenFD : nil,
+                    additional: [
+                        "attempt": String(recovery.attempt),
+                        "trigger_errno": String(recovery.triggeringErrno),
+                        "trigger_error": socketErrorMessage(for: recovery.triggeringErrno),
+                    ]
+                )
+            )
+        } catch {
+            ToasttyLog.error(
+                "Automation socket listener recovery attempt failed",
+                category: .automation,
+                metadata: socketLogMetadata(
+                    fileDescriptor: listenFD >= 0 ? listenFD : nil,
+                    additional: [
+                        "attempt": String(recovery.attempt),
+                        "trigger_errno": String(recovery.triggeringErrno),
+                        "trigger_error": socketErrorMessage(for: recovery.triggeringErrno),
+                        "start_error": error.localizedDescription,
+                    ]
+                )
+            )
+            scheduleListenerRecovery(
+                triggeringErrno: recovery.triggeringErrno,
+                startErrorDescription: error.localizedDescription,
+                cancelCurrentListener: false
+            )
+        }
+    }
+
+    private func recoveryDelay(forAttempt attempt: Int) -> TimeInterval? {
+        guard attempt > 0, attempt <= recoveryPolicy.retryDelays.count else {
+            return nil
+        }
+        return recoveryPolicy.retryDelays[attempt - 1]
     }
 
     private func socketLogMetadata(
