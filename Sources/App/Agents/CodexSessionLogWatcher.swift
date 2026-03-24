@@ -30,6 +30,7 @@ final class CodexSessionLogWatcher {
         self.eventHandler = eventHandler
     }
 
+    @MainActor
     func start() {
         guard task == nil else { return }
         task = Self.makePollingTask(
@@ -39,8 +40,11 @@ final class CodexSessionLogWatcher {
         )
     }
 
-    func stop() {
-        task?.cancel()
+    @MainActor
+    func stop() async {
+        guard let currentTask = task else { return }
+        currentTask.cancel()
+        _ = await currentTask.result
         task = nil
     }
 }
@@ -59,20 +63,27 @@ private extension CodexSessionLogWatcher {
             defer { close(&handle) }
 
             while true {
-                if let delta = Self.readDelta(from: logURL, handle: &handle, offset: &offset) {
-                    let combined = bufferedRemainder + delta
-                    let lines = combined.components(separatedBy: "\n")
-                    bufferedRemainder = lines.last ?? ""
-
-                    for line in lines.dropLast() {
-                        guard let event = Self.parse(line: line, seenKeys: &seenKeys) else {
-                            continue
-                        }
-                        await eventHandler(event)
-                    }
-                }
+                await Self.drainAvailableDeltas(
+                    from: logURL,
+                    handle: &handle,
+                    offset: &offset,
+                    bufferedRemainder: &bufferedRemainder,
+                    seenKeys: &seenKeys,
+                    eventHandler: eventHandler
+                )
 
                 if Task.isCancelled {
+                    // The terminal process can exit immediately after Codex writes
+                    // its final completion/abort event. Drain the file one last time
+                    // before teardown so we do not lose that last status update.
+                    await Self.drainAvailableDeltas(
+                        from: logURL,
+                        handle: &handle,
+                        offset: &offset,
+                        bufferedRemainder: &bufferedRemainder,
+                        seenKeys: &seenKeys,
+                        eventHandler: eventHandler
+                    )
                     break
                 }
 
@@ -82,6 +93,42 @@ private extension CodexSessionLogWatcher {
             if let event = Self.parseBufferedRemainder(bufferedRemainder, seenKeys: &seenKeys) {
                 await eventHandler(event)
             }
+        }
+    }
+
+    static func drainAvailableDeltas(
+        from logURL: URL,
+        handle: inout FileHandle?,
+        offset: inout UInt64,
+        bufferedRemainder: inout String,
+        seenKeys: inout Set<String>,
+        eventHandler: @escaping EventHandler
+    ) async {
+        while let delta = readDelta(from: logURL, handle: &handle, offset: &offset) {
+            await processDelta(
+                delta,
+                bufferedRemainder: &bufferedRemainder,
+                seenKeys: &seenKeys,
+                eventHandler: eventHandler
+            )
+        }
+    }
+
+    static func processDelta(
+        _ delta: String,
+        bufferedRemainder: inout String,
+        seenKeys: inout Set<String>,
+        eventHandler: @escaping EventHandler
+    ) async {
+        let combined = bufferedRemainder + delta
+        let lines = combined.components(separatedBy: "\n")
+        bufferedRemainder = lines.last ?? ""
+
+        for line in lines.dropLast() {
+            guard let event = parse(line: line, seenKeys: &seenKeys) else {
+                continue
+            }
+            await eventHandler(event)
         }
     }
 

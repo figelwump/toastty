@@ -2,6 +2,7 @@ import Foundation
 import XCTest
 @testable import ToasttyApp
 
+@MainActor
 final class CodexSessionLogWatcherTests: XCTestCase {
     func testWatcherDeduplicatesRepeatedExecCommandEvents() async throws {
         let logURL = try makeLogURL()
@@ -28,7 +29,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         await fulfillment(of: [firstEvent], timeout: 1)
         try await Task.sleep(nanoseconds: 100_000_000)
-        watcher.stop()
+        await watcher.stop()
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
@@ -210,7 +211,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         let bufferedEvents = await recorder.snapshot()
         XCTAssertTrue(bufferedEvents.isEmpty)
 
-        watcher.stop()
+        await watcher.stop()
         await fulfillment(of: [finalEvent], timeout: 1)
 
         let events = await recorder.snapshot()
@@ -240,7 +241,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         )
 
         await fulfillment(of: [abortedEvent], timeout: 1)
-        watcher.stop()
+        await watcher.stop()
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
@@ -269,7 +270,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         )
 
         await fulfillment(of: [completionEvent], timeout: 1)
-        watcher.stop()
+        await watcher.stop()
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
@@ -298,7 +299,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         )
 
         await fulfillment(of: [promptEvent], timeout: 1)
-        watcher.stop()
+        await watcher.stop()
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
@@ -331,11 +332,36 @@ final class CodexSessionLogWatcherTests: XCTestCase {
 
         await fulfillment(of: [promptEvent], timeout: 1)
         try await Task.sleep(nanoseconds: 100_000_000)
-        watcher.stop()
+        await watcher.stop()
 
         let events = await recorder.snapshot()
         XCTAssertEqual(events, [
             CodexSessionLogEvent(kind: .turnStarted, detail: "summarize skills in here")
+        ])
+    }
+
+    func testWatcherDrainsTurnAbortedEventOnImmediateStop() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 1_000_000_000
+        ) { event in
+            await recorder.append(event)
+        }
+
+        watcher.start()
+        try append(
+            #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-5","msg":{"type":"turn_aborted","reason":"interrupted"}}}"# + "\n",
+            to: logURL
+        )
+
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
         ])
     }
 
@@ -388,7 +414,7 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         }
 
         try await Task.sleep(nanoseconds: 100_000_000)
-        watcher.stop()
+        await watcher.stop()
         return await recorder.snapshot()
     }
 }

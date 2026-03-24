@@ -106,7 +106,7 @@ final class AgentLaunchService {
         self.socketPathProvider = socketPathProvider
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
-                self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
+                await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
             }
         }
     }
@@ -387,34 +387,29 @@ final class AgentLaunchService {
         }
     }
 
-    private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) {
+    private func cleanupManagedArtifacts(forInactiveSessionsIn registry: SessionRegistry) async {
         let inactiveSessionIDs = managedArtifactsBySessionID.keys.filter { sessionID in
             registry.activeSession(sessionID: sessionID) == nil
         }
         for sessionID in inactiveSessionIDs {
-            cleanupManagedArtifacts(for: sessionID)
+            await cleanupManagedArtifacts(for: sessionID)
         }
     }
 
-    private func cleanupManagedArtifacts(for sessionID: String) {
+    private func cleanupManagedArtifacts(for sessionID: String) async {
         guard let managedArtifacts = managedArtifactsBySessionID.removeValue(forKey: sessionID) else {
             return
         }
-        cleanup(managedArtifacts)
+        await cleanup(managedArtifacts)
     }
 
     private func cleanup(_ preparedArtifacts: PreparedAgentLaunchArtifacts?) {
         guard let preparedArtifacts else { return }
-        cleanup(
-            ManagedLaunchArtifacts(
-                directoryURL: preparedArtifacts.directoryURL,
-                codexSessionLogWatcher: nil
-            )
-        )
+        try? fileManager.removeItem(at: preparedArtifacts.directoryURL)
     }
 
-    private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts) {
-        managedArtifacts.codexSessionLogWatcher?.stop()
+    private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts) async {
+        await managedArtifacts.codexSessionLogWatcher?.stop()
         try? fileManager.removeItem(at: managedArtifacts.directoryURL)
     }
 
