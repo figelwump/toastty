@@ -84,6 +84,85 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
+    func testPreparedClaudeHookScriptLogsTelemetryFailuresWithoutWritingToStdout() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: ["claude"],
+            cliExecutablePath: "/definitely/missing-toastty-cli",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        let artifactsURL = try XCTUnwrap(preparedLaunch.artifacts?.directoryURL)
+        let scriptURL = artifactsURL.appendingPathComponent("claude-hook.sh", isDirectory: false)
+        let telemetryLogURL = artifactsURL.appendingPathComponent("telemetry-failures.log", isDirectory: false)
+
+        let result = try runScript(
+            at: scriptURL,
+            environment: ["TOASTTY_SOCKET_PATH": "/tmp/test-claude-hooks.sock"]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertEqual(result.stderr, "")
+
+        let telemetryLog = try String(contentsOf: telemetryLogURL, encoding: .utf8)
+        XCTAssertTrue(telemetryLog.contains("source=claude-hooks"))
+        XCTAssertTrue(telemetryLog.contains("socket_path=/tmp/test-claude-hooks.sock"))
+        XCTAssertTrue(telemetryLog.contains("exit_code="))
+        XCTAssertTrue(telemetryLog.contains("stderr: "))
+    }
+
+    func testPreparedCodexNotifyScriptLogsTelemetryFailuresWithoutWritingToStdout() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: ["codex"],
+            cliExecutablePath: "/definitely/missing-toastty-cli",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        let artifactsURL = try XCTUnwrap(preparedLaunch.artifacts?.directoryURL)
+        let scriptURL = artifactsURL.appendingPathComponent("codex-notify.sh", isDirectory: false)
+        let telemetryLogURL = artifactsURL.appendingPathComponent("telemetry-failures.log", isDirectory: false)
+
+        let result = try runScript(
+            at: scriptURL,
+            environment: ["TOASTTY_SOCKET_PATH": "/tmp/test-codex-hooks.sock"],
+            arguments: ["{\"kind\":\"task_complete\"}"]
+        )
+
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertEqual(result.stdout, "")
+        XCTAssertEqual(result.stderr, "")
+
+        let telemetryLog = try String(contentsOf: telemetryLogURL, encoding: .utf8)
+        XCTAssertTrue(telemetryLog.contains("source=codex-notify"))
+        XCTAssertTrue(telemetryLog.contains("socket_path=/tmp/test-codex-hooks.sock"))
+        XCTAssertTrue(telemetryLog.contains("exit_code="))
+        XCTAssertTrue(telemetryLog.contains("stderr: "))
+    }
+
     func testTomlBasicStringLiteralEscapesSpecialCharacters() {
         let literal = AgentLaunchInstrumentation.tomlBasicStringLiteralForTesting("line\n\t\"\\\u{7F}\u{0001}")
 
@@ -100,6 +179,29 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
             literal,
             "[\"/bin/sh\",\"path with quote \\\" and slash \\\\ and newline \\n\"]"
         )
+    }
+
+    private func runScript(
+        at scriptURL: URL,
+        environment: [String: String],
+        arguments: [String] = []
+    ) throws -> (exitCode: Int32, stdout: String, stderr: String) {
+        let process = Process()
+        process.executableURL = scriptURL
+        process.arguments = arguments
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let stdout = String(data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let stderr = String(data: stderrPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (process.terminationStatus, stdout, stderr)
     }
 }
 

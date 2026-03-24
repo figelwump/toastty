@@ -76,6 +76,7 @@ When the profile ID is `codex`, Toastty:
    - `*_approval_request` / `request_user_input` → **Needs approval**
    - `task_complete` → **Ready**
    - `turn_aborted` → **Idle**
+5. **Logs helper-script delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active, so socket or CLI errors are inspectable without breaking the Codex process
 
 The log watcher is a temporary bridge; it will be replaced once Codex exposes stable start/approval hooks.
 
@@ -94,6 +95,7 @@ When the profile ID is `claude`, Toastty:
 4. **Writes a temporary settings file** and passes `--settings <path>` to Claude
 
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready).
+When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active, but still exits successfully so Claude keeps running.
 
 ## Launch flow
 
@@ -117,7 +119,7 @@ Every agent launched through Toastty receives these environment variables, set i
 |---|---|
 | `TOASTTY_SESSION_ID` | Unique session UUID |
 | `TOASTTY_PANEL_ID` | UUID of the terminal panel the agent was launched into |
-| `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket |
+| `TOASTTY_SOCKET_PATH` | Path to Toastty's automation Unix socket. Built-in Claude/Codex helpers use this explicit value directly rather than relying on CLI socket discovery fallback. |
 | `TOASTTY_CLI_PATH` | Path to the bundled `toastty` CLI executable |
 | `TOASTTY_CWD` | Panel's working directory (if available) |
 | `TOASTTY_REPO_ROOT` | Inferred git repository root (if available) |
@@ -225,3 +227,5 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 **Shortcut does not work** — Check for conflicts with other agent or terminal-profile shortcuts. Toastty logs a warning when it detects a conflict.
 
 **Claude settings conflict** — If your Claude profile includes `--settings` pointing to a file, Toastty merges its hooks into those settings. If the settings argument is malformed or the file cannot be read, Toastty logs a warning and launches without instrumentation.
+
+**Telemetry helper failures** — While a managed `claude` or `codex` session is still active, inspect `telemetry-failures.log` inside that session's temporary launch artifacts directory if the sidebar stops updating. The helper scripts keep the agent process running, but they now preserve socket and CLI stderr there instead of discarding it.

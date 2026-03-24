@@ -59,10 +59,10 @@ It always records:
 - `worktreeRootPath`
 - `userDefaultsSuiteName`
 - `logFilePath`
+- `socketPath`
 
 It may also record these fields when the launch flow provided them:
 
-- `socketPath`
 - `artifactsDirectory`
 - `derivedPath`
 - `runID`

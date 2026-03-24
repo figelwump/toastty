@@ -14,6 +14,7 @@ final class AutomationSocketServer: @unchecked Sendable {
     private var listenFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private var clients: [Int32: AutomationSocketClient] = [:]
+    private var isStopping = false
 
     init(
         socketPath: String,
@@ -45,6 +46,7 @@ final class AutomationSocketServer: @unchecked Sendable {
     }
 
     private func startListening() throws {
+        isStopping = false
         let socketURL = URL(fileURLWithPath: socketPath, isDirectory: false)
         let directoryURL = socketURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
@@ -99,6 +101,13 @@ final class AutomationSocketServer: @unchecked Sendable {
         }
         source.setCancelHandler { [weak self] in
             guard let self else { return }
+            ToasttyLog.info(
+                "Automation socket listener source cancelled",
+                category: .automation,
+                metadata: self.socketLogMetadata(
+                    additional: ["expected": self.isStopping ? "true" : "false"]
+                )
+            )
             if self.listenFD >= 0 {
                 close(self.listenFD)
                 self.listenFD = -1
@@ -109,16 +118,43 @@ final class AutomationSocketServer: @unchecked Sendable {
         acceptSource = source
         source.resume()
 
-        if publishesDiscoveryRecord {
-            try? AutomationSocketLocator.writeDiscoveryRecord(
-                socketPath: socketPath,
-                processID: getpid(),
-                environment: processEnvironment
+        ToasttyLog.info(
+            "Automation socket listener started",
+            category: .automation,
+            metadata: socketLogMetadata(
+                fileDescriptor: fd
             )
+        )
+
+        if publishesDiscoveryRecord {
+            do {
+                try AutomationSocketLocator.writeDiscoveryRecord(
+                    socketPath: socketPath,
+                    processID: getpid(),
+                    environment: processEnvironment
+                )
+            } catch {
+                ToasttyLog.warning(
+                    "Failed to write automation socket discovery record",
+                    category: .automation,
+                    metadata: socketLogMetadata(
+                        fileDescriptor: fd,
+                        additional: ["error": error.localizedDescription]
+                    )
+                )
+            }
         }
     }
 
     private func stopListening() {
+        isStopping = true
+        ToasttyLog.info(
+            "Automation socket listener stopping",
+            category: .automation,
+            metadata: socketLogMetadata(
+                fileDescriptor: listenFD >= 0 ? listenFD : nil
+            )
+        )
         acceptSource?.cancel()
         acceptSource = nil
         for client in clients.values {
@@ -144,15 +180,38 @@ final class AutomationSocketServer: @unchecked Sendable {
         while true {
             let clientFD = accept(listenFD, nil, nil)
             guard clientFD >= 0 else {
-                if errno == EAGAIN || errno == EWOULDBLOCK {
+                let errorNumber = errno
+                if errorNumber == EAGAIN || errorNumber == EWOULDBLOCK {
                     return
                 }
+                ToasttyLog.error(
+                    "Automation socket accept failed",
+                    category: .automation,
+                    metadata: socketLogMetadata(
+                        fileDescriptor: listenFD >= 0 ? listenFD : nil,
+                        additional: [
+                            "errno": String(errorNumber),
+                            "error": socketErrorMessage(for: errorNumber),
+                        ]
+                    )
+                )
                 return
             }
 
             do {
                 try setNonBlocking(clientFD)
             } catch {
+                ToasttyLog.warning(
+                    "Failed to configure automation socket client",
+                    category: .automation,
+                    metadata: socketLogMetadata(
+                        fileDescriptor: listenFD >= 0 ? listenFD : nil,
+                        additional: [
+                            "client_fd": String(clientFD),
+                            "error": error.localizedDescription,
+                        ]
+                    )
+                )
                 close(clientFD)
                 continue
             }
@@ -237,6 +296,28 @@ final class AutomationSocketServer: @unchecked Sendable {
         guard fcntl(fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
             throw AutomationSocketError.internalError("fcntl(F_SETFL) failed: \(errno)")
         }
+    }
+
+    private func socketLogMetadata(
+        fileDescriptor: Int32? = nil,
+        additional: [String: String] = [:]
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "socket_path": socketPath,
+            "pid": String(getpid()),
+            "publishes_discovery_record": publishesDiscoveryRecord ? "true" : "false",
+        ]
+        if let fileDescriptor, fileDescriptor >= 0 {
+            metadata["listen_fd"] = String(fileDescriptor)
+        }
+        for (key, value) in additional {
+            metadata[key] = value
+        }
+        return metadata
+    }
+
+    private func socketErrorMessage(for errorNumber: Int32) -> String {
+        String(cString: strerror(errorNumber))
     }
 }
 

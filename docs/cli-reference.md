@@ -147,6 +147,8 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
+Toastty's built-in Claude and Codex launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. If the helper cannot reach the app, it keeps the agent process alive but appends the CLI failure details to `telemetry-failures.log` in that session's temporary launch artifacts directory while the session remains active.
+
 ## Environment variables
 
 When Toastty launches an agent, these variables are injected into the agent's environment:
