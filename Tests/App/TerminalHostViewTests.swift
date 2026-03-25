@@ -85,6 +85,28 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(codepoint, UnicodeScalar("A").value)
     }
 
+    func testGhosttyTextPreservesBacktabForShiftTab() {
+        let text = TerminalHostView.ghosttyText(
+            eventType: .keyDown,
+            keyCode: 48,
+            characterProvider: { "\u{19}" },
+            translatedCharacterProvider: { "\t" }
+        )
+
+        XCTAssertEqual(text, "\u{19}")
+    }
+
+    func testGhosttyTextNormalizesControlCharacterWhenNeeded() {
+        let text = TerminalHostView.ghosttyText(
+            eventType: .keyDown,
+            keyCode: 8,
+            characterProvider: { "\u{03}" },
+            translatedCharacterProvider: { "c" }
+        )
+
+        XCTAssertEqual(text, "c")
+    }
+
     func testMouseShapeMapsPointerToLinkCursorStyle() {
         let cursorStyle = TerminalHostView.ghosttyMouseCursorStyle(for: GHOSTTY_MOUSE_SHAPE_POINTER)
 

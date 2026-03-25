@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Foundation
 import UniformTypeIdentifiers
 #if TOASTTY_HAS_GHOSTTY_KIT
@@ -1174,15 +1175,27 @@ final class TerminalHostView: NSView {
         }
     }
 
-    private static func ghosttyText(for event: NSEvent) -> String? {
+    static func ghosttyText(
+        eventType: NSEvent.EventType,
+        keyCode: UInt16,
+        characterProvider: () -> String?,
+        translatedCharacterProvider: () -> String?
+    ) -> String? {
         // FlagsChanged events (modifier-only) have no character data;
         // accessing .characters on them triggers an NSEvent assertion.
-        guard event.type == .keyDown || event.type == .keyUp else { return nil }
-        guard let characters = event.characters else { return nil }
+        guard eventType == .keyDown || eventType == .keyUp else { return nil }
+        guard let characters = characterProvider() else { return nil }
+
+        // AppKit reports Shift+Tab as a backtab control character. Preserve the
+        // native Tab payload so terminal apps can distinguish reverse tabbing
+        // instead of flattening it to a plain tab during control-key normalization.
+        if Int(keyCode) == Int(kVK_Tab) {
+            return characters
+        }
 
         if characters.count == 1, let scalar = characters.unicodeScalars.first {
             if scalar.value < 0x20 {
-                return event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.control))
+                return translatedCharacterProvider()
             }
 
             if scalar.value >= 0xF700 && scalar.value <= 0xF8FF {
@@ -1191,6 +1204,19 @@ final class TerminalHostView: NSView {
         }
 
         return characters
+    }
+
+    private static func ghosttyText(for event: NSEvent) -> String? {
+        ghosttyText(
+            eventType: event.type,
+            keyCode: event.keyCode,
+            characterProvider: {
+                event.characters
+            },
+            translatedCharacterProvider: {
+                event.characters(byApplyingModifiers: event.modifierFlags.subtracting(.control))
+            }
+        )
     }
 
     static func ghosttyUnshiftedCodepoint(
