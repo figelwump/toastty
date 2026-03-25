@@ -48,6 +48,28 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceAgentTopBarModel.addAgentsTitle, "Add Agents…")
     }
 
+    func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: true),
+            .closeButton
+        )
+    }
+
+    func testWorkspaceTabTrailingAccessoryShowsCommandDigitBadgesThroughNine() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: false),
+            .badge("⌘1")
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 8, isHovered: false),
+            .badge("⌘9")
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 9, isHovered: false),
+            .empty
+        )
+    }
+
     private func makeProfileShortcutRegistry(
         agentProfiles: AgentCatalog
     ) -> ProfileShortcutRegistry {

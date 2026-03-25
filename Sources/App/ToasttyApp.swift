@@ -311,7 +311,6 @@ final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
-    private static let maxWorkspaceTabShortcutCount = 9
 
     private enum ShortcutAction {
         case closePanel
@@ -431,7 +430,7 @@ final class DisplayShortcutInterceptor {
         }
 
         guard let shortcutNumber,
-              shortcutNumber <= maxWorkspaceTabShortcutCount else {
+              shortcutNumber <= DisplayShortcutConfig.maxWorkspaceTabSelectionShortcutCount else {
             return nil
         }
         return shortcutNumber

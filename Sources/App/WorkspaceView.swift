@@ -3,6 +3,12 @@ import CoreState
 import SwiftUI
 
 struct WorkspaceView: View {
+    enum WorkspaceTabTrailingAccessory: Equatable {
+        case closeButton
+        case badge(String)
+        case empty
+    }
+
     let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
@@ -17,8 +23,24 @@ struct WorkspaceView: View {
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
+    @State private var hoveredTabID: UUID?
+    @State private var hoveredTabCloseButtonID: UUID?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+
+    nonisolated static func workspaceTabTrailingAccessory(
+        index: Int,
+        isHovered: Bool
+    ) -> WorkspaceTabTrailingAccessory {
+        if isHovered {
+            return .closeButton
+        }
+
+        guard let shortcutLabel = DisplayShortcutConfig.workspaceTabSelectionShortcutLabel(for: index + 1) else {
+            return .empty
+        }
+        return .badge(shortcutLabel)
+    }
 
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
         WorkspaceAgentTopBarModel(
@@ -127,16 +149,17 @@ struct WorkspaceView: View {
         HStack(spacing: 8) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(workspace.orderedTabs) { tab in
+                    ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
                         workspaceTabButton(
                             workspaceID: workspace.id,
                             tab: tab,
+                            index: index,
                             isSelected: workspace.resolvedSelectedTabID == tab.id
                         )
                     }
                 }
                 .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
-                .padding(.vertical, 5)
+                .padding(.vertical, 4)
             }
 
             Button(action: createTabInSelectedWorkspace) {
@@ -406,38 +429,173 @@ struct WorkspaceView: View {
     private func workspaceTabButton(
         workspaceID: UUID,
         tab: WorkspaceTabState,
+        index: Int,
         isSelected: Bool
     ) -> some View {
-        Button {
-            _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
-        } label: {
-            HStack(spacing: 6) {
-                if tab.unreadPanelIDs.isEmpty == false {
-                    Circle()
-                        .fill(ToastyTheme.accent)
-                        .frame(width: 5, height: 5)
-                }
+        let hasUnread = tab.unreadPanelIDs.isEmpty == false
+        let isHovered = hoveredTabID == tab.id
+        let colors = resolveTabColors(
+            isSelected: isSelected,
+            isHovered: isHovered,
+            hasUnread: hasUnread
+        )
 
-                Text(tab.displayTitle)
-                    .font(ToastyTheme.fontWorkspaceTab)
-                    .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+        return ZStack(alignment: .trailing) {
+            Button {
+                _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
+            } label: {
+                HStack(spacing: 5) {
+                    HStack(spacing: 5) {
+                        if hasUnread {
+                            Circle()
+                                .fill(ToastyTheme.workspaceTabUnreadDot)
+                                .frame(width: 5, height: 5)
+                        }
+
+                        Text(tab.displayTitle)
+                            .font(ToastyTheme.fontWorkspaceTab)
+                            .foregroundStyle(colors.text)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    workspaceTabTrailingContent(
+                        index: index,
+                        isSelected: isSelected,
+                        isHovered: isHovered
+                    )
+                    .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
+                }
+                .padding(.horizontal, 10)
+                .frame(width: ToastyTheme.workspaceTabWidth, height: ToastyTheme.workspaceTabHeight)
+                .background(
+                    colors.background,
+                    in: RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
+                        .stroke(colors.border, lineWidth: 1)
+                )
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .frame(height: 22)
-            .background(
-                isSelected ? ToastyTheme.elevatedBackground : Color.clear,
-                in: RoundedRectangle(cornerRadius: 6)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSelected ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+            .buttonStyle(.plain)
+            .accessibilityLabel(tab.displayTitle)
+            .help(tab.displayTitle)
+            .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
+            .animation(.easeInOut(duration: 0.15), value: isSelected)
+            .animation(.easeOut(duration: 0.1), value: isHovered)
+
+            if isHovered {
+                workspaceTabCloseButton(workspaceID: workspaceID, tab: tab)
+                    .padding(.trailing, 10)
+            }
+        }
+        .onHover { hovering in
+            if hovering {
+                hoveredTabID = tab.id
+            } else if hoveredTabID == tab.id {
+                hoveredTabID = nil
+                if hoveredTabCloseButtonID == tab.id {
+                    hoveredTabCloseButtonID = nil
+                }
+            }
+        }
+    }
+
+    private func resolveTabColors(
+        isSelected: Bool,
+        isHovered: Bool,
+        hasUnread: Bool
+    ) -> (background: Color, border: Color, text: Color) {
+        if isSelected {
+            return (
+                ToastyTheme.workspaceTabSelectedBackground,
+                ToastyTheme.workspaceTabSelectedBorder,
+                ToastyTheme.primaryText
             )
         }
+
+        if isHovered {
+            return (
+                ToastyTheme.workspaceTabHoverBackground,
+                ToastyTheme.workspaceTabHoverBorder,
+                ToastyTheme.workspaceTabHoverText
+            )
+        }
+
+        if hasUnread {
+            return (
+                ToastyTheme.workspaceTabUnreadBackground,
+                ToastyTheme.workspaceTabUnreadBorder,
+                ToastyTheme.workspaceTabUnreadText
+            )
+        }
+
+        return (
+            ToastyTheme.workspaceTabUnselectedBackground,
+            ToastyTheme.workspaceTabUnselectedBorder,
+            ToastyTheme.workspaceTabUnselectedText
+        )
+    }
+
+    @ViewBuilder
+    private func workspaceTabTrailingContent(
+        index: Int,
+        isSelected: Bool,
+        isHovered: Bool
+    ) -> some View {
+        switch Self.workspaceTabTrailingAccessory(index: index, isHovered: isHovered) {
+        case .closeButton:
+            Color.clear.frame(height: 16)
+        case .badge(let shortcutLabel):
+            Text(shortcutLabel)
+                .font(ToastyTheme.fontWorkspaceTabBadge)
+                .foregroundStyle(
+                    isSelected
+                        ? ToastyTheme.workspaceTabBadgeSelectedText
+                        : ToastyTheme.workspaceTabBadgeUnselectedText
+                )
+                .transition(.opacity)
+        case .empty:
+            EmptyView()
+        }
+    }
+
+    private func workspaceTabCloseButton(
+        workspaceID: UUID,
+        tab: WorkspaceTabState
+    ) -> some View {
+        Button {
+            hoveredTabID = nil
+            hoveredTabCloseButtonID = nil
+            _ = store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
+        } label: {
+            Text("×")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(
+                    hoveredTabCloseButtonID == tab.id
+                        ? ToastyTheme.workspaceTabCloseButtonHover
+                        : ToastyTheme.workspaceTabCloseButton
+                )
+                .frame(width: 16, height: 16)
+                .background(
+                    ToastyTheme.workspaceTabCloseBackground,
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
+        }
         .buttonStyle(.plain)
-        .help(tab.displayTitle)
-        .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
+        .accessibilityLabel("Close \(tab.displayTitle)")
+        .onHover { hovering in
+            if hovering {
+                hoveredTabCloseButtonID = tab.id
+            } else if hoveredTabCloseButtonID == tab.id {
+                hoveredTabCloseButtonID = nil
+            }
+        }
+        .help("Close \(tab.displayTitle)")
+        .accessibilityIdentifier("workspace.tab.close.\(tab.id.uuidString)")
+        .transition(.opacity)
     }
 
     private func topBarButton(

@@ -19,7 +19,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isNewTabShortcut(repeatedEvent))
     }
 
-    func testTabSelectionShortcutNumberMatchesPlainCommandDigitsUpToNine() throws {
+    func testTabSelectionShortcutNumberMatchesPlainCommandDigitsUpToConfiguredLimit() throws {
         let firstTabEvent = try makeKeyEvent(characters: "1", modifiers: [.command], keyCode: 0x12)
         let thirdTabEvent = try makeKeyEvent(characters: "3", modifiers: [.command], keyCode: 0x14)
         let fourthTabEvent = try makeKeyEvent(characters: "4", modifiers: [.command], keyCode: 0x15)
@@ -27,6 +27,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let zeroEvent = try makeKeyEvent(characters: "0", modifiers: [.command], keyCode: 0x1D)
         let optionDigitEvent = try makeKeyEvent(characters: "1", modifiers: [.option], keyCode: 0x12)
 
+        XCTAssertEqual(DisplayShortcutConfig.maxWorkspaceTabSelectionShortcutCount, 9)
         XCTAssertEqual(DisplayShortcutInterceptor.tabSelectionShortcutNumber(for: firstTabEvent), 1)
         XCTAssertEqual(DisplayShortcutInterceptor.tabSelectionShortcutNumber(for: thirdTabEvent), 3)
         XCTAssertEqual(DisplayShortcutInterceptor.tabSelectionShortcutNumber(for: fourthTabEvent), 4)
