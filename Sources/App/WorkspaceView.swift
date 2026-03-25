@@ -158,7 +158,12 @@ struct WorkspaceView: View {
                         )
                     }
                 }
-                .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+                .padding(
+                    .leading,
+                    sidebarVisible
+                        ? ToastyTheme.workspaceTabLeadingPaddingWithSidebar
+                        : ToastyTheme.topBarLeadingPaddingWithoutSidebar
+                )
                 .padding(.vertical, 4)
             }
 

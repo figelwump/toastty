@@ -26,6 +26,183 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testWorkspaceSnapshotIncludesTabMetadata() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let snapshotResponse = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(snapshotResponse.ok)
+            XCTAssertEqual(snapshotResponse.result["tabCount"] as? Int, 2)
+            XCTAssertEqual(snapshotResponse.result["selectedTabIndex"] as? Int, 2)
+            let tabIDs = try XCTUnwrap(snapshotResponse.result["tabIDs"] as? [String])
+            XCTAssertEqual(tabIDs.count, 2)
+            XCTAssertEqual(snapshotResponse.result["selectedTabID"] as? String, tabIDs[1])
+        }
+    }
+
+    func testWorkspaceTabActionsCreateSelectAndCloseTabsByIndex() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let firstCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(firstCreateResponse.ok)
+
+            let secondCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(secondCreateResponse.ok)
+
+            let selectResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "index": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectResponse.ok)
+
+            var state = await MainActor.run { harness.store.state }
+            let workspaceAfterSelect = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspaceAfterSelect.tabIDs.count, 3)
+            XCTAssertEqual(workspaceAfterSelect.resolvedSelectedTabID, workspaceAfterSelect.tabIDs[0])
+
+            let closeResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.close",
+                    "args": [
+                        "index": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeResponse.ok)
+
+            state = await MainActor.run { harness.store.state }
+            let workspaceAfterClose = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspaceAfterClose.tabIDs.count, 2)
+            XCTAssertEqual(workspaceAfterClose.resolvedSelectedTabID, workspaceAfterClose.tabIDs[0])
+        }
+    }
+
+    func testWorkspaceTabActionsSupportTabIDTargetingAndSelectedTabCloseFallback() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            for _ in 0 ..< 2 {
+                let createResponse = try sendRequest(
+                    command: "automation.perform_action",
+                    payload: [
+                        "action": "workspace.tab.new",
+                        "args": [:],
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(createResponse.ok)
+            }
+
+            let initialSnapshotResponse = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(initialSnapshotResponse.ok)
+            let initialTabIDs = try XCTUnwrap(initialSnapshotResponse.result["tabIDs"] as? [String])
+            XCTAssertEqual(initialTabIDs.count, 3)
+
+            let selectByTabIDResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "tabID": initialTabIDs[0],
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectByTabIDResponse.ok)
+
+            var state = await MainActor.run { harness.store.state }
+            var workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
+
+            let closeByTabIDResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.close",
+                    "args": [
+                        "tabID": initialTabIDs[2],
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeByTabIDResponse.ok)
+
+            state = await MainActor.run { harness.store.state }
+            workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspace.tabIDs.count, 2)
+            XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
+            XCTAssertFalse(workspace.tabIDs.map(\.uuidString).contains(initialTabIDs[2]))
+
+            let selectSecondTabResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "tabID": initialTabIDs[1],
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectSecondTabResponse.ok)
+
+            let closeFallbackResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.close",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeFallbackResponse.ok)
+
+            state = await MainActor.run { harness.store.state }
+            workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspace.tabIDs.count, 1)
+            XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
+            XCTAssertEqual(workspace.tabIDs.map(\.uuidString), [initialTabIDs[0]])
+        }
+    }
+
     func testWorkspaceActionRequiresExplicitTargetWhenMultipleWindowsExist() async throws {
         let fixture = makeTwoWindowFixture()
 

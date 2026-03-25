@@ -13,6 +13,8 @@ public enum AutomationFixtureLoader {
             return makeTwoWorkspaceFixture()
         case "split-workspace":
             return makeSplitWorkspaceFixture()
+        case "workspace-tabs-wide":
+            return makeWorkspaceTabsWideFixture()
         default:
             return nil
         }
@@ -96,6 +98,25 @@ public enum AutomationFixtureLoader {
         return AppState(
             windows: [window],
             workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+    }
+
+    private static func makeWorkspaceTabsWideFixture() -> AppState {
+        let workspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let windowID = UUID(uuidString: "32D1DAA2-E951-4215-8975-8D82A3A59321")!
+        let window = WindowState(
+            id: windowID,
+            frame: CGRectCodable(x: 80, y: 80, width: 2300, height: 760),
+            workspaceIDs: [workspace.id],
+            selectedWorkspaceID: workspace.id,
+            sidebarVisible: true
+        )
+
+        return AppState(
+            windows: [window],
+            workspacesByID: [workspace.id: workspace],
             selectedWindowID: windowID,
             globalTerminalFontPoints: AppState.defaultTerminalFontPoints
         )

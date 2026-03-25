@@ -48,7 +48,7 @@ enum ToastyTheme {
     static let panelHeaderErrorBackground = Color(hex: 0x5BA08A, alpha: 0.14)
     static let panelHeaderErrorDivider = Color(hex: 0x5BA08A)
     static let workspaceTabSelectedBackground = Color(hex: 0x222222)
-    static let workspaceTabSelectedBorder = Color(hex: 0x333333)
+    static let workspaceTabSelectedBorder = accent
     static let workspaceTabUnselectedBackground = Color(hex: 0x161616)
     static let workspaceTabUnselectedBorder = Color(hex: 0x1F1F1F)
     static let workspaceTabUnselectedText = Color(hex: 0x888888)
@@ -81,10 +81,11 @@ enum ToastyTheme {
     // title/buttons don't sit flush against the window edge.
     static let topBarHeight: CGFloat = 32
     static let workspaceTabBarHeight: CGFloat = 34
-    static let workspaceTabWidth: CGFloat = 140
+    static let workspaceTabWidth: CGFloat = 190
     static let workspaceTabHeight: CGFloat = 26
     static let workspaceTabCornerRadius: CGFloat = 6
     static let workspaceTabTrailingSlotWidth: CGFloat = 24
+    static let workspaceTabLeadingPaddingWithSidebar: CGFloat = 6
     static let topBarContentTopPadding: CGFloat = 2
     static let fontHUDTopPadding: CGFloat = topBarHeight + 12
     /// Standard macOS compact titlebar height on current supported macOS releases.

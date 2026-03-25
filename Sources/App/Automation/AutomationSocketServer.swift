@@ -867,6 +867,27 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         let didMutate: Bool
         switch actionID {
+        case "workspace.tab.new":
+            didMutate = store.send(.createWorkspaceTab(workspaceID: try workspaceID(), seed: nil))
+
+        case "workspace.tab.select":
+            let resolvedWorkspaceID = try workspaceID()
+            let tabID = try resolveWorkspaceTabID(
+                args: args,
+                workspaceID: resolvedWorkspaceID,
+                allowSelectedTabFallback: false
+            )
+            didMutate = store.send(.selectWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
+
+        case "workspace.tab.close":
+            let resolvedWorkspaceID = try workspaceID()
+            let tabID = try resolveWorkspaceTabID(
+                args: args,
+                workspaceID: resolvedWorkspaceID,
+                allowSelectedTabFallback: true
+            )
+            didMutate = store.send(.closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
+
         case "workspace.split.horizontal":
             didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .horizontal))
 
@@ -1049,6 +1070,43 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
+    private func resolveWorkspaceTabID(
+        args: [String: AutomationJSONValue],
+        workspaceID: UUID,
+        allowSelectedTabFallback: Bool
+    ) throws -> UUID {
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let rawTabID = args.string("tabID") {
+            guard let tabID = UUID(uuidString: rawTabID) else {
+                throw AutomationSocketError.invalidPayload("tabID must be a UUID")
+            }
+            guard workspace.tabsByID[tabID] != nil else {
+                throw AutomationSocketError.invalidPayload("tabID does not exist")
+            }
+            return tabID
+        }
+
+        if let index = args.int("index") {
+            guard index > 0 else {
+                throw AutomationSocketError.invalidPayload("index must be greater than zero")
+            }
+            guard index <= workspace.tabIDs.count else {
+                throw AutomationSocketError.invalidPayload("index does not exist")
+            }
+            return workspace.tabIDs[index - 1]
+        }
+
+        if allowSelectedTabFallback, let selectedTabID = workspace.resolvedSelectedTabID {
+            return selectedTabID
+        }
+
+        throw AutomationSocketError.invalidPayload("index or tabID is required")
+    }
+
+    @MainActor
     private func resolveWindowID(args: [String: AutomationJSONValue]) throws -> UUID {
         if let rawWindowID = args.string("windowID") {
             guard let windowID = UUID(uuidString: rawWindowID) else {
@@ -1154,6 +1212,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         }
 
         let slotInfos = workspace.layoutTree.allSlotInfos
+        let tabIDs = workspace.tabIDs.map { AutomationJSONValue.string($0.uuidString) }
         let slotIDs = slotInfos.map { AutomationJSONValue.string($0.slotID.uuidString) }
         let slotPanelIDs = slotInfos.map { AutomationJSONValue.string($0.panelID.uuidString) }
         let slotMappings = slotInfos.map { slotInfo in
@@ -1161,6 +1220,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 "slotID": .string(slotInfo.slotID.uuidString),
                 "panelID": .string(slotInfo.panelID.uuidString),
             ])
+        }
+        let selectedTabID = workspace.resolvedSelectedTabID
+        let selectedTabIndex: Int? = selectedTabID.flatMap { tabID in
+            workspace.tabIDs.firstIndex(of: tabID).map { $0 + 1 }
         }
         let rootSplitRatio: AutomationJSONValue
         switch workspace.layoutTree {
@@ -1172,6 +1235,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         return [
             "workspaceID": .string(workspaceID.uuidString),
+            "tabCount": .int(workspace.tabIDs.count),
+            "selectedTabID": selectedTabID.map { .string($0.uuidString) } ?? .null,
+            "selectedTabIndex": selectedTabIndex.map { .int($0) } ?? .null,
+            "tabIDs": .array(tabIDs),
             "slotCount": .int(slotInfos.count),
             "panelCount": .int(workspace.panels.count),
             "focusedPanelID": workspace.focusedPanelID.map { .string($0.uuidString) } ?? .null,
