@@ -102,9 +102,9 @@ private func isNear(_ lhs: RGB, _ rhs: RGB, tolerance: Int) -> Bool {
 }
 
 private func isAccentLike(_ color: RGB) -> Bool {
-    color.red >= 200 &&
-    color.green >= 140 &&
-    color.blue >= 30 &&
+    color.red >= 145 &&
+    color.green >= 110 &&
+    color.blue >= 40 &&
     color.red > color.green &&
     color.green > color.blue
 }
