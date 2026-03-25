@@ -477,7 +477,7 @@ final class DisplayShortcutInterceptor {
     static func isFocusNextUnreadShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown,
               event.isARepeat == false,
-              event.charactersIgnoringModifiers?.lowercased() == "u" else {
+              event.charactersIgnoringModifiers?.lowercased() == "a" else {
             return false
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -536,7 +536,7 @@ final class DisplayShortcutInterceptor {
         }
 
         _ = store.focusNextUnreadPanelFromCommand(preferredWindowID: preferredWindowID)
-        // Cmd+Shift+U is app-owned for normal workspace windows. If there is no
+        // Cmd+Shift+A is app-owned for normal workspace windows. If there is no
         // next unread target, swallow the shortcut rather than passing it to
         // the embedded terminal or default responder.
         return true

@@ -68,13 +68,13 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isClosePanelShortcut(repeatedEvent))
     }
 
-    func testFocusNextUnreadShortcutMatchesCommandShiftUOnly() throws {
-        let matchingEvent = try makeKeyEvent(characters: "U", modifiers: [.command, .shift], keyCode: 0x20)
-        let plainCommandEvent = try makeKeyEvent(characters: "u", modifiers: [.command], keyCode: 0x20)
+    func testFocusNextUnreadShortcutMatchesCommandShiftAOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "A", modifiers: [.command, .shift], keyCode: 0x00)
+        let plainCommandEvent = try makeKeyEvent(characters: "a", modifiers: [.command], keyCode: 0x00)
         let repeatedEvent = try makeKeyEvent(
-            characters: "U",
+            characters: "A",
             modifiers: [.command, .shift],
-            keyCode: 0x20,
+            keyCode: 0x00,
             isARepeat: true
         )
 

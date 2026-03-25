@@ -473,7 +473,7 @@ final class WindowCommandControllerTests: XCTestCase {
         previousItem.keyEquivalentModifierMask = [.command, .shift]
         let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
         nextItem.keyEquivalentModifierMask = [.command, .shift]
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "u")
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "a")
         unreadItem.keyEquivalentModifierMask = [.command, .shift]
         workspaceMenu.addItem(previousItem)
         workspaceMenu.addItem(nextItem)
@@ -522,7 +522,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let workspaceMenu = NSMenu(title: "Workspace")
         let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
         let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "u")
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "a")
         workspaceMenu.addItem(previousItem)
         workspaceMenu.addItem(nextItem)
         workspaceMenu.addItem(unreadItem)
