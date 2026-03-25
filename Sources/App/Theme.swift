@@ -59,6 +59,7 @@ enum ToastyTheme {
     static let workspaceTabUnreadBorder = Color(hex: 0x1F2522)
     static let workspaceTabUnreadText = Color(hex: 0xB8B8B8)
     static let workspaceTabUnreadDot = Color(hex: 0x5BA08A)
+    static let workspaceTabUnreadDotDiameter: CGFloat = 7
     static let workspaceTabBadgeSelectedText = Color(hex: 0x888888)
     static let workspaceTabBadgeUnselectedText = Color(hex: 0x555555)
     static let workspaceTabCloseBackground = Color(hex: 0x2A2A2A)
@@ -215,6 +216,10 @@ enum ToastyTheme {
             let base = panelHeaderUnreadBackgroundColor(for: reason)
             return appIsActive ? base : base.opacity(0.72)
         }
+    }
+
+    static func workspaceTabSelectedBorderColor(appIsActive: Bool) -> Color {
+        appIsActive ? workspaceTabSelectedBorder : workspaceTabSelectedBorder.opacity(0.5)
     }
 
     static func panelHeaderDividerColor(

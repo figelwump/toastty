@@ -2325,6 +2325,104 @@ struct AppReducerTests {
         #expect(try #require(state.workspacesByID[workspaceID]).unreadNotificationCount == 0)
     }
 
+    @Test
+    func focusNextUnreadPanelSelectsTargetWindowTabAndClearsUnread() throws {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let currentWorkspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab],
+            selectedTabIndex: 0
+        )
+        let targetSelectedTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let targetUnreadTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [1]
+        )
+        var targetWorkspace = makeUnreadNavigationWorkspace(
+            title: "Two",
+            tabs: [targetSelectedTab, targetUnreadTab],
+            selectedTabIndex: 0
+        )
+        targetWorkspace.unreadWorkspaceNotificationCount = 3
+
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [currentWorkspace.id],
+                    selectedWorkspaceID: currentWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [targetWorkspace.id],
+                    selectedWorkspaceID: targetWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                currentWorkspace.id: currentWorkspace,
+                targetWorkspace.id: targetWorkspace,
+            ],
+            selectedWindowID: firstWindowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.focusNextUnreadPanel(windowID: firstWindowID), state: &state))
+
+        #expect(state.selectedWindowID == secondWindowID)
+        #expect(state.windows[1].selectedWorkspaceID == targetWorkspace.id)
+        let updatedWorkspace = try #require(state.workspacesByID[targetWorkspace.id])
+        #expect(updatedWorkspace.selectedTabID == targetUnreadTab.tab.id)
+        #expect(updatedWorkspace.focusedPanelID == targetUnreadTab.panelIDs[1])
+        #expect(updatedWorkspace.unreadWorkspaceNotificationCount == 0)
+        let updatedUnreadTab = try #require(updatedWorkspace.tabsByID[targetUnreadTab.tab.id])
+        #expect(updatedUnreadTab.unreadPanelIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func focusNextUnreadPanelReturnsFalseWhenFocusedPanelIsOnlyUnreadTarget() throws {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [0]
+        )
+        let workspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let originalState = state
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.focusNextUnreadPanel(windowID: windowID), state: &state) == false)
+        #expect(state == originalState)
+    }
+
     // MARK: - Toggle Sidebar
 
     @Test
@@ -2351,4 +2449,74 @@ struct AppReducerTests {
 
         #expect(reducer.send(.toggleSidebar(windowID: UUID()), state: &state) == false)
     }
+}
+
+private struct UnreadNavigationTabFixture {
+    let tab: WorkspaceTabState
+    let panelIDs: [UUID]
+}
+
+private func makeUnreadNavigationTab(
+    focusedPanelIndex: Int,
+    unreadPanelIndices: Set<Int>,
+    panelCount: Int = 3
+) -> UnreadNavigationTabFixture {
+    let panelIDs = (0 ..< panelCount).map { _ in UUID() }
+    let panels = Dictionary(uniqueKeysWithValues: panelIDs.enumerated().map { index, panelID in
+        (
+            panelID,
+            PanelState.terminal(
+                TerminalPanelState(
+                    title: "Terminal \(index + 1)",
+                    shell: "zsh",
+                    cwd: NSHomeDirectory()
+                )
+            )
+        )
+    })
+
+    let tab = WorkspaceTabState(
+        id: UUID(),
+        layoutTree: makeUnreadNavigationLayout(panelIDs: panelIDs),
+        panels: panels,
+        focusedPanelID: panelIDs[focusedPanelIndex],
+        unreadPanelIDs: Set(unreadPanelIndices.map { panelIDs[$0] })
+    )
+
+    return UnreadNavigationTabFixture(tab: tab, panelIDs: panelIDs)
+}
+
+private func makeUnreadNavigationWorkspace(
+    title: String,
+    tabs: [UnreadNavigationTabFixture],
+    selectedTabIndex: Int
+) -> WorkspaceState {
+    let tabIDs = tabs.map(\.tab.id)
+    return WorkspaceState(
+        id: UUID(),
+        title: title,
+        selectedTabID: tabIDs[selectedTabIndex],
+        tabIDs: tabIDs,
+        tabsByID: Dictionary(uniqueKeysWithValues: tabs.map { ($0.tab.id, $0.tab) })
+    )
+}
+
+private func makeUnreadNavigationLayout(panelIDs: [UUID]) -> LayoutNode {
+    precondition(panelIDs.isEmpty == false)
+
+    var iterator = panelIDs.makeIterator()
+    let firstPanelID = iterator.next()!
+    var layout = LayoutNode.slot(slotID: UUID(), panelID: firstPanelID)
+
+    while let panelID = iterator.next() {
+        layout = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: layout,
+            second: .slot(slotID: UUID(), panelID: panelID)
+        )
+    }
+
+    return layout
 }

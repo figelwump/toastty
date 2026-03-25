@@ -122,6 +122,13 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.workspace
     }
 
+    private var canFocusNextUnreadPanel: Bool {
+        Self.canFocusNextUnreadPanel(
+            state: store.state,
+            commandSelection: commandSelection
+        )
+    }
+
     private var terminalProfileMenuModel: TerminalProfileMenuModel {
         TerminalProfileMenuModel(
             catalog: terminalProfileStore.catalog,
@@ -276,6 +283,17 @@ struct ToasttyCommandMenus: Commands {
             }
             .keyboardShortcut("]", modifiers: [.command, .shift])
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
+
+            Button("Jump to Next Unread") {
+                store.focusNextUnreadPanelFromCommand(
+                    preferredWindowID: commandSelection?.windowID
+                )
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.focusNextUnreadPanel.key,
+                modifiers: ToasttyKeyboardShortcuts.focusNextUnreadPanel.modifiers
+            )
+            .disabled(canFocusNextUnreadPanel == false)
         }
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
@@ -428,6 +446,23 @@ struct ToasttyCommandMenus: Commands {
             return nil
         }
         return KeyEquivalent(digit)
+    }
+
+    static func canFocusNextUnreadPanel(
+        state: AppState,
+        commandSelection: WindowCommandSelection?
+    ) -> Bool {
+        guard let selection = commandSelection,
+              let selectedTabID = selection.workspace.resolvedSelectedTabID else {
+            return false
+        }
+
+        return state.nextUnreadPanel(
+            fromWindowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            tabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        ) != nil
     }
 }
 

@@ -19,6 +19,20 @@ public struct WindowWorkspaceSelection: Equatable, Sendable {
     }
 }
 
+public struct UnreadPanelTarget: Equatable, Sendable {
+    public let windowID: UUID
+    public let workspaceID: UUID
+    public let tabID: UUID
+    public let panelID: UUID
+
+    public init(windowID: UUID, workspaceID: UUID, tabID: UUID, panelID: UUID) {
+        self.windowID = windowID
+        self.workspaceID = workspaceID
+        self.tabID = tabID
+        self.panelID = panelID
+    }
+}
+
 public struct AppState: Codable, Equatable, Sendable {
     public static let defaultTerminalFontPoints: Double = 12
     public static let minTerminalFontPoints: Double = 6
@@ -159,5 +173,144 @@ public struct AppState: Codable, Equatable, Sendable {
             return nil
         }
         return workspaceSelection(in: windowID)
+    }
+
+    public func nextUnreadPanel(
+        fromWindowID: UUID,
+        workspaceID: UUID,
+        tabID: UUID,
+        focusedPanelID: UUID?
+    ) -> UnreadPanelTarget? {
+        guard let currentWindow = window(id: fromWindowID),
+              currentWindow.workspaceIDs.contains(workspaceID),
+              let currentWorkspace = workspacesByID[workspaceID],
+              currentWorkspace.tabsByID[tabID] != nil,
+              currentWorkspace.tabIDs.contains(tabID) else {
+            return nil
+        }
+
+        if let target = nextUnreadPanel(
+            in: currentWorkspace,
+            windowID: fromWindowID,
+            startingTabID: tabID,
+            focusedPanelID: focusedPanelID
+        ) {
+            return target
+        }
+
+        for otherWorkspaceID in orderedIDs(after: workspaceID, in: currentWindow.workspaceIDs) {
+            guard let workspace = workspacesByID[otherWorkspaceID] else { continue }
+            if let target = nextUnreadPanel(in: workspace, windowID: fromWindowID) {
+                return target
+            }
+        }
+
+        let orderedWindowIDs = orderedIDs(after: fromWindowID, in: windows.map(\.id))
+        for windowID in orderedWindowIDs {
+            guard let window = window(id: windowID) else { continue }
+            let orderedWorkspaceIDs = orderedIDs(
+                startingAt: window.selectedWorkspaceID ?? window.workspaceIDs.first,
+                in: window.workspaceIDs
+            )
+            for workspaceID in orderedWorkspaceIDs {
+                guard let workspace = workspacesByID[workspaceID] else { continue }
+                if let target = nextUnreadPanel(in: workspace, windowID: windowID) {
+                    return target
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func nextUnreadPanel(in workspace: WorkspaceState, windowID: UUID) -> UnreadPanelTarget? {
+        let orderedTabIDs = orderedIDs(startingAt: workspace.resolvedSelectedTabID, in: workspace.tabIDs)
+        for tabID in orderedTabIDs {
+            guard let tab = workspace.tabsByID[tabID],
+                  let panelID = nextUnreadPanel(in: tab, skippingPanelID: nil) else {
+                continue
+            }
+            return UnreadPanelTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: tabID,
+                panelID: panelID
+            )
+        }
+        return nil
+    }
+
+    private func nextUnreadPanel(
+        in workspace: WorkspaceState,
+        windowID: UUID,
+        startingTabID: UUID,
+        focusedPanelID: UUID?
+    ) -> UnreadPanelTarget? {
+        guard let startingTab = workspace.tabsByID[startingTabID] else {
+            return nil
+        }
+
+        if let panelID = nextUnreadPanel(in: startingTab, skippingPanelID: focusedPanelID) {
+            return UnreadPanelTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: startingTabID,
+                panelID: panelID
+            )
+        }
+
+        for otherTabID in orderedIDs(after: startingTabID, in: workspace.tabIDs) {
+            guard let tab = workspace.tabsByID[otherTabID],
+                  let panelID = nextUnreadPanel(in: tab, skippingPanelID: nil) else {
+                continue
+            }
+            return UnreadPanelTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: otherTabID,
+                panelID: panelID
+            )
+        }
+
+        return nil
+    }
+
+    private func nextUnreadPanel(in tab: WorkspaceTabState, skippingPanelID: UUID?) -> UUID? {
+        let panelOrder = tab.layoutTree.allSlotInfos.map(\.panelID)
+        guard panelOrder.isEmpty == false else { return nil }
+
+        if let skippingPanelID,
+           let startIndex = panelOrder.firstIndex(of: skippingPanelID) {
+            guard panelOrder.count > 1 else { return nil }
+            for offset in 1 ..< panelOrder.count {
+                let panelID = panelOrder[(startIndex + offset) % panelOrder.count]
+                if tab.unreadPanelIDs.contains(panelID) {
+                    return panelID
+                }
+            }
+            return nil
+        }
+
+        for panelID in panelOrder where tab.unreadPanelIDs.contains(panelID) {
+            return panelID
+        }
+        return nil
+    }
+
+    private func orderedIDs(startingAt startID: UUID?, in ids: [UUID]) -> [UUID] {
+        guard let startID,
+              let startIndex = ids.firstIndex(of: startID) else {
+            return ids
+        }
+        return Array(ids[startIndex...]) + Array(ids[..<startIndex])
+    }
+
+    private func orderedIDs(after startID: UUID, in ids: [UUID]) -> [UUID] {
+        guard let startIndex = ids.firstIndex(of: startID),
+              ids.count > 1 else {
+            return ids.contains(startID) ? [] : ids
+        }
+        let nextIndex = ids.index(after: startIndex)
+        return Array(ids[nextIndex...]) + Array(ids[..<startIndex])
     }
 }

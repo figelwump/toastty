@@ -450,6 +450,97 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(ownedCloseWorkspaceItem.action, #selector(FileCloseMenuBridge.performCloseWorkspace(_:)))
     }
 
+    func testWorkspaceMenuBridgeRetargetsAndValidatesTabAndUnreadItems() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(store.send(.selectWindow(windowID: windowID)))
+        XCTAssertTrue(store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+
+        let workspaceAfterCreate = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let secondTabID = try XCTUnwrap(workspaceAfterCreate.resolvedSelectedTabID)
+        let secondPanelID = try XCTUnwrap(workspaceAfterCreate.focusedPanelID)
+        let firstTabID = try XCTUnwrap(workspaceAfterCreate.tabIDs.first(where: { $0 != secondTabID }))
+
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: firstTabID)))
+        XCTAssertTrue(store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: secondPanelID)))
+
+        let bridge = makeWorkspaceMenuBridge(store: store)
+        let mainMenu = NSMenu(title: "Main")
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
+        previousItem.keyEquivalentModifierMask = [.command, .shift]
+        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
+        nextItem.keyEquivalentModifierMask = [.command, .shift]
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "u")
+        unreadItem.keyEquivalentModifierMask = [.command, .shift]
+        workspaceMenu.addItem(previousItem)
+        workspaceMenu.addItem(nextItem)
+        workspaceMenu.addItem(unreadItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(previousItem.target === bridge)
+        XCTAssertEqual(previousItem.action, #selector(WorkspaceMenuBridge.selectPreviousTab(_:)))
+        XCTAssertTrue(nextItem.target === bridge)
+        XCTAssertEqual(nextItem.action, #selector(WorkspaceMenuBridge.selectNextTab(_:)))
+        XCTAssertTrue(unreadItem.target === bridge)
+        XCTAssertEqual(unreadItem.action, #selector(WorkspaceMenuBridge.focusNextUnreadPanel(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(previousItem))
+        XCTAssertTrue(bridge.validateMenuItem(nextItem))
+        XCTAssertTrue(bridge.validateMenuItem(unreadItem))
+
+        bridge.selectNextTab(nil)
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID, secondTabID)
+
+        bridge.selectPreviousTab(nil)
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID, firstTabID)
+
+        bridge.focusNextUnreadPanel(nil)
+
+        let workspaceAfterUnreadJump = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterUnreadJump.resolvedSelectedTabID, secondTabID)
+        XCTAssertEqual(workspaceAfterUnreadJump.focusedPanelID, secondPanelID)
+        XCTAssertFalse(try XCTUnwrap(workspaceAfterUnreadJump.tabsByID[secondTabID]).unreadPanelIDs.contains(secondPanelID))
+        XCTAssertFalse(bridge.validateMenuItem(unreadItem))
+    }
+
+    func testWorkspaceMenuBridgeDisablesItemsWithoutKeyToasttyWindow() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let bridge = makeWorkspaceMenuBridge(store: store, preferredWindowIDProvider: { nil })
+
+        let mainMenu = NSMenu(title: "Main")
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
+        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "u")
+        workspaceMenu.addItem(previousItem)
+        workspaceMenu.addItem(nextItem)
+        workspaceMenu.addItem(unreadItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertFalse(bridge.validateMenuItem(previousItem))
+        XCTAssertFalse(bridge.validateMenuItem(nextItem))
+        XCTAssertFalse(bridge.validateMenuItem(unreadItem))
+    }
+
     func testHelpMenuBridgeRetargetsToasttyHelpItemAndOpensGitHub() {
         var openedURL: URL?
         let bridge = HelpMenuBridge { url in
@@ -1247,6 +1338,19 @@ final class WindowCommandControllerTests: XCTestCase {
                 preferredWindowIDProvider: resolvedWindowIDProvider
             ),
             closeWorkspaceCommandController: CloseWorkspaceCommandController(
+                store: store,
+                preferredWindowIDProvider: resolvedWindowIDProvider
+            )
+        )
+    }
+
+    private func makeWorkspaceMenuBridge(
+        store: AppStore,
+        preferredWindowIDProvider: (() -> UUID?)? = nil
+    ) -> WorkspaceMenuBridge {
+        let resolvedWindowIDProvider = preferredWindowIDProvider ?? { store.state.selectedWindowID }
+        return WorkspaceMenuBridge(
+            workspaceTabCommandController: WorkspaceTabCommandController(
                 store: store,
                 preferredWindowIDProvider: resolvedWindowIDProvider
             )

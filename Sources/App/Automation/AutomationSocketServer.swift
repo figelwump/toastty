@@ -888,6 +888,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             )
             didMutate = store.send(.closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
 
+        case "workspace.focus-next-unread":
+            didMutate = store.focusNextUnreadPanelFromCommand(
+                preferredWindowID: try resolveWindowID(args: args)
+            )
+
         case "workspace.split.horizontal":
             didMutate = store.send(.splitFocusedSlot(workspaceID: try workspaceID(), orientation: .horizontal))
 

@@ -173,7 +173,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
             XCTAssertFalse(workspace.tabIDs.map(\.uuidString).contains(initialTabIDs[2]))
 
-            let selectSecondTabResponse = try sendRequest(
+            let closeSelectedTabResponse = try sendRequest(
                 command: "automation.perform_action",
                 payload: [
                     "action": "workspace.tab.select",
@@ -183,7 +183,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 ],
                 socketPath: harness.socketPath
             )
-            XCTAssertTrue(selectSecondTabResponse.ok)
+            XCTAssertTrue(closeSelectedTabResponse.ok)
 
             let closeFallbackResponse = try sendRequest(
                 command: "automation.perform_action",
@@ -200,6 +200,79 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(workspace.tabIDs.count, 1)
             XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
             XCTAssertEqual(workspace.tabIDs.map(\.uuidString), [initialTabIDs[0]])
+        }
+    }
+
+    func testFocusNextUnreadActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
+        let fixture = makeSingleWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            let unreadTab = try XCTUnwrap(workspace.tabsByID[fixture.targetTabID])
+            XCTAssertEqual(state.selectedWindowID, fixture.windowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+            XCTAssertFalse(unreadTab.unreadPanelIDs.contains(fixture.targetPanelID))
+        }
+    }
+
+    func testFocusNextUnreadActionRequiresExplicitWindowWhenMultipleWindowsExist() async throws {
+        let fixture = makeTwoWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "windowID is required when multiple windows exist")
+
+            let state = await MainActor.run { harness.store.state }
+            XCTAssertEqual(state.selectedWindowID, fixture.firstWindowID)
+        }
+    }
+
+    func testFocusNextUnreadActionUsesExplicitWindowSelection() async throws {
+        let fixture = makeTwoWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread",
+                    "args": [
+                        "windowID": fixture.secondWindowID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.secondWorkspaceID])
+            let unreadTab = try XCTUnwrap(workspace.tabsByID[fixture.targetTabID])
+            XCTAssertEqual(state.selectedWindowID, fixture.secondWindowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+            XCTAssertFalse(unreadTab.unreadPanelIDs.contains(fixture.targetPanelID))
         }
     }
 
@@ -761,6 +834,92 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             workspaceID: workspace.id
         )
     }
+
+    private func makeSingleWindowUnreadFixture() -> SingleWindowUnreadFixture {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let unreadTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [2]
+        )
+        let workspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab, unreadTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        return SingleWindowUnreadFixture(
+            state: state,
+            windowID: windowID,
+            workspaceID: workspace.id,
+            targetTabID: unreadTab.tab.id,
+            targetPanelID: unreadTab.panelIDs[2]
+        )
+    }
+
+    private func makeTwoWindowUnreadFixture() -> TwoWindowUnreadFixture {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondCurrentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondUnreadTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [1]
+        )
+        let secondWorkspace = makeUnreadNavigationWorkspace(
+            title: "Two",
+            tabs: [secondCurrentTab, secondUnreadTab],
+            selectedTabIndex: 0
+        )
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 48, y: 48, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        return TwoWindowUnreadFixture(
+            state: state,
+            firstWindowID: firstWindowID,
+            secondWindowID: secondWindowID,
+            secondWorkspaceID: secondWorkspace.id,
+            targetTabID: secondUnreadTab.tab.id,
+            targetPanelID: secondUnreadTab.panelIDs[1]
+        )
+    }
 }
 
 private struct AutomationHarness {
@@ -789,8 +948,95 @@ private struct SingleWindowFixture {
     let workspaceID: UUID
 }
 
+private struct SingleWindowUnreadFixture {
+    let state: AppState
+    let windowID: UUID
+    let workspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+}
+
+private struct TwoWindowUnreadFixture {
+    let state: AppState
+    let firstWindowID: UUID
+    let secondWindowID: UUID
+    let secondWorkspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+}
+
+private struct UnreadNavigationTabFixture {
+    let tab: WorkspaceTabState
+    let panelIDs: [UUID]
+}
+
 private enum AutomationSocketTestError: Error {
     case missingResponse
     case socketFailure(String, Int32)
     case socketPathTooLong
+}
+
+private func makeUnreadNavigationTab(
+    focusedPanelIndex: Int,
+    unreadPanelIndices: Set<Int>,
+    panelCount: Int = 3
+) -> UnreadNavigationTabFixture {
+    let panelIDs = (0 ..< panelCount).map { _ in UUID() }
+    let panels = Dictionary(uniqueKeysWithValues: panelIDs.enumerated().map { index, panelID in
+        (
+            panelID,
+            PanelState.terminal(
+                TerminalPanelState(
+                    title: "Terminal \(index + 1)",
+                    shell: "zsh",
+                    cwd: NSHomeDirectory()
+                )
+            )
+        )
+    })
+
+    let tab = WorkspaceTabState(
+        id: UUID(),
+        layoutTree: makeUnreadNavigationLayout(panelIDs: panelIDs),
+        panels: panels,
+        focusedPanelID: panelIDs[focusedPanelIndex],
+        unreadPanelIDs: Set(unreadPanelIndices.map { panelIDs[$0] })
+    )
+
+    return UnreadNavigationTabFixture(tab: tab, panelIDs: panelIDs)
+}
+
+private func makeUnreadNavigationWorkspace(
+    title: String,
+    tabs: [UnreadNavigationTabFixture],
+    selectedTabIndex: Int
+) -> WorkspaceState {
+    let tabIDs = tabs.map(\.tab.id)
+    return WorkspaceState(
+        id: UUID(),
+        title: title,
+        selectedTabID: tabIDs[selectedTabIndex],
+        tabIDs: tabIDs,
+        tabsByID: Dictionary(uniqueKeysWithValues: tabs.map { ($0.tab.id, $0.tab) })
+    )
+}
+
+private func makeUnreadNavigationLayout(panelIDs: [UUID]) -> LayoutNode {
+    precondition(panelIDs.isEmpty == false)
+
+    var iterator = panelIDs.makeIterator()
+    let firstPanelID = iterator.next()!
+    var layout = LayoutNode.slot(slotID: UUID(), panelID: firstPanelID)
+
+    while let panelID = iterator.next() {
+        layout = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: layout,
+            second: .slot(slotID: UUID(), panelID: panelID)
+        )
+    }
+
+    return layout
 }

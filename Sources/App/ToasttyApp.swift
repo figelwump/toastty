@@ -141,6 +141,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
+    private var workspaceMenuBridge: WorkspaceMenuBridge?
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
     private var sparkleMenuBridge: SparkleMenuBridge?
@@ -175,12 +176,14 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         fileSplitMenuBridge: FileSplitMenuBridge,
         fileCloseMenuBridge: FileCloseMenuBridge,
         windowSplitMenuBridge: WindowSplitMenuBridge,
+        workspaceMenuBridge: WorkspaceMenuBridge,
         helpMenuBridge: HelpMenuBridge,
         hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     ) {
         self.fileSplitMenuBridge = fileSplitMenuBridge
         self.fileCloseMenuBridge = fileCloseMenuBridge
         self.windowSplitMenuBridge = windowSplitMenuBridge
+        self.workspaceMenuBridge = workspaceMenuBridge
         self.helpMenuBridge = helpMenuBridge
         self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
         hiddenSystemMenuItemsBridge.setOnOwnedMenuSectionRefreshRequested { [weak self] in
@@ -281,6 +284,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installDynamicMenuBridges() {
+        workspaceMenuBridge?.installIfNeeded()
         helpMenuBridge?.installIfNeeded()
         sparkleMenuBridge?.installIfNeeded()
     }
@@ -315,6 +319,7 @@ final class DisplayShortcutInterceptor {
     private enum ShortcutAction {
         case closePanel
         case createWorkspaceTab
+        case focusNextUnreadPanel
         case selectWorkspaceTab(Int)
         case selectAdjacentTab(TabNavigationDirection)
         case switchWorkspace(Int)
@@ -363,6 +368,11 @@ final class DisplayShortcutInterceptor {
             return .closePanel
         }
 
+        if Self.isFocusNextUnreadShortcut(event),
+           appOwnedShortcutWindowID() != nil {
+            return .focusNextUnreadPanel
+        }
+
         switch DisplayShortcutConfig.action(for: event) {
         case .workspaceSwitch(let shortcutNumber):
             return .switchWorkspace(shortcutNumber)
@@ -379,6 +389,8 @@ final class DisplayShortcutInterceptor {
             closeFocusedPanel()
         case .createWorkspaceTab:
             createWorkspaceTab()
+        case .focusNextUnreadPanel:
+            focusNextUnreadPanel()
         case .selectWorkspaceTab(let shortcutNumber):
             selectWorkspaceTab(shortcutNumber: shortcutNumber)
         case .selectAdjacentTab(let direction):
@@ -462,6 +474,16 @@ final class DisplayShortcutInterceptor {
         return modifiers == [.command]
     }
 
+    static func isFocusNextUnreadShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "u" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
     static func closePanelShortcutWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
         guard modalWindow == nil else { return nil }
         guard let keyWindow else { return nil }
@@ -504,6 +526,20 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func focusNextUnreadPanel() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard store.commandSelection(preferredWindowID: preferredWindowID) != nil else {
+            return false
+        }
+
+        _ = store.focusNextUnreadPanelFromCommand(preferredWindowID: preferredWindowID)
+        // Cmd+Shift+U is app-owned for normal workspace windows. If there is no
+        // next unread target, swallow the shortcut rather than passing it to
+        // the embedded terminal or default responder.
+        return true
     }
 
     private func switchWorkspace(shortcutNumber: Int) -> Bool {
@@ -627,6 +663,7 @@ struct ToasttyApp: App {
     private let fileSplitMenuBridge: FileSplitMenuBridge
     private let fileCloseMenuBridge: FileCloseMenuBridge
     private let windowSplitMenuBridge: WindowSplitMenuBridge
+    private let workspaceMenuBridge: WorkspaceMenuBridge
     private let helpMenuBridge: HelpMenuBridge
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
@@ -716,6 +753,10 @@ struct ToasttyApp: App {
             store: store,
             preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
         )
+        let workspaceTabCommandController = WorkspaceTabCommandController(
+            store: store,
+            preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+        )
         fileSplitMenuBridge = FileSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
         )
@@ -729,6 +770,9 @@ struct ToasttyApp: App {
         )
         windowSplitMenuBridge = WindowSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
+        )
+        workspaceMenuBridge = WorkspaceMenuBridge(
+            workspaceTabCommandController: workspaceTabCommandController
         )
         helpMenuBridge = HelpMenuBridge()
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
@@ -805,6 +849,7 @@ struct ToasttyApp: App {
             fileSplitMenuBridge: fileSplitMenuBridge,
             fileCloseMenuBridge: fileCloseMenuBridge,
             windowSplitMenuBridge: windowSplitMenuBridge,
+            workspaceMenuBridge: workspaceMenuBridge,
             helpMenuBridge: helpMenuBridge,
             hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
         )

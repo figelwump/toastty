@@ -103,6 +103,50 @@ final class ToasttyCommandMenusTests: XCTestCase {
         XCTAssertNil(actions.first?.shortcut)
         XCTAssertEqual(actions.last?.shortcut, ShortcutChord(key: "z", modifiers: [.command, .control, .shift]))
     }
+
+    @MainActor
+    func testCanFocusNextUnreadPanelUsesResolvedCommandSelection() throws {
+        let currentTab = makeUnreadMenuTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let unreadTab = makeUnreadMenuTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [0]
+        )
+        let workspace = makeUnreadMenuWorkspace(
+            title: "One",
+            tabs: [currentTab, unreadTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        let selection = WindowCommandSelection(
+            windowID: windowID,
+            window: try XCTUnwrap(state.window(id: windowID)),
+            workspace: try XCTUnwrap(state.workspacesByID[workspace.id])
+        )
+
+        XCTAssertTrue(
+            ToasttyCommandMenus.canFocusNextUnreadPanel(
+                state: state,
+                commandSelection: selection
+            )
+        )
+    }
 }
 
 private func makeProfileShortcutRegistry(
@@ -115,4 +159,73 @@ private func makeProfileShortcutRegistry(
         agentProfiles: agentProfiles,
         agentProfilesFilePath: "/tmp/agents.toml"
     )
+}
+
+private struct UnreadMenuTabFixture {
+    let tab: WorkspaceTabState
+}
+
+private func makeUnreadMenuTab(
+    focusedPanelIndex: Int,
+    unreadPanelIndices: Set<Int>,
+    panelCount: Int = 2
+) -> UnreadMenuTabFixture {
+    let panelIDs = (0 ..< panelCount).map { _ in UUID() }
+    let panels = Dictionary(uniqueKeysWithValues: panelIDs.enumerated().map { index, panelID in
+        (
+            panelID,
+            PanelState.terminal(
+                TerminalPanelState(
+                    title: "Terminal \(index + 1)",
+                    shell: "zsh",
+                    cwd: NSHomeDirectory()
+                )
+            )
+        )
+    })
+
+    let tab = WorkspaceTabState(
+        id: UUID(),
+        layoutTree: makeUnreadMenuLayout(panelIDs: panelIDs),
+        panels: panels,
+        focusedPanelID: panelIDs[focusedPanelIndex],
+        unreadPanelIDs: Set(unreadPanelIndices.map { panelIDs[$0] })
+    )
+
+    return UnreadMenuTabFixture(tab: tab)
+}
+
+private func makeUnreadMenuWorkspace(
+    title: String,
+    tabs: [UnreadMenuTabFixture],
+    selectedTabIndex: Int
+) -> WorkspaceState {
+    let tabIDs = tabs.map(\.tab.id)
+    return WorkspaceState(
+        id: UUID(),
+        title: title,
+        selectedTabID: tabIDs[selectedTabIndex],
+        tabIDs: tabIDs,
+        tabsByID: Dictionary(uniqueKeysWithValues: tabs.map { ($0.tab.id, $0.tab) })
+    )
+}
+
+private func makeUnreadMenuLayout(panelIDs: [UUID]) -> LayoutNode {
+    precondition(panelIDs.isEmpty == false)
+
+    var iterator = panelIDs.makeIterator()
+    let firstPanelID = iterator.next()!
+    var layout = LayoutNode.slot(slotID: UUID(), panelID: firstPanelID)
+
+    while let panelID = iterator.next() {
+        layout = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: layout,
+            second: .slot(slotID: UUID(), panelID: panelID)
+        )
+    }
+
+    return layout
 }

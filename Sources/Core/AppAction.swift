@@ -36,6 +36,7 @@ public enum AppAction: Equatable, Sendable {
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
     case focusPanel(workspaceID: UUID, panelID: UUID)
+    case focusNextUnreadPanel(windowID: UUID)
     case movePanelToSlot(panelID: UUID, targetSlotID: UUID)
     case movePanelToWorkspace(panelID: UUID, targetWorkspaceID: UUID, targetSlotID: UUID?)
     case detachPanelToNewWindow(panelID: UUID)
@@ -93,6 +94,8 @@ public extension AppAction {
             return "closeWorkspaceTab"
         case .focusPanel:
             return "focusPanel"
+        case .focusNextUnreadPanel:
+            return "focusNextUnreadPanel"
         case .movePanelToSlot:
             return "movePanelToSlot"
         case .movePanelToWorkspace:

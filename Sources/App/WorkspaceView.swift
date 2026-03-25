@@ -442,7 +442,8 @@ struct WorkspaceView: View {
         let colors = resolveTabColors(
             isSelected: isSelected,
             isHovered: isHovered,
-            hasUnread: hasUnread
+            hasUnread: hasUnread,
+            appIsActive: appIsActive
         )
 
         return ZStack(alignment: .trailing) {
@@ -454,7 +455,10 @@ struct WorkspaceView: View {
                         if hasUnread {
                             Circle()
                                 .fill(ToastyTheme.workspaceTabUnreadDot)
-                                .frame(width: 5, height: 5)
+                                .frame(
+                                    width: ToastyTheme.workspaceTabUnreadDotDiameter,
+                                    height: ToastyTheme.workspaceTabUnreadDotDiameter
+                                )
                         }
 
                         Text(tab.displayTitle)
@@ -511,12 +515,13 @@ struct WorkspaceView: View {
     private func resolveTabColors(
         isSelected: Bool,
         isHovered: Bool,
-        hasUnread: Bool
+        hasUnread: Bool,
+        appIsActive: Bool
     ) -> (background: Color, border: Color, text: Color) {
         if isSelected {
             return (
                 ToastyTheme.workspaceTabSelectedBackground,
-                ToastyTheme.workspaceTabSelectedBorder,
+                ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: appIsActive),
                 ToastyTheme.primaryText
             )
         }

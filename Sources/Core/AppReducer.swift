@@ -115,6 +115,33 @@ public struct AppReducer {
             state.workspacesByID[workspaceID] = workspace
             return true
 
+        case .focusNextUnreadPanel(let windowID):
+            guard let selection = state.workspaceSelection(in: windowID),
+                  let tabID = selection.workspace.resolvedSelectedTabID,
+                  let target = state.nextUnreadPanel(
+                      fromWindowID: selection.windowID,
+                      workspaceID: selection.workspaceID,
+                      tabID: tabID,
+                      focusedPanelID: selection.workspace.focusedPanelID
+                  ),
+                  let windowIndex = state.windows.firstIndex(where: { $0.id == target.windowID }),
+                  var targetWorkspace = state.workspacesByID[target.workspaceID] else {
+                return false
+            }
+
+            state.selectedWindowID = target.windowID
+            state.windows[windowIndex].selectedWorkspaceID = target.workspaceID
+            targetWorkspace.selectedTabID = target.tabID
+            targetWorkspace.focusedPanelID = target.panelID
+            guard targetWorkspace.updateTab(id: target.tabID, { tab in
+                _ = tab.unreadPanelIDs.remove(target.panelID)
+            }) else {
+                return false
+            }
+            targetWorkspace.unreadWorkspaceNotificationCount = 0
+            state.workspacesByID[target.workspaceID] = targetWorkspace
+            return true
+
         case .movePanelToSlot(let panelID, let targetSlotID):
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard let targetLocation = locateSlot(targetSlotID, in: state) else { return false }

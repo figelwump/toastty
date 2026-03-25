@@ -78,6 +78,60 @@ final class CloseWorkspaceCommandController {
 }
 
 @MainActor
+final class WorkspaceTabCommandController {
+    private let store: AppStore
+    private let preferredWindowIDProvider: () -> UUID?
+
+    init(
+        store: AppStore,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
+    ) {
+        self.store = store
+        self.preferredWindowIDProvider = preferredWindowIDProvider
+    }
+
+    func canSelectAdjacentTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        guard let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
+        return workspace.orderedTabs.count > 1
+    }
+
+    @discardableResult
+    func selectAdjacentTab(_ direction: TabNavigationDirection) -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.selectAdjacentWorkspaceTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
+    }
+
+    func canFocusNextUnreadPanel() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.canFocusNextUnreadPanelFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    @discardableResult
+    func focusNextUnreadPanel() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.focusNextUnreadPanelFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
+    }
+}
+
+@MainActor
 final class SplitLayoutCommandController {
     private static let appOwnedResizeAmount = 5
 
@@ -145,6 +199,86 @@ final class SplitLayoutCommandController {
 
     private func commandSelection(preferredWindowID: UUID?) -> WindowCommandSelection? {
         store.commandSelection(preferredWindowID: preferredWindowID)
+    }
+}
+
+@MainActor
+final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
+    private enum ItemTitle {
+        static let selectPreviousTab = "Select Previous Tab"
+        static let selectNextTab = "Select Next Tab"
+        static let jumpToNextUnread = "Jump to Next Unread"
+    }
+
+    private let workspaceTabCommandController: WorkspaceTabCommandController
+
+    init(workspaceTabCommandController: WorkspaceTabCommandController) {
+        self.workspaceTabCommandController = workspaceTabCommandController
+    }
+
+    func installIfNeeded() {
+        guard let mainMenu = NSApp.mainMenu,
+              let workspaceMenu = Self.findWorkspaceMenu(in: mainMenu.items) else {
+            return
+        }
+
+        configureItem(
+            titled: ItemTitle.selectPreviousTab,
+            action: #selector(selectPreviousTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.selectNextTab,
+            action: #selector(selectNextTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.jumpToNextUnread,
+            action: #selector(focusNextUnreadPanel(_:)),
+            in: workspaceMenu
+        )
+    }
+
+    @objc
+    func selectPreviousTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentTab(.previous)
+    }
+
+    @objc
+    func selectNextTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentTab(.next)
+    }
+
+    @objc
+    func focusNextUnreadPanel(_: Any?) {
+        _ = workspaceTabCommandController.focusNextUnreadPanel()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(selectPreviousTab(_:)),
+            #selector(selectNextTab(_:)):
+            return workspaceTabCommandController.canSelectAdjacentTab()
+
+        case #selector(focusNextUnreadPanel(_:)):
+            return workspaceTabCommandController.canFocusNextUnreadPanel()
+
+        default:
+            return true
+        }
+    }
+
+    private func configureItem(titled title: String, action: Selector, in menu: NSMenu) {
+        guard let item = menu.items.first(where: { $0.title == title }) else {
+            return
+        }
+        item.target = self
+        item.action = action
+        item.isEnabled = true
+    }
+
+    private static func findWorkspaceMenu(in items: [NSMenuItem]) -> NSMenu? {
+        items.first(where: { $0.title == "Workspace" })?.submenu
     }
 }
 

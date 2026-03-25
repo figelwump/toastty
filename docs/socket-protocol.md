@@ -215,6 +215,8 @@ Supported action IDs:
 - `workspace.focus-slot.right`
 - `workspace.focus-slot.up`
 - `workspace.focus-slot.down`
+- `workspace.focus-next-unread`
+  - `args.windowID` is required when multiple windows exist
 - `workspace.focus-panel`
   - requires `args.panelID`
 - `workspace.resize-split.left`

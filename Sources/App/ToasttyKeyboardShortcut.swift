@@ -82,6 +82,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let focusNextUnreadPanel = ToasttyKeyboardShortcut(
+        "u",
+        modifiers: [.command, .shift]
+    )
+
     static let splitHorizontal = ToasttyKeyboardShortcut(
         "d",
         modifiers: [.command]

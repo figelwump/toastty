@@ -27,6 +27,7 @@ private enum WorkspaceCommandTarget {
 final class AppStore: ObservableObject {
     typealias ActionAppliedObserver = @MainActor (AppAction, AppState, AppState) -> Void
     typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
+    typealias WindowActivationHandler = @MainActor (UUID) -> Void
     private static let newWindowCascadeOffset: Double = 30
 
     @Published private(set) var state: AppState
@@ -40,19 +41,22 @@ final class AppStore: ObservableObject {
     private let reducer = AppReducer()
     private let persistUserSettings: Bool
     private let commandCreateWindowFrameProvider: CommandCreateWindowFrameProvider
+    private let windowActivationHandler: WindowActivationHandler
     private var actionAppliedObservers: [UUID: ActionAppliedObserver] = [:]
 
     init(
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
         initialHasEverLaunchedAgent: Bool = false,
-        commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame
+        commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
+        windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit
     ) {
         self.state = state
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
+        self.windowActivationHandler = windowActivationHandler
     }
 
     @discardableResult
@@ -177,6 +181,29 @@ final class AppStore: ObservableObject {
                 seed: windowLaunchSeed(from: selection)
             )
         )
+    }
+
+    func canFocusNextUnreadPanelFromCommand(preferredWindowID: UUID?) -> Bool {
+        nextUnreadPanelTarget(preferredWindowID: preferredWindowID) != nil
+    }
+
+    @discardableResult
+    func focusNextUnreadPanelFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        let previousSelectedWindowID = state.selectedWindowID
+        guard send(.focusNextUnreadPanel(windowID: selection.windowID)) else {
+            return false
+        }
+
+        if let targetWindowID = state.selectedWindowID,
+           targetWindowID != previousSelectedWindowID {
+            windowActivationHandler(targetWindowID)
+        }
+
+        return true
     }
 
     @discardableResult
@@ -357,6 +384,19 @@ final class AppStore: ObservableObject {
         return .newWindow
     }
 
+    private func nextUnreadPanelTarget(preferredWindowID: UUID?) -> UnreadPanelTarget? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let selectedTabID = selection.workspace.resolvedSelectedTabID else {
+            return nil
+        }
+        return state.nextUnreadPanel(
+            fromWindowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            tabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        )
+    }
+
     private func windowLaunchSeed(from selection: WindowCommandSelection?) -> WindowLaunchSeed? {
         guard let selection,
               let focusedPanelID = selection.workspace.focusedPanelID,
@@ -393,6 +433,13 @@ final class AppStore: ObservableObject {
             width: frame.width,
             height: frame.height
         )
+    }
+
+    private static func activateWindowInAppKit(id windowID: UUID) {
+        guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue == windowID.uuidString }) else {
+            return
+        }
+        window.makeKeyAndOrderFront(nil)
     }
 
     @discardableResult

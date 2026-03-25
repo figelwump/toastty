@@ -1,5 +1,7 @@
 @testable import ToasttyApp
+import AppKit
 import CoreState
+import SwiftUI
 import XCTest
 
 final class WorkspaceViewTests: XCTestCase {
@@ -68,6 +70,30 @@ final class WorkspaceViewTests: XCTestCase {
             WorkspaceView.workspaceTabTrailingAccessory(index: 9, isHovered: false),
             .empty
         )
+    }
+
+    func testWorkspaceTabSelectedBorderFadesWhenAppIsInactive() throws {
+        let activeBorder = try XCTUnwrap(
+            NSColor(ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: true))
+                .usingColorSpace(.deviceRGB)
+        )
+        let inactiveBorder = try XCTUnwrap(
+            NSColor(ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: false))
+                .usingColorSpace(.deviceRGB)
+        )
+        let expectedInactiveBorder = try XCTUnwrap(
+            NSColor(ToastyTheme.accent.opacity(0.5)).usingColorSpace(.deviceRGB)
+        )
+
+        XCTAssertEqual(activeBorder.alphaComponent, 1, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.redComponent, expectedInactiveBorder.redComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.greenComponent, expectedInactiveBorder.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.blueComponent, expectedInactiveBorder.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.alphaComponent, expectedInactiveBorder.alphaComponent, accuracy: 0.001)
+    }
+
+    func testWorkspaceTabUnreadDotUsesLargerDiameter() {
+        XCTAssertEqual(ToastyTheme.workspaceTabUnreadDotDiameter, 7)
     }
 
     private func makeProfileShortcutRegistry(
