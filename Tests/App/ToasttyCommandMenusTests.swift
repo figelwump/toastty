@@ -147,6 +147,70 @@ final class ToasttyCommandMenusTests: XCTestCase {
             )
         )
     }
+
+    @MainActor
+    func testResolvedCommandWindowIDPrefersAppKitKeyWindowOverStaleFocusedSceneWindow() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        let resolvedWindowID = ToasttyCommandMenus.resolvedCommandWindowID(
+            focusedWindowID: firstWindowID,
+            keyWindowID: secondWindowID
+        )
+
+        XCTAssertEqual(resolvedWindowID, secondWindowID)
+        XCTAssertTrue(store.createWorkspaceFromCommand(preferredWindowID: resolvedWindowID))
+
+        let updatedFirstWindow = try XCTUnwrap(store.state.window(id: firstWindowID))
+        let updatedSecondWindow = try XCTUnwrap(store.state.window(id: secondWindowID))
+        XCTAssertEqual(updatedFirstWindow.workspaceIDs, [firstWorkspace.id])
+        XCTAssertEqual(updatedSecondWindow.workspaceIDs.count, 2)
+        XCTAssertEqual(updatedSecondWindow.workspaceIDs.first, secondWorkspace.id)
+        XCTAssertEqual(updatedSecondWindow.selectedWorkspaceID, updatedSecondWindow.workspaceIDs.last)
+    }
+
+    func testResolvedCommandWindowIDFallsBackToFocusedSceneWindowWithoutAppKitKeyWindow() {
+        let focusedWindowID = UUID()
+
+        XCTAssertEqual(
+            ToasttyCommandMenus.resolvedCommandWindowID(
+                focusedWindowID: focusedWindowID,
+                keyWindowID: nil
+            ),
+            focusedWindowID
+        )
+        XCTAssertNil(
+            ToasttyCommandMenus.resolvedCommandWindowID(
+                focusedWindowID: nil,
+                keyWindowID: nil
+            )
+        )
+    }
 }
 
 private func makeProfileShortcutRegistry(
