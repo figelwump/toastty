@@ -35,6 +35,23 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertNil(DisplayShortcutInterceptor.tabSelectionShortcutNumber(for: optionDigitEvent))
     }
 
+    func testTabNavigationDirectionMatchesCommandShiftBrackets() throws {
+        let leftBracket = try makeKeyEvent(characters: "{", modifiers: [.command, .shift], keyCode: 0x21)
+        let rightBracket = try makeKeyEvent(characters: "}", modifiers: [.command, .shift], keyCode: 0x1E)
+        let plainLeftBracket = try makeKeyEvent(characters: "[", modifiers: [.command], keyCode: 0x21)
+        let repeatedLeftBracket = try makeKeyEvent(
+            characters: "{",
+            modifiers: [.command, .shift],
+            keyCode: 0x21,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(DisplayShortcutInterceptor.tabNavigationDirection(for: leftBracket), .previous)
+        XCTAssertEqual(DisplayShortcutInterceptor.tabNavigationDirection(for: rightBracket), .next)
+        XCTAssertNil(DisplayShortcutInterceptor.tabNavigationDirection(for: plainLeftBracket))
+        XCTAssertNil(DisplayShortcutInterceptor.tabNavigationDirection(for: repeatedLeftBracket))
+    }
+
     func testClosePanelShortcutMatchesPlainCommandWOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D)
         let shiftedEvent = try makeKeyEvent(characters: "W", modifiers: [.command, .shift], keyCode: 0x0D)

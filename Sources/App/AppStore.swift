@@ -2,6 +2,11 @@ import AppKit
 import CoreState
 import Foundation
 
+enum TabNavigationDirection: Equatable {
+    case previous
+    case next
+}
+
 struct WindowCommandSelection {
     let windowID: UUID
     let window: WindowState
@@ -188,6 +193,27 @@ final class AppStore: ObservableObject {
             return true
         }
         return send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: targetTabID))
+    }
+
+    @discardableResult
+    func selectAdjacentWorkspaceTab(preferredWindowID: UUID?, direction: TabNavigationDirection) -> Bool {
+        guard let workspace = commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
+        let tabs = workspace.orderedTabs
+        guard tabs.count > 1 else { return false }
+        guard let selectedID = workspace.resolvedSelectedTabID,
+              let currentIndex = tabs.firstIndex(where: { $0.id == selectedID }) else {
+            return false
+        }
+        let nextIndex: Int
+        switch direction {
+        case .previous:
+            nextIndex = currentIndex > 0 ? currentIndex - 1 : tabs.count - 1
+        case .next:
+            nextIndex = currentIndex < tabs.count - 1 ? currentIndex + 1 : 0
+        }
+        return send(.selectWorkspaceTab(workspaceID: workspace.id, tabID: tabs[nextIndex].id))
     }
 
     @discardableResult

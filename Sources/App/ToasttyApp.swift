@@ -317,6 +317,7 @@ final class DisplayShortcutInterceptor {
         case closePanel
         case createWorkspaceTab
         case selectWorkspaceTab(Int)
+        case selectAdjacentTab(TabNavigationDirection)
         case switchWorkspace(Int)
         case focusPanel(Int)
     }
@@ -348,6 +349,11 @@ final class DisplayShortcutInterceptor {
             return .selectWorkspaceTab(shortcutNumber)
         }
 
+        if let direction = Self.tabNavigationDirection(for: event),
+           appOwnedShortcutWindowID() != nil {
+            return .selectAdjacentTab(direction)
+        }
+
         if Self.isNewTabShortcut(event),
            appOwnedShortcutWindowID() != nil {
             return .createWorkspaceTab
@@ -376,6 +382,8 @@ final class DisplayShortcutInterceptor {
             createWorkspaceTab()
         case .selectWorkspaceTab(let shortcutNumber):
             selectWorkspaceTab(shortcutNumber: shortcutNumber)
+        case .selectAdjacentTab(let direction):
+            selectAdjacentTab(direction: direction)
         case .switchWorkspace(let shortcutNumber):
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
@@ -427,6 +435,22 @@ final class DisplayShortcutInterceptor {
             return nil
         }
         return shortcutNumber
+    }
+
+    /// Detects Cmd+Shift+[ (previous tab) and Cmd+Shift+] (next tab).
+    static func tabNavigationDirection(for event: NSEvent) -> TabNavigationDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command, .shift] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_LeftBracket):
+            return .previous
+        case Int(kVK_ANSI_RightBracket):
+            return .next
+        default:
+            return nil
+        }
     }
 
     static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
@@ -505,6 +529,15 @@ final class DisplayShortcutInterceptor {
         return store.selectWorkspaceTabFromCommand(
             preferredWindowID: preferredWindowID,
             shortcutNumber: shortcutNumber
+        )
+    }
+
+    private func selectAdjacentTab(direction: TabNavigationDirection) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.selectAdjacentWorkspaceTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
         )
     }
 
