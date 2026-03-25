@@ -327,6 +327,7 @@ public struct AppReducer {
                     sourceLocation.tabID,
                     workspaceID: sourceLocation.workspaceID,
                     windowID: sourceLocation.windowID,
+                    emptyWorkspaceDisposition: .removeWorkspace,
                     state: &state
                 )
             }

@@ -535,33 +535,39 @@ struct AppReducerTests {
     }
 
     @Test
-    func closeLastPanelInLastTabBootstrapsReplacementTab() throws {
+    func closeLastPanelInLastTabClosesWorkspaceAndWindow() throws {
         var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
         let reducer = AppReducer()
         let windowID = try #require(state.windows.first?.id)
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspaceBefore = try #require(state.workspacesByID[workspaceID])
-        let originalTabID = try #require(workspaceBefore.selectedTabID)
         let originalPanelID = try #require(workspaceBefore.focusedPanelID)
 
         #expect(reducer.send(.closePanel(panelID: originalPanelID), state: &state))
 
-        let windowAfter = try #require(state.window(id: windowID))
-        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        #expect(windowAfter.workspaceIDs == [workspaceID])
-        #expect(windowAfter.selectedWorkspaceID == workspaceID)
-        #expect(workspaceAfter.tabIDs.count == 1)
-        let replacementTabID = try #require(workspaceAfter.selectedTabID)
-        #expect(replacementTabID != originalTabID)
-        let replacementTab = try #require(workspaceAfter.tab(id: replacementTabID))
-        let replacementPanelID = try #require(replacementTab.focusedPanelID)
-        #expect(replacementPanelID != originalPanelID)
-        guard case .terminal(let terminalState) = replacementTab.panels[replacementPanelID] else {
-            Issue.record("Expected replacement tab bootstrap panel to be terminal")
-            return
-        }
+        #expect(state.window(id: windowID) == nil)
+        #expect(state.workspacesByID[workspaceID] == nil)
+        #expect(state.windows.isEmpty)
+        #expect(state.selectedWindowID == nil)
+        #expect(state.defaultTerminalProfileID == "zmx")
+        try StateValidator.validate(state)
+    }
 
-        #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+    @Test
+    func closeLastPanelInWorkspaceRemovesWorkspaceAndSelectsAdjacentWorkspace() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.workspaceIDs.first)
+        let secondWorkspaceID = try #require(state.windows.first?.workspaceIDs.last)
+        let panelID = try #require(state.workspacesByID[firstWorkspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.closePanel(panelID: panelID), state: &state))
+
+        #expect(state.workspacesByID[firstWorkspaceID] == nil)
+        let updatedWindow = try #require(state.window(id: windowID))
+        #expect(updatedWindow.workspaceIDs == [secondWorkspaceID])
+        #expect(updatedWindow.selectedWorkspaceID == secondWorkspaceID)
         try StateValidator.validate(state)
     }
 
