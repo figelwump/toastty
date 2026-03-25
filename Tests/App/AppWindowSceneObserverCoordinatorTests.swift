@@ -64,14 +64,21 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
     }
 
-    func testAttachRetargetsNativeCloseButtonToOrderWindowOut() throws {
+    func testAttachRetargetsNativeCloseButtonToPresentWindowCloseConfirmation() throws {
         var willCloseCallCount = 0
+        var presentedWindow: NSWindow?
+        var confirmationHandler: (@MainActor (Bool) -> Void)?
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
             onWindowFrameChange: { _ in },
             onWindowWillClose: {
                 willCloseCallCount += 1
+            },
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { window, completion in
+                presentedWindow = window
+                confirmationHandler = completion
             },
             scheduleOnMainActor: { operation in
                 Task { @MainActor in
@@ -89,16 +96,128 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
 
         _ = target.perform(action, with: closeButton)
 
-        XCTAssertTrue(window.didOrderOut)
+        XCTAssertTrue(presentedWindow === window)
+        XCTAssertNotNil(confirmationHandler)
+        XCTAssertFalse(window.didClose)
         XCTAssertEqual(willCloseCallCount, 0)
     }
 
-    func testDidExitFullScreenReinstallsNativeCloseButtonOverride() throws {
+    func testConfirmingNativeCloseButtonConfirmationClosesWindow() throws {
+        var confirmationHandler: (@MainActor (Bool) -> Void)?
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
             onWindowFrameChange: { _ in },
             onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, completion in
+                confirmationHandler = completion
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+        let confirmClose = try XCTUnwrap(confirmationHandler)
+        confirmClose(true)
+
+        XCTAssertTrue(window.didClose)
+    }
+
+    func testCancelingNativeCloseButtonConfirmationKeepsWindowAlive() throws {
+        var confirmationHandler: (@MainActor (Bool) -> Void)?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, completion in
+                confirmationHandler = completion
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+        let cancelClose = try XCTUnwrap(confirmationHandler)
+        cancelClose(false)
+
+        XCTAssertFalse(window.didClose)
+    }
+
+    func testNativeCloseButtonDoesNotPresentDuplicateConfirmationWhilePending() throws {
+        var presentCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertEqual(presentCallCount, 1)
+    }
+
+    func testNativeCloseButtonClosesWindowImmediatelyWhenConfirmationDisabled() throws {
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: false,
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertTrue(window.didClose)
+    }
+
+    func testDidExitFullScreenReinstallsNativeCloseButtonOverride() throws {
+        var presentCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
             scheduleOnMainActor: { operation in
                 Task { @MainActor in
                     operation()
@@ -124,15 +243,20 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         let action = try XCTUnwrap(closeButton.action)
         _ = target.perform(action, with: closeButton)
 
-        XCTAssertTrue(window.didOrderOut)
+        XCTAssertEqual(presentCallCount, 1)
     }
 
     func testDidDeminiaturizeReinstallsNativeCloseButtonOverride() throws {
+        var presentCallCount = 0
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
             onWindowFrameChange: { _ in },
             onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
             scheduleOnMainActor: { operation in
                 Task { @MainActor in
                     operation()
@@ -158,7 +282,7 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         let action = try XCTUnwrap(closeButton.action)
         _ = target.perform(action, with: closeButton)
 
-        XCTAssertTrue(window.didOrderOut)
+        XCTAssertEqual(presentCallCount, 1)
     }
 
     func testAttachLeavesWindowChromeConfigurationToSceneStyle() {
@@ -250,14 +374,14 @@ private final class ScheduledCallbackRecorder: @unchecked Sendable {
 
 private final class TestWindow: NSWindow {
     var forcedIsKeyWindow = false
-    var didOrderOut = false
+    var didClose = false
 
     override var isKeyWindow: Bool {
         forcedIsKeyWindow
     }
 
-    override func orderOut(_ sender: Any?) {
-        didOrderOut = true
+    override func close() {
+        didClose = true
     }
 
     init() {

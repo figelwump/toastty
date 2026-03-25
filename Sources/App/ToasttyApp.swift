@@ -256,7 +256,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         guard flag == false else { return true }
         guard let store else { return true }
 
-        // If Toastty has nothing ordered out to restore, let AppKit continue
+        // If Toastty has no hidden windows to restore, let AppKit continue
         // with its default reopen handling (for example, miniaturized windows).
         _ = restoreHiddenToasttyWindows(
             windows: sender.windows,

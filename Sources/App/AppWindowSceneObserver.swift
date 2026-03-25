@@ -62,6 +62,11 @@ final class WindowTrackingView: NSView {
 final class AppWindowSceneObserverCoordinator: NSObject {
     typealias MainActorScheduler = @Sendable (@escaping @MainActor @Sendable () -> Void) -> Void
     typealias WindowTitleProvider = @Sendable () -> String
+    typealias WindowCloseConfirmationPresenter = @MainActor (
+        _ window: NSWindow,
+        _ completion: @escaping @MainActor (Bool) -> Void
+    ) -> Void
+    typealias WindowCloser = @MainActor (NSWindow) -> Void
 
     var windowID: UUID
     var desiredFrame: CGRect?
@@ -74,6 +79,10 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private var observerTokens: [NSObjectProtocol] = []
     private let scheduleOnMainActor: MainActorScheduler
     private let defaultWindowTitle: WindowTitleProvider
+    private let shouldConfirmWindowClose: Bool
+    private let presentWindowCloseConfirmation: WindowCloseConfirmationPresenter
+    private let closeWindow: WindowCloser
+    private var isPresentingWindowCloseConfirmation = false
 
     init(
         windowID: UUID,
@@ -81,6 +90,21 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         onWindowDidBecomeKey: @escaping @MainActor () -> Void,
         onWindowFrameChange: @escaping @MainActor (CGRectCodable) -> Void,
         onWindowWillClose: @escaping @MainActor () -> Void,
+        shouldConfirmWindowClose: Bool = !AutomationConfig.shouldBypassInteractiveConfirmation(
+            arguments: ProcessInfo.processInfo.arguments,
+            environment: ProcessInfo.processInfo.environment
+        ),
+        presentWindowCloseConfirmation: @escaping WindowCloseConfirmationPresenter = {
+            window,
+            completion in
+            AppWindowSceneObserverCoordinator.presentWindowCloseConfirmation(
+                window: window,
+                completion: completion
+            )
+        },
+        closeWindow: @escaping WindowCloser = { window in
+            window.close()
+        },
         defaultWindowTitle: @escaping WindowTitleProvider = {
             AppWindowSceneObserverCoordinator.resolveDefaultWindowTitle(from: .main)
         },
@@ -98,6 +122,9 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         self.onWindowDidBecomeKey = onWindowDidBecomeKey
         self.onWindowFrameChange = onWindowFrameChange
         self.onWindowWillClose = onWindowWillClose
+        self.shouldConfirmWindowClose = shouldConfirmWindowClose
+        self.presentWindowCloseConfirmation = presentWindowCloseConfirmation
+        self.closeWindow = closeWindow
         self.defaultWindowTitle = defaultWindowTitle
         self.scheduleOnMainActor = scheduleOnMainActor
         super.init()
@@ -201,6 +228,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
             notificationCenter.removeObserver(token)
         }
         observerTokens.removeAll()
+        isPresentingWindowCloseConfirmation = false
         observedWindow = nil
     }
 
@@ -211,9 +239,9 @@ final class AppWindowSceneObserverCoordinator: NSObject {
             return
         }
 
-        // The red traffic-light button should dismiss the native window without
-        // tearing down Toastty's workspace/panel layout. Cmd+W and File close
-        // commands are handled separately by the app-owned menu paths.
+        // Cmd+W and File > Close stay on Toastty's panel-close paths. The red
+        // traffic-light button is app-owned so Toastty can confirm destructive
+        // whole-window teardown before allowing AppKit to close the window.
         closeButton.target = self
         closeButton.action = #selector(handleNativeCloseButton(_:))
     }
@@ -241,7 +269,21 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     @objc
     private func handleNativeCloseButton(_ sender: Any?) {
         guard let observedWindow else { return }
-        observedWindow.orderOut(sender)
+        guard shouldConfirmWindowClose else {
+            closeWindow(observedWindow)
+            return
+        }
+        guard isPresentingWindowCloseConfirmation == false else {
+            return
+        }
+
+        isPresentingWindowCloseConfirmation = true
+        presentWindowCloseConfirmation(observedWindow) { [weak self, weak observedWindow] didConfirm in
+            guard let self else { return }
+            self.isPresentingWindowCloseConfirmation = false
+            guard didConfirm, let observedWindow else { return }
+            self.closeWindow(observedWindow)
+        }
     }
 
     private var normalizedWindowTitle: String? {
@@ -287,5 +329,25 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         }
 
         return "App"
+    }
+
+    @MainActor
+    private static func presentWindowCloseConfirmation(
+        window: NSWindow,
+        completion: @escaping @MainActor (Bool) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = "Close this window?"
+        alert.informativeText = """
+        Closing this window will close all terminals, tabs, and workspaces in this window.
+        """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Close Window")
+        alert.beginSheetModal(for: window) { response in
+            Task { @MainActor in
+                completion(response == .alertSecondButtonReturn)
+            }
+        }
     }
 }
