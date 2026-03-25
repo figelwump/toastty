@@ -1081,7 +1081,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 throw AutomationSocketError.invalidPayload("panelID does not exist")
             }
             guard let workspace = store.state.workspacesByID[location.workspaceID],
-                  let panelState = workspace.panels[panelID],
+                  let panelState = workspace.panelState(for: panelID),
                   case .terminal = panelState else {
                 throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
             }
@@ -1133,7 +1133,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         guard let workspace = store.state.workspacesByID[workspaceID] else {
             throw AutomationSocketError.invalidPayload("workspaceID does not exist")
         }
-        guard let panelState = workspace.panels[panelID],
+        guard let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
         }
@@ -1311,15 +1311,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
     @MainActor
     private func locatePanel(_ panelID: UUID) -> (windowID: UUID, workspaceID: UUID)? {
-        for window in store.state.windows {
-            for workspaceID in window.workspaceIDs {
-                guard let workspace = store.state.workspacesByID[workspaceID] else { continue }
-                if workspace.panels[panelID] != nil {
-                    return (window.id, workspaceID)
-                }
-            }
+        guard let selection = store.state.workspaceSelection(containingPanelID: panelID) else {
+            return nil
         }
-        return nil
+        return (selection.windowID, selection.workspaceID)
     }
 
     @MainActor
@@ -1369,7 +1364,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         guard let workspace = store.state.workspacesByID[workspaceID] else {
             return DesktopNotificationContext()
         }
-        let panelLabel = panelID.flatMap { workspace.panels[$0]?.notificationLabel }
+        let panelLabel = panelID.flatMap { workspace.panelState(for: $0)?.notificationLabel }
         return DesktopNotificationContext(workspaceTitle: workspace.title, panelLabel: panelLabel)
     }
 

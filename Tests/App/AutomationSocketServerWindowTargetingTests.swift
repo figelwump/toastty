@@ -279,6 +279,60 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testTerminalStateTargetsBackgroundTabPanelByPanelID() async throws {
+        var backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
+        guard let panelID = backgroundTab.focusedPanelID,
+              case .terminal(var terminalState)? = backgroundTab.panels[panelID] else {
+            XCTFail("expected bootstrap tab to include a focused terminal")
+            return
+        }
+        terminalState.profileBinding = TerminalProfileBinding(profileID: "background-profile")
+        backgroundTab.panels[panelID] = .terminal(terminalState)
+
+        let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "One",
+            selectedTabID: selectedTab.id,
+            tabIDs: [backgroundTab.id, selectedTab.id],
+            tabsByID: [
+                backgroundTab.id: backgroundTab,
+                selectedTab.id: selectedTab,
+            ]
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+        )
+
+        try await withAutomationHarness(state: state) { harness in
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "panelID": panelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["workspaceID"] as? String, workspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, panelID.uuidString)
+            XCTAssertEqual(response.result["title"] as? String, "Background Agent")
+            XCTAssertEqual(response.result["profileID"] as? String, "background-profile")
+        }
+    }
+
     private func withAutomationHarness(
         state: AppState,
         file: StaticString = #filePath,

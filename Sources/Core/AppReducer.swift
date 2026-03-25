@@ -788,24 +788,18 @@ public struct AppReducer {
     }
 
     private static func locatePanel(_ panelID: UUID, in state: AppState) -> PanelLocation? {
-        for window in state.windows {
-            for workspaceID in window.workspaceIDs {
-                guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                guard let tabID = workspace.tabID(containingPanelID: panelID),
-                      let sourceSlot = workspace.tab(id: tabID)?.layoutTree.slotContaining(panelID: panelID) else {
-                    continue
-                }
-
-                return PanelLocation(
-                    windowID: window.id,
-                    workspaceID: workspaceID,
-                    tabID: tabID,
-                    slotID: sourceSlot.slotID
-                )
-            }
+        guard let selection = state.workspaceSelection(containingPanelID: panelID),
+              let tabID = selection.workspace.tabID(containingPanelID: panelID),
+              let slotID = selection.workspace.slotID(containingPanelID: panelID) else {
+            return nil
         }
 
-        return nil
+        return PanelLocation(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            tabID: tabID,
+            slotID: slotID
+        )
     }
 
     private static func locateSlot(_ slotID: UUID, in state: AppState) -> SlotLocation? {

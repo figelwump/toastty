@@ -181,7 +181,7 @@ final class SessionRuntimeStore: ObservableObject {
         var nextRegistry = sessionRegistry
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
-            guard let location = Self.locatePanel(record.panelID, in: state) else {
+            guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 logSessionStop(record, reason: .panelRemovedFromAppState, at: now)
                 nextRegistry.stopSession(sessionID: record.sessionID, at: now)
                 continue
@@ -318,21 +318,6 @@ final class SessionRuntimeStore: ObservableObject {
         isApplicationActive() && isPanelCurrentlyFocused(record.panelID, state: state)
     }
 
-    private static func locatePanel(
-        _ panelID: UUID,
-        in state: AppState
-    ) -> (windowID: UUID, workspaceID: UUID)? {
-        for window in state.windows {
-            for workspaceID in window.workspaceIDs {
-                guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                if workspace.panels[panelID] != nil {
-                    return (window.id, workspaceID)
-                }
-            }
-        }
-        return nil
-    }
-
     private func isActionableStatusKind(_ kind: SessionStatusKind) -> Bool {
         kind == .needsApproval || kind == .ready || kind == .error
     }
@@ -369,7 +354,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
         return DesktopNotificationContext(
             workspaceTitle: workspace.title,
-            panelLabel: workspace.panels[record.panelID]?.notificationLabel
+            panelLabel: workspace.panelState(for: record.panelID)?.notificationLabel
         )
     }
 

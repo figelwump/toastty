@@ -91,16 +91,9 @@ public enum DesktopNotificationRouteResolver {
         _ panelID: UUID,
         in state: AppState
     ) -> (windowID: UUID, workspaceID: UUID)? {
-        for window in state.windows {
-            for workspaceID in window.workspaceIDs {
-                guard let workspace = state.workspacesByID[workspaceID] else {
-                    continue
-                }
-                if workspace.panels[panelID] != nil {
-                    return (window.id, workspaceID)
-                }
-            }
+        guard let selection = state.workspaceSelection(containingPanelID: panelID) else {
+            return nil
         }
-        return nil
+        return (selection.windowID, selection.workspaceID)
     }
 }

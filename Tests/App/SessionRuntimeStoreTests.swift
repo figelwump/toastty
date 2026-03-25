@@ -115,6 +115,46 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func bindKeepsActiveSessionWhenOwningPanelMovesToBackgroundTab() throws {
+        let appStore = AppStore(persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let workspaceID = selection.workspaceID
+        let originalTabID = try #require(selection.workspace.resolvedSelectedTabID)
+        let originalPanelID = try #require(selection.workspace.focusedPanelID)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-background-tab",
+            agent: .codex,
+            panelID: originalPanelID,
+            windowID: selection.windowID,
+            workspaceID: workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-background-tab",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Editing"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(appStore.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+        let backgroundedWorkspace = try #require(appStore.state.workspacesByID[workspaceID])
+        let backgroundTabID = try #require(backgroundedWorkspace.resolvedSelectedTabID)
+        #expect(backgroundTabID != originalTabID)
+
+        #expect(sessionStore.sessionRegistry.activeSession(for: originalPanelID)?.sessionID == "sess-background-tab")
+        #expect(sessionStore.workspaceStatuses(for: workspaceID).map(\.panelID).contains(originalPanelID))
+
+        #expect(appStore.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID)))
+        #expect(sessionStore.panelStatus(for: originalPanelID)?.status.kind == .working)
+    }
+
+    @Test
     func updateStatusMarksUnfocusedPanelUnreadWhenSessionNeedsAttention() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)

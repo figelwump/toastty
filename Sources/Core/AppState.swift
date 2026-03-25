@@ -127,6 +127,27 @@ public struct AppState: Codable, Equatable, Sendable {
         )
     }
 
+    public func workspaceSelection(containingPanelID panelID: UUID) -> WindowWorkspaceSelection? {
+        for window in windows {
+            for workspaceID in window.workspaceIDs {
+                guard let workspace = workspacesByID[workspaceID],
+                      workspace.panelState(for: panelID) != nil,
+                      workspace.slotID(containingPanelID: panelID) != nil else {
+                    continue
+                }
+
+                return WindowWorkspaceSelection(
+                    windowID: window.id,
+                    window: window,
+                    workspaceID: workspaceID,
+                    workspace: workspace
+                )
+            }
+        }
+
+        return nil
+    }
+
     public func selectedWorkspaceSelection() -> WindowWorkspaceSelection? {
         guard let selectedWindowID else { return nil }
         return workspaceSelection(in: selectedWindowID)
