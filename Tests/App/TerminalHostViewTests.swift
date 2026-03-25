@@ -89,17 +89,43 @@ final class TerminalHostViewTests: XCTestCase {
         let text = TerminalHostView.ghosttyText(
             eventType: .keyDown,
             keyCode: 48,
+            modifierFlags: [.shift],
             characterProvider: { "\u{19}" },
             translatedCharacterProvider: { "\t" }
         )
 
-        XCTAssertEqual(text, "\u{19}")
+        XCTAssertNil(text)
+    }
+
+    func testGhosttyTextPreservesBareTabAsText() {
+        let text = TerminalHostView.ghosttyText(
+            eventType: .keyDown,
+            keyCode: 48,
+            modifierFlags: [],
+            characterProvider: { "\t" },
+            translatedCharacterProvider: { "\t" }
+        )
+
+        XCTAssertEqual(text, "\t")
+    }
+
+    func testGhosttyTextSuppressesModifiedTabTextForControlTab() {
+        let text = TerminalHostView.ghosttyText(
+            eventType: .keyDown,
+            keyCode: 48,
+            modifierFlags: [.control],
+            characterProvider: { "\t" },
+            translatedCharacterProvider: { "\t" }
+        )
+
+        XCTAssertNil(text)
     }
 
     func testGhosttyTextNormalizesControlCharacterWhenNeeded() {
         let text = TerminalHostView.ghosttyText(
             eventType: .keyDown,
             keyCode: 8,
+            modifierFlags: [.control],
             characterProvider: { "\u{03}" },
             translatedCharacterProvider: { "c" }
         )

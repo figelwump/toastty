@@ -1178,6 +1178,7 @@ final class TerminalHostView: NSView {
     static func ghosttyText(
         eventType: NSEvent.EventType,
         keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
         characterProvider: () -> String?,
         translatedCharacterProvider: () -> String?
     ) -> String? {
@@ -1186,11 +1187,17 @@ final class TerminalHostView: NSView {
         guard eventType == .keyDown || eventType == .keyUp else { return nil }
         guard let characters = characterProvider() else { return nil }
 
-        // AppKit reports Shift+Tab as a backtab control character. Preserve the
-        // native Tab payload so terminal apps can distinguish reverse tabbing
-        // instead of flattening it to a plain tab during control-key normalization.
+        // Bare Tab should stay text so shells keep ordinary completion behavior.
+        // Modified Tab must flow through the keycode+modifier path so Ghostty can
+        // encode reverse-tab and enhanced keyboard protocol sequences correctly.
         if Int(keyCode) == Int(kVK_Tab) {
-            return characters
+            let relevantModifiers = modifierFlags.intersection([
+                .shift,
+                .control,
+                .option,
+                .command,
+            ])
+            return relevantModifiers.isEmpty ? characters : nil
         }
 
         if characters.count == 1, let scalar = characters.unicodeScalars.first {
@@ -1210,6 +1217,7 @@ final class TerminalHostView: NSView {
         ghosttyText(
             eventType: event.type,
             keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
             characterProvider: {
                 event.characters
             },
