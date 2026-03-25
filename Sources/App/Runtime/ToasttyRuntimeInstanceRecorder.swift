@@ -24,6 +24,7 @@ enum ToasttyRuntimeInstanceRecorder {
     static func recordLaunch(
         processInfo: ProcessInfo = .processInfo,
         automationConfig: AutomationConfig? = nil,
+        socketPathOverride: String? = nil,
         fileManager: FileManager = .default,
         homeDirectoryPath: String = NSHomeDirectory(),
         environment: [String: String]? = nil,
@@ -55,7 +56,8 @@ enum ToasttyRuntimeInstanceRecorder {
             worktreeRootPath: runtimePaths.worktreeRootURL?.path,
             userDefaultsSuiteName: runtimePaths.userDefaultsSuiteName,
             logFilePath: logConfiguration.filePath,
-            socketPath: automationConfig?.socketPath
+            socketPath: socketPathOverride
+                ?? automationConfig?.socketPath
                 ?? AutomationConfig.resolveServerSocketPath(environment: resolvedEnvironment),
             artifactsDirectory: automationConfig?.artifactsDirectory
                 ?? resolvedEnvironment["TOASTTY_ARTIFACTS_DIR"],

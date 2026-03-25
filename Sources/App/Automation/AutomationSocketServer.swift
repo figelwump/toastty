@@ -23,7 +23,32 @@ struct AutomationSocketServerTestHooks {
     static let disabled = AutomationSocketServerTestHooks()
 }
 
+enum AutomationSocketStartupError: LocalizedError, Equatable {
+    case liveSocketPathInUse(String)
+    case socketPathInspectionFailed(String, errorNumber: Int32)
+
+    var errorDescription: String? {
+        switch self {
+        case .liveSocketPathInUse(let socketPath):
+            return "automation socket path is already owned by a live listener: \(socketPath)"
+        case .socketPathInspectionFailed(let socketPath, let errorNumber):
+            let errorMessage = String(cString: strerror(errorNumber))
+            return "failed to inspect existing automation socket path \(socketPath): \(errorMessage)"
+        }
+    }
+}
+
+private enum AutomationSocketBindingAvailability: Equatable {
+    case available
+    case stale
+    case live
+    case inspectionFailed(Int32)
+}
+
 final class AutomationSocketServer: @unchecked Sendable {
+    private static let liveSocketProbeRetryDelayMicros: useconds_t = 10_000
+    private static let liveSocketProbeAttemptCount = 3
+
     private struct PendingListenerRecovery {
         let attempt: Int
         let triggeringErrno: Int32
@@ -42,12 +67,15 @@ final class AutomationSocketServer: @unchecked Sendable {
     private var acceptSource: DispatchSourceRead?
     private var clients: [Int32: AutomationSocketClient] = [:]
     private var isStopping = false
+    private var ownsSocketPath = false
+    private var publishedDiscoveryRecord = false
     private var pendingRecovery: PendingListenerRecovery?
     private var recoveryAttemptCount = 0
 
     init(
         socketPath: String,
         automationConfig: AutomationConfig?,
+        publishesDiscoveryRecord: Bool? = nil,
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
@@ -58,9 +86,10 @@ final class AutomationSocketServer: @unchecked Sendable {
     ) throws {
         self.socketPath = socketPath
         self.processEnvironment = ProcessInfo.processInfo.environment
-        self.publishesDiscoveryRecord = socketPath == AutomationConfig.resolveServerSocketPath(
-            environment: ProcessInfo.processInfo.environment
-        )
+        self.publishesDiscoveryRecord = publishesDiscoveryRecord
+            ?? (socketPath == AutomationConfig.resolveServerSocketPath(
+                environment: ProcessInfo.processInfo.environment
+            ))
         self.recoveryPolicy = recoveryPolicy
         self.testHooks = testHooks
         self.commandExecutor = AutomationCommandExecutor(
@@ -78,12 +107,76 @@ final class AutomationSocketServer: @unchecked Sendable {
         stopListening()
     }
 
+    static func recommendedSocketPath(
+        preferredSocketPath: String,
+        environment: [String: String],
+        processID: Int32 = getpid(),
+        fileManager: FileManager = .default
+    ) -> String {
+        let runtimePreferredSocketPath = ToasttyRuntimePaths.resolve(environment: environment)
+            .automationSocketFileURL?
+            .path
+        guard preferredSocketPath == runtimePreferredSocketPath else {
+            return preferredSocketPath
+        }
+
+        switch socketBindingAvailability(for: preferredSocketPath, fileManager: fileManager) {
+        case .live:
+            return alternateSocketPath(for: preferredSocketPath, processID: processID)
+        case .available, .stale, .inspectionFailed:
+            return preferredSocketPath
+        }
+    }
+
+    static func alternateSocketPath(
+        for preferredSocketPath: String,
+        processID: Int32 = getpid()
+    ) -> String {
+        let preferredSocketURL = URL(fileURLWithPath: preferredSocketPath, isDirectory: false)
+        return preferredSocketURL.deletingLastPathComponent()
+            .appendingPathComponent("events-v1-\(processID).sock", isDirectory: false)
+            .path
+    }
+
     private func startListening() throws {
         isStopping = false
         let socketURL = URL(fileURLWithPath: socketPath, isDirectory: false)
         let directoryURL = socketURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
         _ = chmod(directoryURL.path, 0o700)
+
+        switch Self.socketBindingAvailability(for: socketPath) {
+        case .available:
+            break
+        case .stale:
+            ToasttyLog.warning(
+                "Replacing stale automation socket path",
+                category: .automation,
+                metadata: socketLogMetadata()
+            )
+        case .live:
+            ToasttyLog.error(
+                "Automation socket path is already in use by a live listener",
+                category: .automation,
+                metadata: socketLogMetadata()
+            )
+            throw AutomationSocketStartupError.liveSocketPathInUse(socketPath)
+        case .inspectionFailed(let errorNumber):
+            ToasttyLog.error(
+                "Failed to inspect existing automation socket path",
+                category: .automation,
+                metadata: socketLogMetadata(
+                    additional: [
+                        "errno": String(errorNumber),
+                        "error": socketErrorMessage(for: errorNumber),
+                    ]
+                )
+            )
+            throw AutomationSocketStartupError.socketPathInspectionFailed(
+                socketPath,
+                errorNumber: errorNumber
+            )
+        }
 
         // Remove any stale socket left by prior runs.
         _ = unlink(socketPath)
@@ -125,6 +218,7 @@ final class AutomationSocketServer: @unchecked Sendable {
             close(fd)
             throw AutomationSocketError.internalError("bind() failed: \(errno)")
         }
+        ownsSocketPath = true
 
         _ = chmod(socketPath, 0o600)
 
@@ -181,6 +275,7 @@ final class AutomationSocketServer: @unchecked Sendable {
                     processID: getpid(),
                     environment: processEnvironment
                 )
+                publishedDiscoveryRecord = true
             } catch {
                 ToasttyLog.warning(
                     "Failed to write automation socket discovery record",
@@ -218,14 +313,18 @@ final class AutomationSocketServer: @unchecked Sendable {
         }
         clients.removeAll()
 
-        if publishesDiscoveryRecord {
+        if publishedDiscoveryRecord {
             AutomationSocketLocator.removeDiscoveryRecordIfOwned(
                 socketPath: socketPath,
                 processID: getpid(),
                 environment: processEnvironment
             )
+            publishedDiscoveryRecord = false
         }
-        _ = unlink(socketPath)
+        if ownsSocketPath {
+            _ = unlink(socketPath)
+            ownsSocketPath = false
+        }
     }
 
     private func acceptConnections(listenFD: Int32) {
@@ -533,6 +632,64 @@ final class AutomationSocketServer: @unchecked Sendable {
 
     private func socketErrorMessage(for errorNumber: Int32) -> String {
         String(cString: strerror(errorNumber))
+    }
+
+    private static func socketBindingAvailability(
+        for socketPath: String,
+        fileManager: FileManager = .default
+    ) -> AutomationSocketBindingAvailability {
+        guard fileManager.fileExists(atPath: socketPath) else {
+            return .available
+        }
+
+        for attempt in 0..<Self.liveSocketProbeAttemptCount {
+            let fileDescriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+            guard fileDescriptor >= 0 else {
+                return .inspectionFailed(errno)
+            }
+
+            var address = sockaddr_un()
+            address.sun_family = sa_family_t(AF_UNIX)
+            let pathBytes = Array(socketPath.utf8CString)
+            let maxPathLength = MemoryLayout.size(ofValue: address.sun_path)
+            guard pathBytes.count <= maxPathLength else {
+                close(fileDescriptor)
+                return .inspectionFailed(ENAMETOOLONG)
+            }
+
+            withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+                buffer.initializeMemory(as: UInt8.self, repeating: 0)
+                pathBytes.withUnsafeBytes { source in
+                    if let destinationAddress = buffer.baseAddress, let sourceAddress = source.baseAddress {
+                        memcpy(destinationAddress, sourceAddress, pathBytes.count)
+                    }
+                }
+            }
+
+            let connectResult = withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                    connect(fileDescriptor, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+                }
+            }
+            if connectResult == 0 {
+                close(fileDescriptor)
+                return .live
+            }
+
+            let errorNumber = errno
+            close(fileDescriptor)
+            switch errorNumber {
+            case ECONNREFUSED where attempt + 1 < Self.liveSocketProbeAttemptCount:
+                usleep(Self.liveSocketProbeRetryDelayMicros)
+                continue
+            case ECONNREFUSED, ENOENT:
+                return .stale
+            default:
+                return .inspectionFailed(errorNumber)
+            }
+        }
+
+        return .stale
     }
 }
 

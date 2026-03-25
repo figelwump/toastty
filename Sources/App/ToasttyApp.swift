@@ -573,7 +573,18 @@ struct ToasttyApp: App {
             processInfo: processInfo,
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
-        Self.recordRuntimeInstance(processInfo: processInfo, automationConfig: bootstrap.automationConfig)
+        let preferredSocketPath = bootstrap.automationConfig?.socketPath
+            ?? AutomationConfig.resolveServerSocketPath(environment: processInfo.environment)
+        let socketPath = AutomationSocketServer.recommendedSocketPath(
+            preferredSocketPath: preferredSocketPath,
+            environment: processInfo.environment
+        )
+        bootstrap.automationLifecycle?.updateSocketPath(socketPath)
+        Self.recordRuntimeInstance(
+            processInfo: processInfo,
+            automationConfig: bootstrap.automationConfig,
+            socketPathOverride: socketPath
+        )
         let persistUserSettings = bootstrap.automationConfig == nil
         let store = AppStore(
             state: bootstrap.state,
@@ -682,8 +693,17 @@ struct ToasttyApp: App {
             appTerminationObserver = nil
         }
 
-        let socketPath = bootstrap.automationConfig?.socketPath
-            ?? AutomationConfig.resolveServerSocketPath(environment: ProcessInfo.processInfo.environment)
+        if socketPath != preferredSocketPath {
+            ToasttyLog.warning(
+                "Preferred automation socket path is already live; using a per-process fallback path",
+                category: .automation,
+                metadata: [
+                    "preferred_socket_path": preferredSocketPath,
+                    "socket_path": socketPath,
+                    "pid": String(getpid()),
+                ]
+            )
+        }
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
@@ -695,6 +715,7 @@ struct ToasttyApp: App {
             automationSocketServer = try AutomationSocketServer(
                 socketPath: socketPath,
                 automationConfig: bootstrap.automationConfig,
+                publishesDiscoveryRecord: true,
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
@@ -979,10 +1000,15 @@ struct ToasttyApp: App {
         }
     }
 
-    private static func recordRuntimeInstance(processInfo: ProcessInfo, automationConfig: AutomationConfig?) {
+    private static func recordRuntimeInstance(
+        processInfo: ProcessInfo,
+        automationConfig: AutomationConfig?,
+        socketPathOverride: String? = nil
+    ) {
         ToasttyRuntimeInstanceRecorder.recordLaunch(
             processInfo: processInfo,
-            automationConfig: automationConfig
+            automationConfig: automationConfig,
+            socketPathOverride: socketPathOverride
         )
     }
 

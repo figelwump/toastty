@@ -39,7 +39,7 @@ Toastty also prepares a few support paths inside the runtime home:
 
 ## What stays outside
 
-- The default automation socket still lives under the system temp directory so the Unix socket path stays short enough for macOS limits.
+- The preferred automation socket still lives under the system temp directory so the Unix socket path stays short enough for macOS limits. When a runtime-isolated launch finds that stable path already owned by a live Toastty listener, it falls back to a per-process sibling path such as `events-v1-<pid>.sock` instead of stealing the existing socket.
 - The app bundle and DerivedData location are only sandboxed if the caller chooses per-run paths. The automation helpers do this by default, but the app itself does not force it.
 - Shell integration installation is disabled while runtime sandboxing is enabled so isolated dev/test runs never rewrite the user's login shell files.
 
@@ -59,7 +59,7 @@ It always records:
 - `worktreeRootPath`
 - `userDefaultsSuiteName`
 - `logFilePath`
-- `socketPath`
+- `socketPath` (the authoritative resolved socket path for this launch, which may differ from the stable runtime-home-derived preferred path when fallback is used)
 
 It may also record these fields when the launch flow provided them:
 
@@ -74,10 +74,11 @@ Typical usage:
 INSTANCE_JSON="$TOASTTY_RUNTIME_HOME/instance.json"
 jq . "$INSTANCE_JSON"
 PID="$(jq -r '.pid' "$INSTANCE_JSON")"
+SOCKET_PATH="$(jq -r '.socketPath' "$INSTANCE_JSON")"
 kill -0 "$PID"
 ```
 
-Use the PID from `instance.json` for PID-targeted validation tools such as `peekaboo ... --pid <pid>` instead of targeting Toastty by app name.
+Use the PID from `instance.json` for PID-targeted validation tools such as `peekaboo ... --pid <pid>` instead of targeting Toastty by app name. Use `socketPath` from the same file instead of reconstructing the socket path by hand.
 
 ## Common flows
 

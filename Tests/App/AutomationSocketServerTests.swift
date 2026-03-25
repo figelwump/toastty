@@ -284,6 +284,117 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func secondServerCannotStealALiveSocketPath() async {
+        let socketPath = temporarySocketPath()
+        let firstServer: (
+            server: AutomationSocketServer,
+            panelID: UUID,
+            workspaceID: UUID,
+            sessionRuntimeStore: SessionRuntimeStore
+        )
+        do {
+            firstServer = try await MainActor.run {
+                try makeServer(socketPath: socketPath)
+            }
+        } catch {
+            Issue.record("failed to start first server: \(error)")
+            return
+        }
+        defer {
+            withExtendedLifetime(firstServer.server) {}
+        }
+
+        do {
+            try waitForSocket(at: socketPath)
+        } catch {
+            Issue.record("first server never became reachable: \(error)")
+            return
+        }
+
+        do {
+            _ = try await MainActor.run {
+                _ = try makeServer(socketPath: socketPath)
+            }
+            Issue.record("second server unexpectedly started on an occupied socket path")
+        } catch let startupError as AutomationSocketStartupError {
+            #expect(startupError == .liveSocketPathInUse(socketPath))
+        } catch {
+            Issue.record("second server failed with unexpected error: \(error)")
+        }
+
+        do {
+            let response = try sendEvent(
+                AutomationEventEnvelope(
+                    eventType: "session.start",
+                    sessionID: "sess-still-live",
+                    panelID: firstServer.panelID.uuidString,
+                    requestID: UUID().uuidString,
+                    payload: [
+                        "agent": .string(AgentKind.codex.rawValue),
+                    ]
+                ),
+                socketPath: socketPath
+            )
+            #expect(response.ok)
+        } catch {
+            Issue.record("first server stopped responding after second startup attempt: \(error)")
+        }
+    }
+
+    @Test
+    func recommendedSocketPathFallsBackWhenRuntimePreferredPathIsLive() throws {
+        let runtimeSocketEnvironment = try makeRuntimeSocketEnvironment()
+        defer {
+            try? FileManager.default.removeItem(at: runtimeSocketEnvironment.rootURL)
+        }
+        let environment = runtimeSocketEnvironment.environment
+        let runtimePaths = ToasttyRuntimePaths.resolve(environment: environment)
+        let preferredSocketPath = try #require(runtimePaths.automationSocketFileURL?.path)
+        let liveSocketFD = try bindAndListenRawSocket(socketPath: preferredSocketPath)
+        defer {
+            close(liveSocketFD)
+            try? FileManager.default.removeItem(atPath: preferredSocketPath)
+        }
+
+        let resolvedSocketPath = AutomationSocketServer.recommendedSocketPath(
+            preferredSocketPath: preferredSocketPath,
+            environment: environment,
+            processID: 4242
+        )
+
+        #expect(resolvedSocketPath != preferredSocketPath)
+        #expect(resolvedSocketPath.hasSuffix("/events-v1-4242.sock"))
+    }
+
+    @Test
+    func staleSocketFileCanBeReplacedDuringStartup() async throws {
+        let socketPath = temporarySocketPath()
+        let staleSocketFD = try bindAndListenRawSocket(socketPath: socketPath)
+        close(staleSocketFD)
+
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: "sess-stale-replaced",
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(response.ok)
+    }
+
+    @Test
     func fatalAcceptErrorsRestartTheListenerOnTheSameSocketPath() async throws {
         let socketPath = temporarySocketPath()
         let probe = ListenerRecoveryProbe()
@@ -387,7 +498,22 @@ struct AutomationSocketServerTests {
 
     private func waitForSocket(at socketPath: String) throws {
         let deadline = Date().addingTimeInterval(1)
-        while FileManager.default.fileExists(atPath: socketPath) == false {
+        while true {
+            guard FileManager.default.fileExists(atPath: socketPath) else {
+                guard Date() < deadline else {
+                    throw SocketTestError.timeoutWaitingForSocket
+                }
+                Thread.sleep(forTimeInterval: 0.01)
+                continue
+            }
+
+            do {
+                try connectAndClose(socketPath: socketPath)
+                return
+            } catch SocketTestError.socket(let errorNumber) where errorNumber == ENOENT || errorNumber == ECONNREFUSED {
+                // The path exists but the listener is not yet accepting connections.
+            }
+
             guard Date() < deadline else {
                 throw SocketTestError.timeoutWaitingForSocket
             }
@@ -555,6 +681,84 @@ struct AutomationSocketServerTests {
         guard connectResult == 0 else {
             throw SocketTestError.socket(errno)
         }
+    }
+
+    private func bindAndListenRawSocket(socketPath: String) throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw SocketTestError.socket(errno)
+        }
+
+        let socketURL = URL(fileURLWithPath: socketPath, isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: socketURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        _ = unlink(socketPath)
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketPath.utf8CString)
+        let maxPathLength = MemoryLayout.size(ofValue: address.sun_path)
+        guard pathBytes.count <= maxPathLength else {
+            close(fd)
+            throw SocketTestError.socketPathTooLong
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+            buffer.initializeMemory(as: UInt8.self, repeating: 0)
+            pathBytes.withUnsafeBytes { source in
+                if let destinationAddress = buffer.baseAddress, let sourceAddress = source.baseAddress {
+                    memcpy(destinationAddress, sourceAddress, pathBytes.count)
+                }
+            }
+        }
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                bind(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            let errorNumber = errno
+            close(fd)
+            throw SocketTestError.socket(errorNumber)
+        }
+
+        guard listen(fd, SOMAXCONN) == 0 else {
+            let errorNumber = errno
+            close(fd)
+            throw SocketTestError.socket(errorNumber)
+        }
+
+        return fd
+    }
+
+    private func makeRuntimeSocketEnvironment() throws -> (rootURL: URL, environment: [String: String]) {
+        let rootURL = try makeShortTemporaryDirectory(prefix: "tts")
+        let runtimeHomeURL = rootURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let temporaryDirectoryURL = rootURL.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectoryURL, withIntermediateDirectories: true)
+        return (
+            rootURL,
+            [
+                "TOASTTY_RUNTIME_HOME": runtimeHomeURL.path,
+                "TMPDIR": temporaryDirectoryURL.path + "/",
+            ]
+        )
+    }
+
+    private func makeShortTemporaryDirectory(prefix: String) throws -> URL {
+        var template = "/tmp/\(prefix).XXXXXX".utf8CString
+        let createdPath = template.withUnsafeMutableBufferPointer { buffer -> String? in
+            guard let baseAddress = buffer.baseAddress, mkdtemp(baseAddress) != nil else {
+                return nil
+            }
+            return String(cString: baseAddress)
+        }
+        guard let createdPath else {
+            throw SocketTestError.socket(errno)
+        }
+        return URL(fileURLWithPath: createdPath, isDirectory: true)
     }
 
     private func waitUntil(

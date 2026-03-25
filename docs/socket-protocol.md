@@ -7,9 +7,10 @@ This document describes the current socket protocol implemented by
 
 Important scope note:
 
-- The socket server is currently created only when Toastty launches in automation mode.
+- The socket server is created for normal launches as well as automation launches so session and notification events can still reach the app.
 - The same server accepts both automation requests and event-style envelopes
   (`session.*`, `notification.emit`).
+- `automation.*` commands still require automation mode.
 - This is a narrow implementation doc, not an aspirational protocol design.
 
 CLI note:
@@ -28,7 +29,8 @@ CLI note:
 - Transport: Unix domain socket only.
 - The server creates the parent directory with mode `0700` and the socket file with
   mode `0600`.
-- The server is available only when automation mode is enabled through either:
+- Event-style envelopes are available whenever the app listener is running.
+- `automation.*` commands require automation mode enabled through either:
   - `--automation`
   - a truthy `TOASTTY_AUTOMATION` environment value
 
@@ -36,8 +38,13 @@ Default socket path resolution:
 
 1. `--socket-path <path>`
 2. `TOASTTY_SOCKET_PATH`
-3. a temp socket path derived from the active runtime home when runtime isolation is enabled
+3. a preferred temp socket path derived from the active runtime home when runtime isolation is enabled
 4. `<TMPDIR-or-system-temp>/toastty-$UID/events-v1.sock`
+
+Runtime-isolated resolution note:
+
+- If the preferred runtime-home-derived socket path is already owned by a live Toastty listener, the app keeps that listener in place and resolves the new launch to a per-process sibling path such as `events-v1-<pid>.sock`.
+- In that case, treat the resolved `socketPath` written to `instance.json`, the automation ready file, or an injected `TOASTTY_SOCKET_PATH` as authoritative.
 
 Automation config defaults:
 
@@ -55,7 +62,7 @@ Ready file:
   - `ready`
   - `runID`
   - `fixture`
-  - `socketPath`
+  - `socketPath` (the resolved live socket path for that launch)
   - `status`
   - `error`
   - `timestamp`
@@ -318,7 +325,7 @@ Launch context environment:
 
 - `TOASTTY_SESSION_ID`
 - `TOASTTY_PANEL_ID`
-- `TOASTTY_SOCKET_PATH`
+- `TOASTTY_SOCKET_PATH` (the resolved live socket path for that launch)
 - `TOASTTY_CLI_PATH`
 - `TOASTTY_CWD` when the target panel has a known working directory
 - `TOASTTY_REPO_ROOT` when Toastty can infer a repository root from that directory

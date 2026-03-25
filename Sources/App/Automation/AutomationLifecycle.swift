@@ -5,11 +5,20 @@ final class AutomationLifecycle {
     private let config: AutomationConfig
     private let startupError: String?
     private let readySignalLock = NSLock()
+    private let socketPathLock = NSLock()
     private var didSignalReady = false
+    private var socketPath: String
 
     init(config: AutomationConfig, startupError: String? = nil) {
         self.config = config
         self.startupError = startupError
+        self.socketPath = config.socketPath
+    }
+
+    func updateSocketPath(_ socketPath: String) {
+        socketPathLock.lock()
+        self.socketPath = socketPath
+        socketPathLock.unlock()
     }
 
     func markReady(runtimeError: String? = nil) {
@@ -32,7 +41,7 @@ final class AutomationLifecycle {
                 ready: finalError == nil,
                 runID: config.runID,
                 fixture: config.fixtureName,
-                socketPath: config.socketPath,
+                socketPath: currentSocketPath(),
                 status: finalError == nil ? "ready" : "error",
                 error: finalError,
                 timestamp: ISO8601DateFormatter().string(from: Date())
@@ -56,6 +65,12 @@ final class AutomationLifecycle {
         guard didSignalReady == false else { return false }
         didSignalReady = true
         return true
+    }
+
+    private func currentSocketPath() -> String {
+        socketPathLock.lock()
+        defer { socketPathLock.unlock() }
+        return socketPath
     }
 }
 
