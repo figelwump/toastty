@@ -405,7 +405,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.selectedWindowID, firstWindowID)
     }
 
-    func testRenameSelectedWorkspaceFromCommandSetsPendingRename() throws {
+    func testRenameSelectedWorkspaceFromCommandSetsPendingRenameRequest() throws {
         let workspace = WorkspaceState.bootstrap(title: "Dev")
         let windowID = UUID()
         let state = AppState(
@@ -423,9 +423,12 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
-        XCTAssertNil(store.pendingRenameWorkspaceID)
-        store.renameSelectedWorkspaceFromCommand(preferredWindowID: windowID)
-        XCTAssertEqual(store.pendingRenameWorkspaceID, workspace.id)
+        XCTAssertNil(store.pendingRenameWorkspaceRequest)
+        XCTAssertTrue(store.renameSelectedWorkspaceFromCommand(preferredWindowID: windowID))
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceRequest,
+            PendingWorkspaceRenameRequest(windowID: windowID, workspaceID: workspace.id)
+        )
     }
 
     func testRenameSelectedWorkspaceFromCommandDoesNothingWithoutWorkspace() {
@@ -439,8 +442,19 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             persistTerminalFontPreference: false
         )
 
-        store.renameSelectedWorkspaceFromCommand(preferredWindowID: nil)
-        XCTAssertNil(store.pendingRenameWorkspaceID)
+        XCTAssertFalse(store.renameSelectedWorkspaceFromCommand(preferredWindowID: nil))
+        XCTAssertNil(store.pendingRenameWorkspaceRequest)
+    }
+
+    func testConsumePendingRenameWorkspaceRequestOnlyReturnsMatchingWindow() {
+        let request = PendingWorkspaceRenameRequest(windowID: UUID(), workspaceID: UUID())
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        store.pendingRenameWorkspaceRequest = request
+
+        XCTAssertNil(store.consumePendingWorkspaceRenameRequest(windowID: UUID()))
+        XCTAssertEqual(store.pendingRenameWorkspaceRequest, request)
+        XCTAssertEqual(store.consumePendingWorkspaceRenameRequest(windowID: request.windowID), request)
+        XCTAssertNil(store.pendingRenameWorkspaceRequest)
     }
 
     func testCloseSelectedWorkspaceFromCommandRequestsFocusedWorkspaceClose() throws {

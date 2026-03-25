@@ -75,12 +75,11 @@ struct SidebarView: View {
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
         }
-        .onChange(of: store.pendingRenameWorkspaceID) { _, newValue in
-            guard let workspaceID = newValue,
+        .onChange(of: store.pendingRenameWorkspaceRequest) { _, _ in
+            guard let request = store.consumePendingWorkspaceRenameRequest(windowID: windowID),
                   let window = store.window(id: windowID),
-                  window.workspaceIDs.contains(workspaceID),
-                  let workspace = store.state.workspacesByID[workspaceID] else { return }
-            store.pendingRenameWorkspaceID = nil
+                  window.workspaceIDs.contains(request.workspaceID),
+                  let workspace = store.state.workspacesByID[request.workspaceID] else { return }
             beginWorkspaceRename(workspace)
         }
     }

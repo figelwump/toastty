@@ -18,6 +18,11 @@ struct PendingWorkspaceCloseRequest: Equatable {
     let workspaceID: UUID
 }
 
+struct PendingWorkspaceRenameRequest: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -33,9 +38,9 @@ final class AppStore: ObservableObject {
     @Published private(set) var state: AppState
     @Published private(set) var hasEverLaunchedAgent: Bool
 
-    /// Set by workspace creation or rename commands; the sidebar observes this
-    /// to enter inline-rename mode for the target workspace.
-    @Published var pendingRenameWorkspaceID: UUID?
+    /// Set by workspace rename commands; the sidebar in the target window
+    /// observes this to enter inline-rename mode for the target workspace.
+    @Published var pendingRenameWorkspaceRequest: PendingWorkspaceRenameRequest?
     @Published var pendingCloseWorkspaceRequest: PendingWorkspaceCloseRequest?
 
     private let reducer = AppReducer()
@@ -273,9 +278,14 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func renameSelectedWorkspaceFromCommand(preferredWindowID: UUID?) {
-        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return }
-        pendingRenameWorkspaceID = selection.workspace.id
+    @discardableResult
+    func renameSelectedWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return false }
+        pendingRenameWorkspaceRequest = PendingWorkspaceRenameRequest(
+            windowID: selection.windowID,
+            workspaceID: selection.workspace.id
+        )
+        return true
     }
 
     @discardableResult
@@ -305,6 +315,15 @@ final class AppStore: ObservableObject {
         return request
     }
 
+    func consumePendingWorkspaceRenameRequest(
+        windowID: UUID
+    ) -> PendingWorkspaceRenameRequest? {
+        guard let request = pendingRenameWorkspaceRequest,
+              request.windowID == windowID else { return nil }
+        pendingRenameWorkspaceRequest = nil
+        return request
+    }
+
     @discardableResult
     func confirmWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
         let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
@@ -314,8 +333,8 @@ final class AppStore: ObservableObject {
         guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
               selection.windowID == windowID else { return false }
         let didCloseWorkspace = send(.closeWorkspace(workspaceID: workspaceID))
-        if didCloseWorkspace, pendingRenameWorkspaceID == workspaceID {
-            pendingRenameWorkspaceID = nil
+        if didCloseWorkspace, pendingRenameWorkspaceRequest?.workspaceID == workspaceID {
+            pendingRenameWorkspaceRequest = nil
         }
         return didCloseWorkspace
     }

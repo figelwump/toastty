@@ -749,7 +749,15 @@ struct ToasttyApp: App {
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let createWorkspaceCommandController = CreateWorkspaceCommandController(
+            store: store,
+            preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+        )
         let closeWorkspaceCommandController = CloseWorkspaceCommandController(
+            store: store,
+            preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+        )
+        let renameWorkspaceCommandController = RenameWorkspaceCommandController(
             store: store,
             preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
         )
@@ -772,6 +780,9 @@ struct ToasttyApp: App {
             splitLayoutCommandController: splitLayoutCommandController
         )
         workspaceMenuBridge = WorkspaceMenuBridge(
+            createWorkspaceCommandController: createWorkspaceCommandController,
+            renameWorkspaceCommandController: renameWorkspaceCommandController,
+            closeWorkspaceCommandController: closeWorkspaceCommandController,
             workspaceTabCommandController: workspaceTabCommandController
         )
         helpMenuBridge = HelpMenuBridge()
