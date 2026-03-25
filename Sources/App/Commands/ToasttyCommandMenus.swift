@@ -258,6 +258,26 @@ struct ToasttyCommandMenus: Commands {
                 store.createWorkspaceTabFromCommand(preferredWindowID: focusedWindowID)
             }
             .disabled(commandWorkspace == nil)
+
+            Divider()
+
+            Button("Select Previous Tab") {
+                store.selectAdjacentWorkspaceTab(
+                    preferredWindowID: focusedWindowID,
+                    direction: .previous
+                )
+            }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
+
+            Button("Select Next Tab") {
+                store.selectAdjacentWorkspaceTab(
+                    preferredWindowID: focusedWindowID,
+                    direction: .next
+                )
+            }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
         }
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
