@@ -2,6 +2,7 @@ import Foundation
 
 public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     public let id: UUID
+    public var customTitle: String?
     public var layoutTree: LayoutNode
     public var panels: [UUID: PanelState]
     public var focusedPanelID: UUID?
@@ -12,6 +13,7 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
 
     public init(
         id: UUID,
+        customTitle: String? = nil,
         layoutTree: LayoutNode,
         panels: [UUID: PanelState],
         focusedPanelID: UUID?,
@@ -21,6 +23,7 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         recentlyClosedPanels: [ClosedPanelRecord] = []
     ) {
         self.id = id
+        self.customTitle = Self.normalizedCustomTitle(customTitle)
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
@@ -55,6 +58,14 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     }
 
     public var displayTitle: String {
+        if let customTitle {
+            return customTitle
+        }
+
+        return derivedDisplayTitle
+    }
+
+    private var derivedDisplayTitle: String {
         if let focusedPanelID = resolvedFocusedPanelID,
            let panelState = panels[focusedPanelID] {
             return panelState.notificationLabel
@@ -102,6 +113,7 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case id
+        case customTitle
         case layoutTree
         case panels
         case focusedPanelID
@@ -113,6 +125,7 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
+        customTitle = Self.normalizedCustomTitle(try container.decodeIfPresent(String.self, forKey: .customTitle))
         layoutTree = try container.decode(LayoutNode.self, forKey: .layoutTree)
         panels = try container.decode([UUID: PanelState].self, forKey: .panels)
         focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
@@ -127,11 +140,19 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(customTitle, forKey: .customTitle)
         try container.encode(layoutTree, forKey: .layoutTree)
         try container.encode(panels, forKey: .panels)
         try container.encodeIfPresent(focusedPanelID, forKey: .focusedPanelID)
         try container.encode(auxPanelVisibility, forKey: .auxPanelVisibility)
         try container.encode(unreadPanelIDs, forKey: .unreadPanelIDs)
         try container.encode(recentlyClosedPanels, forKey: .recentlyClosedPanels)
+    }
+
+    private static func normalizedCustomTitle(_ customTitle: String?) -> String? {
+        guard let customTitle else { return nil }
+        let trimmed = customTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        return trimmed
     }
 }

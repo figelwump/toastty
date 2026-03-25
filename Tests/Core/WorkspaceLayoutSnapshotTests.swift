@@ -246,6 +246,7 @@ struct WorkspaceLayoutSnapshotTests {
                 ),
                 secondTabID: WorkspaceTabState(
                     id: secondTabID,
+                    customTitle: "Deploy",
                     layoutTree: .slot(slotID: secondSlotID, panelID: secondPanelID),
                     panels: [
                         secondPanelID: .terminal(
@@ -300,8 +301,28 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(secondTerminalState.launchWorkingDirectory == "/tmp/second-tab")
         #expect(firstTerminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
         #expect(secondTerminalState.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
+        #expect(restoredWorkspace.tab(id: secondTabID)?.customTitle == "Deploy")
+        #expect(restoredWorkspace.tab(id: secondTabID)?.displayTitle == "Deploy")
         #expect(restoredWorkspace.tab(id: secondTabID)?.auxPanelVisibility == [.diff])
         try StateValidator.validate(restoredState)
+    }
+
+    @Test
+    func workspaceLayoutTabSnapshotDecodesMissingCustomTitleAsNil() throws {
+        let snapshot = WorkspaceLayoutTabSnapshot(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil,
+            auxPanelVisibility: []
+        )
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(json["customTitle"] == nil)
+
+        let decoded = try JSONDecoder().decode(WorkspaceLayoutTabSnapshot.self, from: encoded)
+        #expect(decoded.customTitle == nil)
     }
 
     @Test

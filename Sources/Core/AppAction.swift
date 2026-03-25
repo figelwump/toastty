@@ -33,6 +33,7 @@ public enum AppAction: Equatable, Sendable {
     case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
+    case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
     case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
     case focusPanel(workspaceID: UUID, panelID: UUID)
@@ -88,6 +89,8 @@ public extension AppAction {
             return "closeWindow"
         case .renameWorkspace:
             return "renameWorkspace"
+        case .setWorkspaceTabCustomTitle:
+            return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:
             return "closeWorkspace"
         case .closeWorkspaceTab:

@@ -174,7 +174,9 @@ struct SidebarView: View {
                 ) {
                     WorkspaceRenameTextField(
                         text: $renameDraftTitle,
-                        workspaceID: workspaceID,
+                        itemID: workspaceID,
+                        placeholder: "Workspace name",
+                        font: .systemFont(ofSize: 12, weight: .semibold),
                         accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
                         onSubmit: {
                             commitWorkspaceRename(workspaceID: workspaceID)

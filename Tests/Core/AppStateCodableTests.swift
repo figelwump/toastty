@@ -68,6 +68,13 @@ struct AppStateCodableTests {
         let originalPanelID = try #require(workspaceBeforeEncode.tab(id: originalTabID)?.focusedPanelID)
         let secondPanelID = try #require(workspaceBeforeEncode.tab(id: secondTabID)?.focusedPanelID)
 
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: secondTabID, title: "Deploy"),
+                state: &state
+            )
+        )
+
         let encoded = try JSONEncoder().encode(state)
         let decoded = try JSONDecoder().decode(AppState.self, from: encoded)
         let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
@@ -87,8 +94,46 @@ struct AppStateCodableTests {
         #expect(originalTerminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
         #expect(secondTerminalState.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
         #expect(secondTerminalState.cwd == "/tmp/second-tab")
+        #expect(decodedWorkspace.tab(id: secondTabID)?.customTitle == "Deploy")
+        #expect(decodedWorkspace.tab(id: secondTabID)?.displayTitle == "Deploy")
         #expect(decodedWorkspace.tab(id: originalTabID)?.focusedPanelModeActive == false)
         #expect(decodedWorkspace.tab(id: secondTabID)?.focusedPanelModeActive == false)
         try StateValidator.validate(decoded)
+    }
+
+    @Test
+    func workspaceTabStateCodableNormalizesCustomTitleAndFallsBackToDerivedTitle() throws {
+        let panelID = UUID()
+        let slotID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            customTitle: "  Deploy  ",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .terminal(TerminalPanelState(title: "Terminal 7", shell: "zsh", cwd: "/tmp/deploy")),
+            ],
+            focusedPanelID: panelID
+        )
+
+        #expect(tab.customTitle == "Deploy")
+        #expect(tab.displayTitle == "Deploy")
+
+        let decoded = try JSONDecoder().decode(WorkspaceTabState.self, from: JSONEncoder().encode(tab))
+        #expect(decoded.customTitle == "Deploy")
+        #expect(decoded.displayTitle == "Deploy")
+
+        let fallbackTab = WorkspaceTabState(
+            id: UUID(),
+            customTitle: "   ",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .terminal(TerminalPanelState(title: "Terminal 7", shell: "zsh", cwd: "/tmp/deploy")),
+            ],
+            focusedPanelID: panelID
+        )
+
+        #expect(fallbackTab.customTitle == nil)
+        let fallbackLabel = try #require(fallbackTab.panels[panelID]?.notificationLabel)
+        #expect(fallbackTab.displayTitle == fallbackLabel)
     }
 }

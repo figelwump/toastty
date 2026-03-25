@@ -304,6 +304,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
 
 public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
+    public var customTitle: String?
     public var layoutTree: LayoutNode
     public var panels: [UUID: WorkspaceLayoutPanelSnapshot]
     public var focusedPanelID: UUID?
@@ -311,12 +312,14 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
 
     public init(
         id: UUID,
+        customTitle: String? = nil,
         layoutTree: LayoutNode,
         panels: [UUID: WorkspaceLayoutPanelSnapshot],
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind>
     ) {
         self.id = id
+        self.customTitle = customTitle
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
@@ -325,6 +328,7 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
 
     init(tab: WorkspaceTabState) {
         id = tab.id
+        customTitle = tab.customTitle
         layoutTree = tab.layoutTree
         panels = tab.panels.reduce(into: [:]) { partialResult, entry in
             partialResult[entry.key] = WorkspaceLayoutPanelSnapshot(panelState: entry.value)
@@ -337,6 +341,7 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
         let restoredPanels = makePanelsWithRestoredTerminalTitles()
         return WorkspaceTabState(
             id: id,
+            customTitle: customTitle,
             layoutTree: layoutTree,
             panels: restoredPanels,
             focusedPanelID: focusedPanelID,

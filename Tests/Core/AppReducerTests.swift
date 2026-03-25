@@ -913,6 +913,144 @@ struct AppReducerTests {
     }
 
     @Test
+    func setWorkspaceTabCustomTitleUpdatesTheTargetTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            )
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == "Deploy")
+        #expect(updatedTab.displayTitle == "Deploy")
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleRejectsEmptyTitle() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+        let originalTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "   "),
+                state: &state
+            ) == false
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == originalTab.customTitle)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleWithUnchangedTitleIsNoOp() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            )
+        )
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            ) == false
+        )
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleClearsExistingOverride() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            )
+        )
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: nil),
+                state: &state
+            )
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == nil)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleRejectsSingleTabWorkspace() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.first)
+        let originalTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            ) == false
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab == originalTab)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleTrimsWhitespaceBeforePersisting() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "  Deploy  "),
+                state: &state
+            )
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == "Deploy")
+        #expect(updatedTab.displayTitle == "Deploy")
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func closeWorkspaceRemovesWorkspaceAndSelectsAdjacentWorkspace() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
         let reducer = AppReducer()
