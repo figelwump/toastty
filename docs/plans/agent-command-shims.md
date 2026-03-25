@@ -72,13 +72,21 @@ protocol ManagedAgentLaunchPlanning: AnyObject {
 
 Responsibilities:
 
-- validate the target panel exists and is terminal-backed
+- resolve live panel context for session attachment
 - infer `repoRoot`
 - allocate `sessionID`
 - call `AgentLaunchInstrumentation.prepare(...)`
 - create the session and initial idle status
 - register managed artifacts and start the Codex watcher before returning
 - return the final child `argv` plus the merged launch environment
+
+Important distinction:
+
+- menu launches still need the current "is this panel interactive and safe to launch into?" validation before typing a command into the shell
+- typed launches do not need prompt/busy validation, because the user already launched the command in that panel
+- typed launches only need attachment validation: can Toastty still resolve `TOASTTY_PANEL_ID` to a live terminal panel so the session can be attached to the correct window/workspace?
+
+If typed-launch attachment validation fails, the command should still run untracked rather than being blocked.
 
 Important simplification:
 
@@ -146,6 +154,7 @@ Implementation note:
 
 - model this as a request/response command in the automation socket, not as a fire-and-forget event
 - treat it as an internal CLI surface used by Toastty-owned shims, not a public stable integration contract in v1
+- this is additive to the existing request/response socket protocol, not a new transport design
 
 ### 4. Add a Bundled Generic Shim Binary
 
@@ -165,13 +174,21 @@ Shim algorithm:
 5. resolve the real binary path by searching `PATH` after removing the shim directory from consideration
 6. if real-binary resolution fails, print a concise error and exit `127`
 7. call `toastty agent prepare-managed-launch ...`
-8. if prepare-managed-launch fails before returning a plan, print a concise warning and pass through untracked rather than hanging
+8. if prepare-managed-launch fails before returning a plan, log the failure back to Toastty if possible and pass through untracked without terminal noise rather than hanging
 9. spawn the real binary with the returned env + `argv`
 10. wait for exit
 11. call `toastty session stop --session <id> --reason process_exit`
 12. exit with the child termination status
 
 The pass-through-on-existing-`TOASTTY_SESSION_ID` rule keeps v1 small and avoids nested top-level session clobbering when one managed agent launches another. This means nested managed agent launches are intentionally not tracked as separate top-level sessions in v1.
+
+TTY / signal constraints:
+
+- the shim must be transparent to stdin/stdout/stderr during normal operation
+- the shim must not read from stdin, change terminal modes, or emit progress text
+- the child process must inherit the PTY file descriptors directly
+- signal handling must preserve normal TUI behavior; test `SIGINT` and `SIGTSTP` explicitly
+- if the shim receives termination while waiting on the child, the v1 fallback is existing session cleanup heuristics rather than a second watchdog layer
 
 ### 5. Add a Managed Shim Directory to the PTY Launch Environment
 
@@ -188,7 +205,7 @@ Add an app-side `AgentCommandShimInstaller` that:
 
 - resolves the bundled `toastty-agent-shim` helper path
 - creates the shim directory
-- creates or refreshes symlinks for `codex` and `claude`
+- creates or refreshes symlinks for `codex` and `claude`, pointing directly into the current app bundle helper
 - is safe to run repeatedly
 
 Important simplification:
@@ -197,6 +214,11 @@ Important simplification:
 - do not make this a global system PATH change
 - inject the shim directory only into Toastty-owned PTYs
 - enable the shim `PATH` prepend only once the shim binary and prepare-managed-launch path are both live; do not land the `PATH` change by itself
+
+Freshness rule:
+
+- do not copy shim binaries into the shim directory
+- symlinks should always target the currently installed app bundle helper so app updates refresh behavior automatically
 
 ### 6. Add a Base PTY Launch Context For All Terminal Panels
 
@@ -235,6 +257,35 @@ Accept these v1 gaps explicitly:
 
 These are acceptable trade-offs for a first-party-only command-name design.
 
+## Runtime Constraints
+
+### Latency Budget
+
+Typed `codex` / `claude` launches should stay under an added Toastty overhead budget of roughly 200 ms on a cold shim start.
+
+Measure during implementation:
+
+- shim process startup
+- CLI/socket round-trip
+- app-side launch planning
+- total time to child exec
+
+If the measured overhead is consistently above budget, revisit whether the shim implementation should remain Swift or move to a lighter helper.
+
+### Failure UX
+
+Different failure classes should surface differently:
+
+- real binary missing: print to stderr and exit `127`
+- Toastty tracking setup failed but the agent can still run: pass through silently in the terminal, emit an app log entry, and surface a non-modal Toastty warning
+
+Preferred v1 UI for tracking-attach failures:
+
+- a panel-scoped warning chip or equivalent non-modal panel chrome state
+- optional sidebar warning indicator for the affected panel/workspace
+- no alert dialog for typed launches
+- no fake managed session entry if tracking was never attached
+
 ## File / Module Plan
 
 ### New or Extracted App-Side Code
@@ -250,8 +301,11 @@ These are acceptable trade-offs for a first-party-only command-name design.
 
 - `Sources/App/Agents/AgentLaunchService.swift`
   - call the shared planner and stop owning watcher/session setup directly
+  - keep menu-launch prompt/busy validation separate from typed-launch attachment validation
 - `Sources/App/Automation/AutomationSocketServer.swift`
   - add request handling for managed launch preparation
+- `Sources/App/Sessions/...`
+  - add a lightweight path for panel-scoped tracking-attach warnings if the existing session UI does not already have a suitable surface
 - `Sources/App/Terminal/TerminalRuntimeRegistry.swift`
   - use the base PTY launch environment for every panel
 - `Sources/App/TerminalProfiles/TerminalProfileLaunchResolver.swift`
@@ -293,7 +347,8 @@ These are acceptable trade-offs for a first-party-only command-name design.
 4. Refactor `AgentLaunchService` to use the planner and add the menu-launch shim-bypass env marker.
 5. Add the generic shim binary and symlink installation for `codex` / `claude`.
 6. Add the universal PTY launch environment, including shim `PATH`, only after the prepare path and shim binary are both working.
-7. Update docs after code and validation are complete.
+7. Add non-modal tracking-failure UI and logging for typed-launch attach failures.
+8. Update docs after code and validation are complete.
 
 This order keeps the refactor incremental and lets the existing explicit launch path stay working throughout.
 
@@ -306,6 +361,7 @@ This order keeps the refactor incremental and lets the existing explicit launch 
   - explicit menu launch produces exactly one session record when the shim directory is present on `PATH`
 - new planner tests
   - session creation
+  - typed-launch attachment validation behavior when the panel is stale or missing
   - repo-root inference
   - managed artifact registration
   - Codex watcher startup
@@ -325,6 +381,7 @@ This order keeps the refactor incremental and lets the existing explicit launch 
   - pass-through when `TOASTTY_SESSION_ID` is already set
   - real-binary resolution skips the shim directory
   - dead or unreachable app/socket does not hang the shim
+  - `SIGINT` / `SIGTSTP` behavior stays compatible with TUI expectations
   - child receives returned env and `argv`
   - exit code propagation
   - abnormal child termination still leads to deterministic stop / cleanup behavior
@@ -347,11 +404,14 @@ Test fixture behavior:
 
 Repeat the same end-to-end check for `claude` so the `argv[0]`-based branching is exercised for both first-party names.
 
+Add a Claude-specific integration case where the typed launch already includes `--settings` and verify the planned `argv` merges Toastty hooks instead of clobbering user settings.
+
 ### Validation
 
 - `tuist generate`
 - targeted unit tests for the new planner, shim, CLI, and terminal launch env
 - full `./scripts/automation/check.sh`
+- explicit latency measurement against the typed-launch budget
 - manual local validation with a fake `codex` binary before trying a real Codex install
 - optional real Codex manual run inside an isolated dev runtime after the fake-binary path is green
 
