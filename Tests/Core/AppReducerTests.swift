@@ -607,6 +607,31 @@ struct AppReducerTests {
     }
 
     @Test
+    func focusPanelSelectsOwningBackgroundTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspace.tabIDs.first)
+        let backgroundTabID = try #require(workspace.tabIDs.last)
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        let backgroundTab = try #require(workspace.tab(id: backgroundTabID))
+        let panelID = try #require(backgroundTab.focusedPanelID)
+
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: panelID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.selectedTabID == backgroundTabID)
+        #expect(updatedWorkspace.focusedPanelID == panelID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func createWorkspaceDoesNotStealSelectedWindow() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

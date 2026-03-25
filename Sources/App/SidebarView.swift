@@ -285,7 +285,7 @@ struct SidebarView: View {
             for: workspaceSessionStatus.panelID,
             in: workspace
         )
-        let canFocusPanel = workspace.panels[workspaceSessionStatus.panelID] != nil
+        let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
 
         Group {
             if canFocusPanel {
@@ -505,6 +505,10 @@ struct SidebarView: View {
         case .idle, .working:
             return nil
         }
+    }
+
+    static func canFocusSessionPanel(_ panelID: UUID, in workspace: WorkspaceState) -> Bool {
+        workspace.panelState(for: panelID) != nil && workspace.slotID(containingPanelID: panelID) != nil
     }
 
     static func sessionIndicatorState(for kind: SessionStatusKind) -> SessionStatusIndicatorState {
