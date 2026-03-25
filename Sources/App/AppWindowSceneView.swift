@@ -12,6 +12,7 @@ struct AppWindowSceneView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfiguration: () -> Void
+    let onWindowCloseInitiated: @MainActor () -> Void
     let disableAnimations: Bool
 
     @State private var fontHUDPoints: Double?
@@ -65,6 +66,7 @@ struct AppWindowSceneView: View {
                 windowTitle: store.selectedWorkspace(in: windowID)?.title,
                 onWindowDidBecomeKey: handleWindowDidBecomeKey,
                 onWindowFrameChange: handleWindowFrameChange,
+                onWindowCloseInitiated: onWindowCloseInitiated,
                 onWindowWillClose: handleWindowWillClose
             )
         }

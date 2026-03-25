@@ -8,6 +8,7 @@ struct AppWindowSceneObserver: NSViewRepresentable {
     let windowTitle: String?
     let onWindowDidBecomeKey: @MainActor () -> Void
     let onWindowFrameChange: @MainActor (CGRectCodable) -> Void
+    let onWindowCloseInitiated: @MainActor () -> Void
     let onWindowWillClose: @MainActor () -> Void
 
     func makeCoordinator() -> AppWindowSceneObserverCoordinator {
@@ -16,6 +17,7 @@ struct AppWindowSceneObserver: NSViewRepresentable {
             windowTitle: windowTitle,
             onWindowDidBecomeKey: onWindowDidBecomeKey,
             onWindowFrameChange: onWindowFrameChange,
+            onWindowCloseInitiated: onWindowCloseInitiated,
             onWindowWillClose: onWindowWillClose
         )
     }
@@ -34,6 +36,7 @@ struct AppWindowSceneObserver: NSViewRepresentable {
         context.coordinator.windowTitle = windowTitle
         context.coordinator.onWindowDidBecomeKey = onWindowDidBecomeKey
         context.coordinator.onWindowFrameChange = onWindowFrameChange
+        context.coordinator.onWindowCloseInitiated = onWindowCloseInitiated
         context.coordinator.onWindowWillClose = onWindowWillClose
         context.coordinator.attach(to: nsView.window)
         context.coordinator.applyDesiredFrameIfNeeded()
@@ -73,6 +76,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     var windowTitle: String?
     var onWindowDidBecomeKey: @MainActor () -> Void
     var onWindowFrameChange: @MainActor (CGRectCodable) -> Void
+    var onWindowCloseInitiated: @MainActor () -> Void
     var onWindowWillClose: @MainActor () -> Void
 
     private weak var observedWindow: NSWindow?
@@ -89,6 +93,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         windowTitle: String? = nil,
         onWindowDidBecomeKey: @escaping @MainActor () -> Void,
         onWindowFrameChange: @escaping @MainActor (CGRectCodable) -> Void,
+        onWindowCloseInitiated: @escaping @MainActor () -> Void = {},
         onWindowWillClose: @escaping @MainActor () -> Void,
         shouldConfirmWindowClose: Bool = !AutomationConfig.shouldBypassInteractiveConfirmation(
             arguments: ProcessInfo.processInfo.arguments,
@@ -121,6 +126,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         self.windowTitle = windowTitle
         self.onWindowDidBecomeKey = onWindowDidBecomeKey
         self.onWindowFrameChange = onWindowFrameChange
+        self.onWindowCloseInitiated = onWindowCloseInitiated
         self.onWindowWillClose = onWindowWillClose
         self.shouldConfirmWindowClose = shouldConfirmWindowClose
         self.presentWindowCloseConfirmation = presentWindowCloseConfirmation
@@ -270,6 +276,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private func handleNativeCloseButton(_ sender: Any?) {
         guard let observedWindow else { return }
         guard shouldConfirmWindowClose else {
+            onWindowCloseInitiated()
             closeWindow(observedWindow)
             return
         }
@@ -282,6 +289,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
             guard let self else { return }
             self.isPresentingWindowCloseConfirmation = false
             guard didConfirm, let observedWindow else { return }
+            self.onWindowCloseInitiated()
             self.closeWindow(observedWindow)
         }
     }

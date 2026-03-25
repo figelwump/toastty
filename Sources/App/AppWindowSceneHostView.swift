@@ -1,6 +1,23 @@
 import CoreState
 import SwiftUI
 
+enum AppWindowSceneDismissalPolicy {
+    static func shouldDismissSceneAfterLosingBoundWindow(
+        previouslyHadBoundWindow: Bool,
+        remainingWindowCount: Int,
+        closeWasRequested: Bool
+    ) -> Bool {
+        guard previouslyHadBoundWindow else { return false }
+        if remainingWindowCount > 0 {
+            return true
+        }
+        // When the last state-backed window disappears, only the explicit
+        // native close path should tear the scene down. Otherwise SwiftUI can
+        // keep the scene alive and fall back to the global empty state.
+        return closeWasRequested
+    }
+}
+
 struct AppWindowSceneHostView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
@@ -23,6 +40,7 @@ struct AppWindowSceneHostView: View {
     @State private var boundWindowID: UUID?
     @State private var hasBoundWindow = false
     @State private var restoredStoredWindowID = false
+    @State private var shouldDismissAfterNextBindingLoss = false
 
     private var storedSceneWindowID: UUID? {
         sceneWindowIDValue.flatMap(UUID.init(uuidString:))
@@ -45,6 +63,7 @@ struct AppWindowSceneHostView: View {
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
                     openAgentProfilesConfiguration: openAgentProfilesConfiguration,
+                    onWindowCloseInitiated: handleWindowCloseInitiated,
                     disableAnimations: disableAnimations
                 )
             } else {
@@ -75,16 +94,23 @@ struct AppWindowSceneHostView: View {
             persistWindowID(boundWindowID)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
         } else if hasBoundWindow {
+            let shouldDismissScene = AppWindowSceneDismissalPolicy.shouldDismissSceneAfterLosingBoundWindow(
+                previouslyHadBoundWindow: hasBoundWindow,
+                remainingWindowCount: store.state.windows.count,
+                closeWasRequested: shouldDismissAfterNextBindingLoss
+            )
             if let boundWindowID {
                 sceneCoordinator.unregisterPresentedWindow(windowID: boundWindowID)
             }
             boundWindowID = nil
             hasBoundWindow = false
             sceneWindowIDValue = nil
-            // Keep the scene alive when the app falls back to the global empty
-            // state so the existing window stays on its current display.
-            guard store.state.windows.isEmpty == false else { return }
-            dismiss()
+            shouldDismissAfterNextBindingLoss = false
+            if shouldDismissScene {
+                // A user explicitly closed this window, so dismiss the scene
+                // even when it was the last bound window in app state.
+                dismiss()
+            }
             return
         } else if let claimedWindowID = sceneCoordinator.claimWindowID(in: store.state) {
             bind(claimedWindowID)
@@ -111,6 +137,10 @@ struct AppWindowSceneHostView: View {
         let persistedValue = windowID.uuidString
         guard sceneWindowIDValue != persistedValue else { return }
         sceneWindowIDValue = persistedValue
+    }
+
+    private func handleWindowCloseInitiated() {
+        shouldDismissAfterNextBindingLoss = true
     }
 
     private var createWorkspaceAction: (() -> Void)? {
