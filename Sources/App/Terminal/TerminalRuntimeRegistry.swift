@@ -86,7 +86,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var exitedTerminalPanelIDs: Set<UUID> = []
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
-    @Published private(set) var viewportStateByPanelID: [UUID: TerminalViewportState] = [:]
+    // Keep viewport state as an internal cache rather than published SwiftUI state.
+    // Live controllers receive viewport writebacks directly from Ghostty, and
+    // publishing this cache can force representable updates that replay stale
+    // viewport state back into the active controller.
+    private var viewportStateByPanelID: [UUID: TerminalViewportState] = [:]
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
@@ -223,6 +227,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     func controller(for panelID: UUID, workspaceID: UUID, windowID: UUID) -> TerminalSurfaceController {
+        // TerminalWindowRuntimeStore is main-actor isolated, so this creation
+        // check stays serialized with the lookup below. Existing controllers
+        // already receive live viewport updates directly from scrollbar actions,
+        // so only newly created controllers need cached replay.
+        let shouldReplayCachedViewportState = runtimeStore.containsController(for: panelID) == false
         let controller = runtimeStore.controller(
             for: panelID,
             workspaceID: workspaceID,
@@ -230,21 +239,22 @@ final class TerminalRuntimeRegistry: ObservableObject {
             state: store?.state,
             delegate: self
         )
-        let cachedViewportState = viewportState(for: panelID)
-        if let cachedViewportState {
-            ToasttyLog.info(
-                "Replaying cached terminal viewport state into controller",
-                category: .terminal,
-                metadata: viewportLogMetadata(
-                    panelID: panelID,
-                    workspaceID: workspaceID,
-                    windowID: windowID,
-                    viewportState: cachedViewportState,
-                    state: store?.state,
-                    controller: controller
-                )
-            )
+        guard shouldReplayCachedViewportState,
+              let cachedViewportState = viewportState(for: panelID) else {
+            return controller
         }
+        ToasttyLog.info(
+            "Replaying cached terminal viewport state into controller",
+            category: .terminal,
+            metadata: viewportLogMetadata(
+                panelID: panelID,
+                workspaceID: workspaceID,
+                windowID: windowID,
+                viewportState: cachedViewportState,
+                state: store?.state,
+                controller: controller
+            )
+        )
         controller.applyViewportState(cachedViewportState)
         return controller
     }

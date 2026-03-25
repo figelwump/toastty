@@ -1,5 +1,6 @@
 #if TOASTTY_HAS_GHOSTTY_KIT
 @testable import ToasttyApp
+import Combine
 import CoreState
 import XCTest
 
@@ -193,6 +194,76 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         XCTAssertTrue(registry.activatePanelIfNeeded(originalPanelID))
         XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
+    }
+
+    func testViewportStateUpdatesDoNotPublishObjectChanges() {
+        let registry = TerminalRuntimeRegistry()
+        let panelID = UUID()
+        var objectChangeCount = 0
+        let cancellable = registry.objectWillChange.sink {
+            objectChangeCount += 1
+        }
+
+        registry.setViewportState(
+            TerminalViewportState(
+                panelID: panelID,
+                totalRows: 120,
+                offsetRows: 80,
+                visibleRows: 20
+            ),
+            for: panelID
+        )
+
+        XCTAssertEqual(objectChangeCount, 0)
+        withExtendedLifetime(cancellable) {}
+    }
+
+    func testControllerLookupDoesNotReplayCachedViewportIntoExistingController() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let windowID = try XCTUnwrap(store.selectedWindow?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let cachedViewportState = TerminalViewportState(
+            panelID: panelID,
+            totalRows: 300,
+            offsetRows: 200,
+            visibleRows: 40
+        )
+        registry.setViewportState(cachedViewportState, for: panelID)
+
+        let controller = registry.controller(
+            for: panelID,
+            workspaceID: workspaceID,
+            windowID: windowID
+        )
+        XCTAssertEqual(
+            controller.surfaceScrollViewForTesting.viewportStateForTesting,
+            cachedViewportState
+        )
+
+        let liveViewportState = TerminalViewportState(
+            panelID: panelID,
+            totalRows: 320,
+            offsetRows: 250,
+            visibleRows: 40
+        )
+        controller.applyViewportState(liveViewportState)
+        registry.setViewportState(cachedViewportState, for: panelID)
+
+        let lookedUpController = registry.controller(
+            for: panelID,
+            workspaceID: workspaceID,
+            windowID: windowID
+        )
+
+        XCTAssertTrue(lookedUpController === controller)
+        XCTAssertEqual(
+            lookedUpController.surfaceScrollViewForTesting.viewportStateForTesting,
+            liveViewportState
+        )
     }
 }
 
