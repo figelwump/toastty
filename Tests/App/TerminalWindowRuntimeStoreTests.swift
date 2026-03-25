@@ -104,6 +104,49 @@ final class TerminalWindowRuntimeStoreTests: XCTestCase {
         XCTAssertTrue(staleController === originalController)
         XCTAssertTrue(migratedController === originalController)
     }
+
+    func testSynchronizeKeepsControllersForBackgroundTabsInSelectedWorkspace() throws {
+        let store = AppStore(state: AppState.bootstrap(), persistTerminalFontPreference: false)
+        let runtimeStore = TerminalWindowRuntimeStore()
+        let delegate = TestTerminalSurfaceControllerDelegate()
+
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let originalPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let originalController = runtimeStore.controller(
+            for: originalPanelID,
+            workspaceID: workspaceID,
+            windowID: windowID,
+            state: store.state,
+            delegate: delegate
+        )
+
+        XCTAssertTrue(store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+        let workspaceWithTwoTabs = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let originalTabID = try XCTUnwrap(workspaceWithTwoTabs.tabIDs.first)
+        let selectedTabID = try XCTUnwrap(workspaceWithTwoTabs.selectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceWithTwoTabs.tab(id: selectedTabID))
+        let selectedPanelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        let selectedController = runtimeStore.controller(
+            for: selectedPanelID,
+            workspaceID: workspaceID,
+            windowID: windowID,
+            state: store.state,
+            delegate: delegate
+        )
+
+        let removedAfterTabCreate = runtimeStore.synchronize(with: store.state)
+        XCTAssertTrue(removedAfterTabCreate.isEmpty)
+        XCTAssertTrue(runtimeStore.existingController(for: originalPanelID) === originalController)
+        XCTAssertTrue(runtimeStore.existingController(for: selectedPanelID) === selectedController)
+
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID)))
+
+        let removedAfterTabSwitch = runtimeStore.synchronize(with: store.state)
+        XCTAssertTrue(removedAfterTabSwitch.isEmpty)
+        XCTAssertTrue(runtimeStore.existingController(for: originalPanelID) === originalController)
+        XCTAssertTrue(runtimeStore.existingController(for: selectedPanelID) === selectedController)
+    }
 }
 
 @MainActor

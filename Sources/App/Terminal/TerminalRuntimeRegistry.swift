@@ -532,11 +532,7 @@ private extension TerminalRuntimeRegistry {
 
     func liveTerminalPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for (panelID, panelState) in workspace.panels {
-                if case .terminal = panelState {
-                    result.insert(panelID)
-                }
-            }
+            result.formUnion(workspace.allTerminalPanelIDs)
         }
     }
 

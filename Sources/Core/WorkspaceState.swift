@@ -166,6 +166,15 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    public var allTerminalPanelIDs: Set<UUID> {
+        orderedTabs.reduce(into: Set<UUID>()) { partialResult, tab in
+            for (panelID, panelState) in tab.panels {
+                guard case .terminal = panelState else { continue }
+                partialResult.insert(panelID)
+            }
+        }
+    }
+
     public func tab(id tabID: UUID) -> WorkspaceTabState? {
         tabsByID[tabID]
     }

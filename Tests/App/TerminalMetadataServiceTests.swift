@@ -857,12 +857,55 @@ final class TerminalMetadataServiceTests: XCTestCase {
         XCTAssertTrue(workspaceAfter.unreadPanelIDs.isEmpty)
         try StateValidator.validate(store.state)
     }
+
+    func testBackgroundTabTerminalMetadataUpdatesApplyWithoutSelectingTab() throws {
+        let state = try makeTwoTabState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let backgroundTabID = try XCTUnwrap(workspace.tabIDs.first)
+        let backgroundTab = try XCTUnwrap(workspace.tab(id: backgroundTabID))
+        let backgroundPanelID = try XCTUnwrap(backgroundTab.focusedPanelID)
+        let selectedTabID = try XCTUnwrap(workspace.selectedTabID)
+        XCTAssertNotEqual(selectedTabID, backgroundTabID)
+
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in nil },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        service.reconcileSurfaceWorkingDirectory(
+            panelID: backgroundPanelID,
+            workingDirectory: "/tmp/background-tab",
+            source: "test"
+        )
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("bundle exec rspec"),
+                workspaceID: workspaceID,
+                panelID: backgroundPanelID,
+                state: store.state
+            )
+        )
+
+        let terminalState = try terminalState(panelID: backgroundPanelID, state: store.state)
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(updatedWorkspace.selectedTabID, selectedTabID)
+        XCTAssertEqual(terminalState.cwd, "/tmp/background-tab")
+        XCTAssertEqual(terminalState.title, "bundle exec rspec")
+        try StateValidator.validate(store.state)
+    }
 }
 
 @MainActor
 private func terminalState(panelID: UUID, state: AppState) throws -> TerminalPanelState {
-    let workspace = try XCTUnwrap(state.workspacesByID.values.first { $0.panels[panelID] != nil })
-    guard case .terminal(let terminalState) = workspace.panels[panelID] else {
+    let workspace = try XCTUnwrap(state.workspacesByID.values.first { $0.panelState(for: panelID) != nil })
+    guard case .terminal(let terminalState) = workspace.panelState(for: panelID) else {
         XCTFail("expected terminal panel state")
         throw TerminalMetadataServiceTestError.expectedTerminalPanel
     }
@@ -909,6 +952,17 @@ private func makeTwoWorkspaceState() throws -> AppState {
     XCTAssertTrue(
         reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state),
         "expected second workspace creation to succeed"
+    )
+    return state
+}
+
+private func makeTwoTabState() throws -> AppState {
+    var state = AppState.bootstrap()
+    let reducer = AppReducer()
+    let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+    XCTAssertTrue(
+        reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state),
+        "expected second tab creation to succeed"
     )
     return state
 }

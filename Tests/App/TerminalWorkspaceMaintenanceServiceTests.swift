@@ -118,6 +118,37 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
             "1 busy"
         )
     }
+
+    func testSynchronizePulsesSelectedTabPanelsWhenTabSelectionChanges() throws {
+        let fixture = try makeMaintenanceFixture(state: try makeTwoTabFixtureState())
+        let workspace = try XCTUnwrap(fixture.store.state.workspacesByID[fixture.workspaceID])
+        let originalTabID = try XCTUnwrap(workspace.tabIDs.first)
+        let originalTab = try XCTUnwrap(workspace.tab(id: originalTabID))
+        let originalPanelID = try XCTUnwrap(originalTab.focusedPanelID)
+        let initiallySelectedTabID = try XCTUnwrap(workspace.selectedTabID)
+        let initiallySelectedTab = try XCTUnwrap(workspace.tab(id: initiallySelectedTabID))
+        let initiallySelectedPanelID = try XCTUnwrap(initiallySelectedTab.focusedPanelID)
+
+        fixture.service.synchronize(
+            state: fixture.store.state,
+            livePanelIDs: Set(fixture.panelIDs),
+            removedPanelIDs: []
+        )
+
+        XCTAssertEqual(Set(fixture.pulseRecorder.panelIDs), [initiallySelectedPanelID])
+        fixture.pulseRecorder.panelIDs.removeAll()
+
+        XCTAssertTrue(
+            fixture.store.send(.selectWorkspaceTab(workspaceID: fixture.workspaceID, tabID: originalTabID))
+        )
+        fixture.service.synchronize(
+            state: fixture.store.state,
+            livePanelIDs: Set(fixture.panelIDs),
+            removedPanelIDs: []
+        )
+
+        XCTAssertEqual(Set(fixture.pulseRecorder.panelIDs), [originalPanelID])
+    }
 }
 
 @MainActor
@@ -129,6 +160,7 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
     panelID: UUID,
     panelIDs: [UUID],
     visibleTextStore: VisibleTextStore,
+    pulseRecorder: PulseRecorder,
     publishedDisplayTitleOverrides: PublishedDisplayTitleOverrideStore,
     publishedSubtext: PublishedSubtextStore
 ) {
@@ -143,11 +175,12 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
     let workspace = try XCTUnwrap(store.selectedWorkspace)
     let workspaceID = workspace.id
     let panelID = try XCTUnwrap(workspace.focusedPanelID)
-    let panelIDs = workspace.panels.keys.sorted { $0.uuidString < $1.uuidString }
+    let panelIDs = workspace.allPanelsByID.keys.sorted { $0.uuidString < $1.uuidString }
     let delegate = TestTerminalSurfaceControllerDelegate()
     for panelID in panelIDs {
         _ = controllerStore.controller(for: panelID, delegate: delegate)
     }
+    let pulseRecorder = PulseRecorder()
     let publishedDisplayTitleOverrides = PublishedDisplayTitleOverrideStore()
     let publishedSubtext = PublishedSubtextStore()
     let service = TerminalWorkspaceMaintenanceService(
@@ -158,13 +191,18 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
             controllerStore.containsController(for: panelID)
         },
         controllerForPanelID: { panelID in
-            controllerStore.existingController(for: panelID)
+            pulseRecorder.panelIDs.append(panelID)
+            return nil
         },
         updatePanelDisplayTitleOverrides: { nextOverridesByPanelID in
             publishedDisplayTitleOverrides.overridesByPanelID = nextOverridesByPanelID
         }
     ) { nextSubtextByWorkspaceID in
         publishedSubtext.subtextByWorkspaceID = nextSubtextByWorkspaceID
+    } visibilityPulseScheduler: { pulse in
+        pulse()
+        pulse()
+        return nil
     }
     return (
         store,
@@ -174,6 +212,7 @@ private func makeMaintenanceFixture(state: AppState = .bootstrap()) throws -> (
         panelID,
         panelIDs,
         visibleTextStore,
+        pulseRecorder,
         publishedDisplayTitleOverrides,
         publishedSubtext
     )
@@ -192,6 +231,18 @@ private func makeSplitFixtureState() throws -> AppState {
 }
 
 @MainActor
+private func makeTwoTabFixtureState() throws -> AppState {
+    var state = AppState.bootstrap()
+    let reducer = AppReducer()
+    let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+    XCTAssertTrue(
+        reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state),
+        "expected second tab creation to succeed"
+    )
+    return state
+}
+
+@MainActor
 private final class PublishedSubtextStore {
     var subtextByWorkspaceID: [UUID: String] = [:]
 }
@@ -204,6 +255,11 @@ private final class PublishedDisplayTitleOverrideStore {
 @MainActor
 private final class VisibleTextStore {
     var textByPanelID: [UUID: String] = [:]
+}
+
+@MainActor
+private final class PulseRecorder {
+    var panelIDs: [UUID] = []
 }
 
 @MainActor

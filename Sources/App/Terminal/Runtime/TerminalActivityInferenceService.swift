@@ -126,7 +126,7 @@ final class TerminalActivityInferenceService {
         state: AppState
     ) {
         guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             panelDisplayTitleOverrideByID.removeValue(forKey: panelID)
             return
@@ -189,7 +189,7 @@ final class TerminalActivityInferenceService {
         now: Date
     ) {
         guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal = panelState else {
             busyPanelStateByPanelID.removeValue(forKey: panelID)
             return

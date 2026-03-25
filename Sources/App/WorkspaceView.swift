@@ -34,7 +34,8 @@ struct WorkspaceView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
 
-            if let workspace = selectedWorkspace {
+            if let workspace = selectedWorkspace,
+               workspace.tabIDs.count > 1 {
                 workspaceTabBar(for: workspace)
                 Rectangle()
                     .fill(ToastyTheme.hairline)

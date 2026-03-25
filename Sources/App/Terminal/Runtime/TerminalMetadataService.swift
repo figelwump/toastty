@@ -213,7 +213,7 @@ final class TerminalMetadataService {
         guard let registry,
               let workspaceID = registry.workspaceID(containing: panelID, state: state),
               let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             return
         }
@@ -366,7 +366,7 @@ final class TerminalMetadataService {
             return cwd
         }
         guard let workspace = state.workspacesByID[workspaceID],
-              case .terminal(let terminalState)? = workspace.panels[panelID],
+              case .terminal(let terminalState)? = workspace.panelState(for: panelID),
               normalizedProfileStartupCommandAwaitingTitleCleanup(
                   panelID: panelID,
                   terminalState: terminalState
@@ -604,7 +604,7 @@ final class TerminalMetadataService {
         }
         return DesktopNotificationContext(
             workspaceTitle: workspace.title,
-            panelLabel: panelID.flatMap { workspace.panels[$0]?.notificationLabel }
+            panelLabel: panelID.flatMap { workspace.panelState(for: $0)?.notificationLabel }
         )
     }
 
@@ -617,7 +617,7 @@ final class TerminalMetadataService {
         state: AppState
     ) -> Bool {
         guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             ToasttyLog.debug(
                 "Skipping terminal metadata update for non-terminal panel",
@@ -836,7 +836,7 @@ final class TerminalMetadataService {
             return true
         }
         guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             return false
         }
