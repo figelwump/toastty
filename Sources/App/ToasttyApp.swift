@@ -311,7 +311,7 @@ final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
-    private static let maxWorkspaceTabShortcutCount = 3
+    private static let maxWorkspaceTabShortcutCount = 9
 
     private enum ShortcutAction {
         case closePanel
@@ -406,6 +406,18 @@ final class DisplayShortcutInterceptor {
             shortcutNumber = 2
         case Int(kVK_ANSI_3), Int(kVK_ANSI_Keypad3):
             shortcutNumber = 3
+        case Int(kVK_ANSI_4), Int(kVK_ANSI_Keypad4):
+            shortcutNumber = 4
+        case Int(kVK_ANSI_5), Int(kVK_ANSI_Keypad5):
+            shortcutNumber = 5
+        case Int(kVK_ANSI_6), Int(kVK_ANSI_Keypad6):
+            shortcutNumber = 6
+        case Int(kVK_ANSI_7), Int(kVK_ANSI_Keypad7):
+            shortcutNumber = 7
+        case Int(kVK_ANSI_8), Int(kVK_ANSI_Keypad8):
+            shortcutNumber = 8
+        case Int(kVK_ANSI_9), Int(kVK_ANSI_Keypad9):
+            shortcutNumber = 9
         default:
             shortcutNumber = nil
         }
