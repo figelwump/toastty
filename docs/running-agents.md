@@ -92,9 +92,10 @@ When the profile ID is `claude`, Toastty:
    - `PostToolUse` (wildcard matcher) — fires after any tool use
    - `PostToolUseFailure` (wildcard matcher) — fires after a failed tool use
    - `PermissionRequest` (wildcard matcher) — fires on permission requests
+   - `Notification` (wildcard matcher) — fires on Claude notifications; Toastty currently maps `idle_prompt` to **Ready**, `permission_prompt` to **Needs approval**, and `elicitation_dialog` to **Needs approval**
 4. **Writes a temporary settings file** and passes `--settings <path>` to Claude
 
-These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready).
+These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). Non-actionable notifications such as `auth_success` are ignored.
 When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active, but still exits successfully so Claude keeps running.
 
 ## Launch flow

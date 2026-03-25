@@ -42,9 +42,9 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
 
         let notificationEntries = try XCTUnwrap(hooks["Notification"] as? [[String: Any]])
         let matcherEntry = notificationEntries.first { entry in
-            (entry["matcher"] as? String) == "idle_prompt"
+            (entry["matcher"] as? String) == "*"
         }
-        XCTAssertNotNil(matcherEntry, "Notification hook should have an idle_prompt matcher entry")
+        XCTAssertNotNil(matcherEntry, "Notification hook should have a wildcard matcher entry")
     }
 
     func testPrepareCodexLaunchFormatsNotifyOverrideAsTomlArray() throws {

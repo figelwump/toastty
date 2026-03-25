@@ -154,7 +154,87 @@ struct AgentEventParsersTests {
     }
 
     @Test
-    func claudeNotificationNonIdlePromptIsIgnored() throws {
+    func claudeNotificationPermissionPromptMapsToNeedsApprovalStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Notification","notification_type":"permission_prompt","message":"Need approval to exit plan mode"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .needsApproval,
+                summary: "Needs approval",
+                detail: "Need approval to exit plan mode"
+            )
+        ])
+    }
+
+    @Test
+    func claudeNotificationPermissionPromptFallsBackWithoutMessage() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Notification","notification_type":"permission_prompt"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .needsApproval,
+                summary: "Needs approval",
+                detail: "Claude Code is waiting for approval"
+            )
+        ])
+    }
+
+    @Test
+    func claudeNotificationElicitationDialogMapsToNeedsInputStatus() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Notification","notification_type":"elicitation_dialog","message":"Choose a target project"}"#.utf8
+            )
+        )
+
+        #expect(commands == [
+            .sessionStatus(
+                sessionID: "sess-123",
+                panelID: nil,
+                kind: .needsApproval,
+                summary: "Needs input",
+                detail: "Choose a target project"
+            )
+        ])
+    }
+
+    @Test
+    func claudeNotificationAuthSuccessIsIgnored() throws {
+        let commands = try AgentEventIngestor.commands(
+            for: .claudeHooks,
+            sessionID: "sess-123",
+            panelID: nil,
+            payload: Data(
+                #"{"hook_event_name":"Notification","notification_type":"auth_success","message":"Signed in"}"#.utf8
+            )
+        )
+
+        #expect(commands.isEmpty)
+    }
+
+    @Test
+    func claudeNotificationUnknownTypeIsIgnored() throws {
         let commands = try AgentEventIngestor.commands(
             for: .claudeHooks,
             sessionID: "sess-123",

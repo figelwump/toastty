@@ -80,18 +80,47 @@ enum ClaudeHookEventParser {
         panelID: UUID?,
         from object: [String: Any]
     ) -> [CLICommand] {
-        guard normalizedString(object["notification_type"]) == "idle_prompt" else {
+        switch normalizedString(object["notification_type"]) {
+        case "idle_prompt":
+            return [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .ready,
+                    summary: "Ready",
+                    detail: normalizedSummaryText(object["message"]) ?? "Waiting for input"
+                )
+            ]
+
+        case "permission_prompt":
+            return [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .needsApproval,
+                    summary: "Needs approval",
+                    detail: normalizedSummaryText(object["message"]) ?? "Claude Code is waiting for approval"
+                )
+            ]
+
+        case "elicitation_dialog":
+            return [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .needsApproval,
+                    summary: "Needs input",
+                    detail: normalizedSummaryText(object["message"]) ?? "Claude Code is waiting for input"
+                )
+            ]
+
+        case "auth_success":
+            // Authentication success is informative but not a session status change.
+            return []
+
+        default:
             return []
         }
-        return [
-            .sessionStatus(
-                sessionID: sessionID,
-                panelID: panelID,
-                kind: .ready,
-                summary: "Ready",
-                detail: normalizedSummaryText(object["message"]) ?? "Waiting for input"
-            )
-        ]
     }
 
     private static func approvalDetail(from object: [String: Any]) -> String? {

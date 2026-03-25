@@ -272,23 +272,17 @@ private extension AgentLaunchInstrumentation {
             ],
         ]
 
-        let idlePromptCommandHook: [String: Any] = [
-            "matcher": "idle_prompt",
-            "hooks": [
-                [
-                    "type": "command",
-                    "command": command,
-                ],
-            ],
-        ]
-
         var hooks = mergedSettings["hooks"] as? [String: Any] ?? [:]
         appendClaudeHookEntry(commandHook, to: "UserPromptSubmit", in: &hooks)
         appendClaudeHookEntry(commandHook, to: "Stop", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PostToolUse", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PostToolUseFailure", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PermissionRequest", in: &hooks)
-        appendClaudeHookEntry(idlePromptCommandHook, to: "Notification", in: &hooks)
+        // Keep both PermissionRequest and Notification coverage. Claude surfaces
+        // some approval/input pauses as notifications (for example
+        // permission_prompt / elicitation_dialog), and the runtime store
+        // already suppresses repeated actionable transitions with the same kind.
+        appendClaudeHookEntry(wildcardCommandHook, to: "Notification", in: &hooks)
         mergedSettings["hooks"] = hooks
 
         return mergedSettings
