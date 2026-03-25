@@ -28,6 +28,11 @@ final class TerminalMetadataService {
     // Once a panel proves native Ghostty cwd support, keep process-based cwd
     // fallback disabled for that panel's lifetime to avoid misbinding drift.
     private var panelsWithConfirmedNativeCWDSupport: Set<UUID> = []
+    // Restored profiled panes can surface the bootstrap login shell cwd before
+    // the attached session takes over. Suppress that one provisional value from
+    // both native callbacks and process refresh until a different live signal
+    // arrives, but do not persist or promote it into panel state.
+    private var suppressedBootstrapWorkingDirectoryByPanelID: [UUID: String] = [:]
     private var nativeCWDLastProcessFallbackPollAtByPanelID: [UUID: Date] = [:]
     private let processWorkingDirectoryResolver = TerminalProcessWorkingDirectoryResolver()
     private let resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?
@@ -85,6 +90,9 @@ final class TerminalMetadataService {
             livePanelIDs.contains(panelID)
         }
         panelsWithConfirmedNativeCWDSupport = panelsWithConfirmedNativeCWDSupport.filter { livePanelIDs.contains($0) }
+        suppressedBootstrapWorkingDirectoryByPanelID = suppressedBootstrapWorkingDirectoryByPanelID.filter { panelID, _ in
+            livePanelIDs.contains(panelID)
+        }
         nativeCWDLastProcessFallbackPollAtByPanelID = nativeCWDLastProcessFallbackPollAtByPanelID.filter { panelID, _ in
             livePanelIDs.contains(panelID)
         }
@@ -95,6 +103,7 @@ final class TerminalMetadataService {
         immediateProcessRefreshTaskByPanelID.removeValue(forKey: panelID)?.cancel()
         immediateProcessRefreshTokenByPanelID.removeValue(forKey: panelID)
         panelsWithConfirmedNativeCWDSupport.remove(panelID)
+        suppressedBootstrapWorkingDirectoryByPanelID.removeValue(forKey: panelID)
         nativeCWDLastProcessFallbackPollAtByPanelID.removeValue(forKey: panelID)
     }
 
@@ -135,19 +144,23 @@ final class TerminalMetadataService {
             )
 
         case .setTerminalCWD(let cwd):
-            let effectiveCWD = effectiveNativeGhosttyCWD(
-                for: cwd,
-                workspaceID: workspaceID,
-                panelID: panelID,
-                state: state
-            )
-            if TerminalRuntimeRegistry.normalizedCWDValue(effectiveCWD) != nil {
-                // Profile attach wrappers surface the bootstrap shell process to
-                // both Ghostty and process polling first. Once we choose the
-                // restored launch cwd as the placeholder, suppress process
-                // fallback as well so that provisional shell cannot overwrite it.
-                recordNativeCWDSignal(panelID: panelID)
+            guard let workspace = state.workspacesByID[workspaceID],
+                  let panelState = workspace.panels[panelID],
+                  case .terminal(let terminalState) = panelState else {
+                return false
             }
+            guard let effectiveCWD = effectiveNativeGhosttyCWD(
+                for: cwd,
+                panelID: panelID,
+                terminalState: terminalState
+            ) else {
+                return true
+            }
+            recordAcceptedLiveWorkingDirectorySignal(
+                panelID: panelID,
+                source: "ghostty_native"
+            )
+            recordNativeCWDSignal(panelID: panelID)
             return handleTerminalMetadataUpdate(
                 title: nil,
                 cwd: effectiveCWD,
@@ -204,9 +217,10 @@ final class TerminalMetadataService {
         )
     }
 
-    func reconcileSurfaceWorkingDirectory(panelID: UUID, workingDirectory: String?, source: String) {
+    @discardableResult
+    func reconcileSurfaceWorkingDirectory(panelID: UUID, workingDirectory: String?, source: String) -> Bool {
         guard let normalizedWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(workingDirectory) else {
-            return
+            return false
         }
 
         let state = store.state
@@ -215,11 +229,24 @@ final class TerminalMetadataService {
               let workspace = state.workspacesByID[workspaceID],
               let panelState = workspace.panels[panelID],
               case .terminal(let terminalState) = panelState else {
-            return
+            return false
+        }
+        guard shouldSuppressBootstrapWorkingDirectory(
+            normalizedWorkingDirectory,
+            panelID: panelID,
+            terminalState: terminalState,
+            source: source
+        ) == false else {
+            return false
         }
         guard TerminalRuntimeRegistry.cwdValuesDiffer(normalizedWorkingDirectory, terminalState.cwd) else {
-            return
+            return true
         }
+
+        recordAcceptedLiveWorkingDirectorySignal(
+            panelID: panelID,
+            source: source
+        )
 
         let handled = store.send(
             .updateTerminalPanelMetadata(
@@ -250,6 +277,7 @@ final class TerminalMetadataService {
                 ]
             )
         }
+        return handled
     }
 
     func refreshWorkingDirectoryFromProcessIfNeeded(panelID: UUID, source: String) -> String? {
@@ -261,11 +289,13 @@ final class TerminalMetadataService {
             return nil
         }
 
-        reconcileSurfaceWorkingDirectory(
+        guard reconcileSurfaceWorkingDirectory(
             panelID: panelID,
             workingDirectory: normalizedWorkingDirectory,
             source: source
-        )
+        ) else {
+            return nil
+        }
         return normalizedWorkingDirectory
     }
 
@@ -358,38 +388,21 @@ final class TerminalMetadataService {
 
     private func effectiveNativeGhosttyCWD(
         for cwd: String?,
-        workspaceID: UUID,
         panelID: UUID,
-        state: AppState
+        terminalState: TerminalPanelState
     ) -> String? {
         guard let incomingCWD = TerminalRuntimeRegistry.normalizedCWDValue(cwd) else {
             return cwd
         }
-        guard let workspace = state.workspacesByID[workspaceID],
-              case .terminal(let terminalState)? = workspace.panels[panelID],
-              normalizedProfileStartupCommandAwaitingTitleCleanup(
-                  panelID: panelID,
-                  terminalState: terminalState
-              ) != nil,
-              TerminalRuntimeRegistry.normalizedCWDValue(terminalState.cwd) == nil,
-              let restoredLaunchWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(
-                  terminalState.launchWorkingDirectory
-              ),
-              restoredLaunchWorkingDirectory != incomingCWD else {
-            return incomingCWD
+        guard shouldSuppressBootstrapWorkingDirectory(
+            incomingCWD,
+            panelID: panelID,
+            terminalState: terminalState,
+            source: "ghostty_native"
+        ) == false else {
+            return nil
         }
-
-        ToasttyLog.debug(
-            "Replacing provisional profile startup cwd with restored launch working directory",
-            category: .terminal,
-            metadata: [
-                "workspace_id": workspaceID.uuidString,
-                "panel_id": panelID.uuidString,
-                "incoming_cwd_sample": String(incomingCWD.prefix(120)),
-                "launch_cwd_sample": String(restoredLaunchWorkingDirectory.prefix(120)),
-            ]
-        )
-        return restoredLaunchWorkingDirectory
+        return incomingCWD
     }
 
     private func resolveDesktopNotificationRoute(
@@ -766,6 +779,83 @@ final class TerminalMetadataService {
             )
         }
         return handled
+    }
+
+    private func shouldSuppressBootstrapWorkingDirectory(
+        _ incomingWorkingDirectory: String,
+        panelID: UUID,
+        terminalState: TerminalPanelState,
+        source: String
+    ) -> Bool {
+        if let suppressedWorkingDirectory = suppressedBootstrapWorkingDirectoryByPanelID[panelID] {
+            // Once the bootstrap shell cwd has been identified, repeated
+            // sightings of that same value stay suppressed. The next distinct
+            // cwd is allowed through because restored profiled panes need a
+            // way to recover before a semantic title arrives, and we do not
+            // carry a heavier persisted source-ranking model here.
+            guard TerminalRuntimeRegistry.cwdValuesDiffer(incomingWorkingDirectory, suppressedWorkingDirectory) == false else {
+                return false
+            }
+            ToasttyLog.debug(
+                "Suppressing repeated bootstrap working directory for restored profiled pane",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "source": source,
+                    "cwd_sample": String(incomingWorkingDirectory.prefix(120)),
+                ]
+            )
+            return true
+        }
+
+        guard normalizedProfileStartupCommandAwaitingTitleCleanup(
+            panelID: panelID,
+            terminalState: terminalState
+        ) != nil,
+        TerminalRuntimeRegistry.normalizedCWDValue(terminalState.cwd) == nil,
+        let restoredLaunchWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(
+            terminalState.launchWorkingDirectory
+        ),
+        TerminalRuntimeRegistry.cwdValuesDiffer(restoredLaunchWorkingDirectory, incomingWorkingDirectory) else {
+            return false
+        }
+
+        suppressedBootstrapWorkingDirectoryByPanelID[panelID] = incomingWorkingDirectory
+        ToasttyLog.debug(
+            "Suppressing bootstrap working directory for restored profiled pane",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "source": source,
+                "incoming_cwd_sample": String(incomingWorkingDirectory.prefix(120)),
+                "launch_cwd_sample": String(restoredLaunchWorkingDirectory.prefix(120)),
+            ]
+        )
+        return true
+    }
+
+    private func recordAcceptedLiveWorkingDirectorySignal(
+        panelID: UUID,
+        source: String
+    ) {
+        // Accepting a live cwd only clears the provisional bootstrap record.
+        // Startup-title cleanup remains active until a semantic non-wrapper
+        // title arrives, so late wrapper titles still stay suppressed.
+        guard let suppressedBootstrapWorkingDirectory = suppressedBootstrapWorkingDirectoryByPanelID.removeValue(
+            forKey: panelID
+        ) else {
+            return
+        }
+
+        ToasttyLog.debug(
+            "Accepted live working directory after suppressing bootstrap value",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "source": source,
+                "suppressed_cwd_sample": String(suppressedBootstrapWorkingDirectory.prefix(120)),
+            ]
+        )
     }
 
     private func shouldSuppressProfileStartupCommandTitleUpdate(

@@ -318,6 +318,42 @@ final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
             )
         )
     }
+
+    func testPreferredRegistrationCandidateIndexUsesExpectedWorkingDirectoryMatch() {
+        XCTAssertEqual(
+            TerminalProcessWorkingDirectoryResolver.preferredRegistrationCandidateIndex(
+                expectedWorkingDirectory: "/tmp/restored-one",
+                candidateWorkingDirectories: ["/tmp/restored-two", "/tmp/restored-one"],
+                candidateLoginPIDs: [101, 202],
+                preferNewestWhenAmbiguous: true
+            ),
+            1
+        )
+    }
+
+    func testPreferredRegistrationCandidateIndexFallsBackToNewestCandidateWhenExpectedWorkingDirectoryIsMissing() {
+        XCTAssertEqual(
+            TerminalProcessWorkingDirectoryResolver.preferredRegistrationCandidateIndex(
+                expectedWorkingDirectory: nil,
+                candidateWorkingDirectories: ["/tmp/one", "/tmp/two"],
+                candidateLoginPIDs: [101, 202],
+                preferNewestWhenAmbiguous: true
+            ),
+            1
+        )
+    }
+
+    func testPreferredRegistrationCandidateIndexKeepsDeterministicNewestFallbackWhenExpectedWorkingDirectoryMatchesMultipleCandidates() {
+        XCTAssertEqual(
+            TerminalProcessWorkingDirectoryResolver.preferredRegistrationCandidateIndex(
+                expectedWorkingDirectory: "/tmp/shared",
+                candidateWorkingDirectories: ["/tmp/shared", "/tmp/shared"],
+                candidateLoginPIDs: [101, 202],
+                preferNewestWhenAmbiguous: true
+            ),
+            1
+        )
+    }
 }
 
 @MainActor
