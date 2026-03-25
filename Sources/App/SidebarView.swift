@@ -11,6 +11,16 @@ struct SidebarView: View {
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
 
+    /// Fixed height for the session detail text area (2 lines at the detail
+    /// font size). Reserving a constant height prevents the sidebar from
+    /// jittering as streaming summaries change length.
+    private static let sessionDetailFixedHeight: CGFloat = {
+        // 10pt system font default line height ≈ 12pt; 2 lines + inter-line spacing.
+        let font = NSFont.systemFont(ofSize: 10, weight: .regular)
+        let lineHeight = ceil(font.ascender - font.descender + font.leading)
+        return lineHeight * 2
+    }()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let window = store.window(id: windowID) {
@@ -353,13 +363,21 @@ struct SidebarView: View {
                 Spacer(minLength: 0)
             }
 
-            if status.kind != .idle, let detail = status.detail {
-                Text(detail)
+            if status.kind != .idle {
+                // Fixed 2-line height prevents sidebar jitter as summaries
+                // stream in at varying lengths. The placeholder sets the
+                // intrinsic height; the real text overlays it.
+                Text(status.detail ?? " ")
                     .font(ToastyTheme.fontWorkspaceSessionDetail)
                     .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
                     .lineLimit(2)
                     .truncationMode(.tail)
                     .multilineTextAlignment(.leading)
+                    .frame(
+                        maxWidth: .infinity,
+                        minHeight: Self.sessionDetailFixedHeight,
+                        alignment: .topLeading
+                    )
             }
 
             if let cwd = Self.abbreviatedPathLabel(workspaceSessionStatus.cwd) {
