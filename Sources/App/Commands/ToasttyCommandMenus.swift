@@ -259,8 +259,6 @@ struct ToasttyCommandMenus: Commands {
             }
             .disabled(commandWorkspace == nil)
 
-            Divider()
-
             Button("Select Previous Tab") {
                 store.selectAdjacentWorkspaceTab(
                     preferredWindowID: focusedWindowID,
