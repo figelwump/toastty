@@ -97,13 +97,21 @@ Important simplification:
 
 Refactor `AgentLaunchService.launch(...)` to use the shared planner instead of creating sessions and artifacts directly.
 
+Important boundary:
+
+- this reuses only the shared managed-launch preparation
+- it does not mean typed launches should inherit the GUI launch path's terminal-state validation
+- prompt/busy/interactive-shell validation remains GUI-launch-only because Toastty is about to type into the panel on the user's behalf
+- when the user types `codex` or `claude` themselves, the shim path should skip that terminal validation and only ask the planner to attach the launch to the already-selected panel context when possible
+
 After refactor, the explicit path should become:
 
 1. resolve profile and target panel
-2. call the shared planner with the profile `argv`
-3. render the returned env + `argv` into a shell command
-4. add an explicit shim-bypass env assignment for menu launches only, for example `TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1`
-5. send it to the panel
+2. run the existing GUI-only terminal validation for "is it safe for Toastty to type into this panel?"
+3. call the shared planner with the profile `argv`
+4. render the returned env + `argv` into a shell command
+5. add an explicit shim-bypass env assignment for menu launches only, for example `TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1`
+6. send it to the panel
 
 This preserves current behavior while removing the duplication risk between menu-launch and typed-launch.
 
