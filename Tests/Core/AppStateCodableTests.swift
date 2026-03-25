@@ -102,6 +102,89 @@ struct AppStateCodableTests {
     }
 
     @Test
+    func appStateDecodesLegacySingleTabWorkspacePayload() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let slotID = UUID()
+        let panelID = UUID()
+        let closedSlotID = UUID()
+        let payload = LegacyAppStatePayload(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 40, y: 60, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: LegacyWorkspacePayload(
+                    id: workspaceID,
+                    title: "Infra",
+                    layoutTree: .slot(slotID: slotID, panelID: panelID),
+                    panels: [
+                        panelID: .terminal(
+                            TerminalPanelState(
+                                title: "Infra Shell",
+                                shell: "zsh",
+                                cwd: "/tmp/infra",
+                                profileBinding: TerminalProfileBinding(profileID: "ssh-prod")
+                            )
+                        ),
+                    ],
+                    focusedPanelID: panelID,
+                    auxPanelVisibility: [.diff],
+                    unreadPanelIDs: [panelID],
+                    unreadNotificationCount: 3,
+                    recentlyClosedPanels: [
+                        ClosedPanelRecord(
+                            panelState: .terminal(
+                                TerminalPanelState(
+                                    title: "Closed Shell",
+                                    shell: "bash",
+                                    cwd: "/tmp/closed"
+                                )
+                            ),
+                            closedAt: Date(timeIntervalSince1970: 1_710_000_000),
+                            sourceSlotID: closedSlotID
+                        ),
+                    ]
+                ),
+            ],
+            selectedWindowID: windowID,
+            defaultTerminalProfileID: "ssh-prod",
+            globalTerminalFontPoints: 14
+        )
+
+        let decoded = try JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(payload))
+        let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
+        let decodedTabID = try #require(decodedWorkspace.selectedTabID)
+        let decodedTab = try #require(decodedWorkspace.tab(id: decodedTabID))
+
+        #expect(decoded.selectedWindowID == windowID)
+        #expect(decoded.defaultTerminalProfileID == "ssh-prod")
+        #expect(decoded.globalTerminalFontPoints == 14)
+        #expect(decodedWorkspace.title == "Infra")
+        #expect(decodedWorkspace.tabIDs == [decodedTabID])
+        #expect(decodedWorkspace.selectedTabID == decodedTabID)
+        #expect(decodedWorkspace.focusedPanelID == panelID)
+        #expect(decodedWorkspace.auxPanelVisibility == [.diff])
+        #expect(decodedWorkspace.unreadWorkspaceNotificationCount == 3)
+        #expect(decodedWorkspace.unreadPanelIDs == [panelID])
+        #expect(decodedWorkspace.focusedPanelModeActive == false)
+        #expect(decodedWorkspace.recentlyClosedPanels.count == 1)
+
+        guard case .terminal(let restoredTerminal) = decodedTab.panels[panelID] else {
+            Issue.record("Expected legacy single-tab panel to decode as terminal")
+            return
+        }
+
+        #expect(restoredTerminal.cwd == "/tmp/infra")
+        #expect(restoredTerminal.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
+        try StateValidator.validate(decoded)
+    }
+
+    @Test
     func workspaceTabStateCodableNormalizesCustomTitleAndFallsBackToDerivedTitle() throws {
         let panelID = UUID()
         let slotID = UUID()
@@ -136,4 +219,24 @@ struct AppStateCodableTests {
         let fallbackLabel = try #require(fallbackTab.panels[panelID]?.notificationLabel)
         #expect(fallbackTab.displayTitle == fallbackLabel)
     }
+}
+
+private struct LegacyAppStatePayload: Codable {
+    let windows: [WindowState]
+    let workspacesByID: [UUID: LegacyWorkspacePayload]
+    let selectedWindowID: UUID?
+    let defaultTerminalProfileID: String?
+    let globalTerminalFontPoints: Double
+}
+
+private struct LegacyWorkspacePayload: Codable {
+    let id: UUID
+    let title: String
+    let layoutTree: LayoutNode
+    let panels: [UUID: PanelState]
+    let focusedPanelID: UUID?
+    let auxPanelVisibility: Set<PanelKind>
+    let unreadPanelIDs: Set<UUID>
+    let unreadNotificationCount: Int
+    let recentlyClosedPanels: [ClosedPanelRecord]
 }

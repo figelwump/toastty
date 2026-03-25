@@ -18,6 +18,41 @@ enum AppWindowSceneDismissalPolicy {
     }
 }
 
+struct AppWindowSceneBindingState: Equatable {
+    var boundWindowID: UUID?
+    var hasBoundWindow: Bool
+    var sceneWindowIDValue: String?
+    var shouldDismissAfterNextBindingLoss: Bool
+}
+
+struct AppWindowSceneBindingLossResolution: Equatable {
+    let nextState: AppWindowSceneBindingState
+    let shouldDismissScene: Bool
+}
+
+enum AppWindowSceneBindingLossResolver {
+    static func resolve(
+        previouslyHadBoundWindow: Bool,
+        remainingWindowCount: Int,
+        closeWasRequested: Bool
+    ) -> AppWindowSceneBindingLossResolution {
+        let shouldDismissScene = AppWindowSceneDismissalPolicy.shouldDismissSceneAfterLosingBoundWindow(
+            previouslyHadBoundWindow: previouslyHadBoundWindow,
+            remainingWindowCount: remainingWindowCount,
+            closeWasRequested: closeWasRequested
+        )
+        return AppWindowSceneBindingLossResolution(
+            nextState: AppWindowSceneBindingState(
+                boundWindowID: nil,
+                hasBoundWindow: false,
+                sceneWindowIDValue: nil,
+                shouldDismissAfterNextBindingLoss: false
+            ),
+            shouldDismissScene: shouldDismissScene
+        )
+    }
+}
+
 struct AppWindowSceneHostView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
@@ -94,7 +129,7 @@ struct AppWindowSceneHostView: View {
             persistWindowID(boundWindowID)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
         } else if hasBoundWindow {
-            let shouldDismissScene = AppWindowSceneDismissalPolicy.shouldDismissSceneAfterLosingBoundWindow(
+            let resolution = AppWindowSceneBindingLossResolver.resolve(
                 previouslyHadBoundWindow: hasBoundWindow,
                 remainingWindowCount: store.state.windows.count,
                 closeWasRequested: shouldDismissAfterNextBindingLoss
@@ -102,11 +137,11 @@ struct AppWindowSceneHostView: View {
             if let boundWindowID {
                 sceneCoordinator.unregisterPresentedWindow(windowID: boundWindowID)
             }
-            boundWindowID = nil
-            hasBoundWindow = false
-            sceneWindowIDValue = nil
-            shouldDismissAfterNextBindingLoss = false
-            if shouldDismissScene {
+            boundWindowID = resolution.nextState.boundWindowID
+            hasBoundWindow = resolution.nextState.hasBoundWindow
+            sceneWindowIDValue = resolution.nextState.sceneWindowIDValue
+            shouldDismissAfterNextBindingLoss = resolution.nextState.shouldDismissAfterNextBindingLoss
+            if resolution.shouldDismissScene {
                 // A user explicitly closed this window, so dismiss the scene
                 // even when it was the last bound window in app state.
                 dismiss()
