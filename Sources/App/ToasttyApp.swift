@@ -788,9 +788,12 @@ struct ToasttyApp: App {
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let preferredWorkspaceCommandWindowID: () -> UUID? = {
+            currentToasttyWorkspaceCommandWindowID(in: store)
+        }
         let createWorkspaceCommandController = CreateWorkspaceCommandController(
             store: store,
-            preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         let closeWorkspaceCommandController = CloseWorkspaceCommandController(
             store: store,
@@ -798,11 +801,11 @@ struct ToasttyApp: App {
         )
         let renameWorkspaceCommandController = RenameWorkspaceCommandController(
             store: store,
-            preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         let workspaceTabCommandController = WorkspaceTabCommandController(
             store: store,
-            preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         fileSplitMenuBridge = FileSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController

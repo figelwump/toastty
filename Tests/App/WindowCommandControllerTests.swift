@@ -601,6 +601,55 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(updatedSecondWindow.selectedWorkspaceID, updatedSecondWindow.workspaceIDs.last)
     }
 
+    func testWorkspaceMenuBridgeFallsBackToSelectedWindowWhenAppKitKeyWindowIsUnavailable() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertEqual(store.state.selectedWindowID, windowID)
+        let bridge = makeWorkspaceMenuBridge(
+            store: store,
+            preferredWindowIDProvider: {
+                currentToasttyWorkspaceCommandWindowID(in: store, keyWindow: nil)
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
+        renameWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        workspaceMenu.addItem(renameWorkspaceItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(renameWorkspaceItem.target === bridge)
+        XCTAssertEqual(renameWorkspaceItem.action, #selector(WorkspaceMenuBridge.renameWorkspace(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
+
+        bridge.renameWorkspace(nil)
+
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceRequest,
+            PendingWorkspaceRenameRequest(windowID: windowID, workspaceID: workspaceID)
+        )
+    }
+
+    func testCurrentToasttyWorkspaceCommandWindowIDRejectsMissingSelectedWindowFallback() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        var state = store.state
+        state.selectedWindowID = UUID()
+        store.replaceState(state)
+
+        XCTAssertNil(currentToasttyWorkspaceCommandWindowID(in: store, keyWindow: nil))
+    }
+
     func testWorkspaceMenuBridgeDisablesItemsWithoutKeyToasttyWindow() {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let bridge = makeWorkspaceMenuBridge(store: store, preferredWindowIDProvider: { nil })

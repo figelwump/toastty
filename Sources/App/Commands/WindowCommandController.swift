@@ -1379,12 +1379,37 @@ private enum ManagedMenuSectionMarker: String {
 
 @MainActor
 func currentToasttyKeyWindowID(in store: AppStore) -> UUID? {
-    guard let rawWindowID = NSApp.keyWindow?.identifier?.rawValue,
+    currentToasttyKeyWindowID(keyWindow: NSApp.keyWindow, in: store)
+}
+
+@MainActor
+func currentToasttyKeyWindowID(keyWindow: NSWindow?, in store: AppStore) -> UUID? {
+    guard let rawWindowID = keyWindow?.identifier?.rawValue,
           let windowID = UUID(uuidString: rawWindowID),
           store.window(id: windowID) != nil else {
         return nil
     }
     return windowID
+}
+
+@MainActor
+func currentToasttyWorkspaceCommandWindowID(in store: AppStore) -> UUID? {
+    currentToasttyWorkspaceCommandWindowID(in: store, keyWindow: NSApp.keyWindow)
+}
+
+@MainActor
+func currentToasttyWorkspaceCommandWindowID(in store: AppStore, keyWindow: NSWindow?) -> UUID? {
+    if let keyWindowID = currentToasttyKeyWindowID(keyWindow: keyWindow, in: store) {
+        return keyWindowID
+    }
+
+    // Workspace menu commands should survive brief AppKit key-window gaps by
+    // falling back to the last selected Toastty window.
+    guard let selectedWindowID = store.state.selectedWindowID,
+          store.window(id: selectedWindowID) != nil else {
+        return nil
+    }
+    return selectedWindowID
 }
 
 private func findToasttyFileMenu(in items: [NSMenuItem]) -> NSMenu? {
