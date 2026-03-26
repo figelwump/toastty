@@ -84,6 +84,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
 
     private weak var observedWindow: NSWindow?
     private var observerTokens: [NSObjectProtocol] = []
+    private var lastPublishedWindowFrame: CGRect?
     private let scheduleOnMainActor: MainActorScheduler
     private let defaultWindowTitle: WindowTitleProvider
     var shouldConfirmWindowClose: Bool
@@ -237,6 +238,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
             notificationCenter.removeObserver(token)
         }
         observerTokens.removeAll()
+        lastPublishedWindowFrame = nil
         isPresentingWindowCloseConfirmation = false
         observedWindow = nil
     }
@@ -258,6 +260,13 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     func applyDesiredFrameIfNeeded() {
         guard let observedWindow, let desiredFrame else { return }
         guard framesEqual(observedWindow.frame, desiredFrame) == false else { return }
+        // Window move/resize notifications publish the live AppKit frame back
+        // into app state. Ignore that immediate state echo so SwiftUI updates do
+        // not replay a stale frame onto an actively dragged window.
+        if let lastPublishedWindowFrame,
+           framesEqual(lastPublishedWindowFrame, desiredFrame) {
+            return
+        }
         observedWindow.setFrame(desiredFrame, display: true)
     }
 
@@ -272,7 +281,9 @@ final class AppWindowSceneObserverCoordinator: NSObject {
 
     private func publishWindowFrame() {
         guard let observedWindow else { return }
-        onWindowFrameChange(CGRectCodable(observedWindow.frame))
+        let frame = observedWindow.frame
+        lastPublishedWindowFrame = frame
+        onWindowFrameChange(CGRectCodable(frame))
     }
 
     @objc

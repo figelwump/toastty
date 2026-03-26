@@ -1,5 +1,6 @@
 @testable import ToasttyApp
 import AppKit
+import CoreState
 import XCTest
 
 @MainActor
@@ -46,6 +47,26 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         coordinator.attach(to: window)
 
         XCTAssertEqual(window.title, "Workspace 1")
+    }
+
+    func testAttachAppliesDesiredFrameOnInitialWindowBinding() {
+        let desiredFrame = CGRect(x: 180, y: 220, width: 900, height: 700)
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = desiredFrame
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, desiredFrame)
+        XCTAssertEqual(window.frame, desiredFrame)
     }
 
     func testAttachPersistsWindowIdentifierFromWindowID() {
@@ -374,6 +395,137 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.title, "Toastty")
     }
 
+    func testApplyDesiredFrameSkipsReplayingMostRecentlyPublishedWindowFrame() {
+        let recorder = ScheduledCallbackRecorder()
+        var publishedFrame: CGRectCodable?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { frame in
+                publishedFrame = frame
+            },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+        let firstFrame = CGRect(x: 120, y: 140, width: 640, height: 480)
+        let secondFrame = CGRect(x: 820, y: 140, width: 640, height: 480)
+
+        coordinator.attach(to: window)
+
+        window.setFrame(firstFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        XCTAssertFalse(recorder.callbacks.isEmpty)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        XCTAssertEqual(publishedFrame?.cgRect, firstFrame)
+
+        window.setFrame(secondFrame, display: false)
+        recorder.callbacks.removeAll()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = publishedFrame?.cgRect
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 0)
+        XCTAssertNil(window.lastSetFrame)
+        XCTAssertEqual(window.frame, secondFrame)
+    }
+
+    func testApplyDesiredFrameStillAppliesExplicitExternalFrameChange() {
+        let recorder = ScheduledCallbackRecorder()
+        var publishedFrame: CGRectCodable?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { frame in
+                publishedFrame = frame
+            },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+        let liveFrame = CGRect(x: 120, y: 140, width: 640, height: 480)
+        let externallyRequestedFrame = CGRect(x: 260, y: 320, width: 900, height: 700)
+
+        coordinator.attach(to: window)
+
+        window.setFrame(liveFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        XCTAssertFalse(recorder.callbacks.isEmpty)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        XCTAssertEqual(publishedFrame?.cgRect, liveFrame)
+
+        recorder.callbacks.removeAll()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = externallyRequestedFrame
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, externallyRequestedFrame)
+        XCTAssertEqual(window.frame, externallyRequestedFrame)
+    }
+
+    func testApplyDesiredFrameRecoversAfterSuppressingOlderPublishedFrameEcho() {
+        let recorder = ScheduledCallbackRecorder()
+        var publishedFrame: CGRectCodable?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { frame in
+                publishedFrame = frame
+            },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+        let firstFrame = CGRect(x: 120, y: 140, width: 640, height: 480)
+        let secondFrame = CGRect(x: 820, y: 140, width: 640, height: 480)
+
+        coordinator.attach(to: window)
+
+        window.setFrame(firstFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+
+        window.setFrame(secondFrame, display: false)
+        recorder.callbacks.removeAll()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = firstFrame
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 0)
+        XCTAssertEqual(window.frame, secondFrame)
+
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        XCTAssertEqual(publishedFrame?.cgRect, secondFrame)
+
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = firstFrame
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, firstFrame)
+        XCTAssertEqual(window.frame, firstFrame)
+    }
+
     func testApplyWindowTitleUpdatesAttachedWindowWhenWorkspaceTitleChanges() {
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
@@ -423,13 +575,26 @@ private final class ScheduledCallbackRecorder: @unchecked Sendable {
 private final class TestWindow: NSWindow {
     var forcedIsKeyWindow = false
     var didClose = false
+    var setFrameCallCount = 0
+    var lastSetFrame: NSRect?
 
     override var isKeyWindow: Bool {
         forcedIsKeyWindow
     }
 
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        setFrameCallCount += 1
+        lastSetFrame = frameRect
+        super.setFrame(frameRect, display: flag)
+    }
+
     override func close() {
         didClose = true
+    }
+
+    func resetSetFrameTracking() {
+        setFrameCallCount = 0
+        lastSetFrame = nil
     }
 
     init() {
