@@ -1039,6 +1039,21 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
             return nil
         }
 
+        switch action.intent {
+        case .setTerminalTitle, .setTerminalCWD:
+            ToasttyLog.info(
+                "Routing Ghostty metadata action through selected panel because surface handle is missing",
+                category: .terminal,
+                metadata: [
+                    "intent": action.logIntentName,
+                    "workspace_id": selection.workspaceID.uuidString,
+                    "panel_id": resolvedPanelID.uuidString,
+                ]
+            )
+        default:
+            break
+        }
+
         return (resolvedPanelID, selection.workspaceID)
     }
 

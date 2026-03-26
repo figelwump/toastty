@@ -351,6 +351,8 @@ final class DisplayShortcutInterceptor {
         case selectAdjacentTab(TabNavigationDirection)
         case switchWorkspace(Int)
         case focusPanel(Int)
+        case cycleWorkspaceNext
+        case cycleWorkspacePrevious
     }
 
     init(
@@ -415,6 +417,10 @@ final class DisplayShortcutInterceptor {
             return .switchWorkspace(shortcutNumber)
         case .panelFocus(let shortcutNumber):
             return .focusPanel(shortcutNumber)
+        case .cycleWorkspaceNext:
+            return .cycleWorkspaceNext
+        case .cycleWorkspacePrevious:
+            return .cycleWorkspacePrevious
         case nil:
             return nil
         }
@@ -438,6 +444,10 @@ final class DisplayShortcutInterceptor {
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
             focusTerminalPanel(shortcutNumber: shortcutNumber)
+        case .cycleWorkspaceNext:
+            cycleWorkspace(direction: 1)
+        case .cycleWorkspacePrevious:
+            cycleWorkspace(direction: -1)
         }
     }
 
@@ -629,6 +639,19 @@ final class DisplayShortcutInterceptor {
             preferredWindowID: preferredWindowID,
             direction: direction
         )
+    }
+
+    private func cycleWorkspace(direction: Int) -> Bool {
+        guard let store else { return false }
+        guard let window = store.selectedWindow else { return false }
+        let workspaceIDs = window.workspaceIDs
+        guard workspaceIDs.count > 1 else { return false }
+        guard let currentID = store.selectedWorkspaceID(in: window.id),
+              let currentIndex = workspaceIDs.firstIndex(of: currentID) else {
+            return false
+        }
+        let nextIndex = (currentIndex + direction + workspaceIDs.count) % workspaceIDs.count
+        return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceIDs[nextIndex]))
     }
 
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {

@@ -11,14 +11,14 @@ struct SidebarView: View {
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
 
-    /// Fixed height for the session detail text area (2 lines at the detail
+    /// Fixed height for the session detail text area (1 line at the detail
     /// font size). Reserving a constant height prevents the sidebar from
     /// jittering as streaming summaries change length.
     private static let sessionDetailFixedHeight: CGFloat = {
-        // 10pt system font default line height ≈ 12pt; 2 lines + inter-line spacing.
+        // 10pt system font default line height ≈ 12pt; 1 line.
         let font = NSFont.systemFont(ofSize: 10, weight: .regular)
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
-        return lineHeight * 2
+        return lineHeight
     }()
 
     var body: some View {
@@ -371,7 +371,7 @@ struct SidebarView: View {
                 Text(status.detail ?? " ")
                     .font(ToastyTheme.fontWorkspaceSessionDetail)
                     .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
-                    .lineLimit(2)
+                    .lineLimit(1)
                     .truncationMode(.tail)
                     .multilineTextAlignment(.leading)
                     .frame(

@@ -184,7 +184,24 @@ final class TerminalControllerStore {
     func armCloseTransitionViewportDeferral(for panelIDs: Set<UUID>) {
         guard panelIDs.isEmpty == false else { return }
         for panelID in panelIDs {
-            controllers[panelID]?.armCloseTransitionViewportDeferral()
+            guard let controller = controllers[panelID] else {
+                ToasttyLog.info(
+                    "Skipping close-transition viewport deferral because the terminal controller is unavailable",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                    ]
+                )
+                continue
+            }
+            ToasttyLog.info(
+                "Arming close-transition viewport deferral for terminal controller",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                ]
+            )
+            controller.armCloseTransitionViewportDeferral()
         }
     }
 

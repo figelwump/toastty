@@ -247,6 +247,10 @@ final class TerminalMetadataService {
             panelID: panelID,
             source: source
         )
+        let previousWorkingDirectorySample = {
+            let normalizedCurrentWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(terminalState.cwd)
+            return normalizedCurrentWorkingDirectory.map { String($0.prefix(120)) } ?? "nil"
+        }()
 
         let handled = store.send(
             .updateTerminalPanelMetadata(
@@ -256,13 +260,14 @@ final class TerminalMetadataService {
             )
         )
         if handled {
-            ToasttyLog.debug(
-                "Synchronized terminal cwd from Ghostty surface state",
+            ToasttyLog.info(
+                "Applied terminal cwd update from Ghostty surface state",
                 category: .terminal,
                 metadata: [
                     "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
                     "source": source,
+                    "previous_cwd_sample": previousWorkingDirectorySample,
                     "cwd_sample": String(normalizedWorkingDirectory.prefix(120)),
                 ]
             )
@@ -305,7 +310,7 @@ final class TerminalMetadataService {
             panelID: panelID,
             source: source
         ) {
-            ToasttyLog.debug(
+            ToasttyLog.info(
                 "Resolved terminal cwd from process immediately after surface creation",
                 category: .terminal,
                 metadata: [
@@ -718,6 +723,11 @@ final class TerminalMetadataService {
         }
 
         var hasChanges = false
+        let currentWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(terminalState.cwd)
+        let currentWorkingDirectoryChanged = normalizedCWD.flatMap { nextWorkingDirectory in
+            currentWorkingDirectory.map { TerminalRuntimeRegistry.cwdValuesDiffer(nextWorkingDirectory, $0) } ?? true
+        } ?? false
+        let pathLikeTitleUpdate = normalizedTitle.map { Self.titleLooksSemantic($0) == false } ?? false
         if let normalizedTitle, normalizedTitle != terminalState.title {
             hasChanges = true
         }
@@ -753,6 +763,35 @@ final class TerminalMetadataService {
         if handled {
             let titleSample = normalizedTitle.map { String($0.prefix(80)) } ?? "nil"
             let cwdSample = normalizedCWD.map { String($0.prefix(80)) } ?? "nil"
+            if currentWorkingDirectoryChanged {
+                ToasttyLog.info(
+                    "Applied terminal cwd update from Ghostty metadata",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "cwd_source": cwdSource,
+                        "allow_legacy_cwd_inference": allowLegacyCWDInference ? "true" : "false",
+                        "previous_cwd_sample": currentWorkingDirectory.map { String($0.prefix(80)) } ?? "nil",
+                        "cwd_sample": cwdSample,
+                        "title_sample": titleSample,
+                    ]
+                )
+            } else if pathLikeTitleUpdate {
+                ToasttyLog.info(
+                    "Applied path-like terminal title without cwd change",
+                    category: .terminal,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "panel_id": panelID.uuidString,
+                        "cwd_source": cwdSource,
+                        "allow_legacy_cwd_inference": allowLegacyCWDInference ? "true" : "false",
+                        "previous_title_sample": String(terminalState.title.prefix(80)),
+                        "title_sample": titleSample,
+                        "current_cwd_sample": currentWorkingDirectory.map { String($0.prefix(80)) } ?? "nil",
+                    ]
+                )
+            }
             ToasttyLog.debug(
                 "Applied terminal metadata update from Ghostty",
                 category: .terminal,

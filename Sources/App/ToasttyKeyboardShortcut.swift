@@ -136,4 +136,14 @@ enum ToasttyKeyboardShortcuts {
         "=",
         modifiers: [.command, .control]
     )
+
+    static let previousWorkspace = ToasttyKeyboardShortcut(
+        "[",
+        modifiers: [.option, .shift]
+    )
+
+    static let nextWorkspace = ToasttyKeyboardShortcut(
+        "]",
+        modifiers: [.option, .shift]
+    )
 }
