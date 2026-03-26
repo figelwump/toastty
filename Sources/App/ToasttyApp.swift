@@ -135,6 +135,28 @@ func restoreHiddenToasttyWindows(
 }
 
 @MainActor
+func handleToasttyReopen(
+    hasVisibleWindows: Bool,
+    windows: [NSWindow],
+    store: AppStore,
+    restoreHiddenWindows: ([NSWindow], AppStore) -> Bool = { windows, store in
+        restoreHiddenToasttyWindows(windows: windows, store: store)
+    },
+    createWindowWhenNeeded: () -> Bool
+) -> Bool {
+    guard hasVisibleWindows == false else { return true }
+
+    let restoredHiddenWindows = restoreHiddenWindows(windows, store)
+    guard restoredHiddenWindows == false else { return true }
+
+    if store.state.windows.isEmpty {
+        _ = createWindowWhenNeeded()
+    }
+
+    return true
+}
+
+@MainActor
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
     private weak var store: AppStore?
@@ -255,17 +277,23 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         guard flag == false else { return true }
         guard let store else { return true }
-
-        // If Toastty has no hidden windows to restore, let AppKit continue
-        // with its default reopen handling (for example, miniaturized windows).
-        _ = restoreHiddenToasttyWindows(
+        return handleToasttyReopen(
+            hasVisibleWindows: flag,
             windows: sender.windows,
             store: store,
-            activateApp: {
-                sender.activate(ignoringOtherApps: true)
+            restoreHiddenWindows: { windows, store in
+                restoreHiddenToasttyWindows(
+                    windows: windows,
+                    store: store,
+                    activateApp: {
+                        sender.activate(ignoringOtherApps: true)
+                    }
+                )
+            },
+            createWindowWhenNeeded: {
+                store.createWorkspaceFromCommand(preferredWindowID: nil)
             }
         )
-        return true
     }
 
     private func installMenuBridges() {
@@ -742,10 +770,12 @@ struct ToasttyApp: App {
             Self.ensureToasttyConfigTemplateExists()
         }
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
+        appWindowSceneCoordinator = AppWindowSceneCoordinator()
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
-            slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
+            slotFocusRestoreCoordinator: slotFocusRestoreCoordinator,
+            sceneCoordinator: appWindowSceneCoordinator
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
@@ -799,7 +829,6 @@ struct ToasttyApp: App {
         _store = StateObject(wrappedValue: store)
         _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
         _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
-        appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
@@ -868,8 +897,9 @@ struct ToasttyApp: App {
     }
 
     var body: some Scene {
-        WindowGroup(id: AppWindowSceneID.value) {
+        WindowGroup(id: AppWindowSceneID.value, for: UUID.self) { $sceneWindowID in
             AppWindowSceneHostView(
+                sceneWindowID: $sceneWindowID,
                 store: store,
                 agentCatalogStore: agentCatalogStore,
                 terminalProfileStore: terminalProfileStore,

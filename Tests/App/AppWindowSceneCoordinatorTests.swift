@@ -75,6 +75,51 @@ final class AppWindowSceneCoordinatorTests: XCTestCase {
         XCTAssertNil(coordinator.claimWindowID(in: state))
     }
 
+    func testDismissSceneInvokesRegisteredHandler() {
+        let coordinator = AppWindowSceneCoordinator()
+        let windowID = UUID()
+        var dismissCallCount = 0
+
+        coordinator.registerPresentedWindow(windowID: windowID)
+        coordinator.registerWindowCloseHandler(windowID: windowID) {
+            dismissCallCount += 1
+        }
+
+        XCTAssertTrue(coordinator.dismissScene(windowID: windowID))
+        XCTAssertEqual(dismissCallCount, 1)
+    }
+
+    func testDismissSceneReturnsFalseAfterWindowUnregisters() {
+        let coordinator = AppWindowSceneCoordinator()
+        let windowID = UUID()
+
+        coordinator.registerPresentedWindow(windowID: windowID)
+        coordinator.registerWindowCloseHandler(windowID: windowID, closeWindow: {})
+        coordinator.unregisterWindowCloseHandler(windowID: windowID)
+
+        XCTAssertFalse(coordinator.dismissScene(windowID: windowID))
+    }
+
+    func testConsumeSceneDismissalAfterBindingLossReturnsTrueOnceForRequestedWindow() {
+        let coordinator = AppWindowSceneCoordinator()
+        let windowID = UUID()
+
+        coordinator.requestSceneDismissalAfterBindingLoss(windowID: windowID)
+
+        XCTAssertTrue(coordinator.consumeSceneDismissalAfterBindingLoss(windowID: windowID))
+        XCTAssertFalse(coordinator.consumeSceneDismissalAfterBindingLoss(windowID: windowID))
+    }
+
+    func testCancelSceneDismissalAfterBindingLossRemovesPendingRequest() {
+        let coordinator = AppWindowSceneCoordinator()
+        let windowID = UUID()
+
+        coordinator.requestSceneDismissalAfterBindingLoss(windowID: windowID)
+        coordinator.cancelSceneDismissalAfterBindingLoss(windowID: windowID)
+
+        XCTAssertFalse(coordinator.consumeSceneDismissalAfterBindingLoss(windowID: windowID))
+    }
+
     private func makeState(windowIDs: [UUID]) -> AppState {
         var workspacesByID: [UUID: WorkspaceState] = [:]
         let windows = windowIDs.map { windowID in

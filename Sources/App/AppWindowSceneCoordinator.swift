@@ -5,6 +5,8 @@ import Foundation
 final class AppWindowSceneCoordinator {
     private var presentedWindowIDs: Set<UUID> = []
     private var pendingWindowIDs: Set<UUID> = []
+    private var dismissalRequestWindowIDs: Set<UUID> = []
+    private var closeWindowHandlers: [UUID: @MainActor () -> Void] = [:]
 
     func registerPresentedWindow(windowID: UUID) {
         pendingWindowIDs.remove(windowID)
@@ -29,6 +31,32 @@ final class AppWindowSceneCoordinator {
 
         pendingWindowIDs.formUnion(missingWindowIDs)
         return missingWindowIDs
+    }
+
+    func dismissScene(windowID: UUID) -> Bool {
+        guard let closeWindow = closeWindowHandlers[windowID] else { return false }
+        closeWindow()
+        return true
+    }
+
+    func requestSceneDismissalAfterBindingLoss(windowID: UUID) {
+        dismissalRequestWindowIDs.insert(windowID)
+    }
+
+    func cancelSceneDismissalAfterBindingLoss(windowID: UUID) {
+        dismissalRequestWindowIDs.remove(windowID)
+    }
+
+    func consumeSceneDismissalAfterBindingLoss(windowID: UUID) -> Bool {
+        dismissalRequestWindowIDs.remove(windowID) != nil
+    }
+
+    func registerWindowCloseHandler(windowID: UUID, closeWindow: @escaping @MainActor () -> Void) {
+        closeWindowHandlers[windowID] = closeWindow
+    }
+
+    func unregisterWindowCloseHandler(windowID: UUID) {
+        closeWindowHandlers.removeValue(forKey: windowID)
     }
 
     func claimWindowID(in state: AppState) -> UUID? {

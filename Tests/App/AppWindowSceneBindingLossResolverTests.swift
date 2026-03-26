@@ -3,8 +3,6 @@ import XCTest
 
 final class AppWindowSceneBindingLossResolverTests: XCTestCase {
     func testResolveClearsStaleRestoredBindingWithoutDismissingLastScene() {
-        let windowID = UUID()
-
         let resolution = AppWindowSceneBindingLossResolver.resolve(
             previouslyHadBoundWindow: true,
             remainingWindowCount: 0,
@@ -24,8 +22,6 @@ final class AppWindowSceneBindingLossResolverTests: XCTestCase {
     }
 
     func testResolveClearsBindingAndDismissesAfterConfirmedLastWindowClose() {
-        let windowID = UUID()
-
         let resolution = AppWindowSceneBindingLossResolver.resolve(
             previouslyHadBoundWindow: true,
             remainingWindowCount: 0,
@@ -61,5 +57,24 @@ final class AppWindowSceneBindingLossResolverTests: XCTestCase {
             )
         )
         XCTAssertTrue(resolution.shouldDismissScene)
+    }
+
+    func testResolveLeavesSceneAliveWhenNothingWasEverBound() {
+        let resolution = AppWindowSceneBindingLossResolver.resolve(
+            previouslyHadBoundWindow: false,
+            remainingWindowCount: 0,
+            closeWasRequested: true
+        )
+
+        XCTAssertEqual(
+            resolution.nextState,
+            AppWindowSceneBindingState(
+                boundWindowID: nil,
+                hasBoundWindow: false,
+                sceneWindowIDValue: nil,
+                shouldDismissAfterNextBindingLoss: false
+            )
+        )
+        XCTAssertFalse(resolution.shouldDismissScene)
     }
 }

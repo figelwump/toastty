@@ -37,6 +37,8 @@ final class SlotFocusRestoreCoordinator {
 
 @MainActor
 final class FocusedPanelCommandController {
+    typealias NativeWindowCloseHandler = @MainActor (UUID) -> Bool
+
     enum CloseResult: Equatable {
         case notHandled
         case canceled
@@ -53,17 +55,24 @@ final class FocusedPanelCommandController {
 
     private weak var store: AppStore?
     private weak var runtimeRegistry: TerminalRuntimeRegistry?
+    private let sceneCoordinator: AppWindowSceneCoordinator?
     private let slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator
+    private let closeNativeWindow: NativeWindowCloseHandler
     private let shouldConfirmClose: Bool
 
     init(
         store: AppStore,
         runtimeRegistry: TerminalRuntimeRegistry,
-        slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator
+        slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator,
+        sceneCoordinator: AppWindowSceneCoordinator? = nil,
+        closeNativeWindow: @escaping NativeWindowCloseHandler = FocusedPanelCommandController
+            .closeNativeWindowInAppKit
     ) {
         self.store = store
         self.runtimeRegistry = runtimeRegistry
+        self.sceneCoordinator = sceneCoordinator
         self.slotFocusRestoreCoordinator = slotFocusRestoreCoordinator
+        self.closeNativeWindow = closeNativeWindow
         let processInfo = ProcessInfo.processInfo
         shouldConfirmClose = !AutomationConfig.shouldBypassInteractiveConfirmation(
             arguments: processInfo.arguments,
@@ -107,11 +116,13 @@ final class FocusedPanelCommandController {
     private func closePanel(panelID: UUID, preferredWorkspaceID: UUID?) -> CloseResult {
         guard let store else { return .notHandled }
         let selectedWorkspaceIDBeforeClose = store.selectedWorkspace?.id
-        guard let workspace = resolvedWorkspace(containing: panelID, preferredWorkspaceID: preferredWorkspaceID) else {
+        guard let selection = resolvedSelection(containing: panelID, preferredWorkspaceID: preferredWorkspaceID) else {
             return .notHandled
         }
 
-        let resolvedWorkspaceID = workspace.id
+        let resolvedWorkspaceID = selection.workspace.id
+        let resolvedWindowID = selection.windowID
+        let workspace = selection.workspace
         let closedPanelWasFocused = workspace.focusedPanelID == panelID
         let panelState = workspace.panelState(for: panelID)
         var didPromptForConfirmation = false
@@ -137,7 +148,24 @@ final class FocusedPanelCommandController {
             }
         }
 
+        let willCloseWholeWindow = workspace.panels.count == 1 && selection.window.workspaceIDs == [resolvedWorkspaceID]
+        if willCloseWholeWindow {
+            if sceneCoordinator?.dismissScene(windowID: resolvedWindowID) == true {
+                return .closed
+            }
+            sceneCoordinator?.requestSceneDismissalAfterBindingLoss(windowID: resolvedWindowID)
+            if closeNativeWindow(resolvedWindowID) {
+                return .closed
+            }
+            // Fall back to reducer-driven teardown only if no native window is
+            // currently available for this last-panel close.
+        }
+
         let didClosePanel = store.send(.closePanel(panelID: panelID))
+        let windowStillExists = store.window(id: resolvedWindowID) != nil
+        if willCloseWholeWindow && (didClosePanel == false || windowStillExists) {
+            sceneCoordinator?.cancelSceneDismissalAfterBindingLoss(windowID: resolvedWindowID)
+        }
         guard didClosePanel else {
             return didPromptForConfirmation ? .canceled : .notHandled
         }
@@ -167,14 +195,22 @@ final class FocusedPanelCommandController {
         return store.state.workspacesByID[resolvedWorkspaceID]
     }
 
-    private func resolvedWorkspace(containing panelID: UUID, preferredWorkspaceID: UUID?) -> WorkspaceState? {
+    private func resolvedSelection(
+        containing panelID: UUID,
+        preferredWorkspaceID: UUID?
+    ) -> WindowCommandSelection? {
         guard let store else { return nil }
 
         if let preferredWorkspaceID,
+           let window = store.state.windows.first(where: { $0.workspaceIDs.contains(preferredWorkspaceID) }),
            let workspace = store.state.workspacesByID[preferredWorkspaceID],
            workspace.panelState(for: panelID) != nil,
            workspace.slotID(containingPanelID: panelID) != nil {
-            return workspace
+            return WindowCommandSelection(
+                windowID: window.id,
+                window: window,
+                workspace: workspace
+            )
         }
 
         for window in store.state.windows {
@@ -184,7 +220,11 @@ final class FocusedPanelCommandController {
                       workspace.slotID(containingPanelID: panelID) != nil else {
                     continue
                 }
-                return workspace
+                return WindowCommandSelection(
+                    windowID: window.id,
+                    window: window,
+                    workspace: workspace
+                )
             }
         }
 
@@ -206,5 +246,26 @@ final class FocusedPanelCommandController {
 
         let response = confirmationAlert.runModal()
         return response == .alertSecondButtonReturn
+    }
+
+    private static func closeNativeWindowInAppKit(windowID: UUID) -> Bool {
+        guard let window = NSApp.windows.first(where: { $0.identifier?.rawValue == windowID.uuidString }) else {
+            ToasttyLog.debug(
+                "Skipping native window close for last-panel teardown because no matching NSWindow was found",
+                category: .app,
+                metadata: ["window_id": windowID.uuidString]
+            )
+            return false
+        }
+        ToasttyLog.debug(
+            "Closing native window before last-panel teardown",
+            category: .app,
+            metadata: [
+                "window_id": windowID.uuidString,
+                "window_title": window.title,
+            ]
+        )
+        window.close()
+        return true
     }
 }

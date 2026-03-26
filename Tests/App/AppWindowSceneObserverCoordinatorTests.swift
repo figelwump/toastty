@@ -222,6 +222,45 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(closeInitiatedCallCount, 1)
     }
 
+    func testProgrammaticCloseIsIgnoredWhileAlreadyClosing() {
+        let sceneCoordinator = AppWindowSceneCoordinator()
+        let windowID = UUID()
+        var closeCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: windowID,
+            sceneCoordinator: sceneCoordinator,
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            closeWindow: { _ in
+                closeCallCount += 1
+            },
+            scheduleOnMainActor: { _ in }
+        )
+
+        coordinator.attach(to: TestWindow())
+
+        XCTAssertTrue(sceneCoordinator.dismissScene(windowID: windowID))
+        XCTAssertTrue(sceneCoordinator.dismissScene(windowID: windowID))
+        XCTAssertEqual(closeCallCount, 1)
+    }
+
+    func testAttachMarksObservedWindowReleasedWhenClosed() {
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        window.isReleasedWhenClosed = false
+
+        coordinator.attach(to: window)
+
+        XCTAssertTrue(window.isReleasedWhenClosed)
+    }
+
     func testDidExitFullScreenReinstallsNativeCloseButtonOverride() throws {
         var presentCallCount = 0
         let coordinator = AppWindowSceneObserverCoordinator(
@@ -393,6 +432,10 @@ private final class TestWindow: NSWindow {
 
     override var isKeyWindow: Bool {
         forcedIsKeyWindow
+    }
+
+    override func performClose(_ sender: Any?) {
+        close()
     }
 
     override func close() {
