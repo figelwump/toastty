@@ -367,7 +367,7 @@ private extension AgentLaunchInstrumentation {
                 "  status=\"$1\"",
                 "  timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
                 "  {",
-                "    printf '[%s] source=%s exit_code=%s socket_path=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\"",
+                "    printf '[%s] source=%s exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
                 "    if [ -s \"$stderr_file\" ]; then",
                 "      sed 's/^/stderr: /' \"$stderr_file\"",
                 "    else",

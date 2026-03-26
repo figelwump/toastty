@@ -1874,18 +1874,53 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         rawPanelID: String?,
         requireLivePanel: Bool = true
     ) throws -> SessionRecord {
+        let parsedPanelID = rawPanelID.flatMap(UUID.init(uuidString:))
         guard let record = sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID) else {
+            ToasttyLog.warning(
+                "Rejected session event for inactive session",
+                category: .automation,
+                metadata: [
+                    "session_id": sessionID,
+                    "raw_panel_id": rawPanelID ?? "none",
+                    "parsed_panel_id": parsedPanelID?.uuidString ?? "none",
+                    "active_session_for_panel": parsedPanelID
+                        .flatMap { sessionRuntimeStore.sessionRegistry.activeSession(for: $0)?.sessionID }
+                        ?? "none",
+                    "require_live_panel": requireLivePanel ? "true" : "false",
+                ]
+            )
             throw AutomationSocketError.invalidPayload("sessionID does not identify an active session")
         }
 
         if let panelID = try parsePanelID(rawPanelID) {
             guard panelID == record.panelID else {
+                ToasttyLog.warning(
+                    "Rejected session event with mismatched panel",
+                    category: .automation,
+                    metadata: [
+                        "session_id": sessionID,
+                        "agent": record.agent.rawValue,
+                        "expected_panel_id": record.panelID.uuidString,
+                        "provided_panel_id": panelID.uuidString,
+                        "workspace_id": record.workspaceID.uuidString,
+                    ]
+                )
                 throw AutomationSocketError.invalidPayload("panelID does not match active session")
             }
         }
 
         if requireLivePanel {
             guard locatePanel(record.panelID) != nil else {
+                ToasttyLog.warning(
+                    "Rejected session event for missing panel",
+                    category: .automation,
+                    metadata: [
+                        "session_id": sessionID,
+                        "agent": record.agent.rawValue,
+                        "panel_id": record.panelID.uuidString,
+                        "workspace_id": record.workspaceID.uuidString,
+                    ]
+                )
                 throw AutomationSocketError.invalidPayload("panelID does not exist")
             }
         }
