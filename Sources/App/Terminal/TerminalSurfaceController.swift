@@ -160,9 +160,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         return attachedToContainer && attachedToWindow ? .ready(activeAttachment) : .attached(activeAttachment)
     }
 
+    private func containerIdentifier(_ view: NSView?) -> String {
+        guard let view else { return "nil" }
+        return String(describing: ObjectIdentifier(view))
+    }
+
     func attachHost(to container: NSView, attachment: PanelHostAttachmentToken) {
         if let activeAttachment, attachment.generation < activeAttachment.generation {
-            ToasttyLog.debug(
+            ToasttyLog.info(
                 "Ignoring stale panel host attachment",
                 category: .terminal,
                 metadata: [
@@ -178,9 +183,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         pendingDetachTask?.cancel()
         pendingDetachTask = nil
         pendingDetachAttachment = nil
+        let previousAttachment = activeAttachment
+        let previousContainer = activeSourceContainer
         let sourceContainerChanged = activeSourceContainer !== container
         let hostedViewWillReattach = hostedView.superview !== container
         let attachmentChanged = activeAttachment != attachment
+        let crossContainerMove = previousContainer != nil && sourceContainerChanged
         // Claim the newest token even if the move is deferred so stale callbacks
         // from the previous SwiftUI container cannot reclaim the host. The
         // controller continues to receive attachHost/update retries while
@@ -195,6 +203,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 metadata: [
                     "panel_id": panelID.uuidString,
                     "attachment_id": attachment.rawValue.uuidString,
+                    "previous_container_id": containerIdentifier(previousContainer),
+                    "target_container_id": containerIdentifier(container),
                     "target_has_window": container.window == nil ? "false" : "true",
                     "target_hidden": container.isHidden ? "true" : "false",
                     "target_hidden_ancestor": container.hasHiddenAncestor ? "true" : "false",
@@ -219,6 +229,25 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 hostedView.topAnchor.constraint(equalTo: container.topAnchor),
                 hostedView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             ])
+        }
+
+        if crossContainerMove && hostedViewWillReattach {
+            ToasttyLog.info(
+                "Attached terminal host to container",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "attachment_id": attachment.rawValue.uuidString,
+                    "attachment_generation": String(attachment.generation),
+                    "previous_attachment_id": previousAttachment?.rawValue.uuidString ?? "nil",
+                    "previous_attachment_generation": previousAttachment.map { String($0.generation) } ?? "nil",
+                    "previous_container_id": containerIdentifier(previousContainer),
+                    "active_container_id": containerIdentifier(activeSourceContainer),
+                    "hosted_view_superview_matches_target": hostedView.superview === container ? "true" : "false",
+                    "target_has_window": container.window == nil ? "false" : "true",
+                    "attachment_changed": attachmentChanged ? "true" : "false",
+                ]
+            )
         }
 
         #if TOASTTY_HAS_GHOSTTY_KIT
@@ -263,7 +292,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         guard let currentAttachment = activeAttachment else { return }
         guard attachment == currentAttachment else {
             if attachment.generation < currentAttachment.generation {
-                ToasttyLog.debug(
+                ToasttyLog.info(
                     "Ignoring stale panel host detach",
                     category: .terminal,
                     metadata: [
