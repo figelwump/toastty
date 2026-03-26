@@ -119,6 +119,91 @@ require_env() {
   fi
 }
 
+extract_existing_entitlements() {
+  local signed_path="$1"
+  local output_path="$2"
+
+  if ! codesign -d --entitlements :- "$signed_path" >"$output_path" 2>/dev/null; then
+    rm -f "$output_path"
+    return 1
+  fi
+
+  if ! plutil -lint "$output_path" >/dev/null 2>&1; then
+    rm -f "$output_path"
+    return 1
+  fi
+
+  if ! grep -q "<key>" "$output_path"; then
+    rm -f "$output_path"
+    return 1
+  fi
+}
+
+codesign_path_preserving_entitlements() {
+  local signed_path="$1"
+  local temp_entitlements=""
+  local -a codesign_args=(
+    --force
+    --sign "$SIGNING_IDENTITY"
+    --timestamp
+    --options runtime
+  )
+
+  temp_entitlements="$(mktemp "${TMPDIR:-/tmp}/toastty-release-entitlements.XXXXXX")"
+  if extract_existing_entitlements "$signed_path" "$temp_entitlements"; then
+    codesign_args+=(--entitlements "$temp_entitlements")
+  else
+    temp_entitlements=""
+  fi
+
+  if codesign "${codesign_args[@]}" "$signed_path"; then
+    :
+  else
+    if [[ -n "$temp_entitlements" && -f "$temp_entitlements" ]]; then
+      rm -f "$temp_entitlements"
+    fi
+    fail "codesign failed for $signed_path"
+  fi
+
+  if [[ -n "$temp_entitlements" && -f "$temp_entitlements" ]]; then
+    rm -f "$temp_entitlements"
+  fi
+}
+
+verify_app_tcc_metadata() {
+  local app_path="$1"
+  local info_plist="$app_path/Contents/Info.plist"
+  local temp_entitlements=""
+  local camera_usage=""
+  local microphone_usage=""
+  local entitlements_summary=""
+
+  [[ -f "$info_plist" ]] || fail "expected Info.plist at $info_plist"
+
+  camera_usage="$(plutil -extract NSCameraUsageDescription raw -o - "$info_plist" 2>/dev/null || true)"
+  microphone_usage="$(plutil -extract NSMicrophoneUsageDescription raw -o - "$info_plist" 2>/dev/null || true)"
+  [[ -n "$camera_usage" ]] || fail "missing NSCameraUsageDescription in $info_plist"
+  [[ -n "$microphone_usage" ]] || fail "missing NSMicrophoneUsageDescription in $info_plist"
+
+  temp_entitlements="$(mktemp "${TMPDIR:-/tmp}/toastty-release-entitlements.XXXXXX")"
+  if ! extract_existing_entitlements "$app_path" "$temp_entitlements"; then
+    rm -f "$temp_entitlements"
+    fail "failed to read entitlements from $app_path"
+  fi
+
+  entitlements_summary="$(plutil -p "$temp_entitlements" 2>/dev/null || true)"
+  rm -f "$temp_entitlements"
+  [[ -n "$entitlements_summary" ]] || fail "failed to read entitlements from $app_path"
+
+  if ! printf '%s\n' "$entitlements_summary" | grep -Fq '"com.apple.security.device.camera" => true'; then
+    fail "missing camera entitlement in $app_path"
+  fi
+
+  if ! printf '%s\n' "$entitlements_summary" | grep -Fq '"com.apple.security.device.audio-input" => true'; then
+    fail "missing microphone entitlement in $app_path"
+  fi
+}
+
 validate_build_number() {
   if [[ ! "$TOASTTY_BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
     fail "TOASTTY_BUILD_NUMBER must be a monotonically increasing integer"
@@ -400,13 +485,35 @@ verify_exported_app() {
 
 resign_exported_app_for_distribution() {
   local bundled_cli_path="$EXPORTED_APP_PATH/$BUNDLED_CLI_RELATIVE_PATH"
+  local sparkle_framework_path="$EXPORTED_APP_PATH/Contents/Frameworks/Sparkle.framework"
+  local sparkle_current_path="$sparkle_framework_path/Versions/Current"
+  local -a sparkle_nested_paths=(
+    "$sparkle_current_path/XPCServices/Downloader.xpc"
+    "$sparkle_current_path/XPCServices/Installer.xpc"
+    "$sparkle_current_path/Updater.app"
+    "$sparkle_current_path/Autoupdate"
+  )
+  local nested_path=""
 
   [[ -x "$bundled_cli_path" ]] || fail "exported app is missing bundled CLI at $bundled_cli_path"
-  # Copying the archived app preserves ad-hoc signatures on Sparkle's nested
-  # helper binaries, so re-sign the copied bundle recursively before packaging.
+  # Copying the archived app preserves Sparkle's nested helper signatures, and
+  # Gatekeeper only accepts the final bundle if those helpers are re-signed
+  # inside-out before the framework and app are sealed. Keep this list aligned
+  # with the vendored Sparkle layout when Sparkle is upgraded.
   log "Re-signing exported app bundle for distribution"
-  codesign --force --deep --sign "$SIGNING_IDENTITY" --timestamp --options runtime "$EXPORTED_APP_PATH"
+  for nested_path in "${sparkle_nested_paths[@]}"; do
+    if [[ -e "$nested_path" ]]; then
+      codesign_path_preserving_entitlements "$nested_path"
+    fi
+  done
+  if [[ -d "$sparkle_framework_path" ]]; then
+    codesign_path_preserving_entitlements "$sparkle_framework_path"
+  fi
+  codesign_path_preserving_entitlements "$bundled_cli_path"
+  codesign_path_preserving_entitlements "$EXPORTED_APP_PATH"
   codesign --verify --deep --strict --verbose=2 "$EXPORTED_APP_PATH"
+  spctl --assess --type exec -vv "$EXPORTED_APP_PATH"
+  verify_app_tcc_metadata "$EXPORTED_APP_PATH"
 }
 
 stage_dmg_contents() {
