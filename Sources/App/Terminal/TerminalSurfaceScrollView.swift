@@ -163,6 +163,10 @@ final class TerminalSurfaceScrollView: NSScrollView {
     }
 
     #if DEBUG
+    var viewportStateForTesting: TerminalViewportState? {
+        viewportState
+    }
+
     func performLiveScrollWritebackForTesting() {
         handleLiveScroll()
     }

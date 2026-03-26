@@ -1362,7 +1362,8 @@ final class WindowCommandControllerTests: XCTestCase {
         let controller = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: runtimeRegistry,
-            installShellIntegrationAction: {}
+            installShellIntegrationAction: {},
+            openProfilesConfigurationAction: {}
         )
 
         XCTAssertTrue(controller.canSplitFocusedSlotWithTerminalProfile(preferredWindowID: nil))
@@ -1393,12 +1394,32 @@ final class WindowCommandControllerTests: XCTestCase {
             terminalRuntimeRegistry: runtimeRegistry,
             installShellIntegrationAction: {
                 didInstallShellIntegration = true
-            }
+            },
+            openProfilesConfigurationAction: {}
         )
 
         controller.installShellIntegration()
         XCTAssertTrue(didInstallShellIntegration)
     }
+
+    func testTerminalProfilesMenuControllerRunsOpenProfilesConfigurationAction() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        var didOpenProfilesConfiguration = false
+        let controller = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            installShellIntegrationAction: {},
+            openProfilesConfigurationAction: {
+                didOpenProfilesConfiguration = true
+            }
+        )
+
+        controller.openProfilesConfiguration()
+        XCTAssertTrue(didOpenProfilesConfiguration)
+    }
+
     private func makeSplitWorkspaceFixture(
         preferredWindowIDProvider: (() -> UUID?)? = nil
     ) throws -> SplitWorkspaceFixture {

@@ -72,12 +72,15 @@ enum AgentLaunchInstrumentation {
 
         do {
             let hookScriptURL = artifactsDirectoryURL.appendingPathComponent("claude-hook.sh", isDirectory: false)
+            let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
             try writeExecutableScript(
-                """
-                #!/bin/sh
-                "\(cliExecutablePath)" session ingest-agent-event --source claude-hooks >/dev/null 2>&1 || true
-                exit 0
-                """,
+                makeTelemetryForwarderScript(
+                    cliExecutablePath: cliExecutablePath,
+                    source: "claude-hooks",
+                    telemetryErrorLogURL: telemetryErrorLogURL,
+                    stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent("claude-hook.stderr", isDirectory: false),
+                    inputMode: .none
+                ),
                 to: hookScriptURL,
                 fileManager: fileManager
             )
@@ -126,16 +129,15 @@ enum AgentLaunchInstrumentation {
 
         do {
             let notifyScriptURL = artifactsDirectoryURL.appendingPathComponent("codex-notify.sh", isDirectory: false)
+            let telemetryErrorLogURL = telemetryErrorLogURL(in: artifactsDirectoryURL)
             try writeExecutableScript(
-                """
-                #!/bin/sh
-                if [ -n "$1" ]; then
-                  printf '%s' "$1"
-                else
-                  cat
-                fi | "\(cliExecutablePath)" session ingest-agent-event --source codex-notify >/dev/null 2>&1 || true
-                exit 0
-                """,
+                makeTelemetryForwarderScript(
+                    cliExecutablePath: cliExecutablePath,
+                    source: "codex-notify",
+                    telemetryErrorLogURL: telemetryErrorLogURL,
+                    stderrFallbackURL: artifactsDirectoryURL.appendingPathComponent("codex-notify.stderr", isDirectory: false),
+                    inputMode: .stdinOrFirstArgument
+                ),
                 to: notifyScriptURL,
                 fileManager: fileManager
             )
@@ -165,6 +167,11 @@ enum AgentLaunchInstrumentation {
 }
 
 private extension AgentLaunchInstrumentation {
+    enum TelemetryInputMode {
+        case none
+        case stdinOrFirstArgument
+    }
+
     struct ResolvedClaudeSettings {
         let argvWithoutSettings: [String]
         let baseSettings: [String: Any]
@@ -271,6 +278,11 @@ private extension AgentLaunchInstrumentation {
         appendClaudeHookEntry(wildcardCommandHook, to: "PostToolUse", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PostToolUseFailure", in: &hooks)
         appendClaudeHookEntry(wildcardCommandHook, to: "PermissionRequest", in: &hooks)
+        // Keep both PermissionRequest and Notification coverage. Claude surfaces
+        // some approval/input pauses as notifications (for example
+        // permission_prompt / elicitation_dialog), and the runtime store
+        // already suppresses repeated actionable transitions with the same kind.
+        appendClaudeHookEntry(wildcardCommandHook, to: "Notification", in: &hooks)
         mergedSettings["hooks"] = hooks
 
         return mergedSettings
@@ -298,6 +310,77 @@ private extension AgentLaunchInstrumentation {
     static func writeJSONObject(_ object: [String: Any], to url: URL) throws {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         try data.write(to: url, options: .atomic)
+    }
+
+    static func telemetryErrorLogURL(in artifactsDirectoryURL: URL) -> URL {
+        artifactsDirectoryURL.appendingPathComponent("telemetry-failures.log", isDirectory: false)
+    }
+
+    static func makeTelemetryForwarderScript(
+        cliExecutablePath: String,
+        source: String,
+        telemetryErrorLogURL: URL,
+        stderrFallbackURL: URL,
+        inputMode: TelemetryInputMode
+    ) -> String {
+        let stderrTemplateURL = stderrFallbackURL.deletingLastPathComponent()
+            .appendingPathComponent("telemetry-stderr.XXXXXX", isDirectory: false)
+        let cliCommand = "\(shellQuote(cliExecutablePath)) session ingest-agent-event --source \(source)"
+        let commandInvocationLines: [String]
+
+        switch inputMode {
+        case .none:
+            commandInvocationLines = [
+                "if \(cliCommand) >/dev/null 2>\"$stderr_file\"; then",
+                "  :",
+                "else",
+                "  status=$?",
+                "  append_telemetry_failure \"$status\"",
+                "fi",
+            ]
+
+        case .stdinOrFirstArgument:
+            commandInvocationLines = [
+                "if [ -n \"$1\" ]; then",
+                "  printf '%s' \"$1\"",
+                "else",
+                "  cat",
+                "fi | \(cliCommand) >/dev/null 2>\"$stderr_file\"",
+                "status=$?",
+                "if [ \"$status\" -ne 0 ]; then",
+                "  append_telemetry_failure \"$status\"",
+                "fi",
+            ]
+        }
+
+        return (
+            [
+                "#!/bin/sh",
+                "log_file=\(shellQuote(telemetryErrorLogURL.path))",
+                "stderr_file=\"$(mktemp \(shellQuote(stderrTemplateURL.path)) 2>/dev/null)\"",
+                "if [ -z \"$stderr_file\" ]; then",
+                "  stderr_file=\(shellQuote(stderrFallbackURL.path))",
+                "fi",
+                "rm -f \"$stderr_file\"",
+                "",
+                "append_telemetry_failure() {",
+                "  status=\"$1\"",
+                "  timestamp=\"$(date -u +\"%Y-%m-%dT%H:%M:%SZ\" 2>/dev/null || date)\"",
+                "  {",
+                "    printf '[%s] source=%s exit_code=%s socket_path=%s session_id=%s panel_id=%s\\n' \"$timestamp\" \(shellQuote(source)) \"$status\" \"${TOASTTY_SOCKET_PATH:-<unset>}\" \"${TOASTTY_SESSION_ID:-<unset>}\" \"${TOASTTY_PANEL_ID:-<unset>}\"",
+                "    if [ -s \"$stderr_file\" ]; then",
+                "      sed 's/^/stderr: /' \"$stderr_file\"",
+                "    else",
+                "      printf 'stderr: <empty>\\n'",
+                "    fi",
+                "  } >> \"$log_file\"",
+                "}",
+                "",
+            ] + commandInvocationLines + [
+                "rm -f \"$stderr_file\"",
+                "exit 0",
+            ]
+        ).joined(separator: "\n")
     }
 
     static func tomlStringArrayLiteral(_ values: [String]) -> String {

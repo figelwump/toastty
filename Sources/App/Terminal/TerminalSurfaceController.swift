@@ -1001,7 +1001,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         delegate.registerSurfaceChildPIDAfterCreation(
             panelID: panelID,
             previousChildren: previousChildPIDs,
-            expectedWorkingDirectory: terminalState.expectedProcessWorkingDirectory
+            expectedWorkingDirectory: createdSurface.workingDirectory
         )
 
         // The requested cwd is just launch config, not authoritative live shell

@@ -368,6 +368,43 @@ final class TerminalProcessWorkingDirectoryResolver {
         return panelIndex
     }
 
+    static func preferredRegistrationCandidateIndex(
+        expectedWorkingDirectory: String?,
+        candidateWorkingDirectories: [String?],
+        candidateLoginPIDs: [pid_t],
+        preferNewestWhenAmbiguous: Bool
+    ) -> Int? {
+        guard candidateWorkingDirectories.count == candidateLoginPIDs.count else {
+            return nil
+        }
+        guard candidateWorkingDirectories.isEmpty == false else {
+            return nil
+        }
+
+        if let expectedWorkingDirectory = canonicalWorkingDirectory(expectedWorkingDirectory) {
+            let matchingIndices = candidateWorkingDirectories.enumerated().compactMap { index, candidateWorkingDirectory in
+                canonicalWorkingDirectory(candidateWorkingDirectory) == expectedWorkingDirectory ? index : nil
+            }
+            if matchingIndices.count == 1 {
+                return matchingIndices[0]
+            }
+            if matchingIndices.isEmpty == false {
+                guard preferNewestWhenAmbiguous else {
+                    return matchingIndices[0]
+                }
+                return matchingIndices.max(by: { candidateLoginPIDs[$0] < candidateLoginPIDs[$1] })
+            }
+        }
+
+        if candidateWorkingDirectories.count == 1 {
+            return 0
+        }
+        if preferNewestWhenAmbiguous {
+            return candidateLoginPIDs.indices.max(by: { candidateLoginPIDs[$0] < candidateLoginPIDs[$1] })
+        }
+        return nil
+    }
+
     private func selectRegistrationCandidate(
         panelID: UUID,
         candidates: [RegistrationCandidate],
@@ -375,33 +412,31 @@ final class TerminalProcessWorkingDirectoryResolver {
     ) -> RegistrationCandidate? {
         guard !candidates.isEmpty else { return nil }
 
-        if let expectedWorkingDirectory = expectedWorkingDirectoryByPanelID[panelID] {
-            let cwdMatches = candidates.filter { $0.shellWorkingDirectory == expectedWorkingDirectory }
-            if cwdMatches.count == 1 {
-                return cwdMatches[0]
-            }
-            if !cwdMatches.isEmpty {
-                if cwdMatches.count > 1 {
+        if let candidateIndex = Self.preferredRegistrationCandidateIndex(
+            expectedWorkingDirectory: expectedWorkingDirectoryByPanelID[panelID],
+            candidateWorkingDirectories: candidates.map(\.shellWorkingDirectory),
+            candidateLoginPIDs: candidates.map(\.loginPID),
+            preferNewestWhenAmbiguous: preferNewestWhenAmbiguous
+        ) {
+            if let expectedWorkingDirectory = expectedWorkingDirectoryByPanelID[panelID] {
+                let matchingIndices = candidates.indices.filter {
+                    Self.canonicalWorkingDirectory(candidates[$0].shellWorkingDirectory) == expectedWorkingDirectory
+                }
+                if matchingIndices.count > 1 {
                     ToasttyLog.debug(
                         "Multiple login candidates matched expected cwd; applying deterministic tiebreak",
                         category: .terminal,
                         metadata: [
                             "panel_id": panelID.uuidString,
-                            "match_count": String(cwdMatches.count),
+                            "match_count": String(matchingIndices.count),
                             "expected_cwd": expectedWorkingDirectory,
                         ]
                     )
                 }
-                return preferNewestWhenAmbiguous ? cwdMatches.max(by: { $0.loginPID < $1.loginPID }) : cwdMatches[0]
             }
+            return candidates[candidateIndex]
         }
 
-        if candidates.count == 1 {
-            return candidates[0]
-        }
-        if preferNewestWhenAmbiguous {
-            return candidates.max(by: { $0.loginPID < $1.loginPID })
-        }
         return nil
     }
 

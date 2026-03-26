@@ -67,6 +67,57 @@ enum ClaudeHookEventParser {
                 )
             ]
 
+        case "Notification":
+            return notificationCommands(sessionID: sessionID, panelID: panelID, from: object)
+
+        default:
+            return []
+        }
+    }
+
+    private static func notificationCommands(
+        sessionID: String,
+        panelID: UUID?,
+        from object: [String: Any]
+    ) -> [CLICommand] {
+        switch normalizedString(object["notification_type"]) {
+        case "idle_prompt":
+            return [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .ready,
+                    summary: "Ready",
+                    detail: normalizedSummaryText(object["message"]) ?? "Waiting for input"
+                )
+            ]
+
+        case "permission_prompt":
+            return [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .needsApproval,
+                    summary: "Needs approval",
+                    detail: normalizedSummaryText(object["message"]) ?? "Claude Code is waiting for approval"
+                )
+            ]
+
+        case "elicitation_dialog":
+            return [
+                .sessionStatus(
+                    sessionID: sessionID,
+                    panelID: panelID,
+                    kind: .needsApproval,
+                    summary: "Needs input",
+                    detail: normalizedSummaryText(object["message"]) ?? "Claude Code is waiting for input"
+                )
+            ]
+
+        case "auth_success":
+            // Authentication success is informative but not a session status change.
+            return []
+
         default:
             return []
         }

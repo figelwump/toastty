@@ -389,6 +389,32 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             try StateValidator.validate(store.state)
         }
     }
+
+    func testBusyPaneDoesNotAutoStopManagedSessionOnIdlePromptHeuristic() async throws {
+        try await MainActor.run {
+            let (store, _, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+            let tracker = SessionLifecycleTrackerSpy()
+            let service = makeActivityInferenceService(
+                visibleTextStore: visibleTextStore,
+                sessionLifecycleTracker: tracker
+            )
+
+            visibleTextStore.textByPanelID[panelID] = """
+            dev@host ~/repo %
+            OpenAI Codex (v0.1)
+            Applying diff...
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
+            XCTAssertEqual(tracker.stopOlderThanCalls.count, 0)
+            try StateValidator.validate(store.state)
+        }
+    }
 }
 
 @MainActor

@@ -12,7 +12,7 @@ When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environmen
 | `--socket-path <path>` | Override the automation socket path |
 | `-h`, `--help` | Print usage information |
 
-**Socket resolution order:** `--socket-path` flag > `TOASTTY_SOCKET_PATH` env var > default `$TMPDIR/toastty-$UID/events-v1.sock`.
+**Socket resolution order:** `--socket-path` flag > `TOASTTY_SOCKET_PATH` env var > app-resolved default socket path. For runtime-isolated launches, that default starts from the stable runtime-home-derived socket path and can resolve to a per-process sibling such as `events-v1-<pid>.sock` if the stable path is already owned by a live listener.
 
 ## Commands
 
@@ -147,6 +147,8 @@ toastty session ingest-agent-event --source <source> [--session <id>] [--panel <
 
 This command is not intended for third-party integrations. Custom agents should use `session status` and `session stop` directly.
 
+Toastty's built-in Claude and Codex launch helpers invoke this command with an explicit `TOASTTY_SOCKET_PATH` injected at launch time. That injected value is the authoritative resolved socket path for the target app instance, including runtime-isolated fallback cases. If the helper cannot reach the app, it keeps the agent process alive but appends the CLI failure details to `telemetry-failures.log` in that session's temporary launch artifacts directory while the session remains active.
+
 ## Environment variables
 
 When Toastty launches an agent, these variables are injected into the agent's environment:
@@ -156,7 +158,7 @@ When Toastty launches an agent, these variables are injected into the agent's en
 | `TOASTTY_CLI_PATH` | Absolute path to the bundled `toastty` CLI |
 | `TOASTTY_SESSION_ID` | Session ID for the current agent run |
 | `TOASTTY_PANEL_ID` | Terminal panel UUID |
-| `TOASTTY_SOCKET_PATH` | Automation socket path |
+| `TOASTTY_SOCKET_PATH` | Resolved automation socket path for the target app instance |
 | `TOASTTY_CWD` | Panel working directory (if available) |
 | `TOASTTY_REPO_ROOT` | Git repository root (if available) |
 

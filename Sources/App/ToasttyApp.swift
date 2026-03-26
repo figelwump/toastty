@@ -5,6 +5,31 @@ import SwiftUI
 
 @MainActor
 private enum ToasttyMenuActions {
+    static func openTerminalProfilesConfiguration() {
+        do {
+            try TerminalProfilesFile.ensureTemplateExists()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Terminal Profiles"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let fileURL = TerminalProfilesFile.fileURL()
+        guard NSWorkspace.shared.open(fileURL) else {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Terminal Profiles"
+            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+    }
+
     static func installShellIntegration() {
         let installer = ProfileShellIntegrationInstaller()
         let status: ProfileShellIntegrationInstallStatus
@@ -705,7 +730,18 @@ struct ToasttyApp: App {
             processInfo: processInfo,
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
-        Self.recordRuntimeInstance(processInfo: processInfo, automationConfig: bootstrap.automationConfig)
+        let preferredSocketPath = bootstrap.automationConfig?.socketPath
+            ?? AutomationConfig.resolveServerSocketPath(environment: processInfo.environment)
+        let socketPath = AutomationSocketServer.recommendedSocketPath(
+            preferredSocketPath: preferredSocketPath,
+            environment: processInfo.environment
+        )
+        bootstrap.automationLifecycle?.updateSocketPath(socketPath)
+        Self.recordRuntimeInstance(
+            processInfo: processInfo,
+            automationConfig: bootstrap.automationConfig,
+            socketPathOverride: socketPath
+        )
         let persistUserSettings = bootstrap.automationConfig == nil
         let store = AppStore(
             state: bootstrap.state,
@@ -793,7 +829,8 @@ struct ToasttyApp: App {
         terminalProfilesMenuController = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            installShellIntegrationAction: ToasttyMenuActions.installShellIntegration
+            installShellIntegrationAction: ToasttyMenuActions.installShellIntegration,
+            openProfilesConfigurationAction: ToasttyMenuActions.openTerminalProfilesConfiguration
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
@@ -831,8 +868,17 @@ struct ToasttyApp: App {
             appTerminationObserver = nil
         }
 
-        let socketPath = bootstrap.automationConfig?.socketPath
-            ?? AutomationConfig.resolveServerSocketPath(environment: ProcessInfo.processInfo.environment)
+        if socketPath != preferredSocketPath {
+            ToasttyLog.warning(
+                "Preferred automation socket path is already live; using a per-process fallback path",
+                category: .automation,
+                metadata: [
+                    "preferred_socket_path": preferredSocketPath,
+                    "socket_path": socketPath,
+                    "pid": String(getpid()),
+                ]
+            )
+        }
         agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: terminalRuntimeRegistry,
@@ -844,6 +890,7 @@ struct ToasttyApp: App {
             automationSocketServer = try AutomationSocketServer(
                 socketPath: socketPath,
                 automationConfig: bootstrap.automationConfig,
+                publishesDiscoveryRecord: true,
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
@@ -1140,10 +1187,15 @@ struct ToasttyApp: App {
         }
     }
 
-    private static func recordRuntimeInstance(processInfo: ProcessInfo, automationConfig: AutomationConfig?) {
+    private static func recordRuntimeInstance(
+        processInfo: ProcessInfo,
+        automationConfig: AutomationConfig?,
+        socketPathOverride: String? = nil
+    ) {
         ToasttyRuntimeInstanceRecorder.recordLaunch(
             processInfo: processInfo,
-            automationConfig: automationConfig
+            automationConfig: automationConfig,
+            socketPathOverride: socketPathOverride
         )
     }
 

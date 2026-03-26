@@ -6,15 +6,18 @@ final class TerminalProfilesMenuController {
     private let store: AppStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let installShellIntegrationAction: @MainActor () -> Void
+    private let openProfilesConfigurationAction: @MainActor () -> Void
 
     init(
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
-        installShellIntegrationAction: @escaping @MainActor () -> Void
+        installShellIntegrationAction: @escaping @MainActor () -> Void,
+        openProfilesConfigurationAction: @escaping @MainActor () -> Void
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.installShellIntegrationAction = installShellIntegrationAction
+        self.openProfilesConfigurationAction = openProfilesConfigurationAction
     }
 
     func canSplitFocusedSlotWithTerminalProfile(preferredWindowID: UUID?) -> Bool {
@@ -40,6 +43,10 @@ final class TerminalProfilesMenuController {
 
     func installShellIntegration() {
         installShellIntegrationAction()
+    }
+
+    func openProfilesConfiguration() {
+        openProfilesConfigurationAction()
     }
 }
 
@@ -204,6 +211,10 @@ struct ToasttyCommandMenus: Commands {
             terminalProfileMenuItems()
 
             Divider()
+
+            Button("Manage Terminal Profiles…") {
+                terminalProfilesMenuController.openProfilesConfiguration()
+            }
 
             Button("Install Shell Integration…") {
                 terminalProfilesMenuController.installShellIntegration()

@@ -24,12 +24,17 @@ enum ToasttyRuntimeInstanceRecorder {
     static func recordLaunch(
         processInfo: ProcessInfo = .processInfo,
         automationConfig: AutomationConfig? = nil,
+        socketPathOverride: String? = nil,
         fileManager: FileManager = .default,
-        homeDirectoryPath: String = NSHomeDirectory()
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String]? = nil,
+        arguments: [String]? = nil
     ) {
+        let resolvedEnvironment = environment ?? processInfo.environment
+        let resolvedArguments = arguments ?? processInfo.arguments
         let runtimePaths = ToasttyRuntimePaths.resolve(
             homeDirectoryPath: homeDirectoryPath,
-            environment: processInfo.environment
+            environment: resolvedEnvironment
         )
         guard let instanceFileURL = runtimePaths.instanceFileURL,
               let runtimeHomeURL = runtimePaths.runtimeHomeURL else {
@@ -37,26 +42,28 @@ enum ToasttyRuntimeInstanceRecorder {
         }
 
         let logConfiguration = ToasttyLogConfiguration.fromEnvironment(
-            processInfo.environment,
+            resolvedEnvironment,
             homeDirectoryPath: homeDirectoryPath
         )
         let manifest = ToasttyRuntimeInstanceManifest(
             pid: getpid(),
             launchedAt: ISO8601DateFormatter().string(from: Date()),
             bundlePath: Bundle.main.bundleURL.path,
-            executablePath: Bundle.main.executableURL?.path ?? processInfo.arguments.first ?? "",
+            executablePath: Bundle.main.executableURL?.path ?? resolvedArguments.first ?? "",
             runtimeHomePath: runtimeHomeURL.path,
             runtimeHomeStrategy: runtimePaths.runtimeHomeStrategy.rawValue,
             runtimeLabel: runtimePaths.runtimeLabel,
             worktreeRootPath: runtimePaths.worktreeRootURL?.path,
             userDefaultsSuiteName: runtimePaths.userDefaultsSuiteName,
             logFilePath: logConfiguration.filePath,
-            socketPath: automationConfig?.socketPath,
+            socketPath: socketPathOverride
+                ?? automationConfig?.socketPath
+                ?? AutomationConfig.resolveServerSocketPath(environment: resolvedEnvironment),
             artifactsDirectory: automationConfig?.artifactsDirectory
-                ?? processInfo.environment["TOASTTY_ARTIFACTS_DIR"],
-            derivedPath: processInfo.environment["TOASTTY_DERIVED_PATH"],
+                ?? resolvedEnvironment["TOASTTY_ARTIFACTS_DIR"],
+            derivedPath: resolvedEnvironment["TOASTTY_DERIVED_PATH"],
             runID: automationConfig?.runID,
-            arguments: processInfo.arguments
+            arguments: resolvedArguments
         )
 
         do {

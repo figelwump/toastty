@@ -219,7 +219,10 @@ final class TerminalActivityInferenceService {
 
         let recentPromptCommandToken = TerminalVisibleTextInspector.recentPromptCommandToken(visibleText)
         let showsIdlePrompt = Self.visibleTextShowsIdleShellPrompt(visibleText)
-        if showsIdlePrompt {
+        if showsIdlePrompt, appearsBusy == false {
+            // Visible-text prompt detection can surface a stale shell prompt
+            // while an alternate-screen TUI is still rendering. Do not let
+            // that heuristic auto-stop an actively busy managed session.
             ToasttyLog.debug(
                 "Visible terminal text looked like an idle shell prompt; attempting prompt-based session stop",
                 category: .terminal,

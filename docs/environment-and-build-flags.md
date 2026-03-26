@@ -41,7 +41,7 @@ These flags are read by the app itself when Toastty launches normally.
 
 | Flag | Default | Effect |
 |---|---|---|
-| `TOASTTY_RUNTIME_HOME` | unset | Enables an isolated runtime sandbox for dev/test runs. When set, Toastty stores config, workspace layouts, terminal profiles, the default log path, `instance.json`, and UI-managed defaults under this directory instead of the shared user locations. The default automation socket path is also derived from this sandbox identity, but lives under the system temp directory to stay within Unix socket path-length limits. Explicit overrides such as `TOASTTY_TERMINAL_PROFILES_PATH`, `TOASTTY_LOG_FILE`, and `TOASTTY_SOCKET_PATH` still win. |
+| `TOASTTY_RUNTIME_HOME` | unset | Enables an isolated runtime sandbox for dev/test runs. When set, Toastty stores config, workspace layouts, terminal profiles, the default log path, `instance.json`, and UI-managed defaults under this directory instead of the shared user locations. The preferred automation socket path is also derived from this sandbox identity, but lives under the system temp directory to stay within Unix socket path-length limits. If that stable runtime-home socket path is already owned by a live Toastty listener, Toastty preserves the existing listener and falls back to a per-process sibling path such as `events-v1-<pid>.sock`. Explicit overrides such as `TOASTTY_TERMINAL_PROFILES_PATH`, `TOASTTY_LOG_FILE`, and `TOASTTY_SOCKET_PATH` still win. |
 | `TOASTTY_DEV_WORKTREE_ROOT` | unset | Enables a stable worktree-derived runtime sandbox for manual dev/debug/test runs when `TOASTTY_RUNTIME_HOME` is not set. Toastty derives `artifacts/dev-runs/worktree-<basename>-<hash>/runtime-home` under this worktree root, then uses that runtime home for config, workspace layouts, terminal profiles, logs, `instance.json`, and UI-managed defaults. Use this for repeated manual launches from one worktree. The Tuist-generated `ToasttyApp` and `ToasttyApp-Release` Run schemes already set it to `$(SRCROOT)`. |
 | `TOASTTY_GHOSTTY_CONFIG_PATH` | unset | Overrides Ghostty config loading with a specific config file. Must be an absolute path or use a `~/` prefix. Toastty loads that file and then Ghostty recursive includes. |
 | `TOASTTY_GHOSTTY_PARSE_CLI_ARGS` | unset | If enabled, lets Ghostty parse Toastty's process arguments as Ghostty CLI args before config finalization. Off by default. |
@@ -64,7 +64,7 @@ These flags are read by the app itself when Toastty launches normally.
 | Variable | Effect |
 |---|---|
 | `XDG_CONFIG_HOME` | Used when looking for `ghostty/config` before falling back to `~/.config/ghostty/config`. |
-| `TMPDIR` | Used for the default automation socket location when `TOASTTY_SOCKET_PATH` is unset. With runtime isolation enabled, Toastty derives a short temp socket path from the sandbox identity. |
+| `TMPDIR` | Used for the default automation socket location when `TOASTTY_SOCKET_PATH` is unset. With runtime isolation enabled, Toastty derives a short preferred temp socket path from the sandbox identity, and may fall back to a per-process sibling path if that preferred path is already live. |
 
 ## Launch Arguments
 
@@ -91,10 +91,14 @@ These flags are consumed by the app when it is launched in automation mode.
 | `TOASTTY_RUN_ID` | `default` | Automation run identifier when `--run-id` is not passed. |
 | `TOASTTY_FIXTURE` | unset | Automation fixture name when `--fixture` is not passed. |
 | `TOASTTY_ARTIFACTS_DIR` | temp directory derived from run ID | Directory for automation artifacts when `--artifacts-dir` is not passed. |
-| `TOASTTY_SOCKET_PATH` | temp socket path derived from the active runtime home, otherwise `$TMPDIR/toastty-$UID/events-v1.sock` | Unix socket path for automation requests when `--socket-path` is not passed. |
+| `TOASTTY_SOCKET_PATH` | temp socket path derived from the active runtime home, otherwise `$TMPDIR/toastty-$UID/events-v1.sock` | Unix socket path for automation requests when `--socket-path` is not passed. With runtime isolation enabled, the preferred runtime-home-derived socket may resolve at launch to a per-process fallback such as `events-v1-<pid>.sock` if the stable path is already owned by a live listener. In that case, `instance.json`, automation ready files, and Toastty-injected `TOASTTY_SOCKET_PATH` values are the authoritative resolved path. |
 | `TOASTTY_DISABLE_ANIMATIONS` | unset | Disables animations in automation mode. |
 | `TOASTTY_FIXED_LOCALE` | unset | Forces a fixed locale identifier for automation determinism. |
 | `TOASTTY_FIXED_TIMEZONE` | unset | Forces a fixed time zone identifier for automation determinism. |
+
+Runtime-isolated socket note:
+
+- Do not reconstruct the socket path from `TOASTTY_RUNTIME_HOME` alone when attaching to an existing run. Read the resolved path from `instance.json`, the automation ready file, or an injected `TOASTTY_SOCKET_PATH` first.
 
 ## Automation Script Environment
 
@@ -312,3 +316,5 @@ TOASTTY_FIXTURE=split-workspace \
 TOASTTY_SOCKET_PATH="${TMPDIR:-/tmp}/toastty-$(id -u)/events-v1.sock" \
 /path/to/Toastty.app/Contents/MacOS/Toastty --automation
 ```
+
+If a runtime-isolated launch falls back to a per-process socket because the preferred stable path is already live, `instance.json` and `automation-ready-<run-id>.json` record the resolved path that clients should use.

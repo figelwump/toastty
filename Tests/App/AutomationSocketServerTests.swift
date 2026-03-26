@@ -347,13 +347,238 @@ struct AutomationSocketServerTests {
         #expect(activeAgent == .codex)
     }
 
+    @Test
+    func secondServerCannotStealALiveSocketPath() async {
+        let socketPath = temporarySocketPath()
+        let firstServer: (
+            server: AutomationSocketServer,
+            store: AppStore,
+            panelID: UUID,
+            workspaceID: UUID,
+            sessionRuntimeStore: SessionRuntimeStore
+        )
+        do {
+            firstServer = try await MainActor.run {
+                try makeServer(socketPath: socketPath)
+            }
+        } catch {
+            Issue.record("failed to start first server: \(error)")
+            return
+        }
+        defer {
+            withExtendedLifetime(firstServer.server) {}
+        }
+
+        do {
+            try waitForSocket(at: socketPath)
+        } catch {
+            Issue.record("first server never became reachable: \(error)")
+            return
+        }
+
+        do {
+            _ = try await MainActor.run {
+                _ = try makeServer(socketPath: socketPath)
+            }
+            Issue.record("second server unexpectedly started on an occupied socket path")
+        } catch let startupError as AutomationSocketStartupError {
+            #expect(startupError == .liveSocketPathInUse(socketPath))
+        } catch {
+            Issue.record("second server failed with unexpected error: \(error)")
+        }
+
+        do {
+            let response = try sendEvent(
+                AutomationEventEnvelope(
+                    eventType: "session.start",
+                    sessionID: "sess-still-live",
+                    panelID: firstServer.panelID.uuidString,
+                    requestID: UUID().uuidString,
+                    payload: [
+                        "agent": .string(AgentKind.codex.rawValue),
+                    ]
+                ),
+                socketPath: socketPath
+            )
+            #expect(response.ok)
+        } catch {
+            Issue.record("first server stopped responding after second startup attempt: \(error)")
+        }
+    }
+
+    @Test
+    func recommendedSocketPathFallsBackWhenRuntimePreferredPathIsLive() throws {
+        let runtimeSocketEnvironment = try makeRuntimeSocketEnvironment()
+        defer {
+            try? FileManager.default.removeItem(at: runtimeSocketEnvironment.rootURL)
+        }
+        let environment = runtimeSocketEnvironment.environment
+        let runtimePaths = ToasttyRuntimePaths.resolve(environment: environment)
+        let preferredSocketPath = try #require(runtimePaths.automationSocketFileURL?.path)
+        let liveSocketFD = try bindAndListenRawSocket(socketPath: preferredSocketPath)
+        defer {
+            close(liveSocketFD)
+            try? FileManager.default.removeItem(atPath: preferredSocketPath)
+        }
+
+        let resolvedSocketPath = AutomationSocketServer.recommendedSocketPath(
+            preferredSocketPath: preferredSocketPath,
+            environment: environment,
+            processID: 4242
+        )
+
+        #expect(resolvedSocketPath != preferredSocketPath)
+        #expect(resolvedSocketPath.hasSuffix("/events-v1-4242.sock"))
+    }
+
+    @Test
+    func staleSocketFileCanBeReplacedDuringStartup() async throws {
+        let socketPath = temporarySocketPath()
+        let staleSocketFD = try bindAndListenRawSocket(socketPath: socketPath)
+        close(staleSocketFD)
+
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: "sess-stale-replaced",
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(response.ok)
+    }
+
+    @Test
+    func fatalAcceptErrorsRestartTheListenerOnTheSameSocketPath() async throws {
+        let socketPath = temporarySocketPath()
+        let probe = ListenerRecoveryProbe()
+        let acceptOverride = OneShotAcceptOverride(errorNumber: EBADF)
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                recoveryPolicy: AutomationSocketServerRecoveryPolicy(retryDelays: [0]),
+                testHooks: AutomationSocketServerTestHooks(
+                    acceptOverride: { _ in acceptOverride.nextResult() },
+                    listenerDidStart: { _, recoveryAttempt in
+                        probe.recordListenerStart(recoveryAttempt: recoveryAttempt)
+                    },
+                    recoveryDidSchedule: { attempt, errorNumber, delay in
+                        probe.recordRecoverySchedule(attempt: attempt, errorNumber: errorNumber, delay: delay)
+                    }
+                )
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        try connectAndClose(socketPath: socketPath)
+        try waitUntil("listener recovery was scheduled") {
+            probe.recoverySchedulesSnapshot().count == 1
+        }
+        try waitUntil("listener restarted after fatal accept error") {
+            probe.listenerStartsSnapshot().count >= 2
+        }
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: "sess-recovery",
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(response.ok)
+        let recoverySchedules = probe.recoverySchedulesSnapshot()
+        let listenerStarts = probe.listenerStartsSnapshot()
+        #expect(recoverySchedules.map { $0.attempt } == [1])
+        #expect(recoverySchedules.map { $0.errorNumber } == [EBADF])
+        #expect(listenerStarts == [nil, 1])
+    }
+
+    @Test
+    func transientAcceptErrorsDoNotRestartTheListener() async throws {
+        let socketPath = temporarySocketPath()
+        let probe = ListenerRecoveryProbe()
+        let acceptOverride = OneShotAcceptOverride(errorNumber: EINTR)
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                recoveryPolicy: AutomationSocketServerRecoveryPolicy(retryDelays: [0]),
+                testHooks: AutomationSocketServerTestHooks(
+                    acceptOverride: { _ in acceptOverride.nextResult() },
+                    listenerDidStart: { _, recoveryAttempt in
+                        probe.recordListenerStart(recoveryAttempt: recoveryAttempt)
+                    },
+                    recoveryDidSchedule: { attempt, errorNumber, delay in
+                        probe.recordRecoverySchedule(attempt: attempt, errorNumber: errorNumber, delay: delay)
+                    }
+                )
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+        try connectAndClose(socketPath: socketPath)
+        try await Task.sleep(for: .milliseconds(100))
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: "sess-transient",
+                panelID: server.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(response.ok)
+        #expect(probe.recoverySchedulesSnapshot().isEmpty)
+        #expect(probe.listenerStartsSnapshot() == [nil])
+    }
+
     private func temporarySocketPath() -> String {
         "/tmp/toastty-tests-\(UUID().uuidString.prefix(8)).sock"
     }
 
     private func waitForSocket(at socketPath: String) throws {
         let deadline = Date().addingTimeInterval(1)
-        while FileManager.default.fileExists(atPath: socketPath) == false {
+        while true {
+            guard FileManager.default.fileExists(atPath: socketPath) else {
+                guard Date() < deadline else {
+                    throw SocketTestError.timeoutWaitingForSocket
+                }
+                Thread.sleep(forTimeInterval: 0.01)
+                continue
+            }
+
+            do {
+                try connectAndClose(socketPath: socketPath)
+                return
+            } catch SocketTestError.socket(let errorNumber) where errorNumber == ENOENT || errorNumber == ECONNREFUSED {
+                // The path exists but the listener is not yet accepting connections.
+            }
+
             guard Date() < deadline else {
                 throw SocketTestError.timeoutWaitingForSocket
             }
@@ -365,7 +590,9 @@ struct AutomationSocketServerTests {
     private func makeServer(
         socketPath: String,
         automationConfig: AutomationConfig? = nil,
-        terminalCommandRouter: (any TerminalCommandRouting)? = nil
+        terminalCommandRouter: (any TerminalCommandRouting)? = nil,
+        recoveryPolicy: AutomationSocketServerRecoveryPolicy = .default,
+        testHooks: AutomationSocketServerTestHooks = .disabled
     ) throws -> (
         server: AutomationSocketServer,
         store: AppStore,
@@ -402,7 +629,9 @@ struct AutomationSocketServerTests {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
-            agentLaunchService: agentLaunchService
+            agentLaunchService: agentLaunchService,
+            recoveryPolicy: recoveryPolicy,
+            testHooks: testHooks
         )
         return (server, store, panelID, workspaceID, sessionRuntimeStore)
     }
@@ -487,6 +716,132 @@ struct AutomationSocketServerTests {
 
         throw SocketTestError.missingResponseTerminator
     }
+
+    private func connectAndClose(socketPath: String) throws {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw SocketTestError.socket(errno)
+        }
+        defer { close(fd) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketPath.utf8CString)
+        let maxPathLength = MemoryLayout.size(ofValue: address.sun_path)
+        guard pathBytes.count <= maxPathLength else {
+            throw SocketTestError.socketPathTooLong
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+            buffer.initializeMemory(as: UInt8.self, repeating: 0)
+            pathBytes.withUnsafeBytes { source in
+                if let destinationAddress = buffer.baseAddress, let sourceAddress = source.baseAddress {
+                    memcpy(destinationAddress, sourceAddress, pathBytes.count)
+                }
+            }
+        }
+
+        let connectResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                connect(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connectResult == 0 else {
+            throw SocketTestError.socket(errno)
+        }
+    }
+
+    private func bindAndListenRawSocket(socketPath: String) throws -> Int32 {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw SocketTestError.socket(errno)
+        }
+
+        let socketURL = URL(fileURLWithPath: socketPath, isDirectory: false)
+        try FileManager.default.createDirectory(
+            at: socketURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        _ = unlink(socketPath)
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketPath.utf8CString)
+        let maxPathLength = MemoryLayout.size(ofValue: address.sun_path)
+        guard pathBytes.count <= maxPathLength else {
+            close(fd)
+            throw SocketTestError.socketPathTooLong
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { buffer in
+            buffer.initializeMemory(as: UInt8.self, repeating: 0)
+            pathBytes.withUnsafeBytes { source in
+                if let destinationAddress = buffer.baseAddress, let sourceAddress = source.baseAddress {
+                    memcpy(destinationAddress, sourceAddress, pathBytes.count)
+                }
+            }
+        }
+
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockaddrPointer in
+                bind(fd, sockaddrPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard bindResult == 0 else {
+            let errorNumber = errno
+            close(fd)
+            throw SocketTestError.socket(errorNumber)
+        }
+
+        guard listen(fd, SOMAXCONN) == 0 else {
+            let errorNumber = errno
+            close(fd)
+            throw SocketTestError.socket(errorNumber)
+        }
+
+        return fd
+    }
+
+    private func makeRuntimeSocketEnvironment() throws -> (rootURL: URL, environment: [String: String]) {
+        let rootURL = try makeShortTemporaryDirectory(prefix: "tts")
+        let runtimeHomeURL = rootURL.appendingPathComponent("runtime-home", isDirectory: true)
+        let temporaryDirectoryURL = rootURL.appendingPathComponent("tmp", isDirectory: true)
+        try FileManager.default.createDirectory(at: temporaryDirectoryURL, withIntermediateDirectories: true)
+        return (
+            rootURL,
+            [
+                "TOASTTY_RUNTIME_HOME": runtimeHomeURL.path,
+                "TMPDIR": temporaryDirectoryURL.path + "/",
+            ]
+        )
+    }
+
+    private func makeShortTemporaryDirectory(prefix: String) throws -> URL {
+        var template = "/tmp/\(prefix).XXXXXX".utf8CString
+        let createdPath = template.withUnsafeMutableBufferPointer { buffer -> String? in
+            guard let baseAddress = buffer.baseAddress, mkdtemp(baseAddress) != nil else {
+                return nil
+            }
+            return String(cString: baseAddress)
+        }
+        guard let createdPath else {
+            throw SocketTestError.socket(errno)
+        }
+        return URL(fileURLWithPath: createdPath, isDirectory: true)
+    }
+
+    private func waitUntil(
+        _ description: String,
+        timeout: TimeInterval = 1,
+        pollInterval: TimeInterval = 0.01,
+        condition: () -> Bool
+    ) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while condition() == false {
+            guard Date() < deadline else {
+                throw SocketTestError.timeout(description)
+            }
+            Thread.sleep(forTimeInterval: pollInterval)
+        }
+    }
 }
 
 private enum SocketTestError: Error {
@@ -495,4 +850,57 @@ private enum SocketTestError: Error {
     case socket(Int32)
     case socketPathTooLong
     case timeoutWaitingForSocket
+    case timeout(String)
+}
+
+private final class ListenerRecoveryProbe: @unchecked Sendable {
+    private let lock = NSLock()
+
+    private var listenerStarts: [Int?] = []
+    private var recoverySchedules: [(attempt: Int, errorNumber: Int32, delay: TimeInterval)] = []
+
+    func recordListenerStart(recoveryAttempt: Int?) {
+        lock.lock()
+        listenerStarts.append(recoveryAttempt)
+        lock.unlock()
+    }
+
+    func recordRecoverySchedule(attempt: Int, errorNumber: Int32, delay: TimeInterval) {
+        lock.lock()
+        recoverySchedules.append((attempt, errorNumber, delay))
+        lock.unlock()
+    }
+
+    func listenerStartsSnapshot() -> [Int?] {
+        lock.lock()
+        defer { lock.unlock() }
+        return listenerStarts
+    }
+
+    func recoverySchedulesSnapshot() -> [(attempt: Int, errorNumber: Int32, delay: TimeInterval)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recoverySchedules
+    }
+}
+
+private final class OneShotAcceptOverride: @unchecked Sendable {
+    private let lock = NSLock()
+    private let errorNumber: Int32
+    private var didFire = false
+
+    init(errorNumber: Int32) {
+        self.errorNumber = errorNumber
+    }
+
+    func nextResult() -> AutomationSocketServerTestHooks.AcceptResult {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if didFire {
+            return .useSystemAccept
+        }
+        didFire = true
+        return .fail(errorNumber)
+    }
 }

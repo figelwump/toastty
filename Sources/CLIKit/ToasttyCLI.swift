@@ -638,21 +638,33 @@ public enum ToasttyCLI {
         panelID: UUID?
     ) throws -> Int32 {
         let payload = FileHandle.standardInput.readDataToEndOfFile()
-        let commands = try AgentEventIngestor.commands(
-            for: source,
-            sessionID: sessionID,
-            panelID: panelID,
-            payload: payload
-        )
+        let eventSummary = ingestEventSummary(source: source, payload: payload)
+        let commands: [CLICommand]
+        do {
+            commands = try AgentEventIngestor.commands(
+                for: source,
+                sessionID: sessionID,
+                panelID: panelID,
+                payload: payload
+            )
+        } catch {
+            throw ToasttyCLIError.runtime(
+                "failed to parse \(source.rawValue) event for session \(sessionID) panel \(panelID?.uuidString ?? "<none>"): \(eventSummary): \(error.localizedDescription)"
+            )
+        }
 
         let client = ToasttySocketClient(socketPath: options.socketPath)
         for command in commands {
             let response = try client.send(command.makeEventEnvelope())
             if response.ok == false {
                 if let error = response.error {
-                    throw ToasttyCLIError.runtime("\(error.code): \(error.message)")
+                    throw ToasttyCLIError.runtime(
+                        "failed to process \(source.rawValue) event for session \(sessionID) panel \(panelID?.uuidString ?? "<none>"): \(eventSummary): \(error.code): \(error.message)"
+                    )
                 }
-                throw ToasttyCLIError.runtime("request failed")
+                throw ToasttyCLIError.runtime(
+                    "failed to process \(source.rawValue) event for session \(sessionID) panel \(panelID?.uuidString ?? "<none>"): \(eventSummary): request failed"
+                )
             }
         }
 
@@ -669,6 +681,40 @@ public enum ToasttyCLI {
         }
 
         return 0
+    }
+
+    private static func ingestEventSummary(source: AgentEventSource, payload: Data) -> String {
+        guard payload.isEmpty == false else {
+            return "payload=empty"
+        }
+
+        guard let object = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] else {
+            return "payload_bytes=\(payload.count) payload=parse_failed"
+        }
+
+        switch source {
+        case .claudeHooks:
+            var components = ["hook_event_name=\(normalizedEventField(object["hook_event_name"]) ?? "unknown")"]
+            if let notificationType = normalizedEventField(object["notification_type"]) {
+                components.append("notification_type=\(notificationType)")
+            }
+            if let toolName = normalizedEventField(object["tool_name"]) {
+                components.append("tool_name=\(toolName)")
+            }
+            return components.joined(separator: " ")
+
+        case .codexNotify:
+            return "type=\(normalizedEventField(object["type"]) ?? "unknown")"
+        }
+    }
+
+    private static func normalizedEventField(_ value: Any?) -> String? {
+        guard let string = value as? String else { return nil }
+        let collapsed = string
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { $0.isEmpty == false }
+            .joined(separator: " ")
+        return collapsed.isEmpty ? nil : collapsed
     }
 }
 
