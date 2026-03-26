@@ -84,6 +84,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     private var exitedTerminalPanelIDs: Set<UUID> = []
+    private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     // Keep viewport state as an internal cache rather than published SwiftUI state.
@@ -192,6 +193,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
         self.terminalProfileProvider = terminalProfileProvider
         restoredTerminalPanelIDsAwaitingLaunch = restoredTerminalPanelIDs
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = restoredTerminalPanelIDs
+    }
+
+    func setBaseLaunchEnvironmentProvider(
+        _ provider: @escaping @Sendable (UUID) -> [String: String]
+    ) {
+        baseLaunchEnvironmentProvider = provider
     }
 
     @discardableResult
@@ -678,14 +685,16 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
+        let baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
+
         guard launchedProfiledPanelIDs.contains(panelID) == false else {
-            return .empty
+            return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
         }
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],
               case .terminal(let terminalState)? = workspace.panels[panelID] else {
-            return .empty
+            return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
         }
 
         let catalog = terminalProfileProvider?.catalog ?? .empty
@@ -694,10 +703,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             terminalState: terminalState,
             catalog: catalog,
             restoredTerminalPanelIDsAwaitingLaunch: restoredTerminalPanelIDsAwaitingLaunch,
-            launchedProfiledPanelIDs: launchedProfiledPanelIDs
+            launchedProfiledPanelIDs: launchedProfiledPanelIDs,
+            baseEnvironmentVariables: baseEnvironmentVariables
         ) {
         case .none:
-            return .empty
+            return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
         case .missingProfile(let profileID, let reason):
             ToasttyLog.warning(
                 "Launching profiled pane without startup command because the profile is unavailable",
@@ -708,7 +718,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     "launch_reason": reason.rawValue,
                 ]
             )
-            return .empty
+            return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
         case .launch(let configuration):
             if Self.shouldSuppressProfileStartupCommandTitle(configuration.initialInput) {
                 // Seed cleanup before the surface starts emitting title callbacks so the

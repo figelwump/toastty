@@ -91,6 +91,39 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func defaultAgentShimExecutablePathPrefersBundledHelperCopy() throws {
+        let fixture = try makeCLIResolutionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        try makeExecutableFile(at: fixture.bundledHelperAgentShimURL)
+        try makeExecutableFile(at: fixture.siblingAgentShimURL)
+
+        let resolvedPath = ToasttyBundledExecutableLocator.resolvedAgentShimExecutablePath(
+            fileManager: .default,
+            bundleURL: fixture.bundleURL,
+            executableURL: fixture.executableURL
+        )
+
+        #expect(resolvedPath == fixture.bundledHelperAgentShimURL.path)
+    }
+
+    @Test
+    func defaultAgentShimExecutablePathFallsBackToUnderscoredSiblingBuildProduct() throws {
+        let fixture = try makeCLIResolutionFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.rootURL) }
+
+        try makeExecutableFile(at: fixture.siblingAgentShimURL)
+
+        let resolvedPath = ToasttyBundledExecutableLocator.resolvedAgentShimExecutablePath(
+            fileManager: .default,
+            bundleURL: fixture.bundleURL,
+            executableURL: fixture.executableURL
+        )
+
+        #expect(resolvedPath == fixture.siblingAgentShimURL.path)
+    }
+
+    @Test
     func launchInjectsToasttyContextAndStartsSession() throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -136,6 +169,7 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("TOASTTY_CLI_PATH=/bin/sh"))
         #expect(injectedCommand.contains("TOASTTY_CWD=\(cwd)"))
         #expect(injectedCommand.contains("TOASTTY_REPO_ROOT=\(projectRoot.path)"))
+        #expect(injectedCommand.contains("TOASTTY_MANAGED_AGENT_SHIM_BYPASS=1"))
         #expect(injectedCommand.contains("CODEX_TUI_RECORD_SESSION=1"))
         #expect(injectedCommand.contains("CODEX_TUI_SESSION_LOG_PATH="))
         #expect(injectedCommand.contains("codex -c "))
@@ -169,6 +203,41 @@ struct AgentLaunchServiceTests {
             try service.launch(profileID: "claude")
         }
         #expect(store.hasEverLaunchedAgent == false)
+    }
+
+    @Test
+    func prepareManagedLaunchSkipsBusyPanelValidationForTypedLaunches() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultVisibleText = "vishal ~/toastty % npm run dev"
+        let agentCatalogProvider = TestAgentCatalogProvider()
+
+        let workspace = try #require(store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let plan = try service.prepareManagedLaunch(
+            ManagedAgentLaunchRequest(
+                agent: .codex,
+                panelID: panelID,
+                argv: ["codex"],
+                cwd: "/tmp/repo"
+            )
+        )
+
+        #expect(plan.agent == .codex)
+        #expect(plan.panelID == panelID)
+        #expect(plan.environment["TOASTTY_SESSION_ID"] == plan.sessionID)
+        #expect(plan.environment["TOASTTY_PANEL_ID"] == panelID.uuidString)
     }
 
     @Test
@@ -236,7 +305,9 @@ struct AgentLaunchServiceTests {
         executableURL: URL,
         bundledHelperCLIURL: URL,
         legacyBundledCLIURL: URL,
-        siblingCLIURL: URL
+        siblingCLIURL: URL,
+        bundledHelperAgentShimURL: URL,
+        siblingAgentShimURL: URL
     ) {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-cli-resolution-\(UUID().uuidString)", isDirectory: true)
@@ -251,6 +322,10 @@ struct AgentLaunchServiceTests {
             .deletingLastPathComponent()
             .appendingPathComponent("toastty", isDirectory: false)
         let siblingCLIURL = rootURL.appendingPathComponent("toastty", isDirectory: false)
+        let bundledHelperAgentShimURL = bundleURL
+            .appendingPathComponent("Contents/Helpers", isDirectory: true)
+            .appendingPathComponent("toastty-agent-shim", isDirectory: false)
+        let siblingAgentShimURL = rootURL.appendingPathComponent("toastty_agent_shim", isDirectory: false)
 
         try FileManager.default.createDirectory(
             at: executableURL.deletingLastPathComponent(),
@@ -261,7 +336,16 @@ struct AgentLaunchServiceTests {
             withIntermediateDirectories: true
         )
 
-        return (rootURL, bundleURL, executableURL, bundledHelperCLIURL, legacyBundledCLIURL, siblingCLIURL)
+        return (
+            rootURL,
+            bundleURL,
+            executableURL,
+            bundledHelperCLIURL,
+            legacyBundledCLIURL,
+            siblingCLIURL,
+            bundledHelperAgentShimURL,
+            siblingAgentShimURL
+        )
     }
 
     private func makeExecutableFile(at url: URL) throws {

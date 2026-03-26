@@ -552,6 +552,7 @@ struct ToasttyApp: App {
 
     init() {
         let processInfo = ProcessInfo.processInfo
+        let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
         Self.prepareRuntimeEnvironment(processInfo: processInfo)
         Self.ensureTerminalProfilesTemplateExists()
         Self.configureWindowPersistenceDefaults()
@@ -600,6 +601,38 @@ struct ToasttyApp: App {
         )
         Self.logProfileShortcutWarnings(initialProfileShortcutRegistry.warningMessages)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let cliExecutablePath = AgentLaunchService.defaultCLIExecutablePath()
+        let shimInstallation: AgentCommandShimInstallation?
+        do {
+            shimInstallation = try AgentCommandShimInstaller(runtimePaths: runtimePaths).install()
+        } catch {
+            shimInstallation = nil
+            ToasttyLog.warning(
+                "Failed to install managed agent command shims",
+                category: .bootstrap,
+                metadata: [
+                    "directory": runtimePaths.agentShimDirectoryURL.path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+        let shimDirectoryPath = shimInstallation?.directoryURL.path
+        terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
+            var environment: [String: String] = [
+                ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
+                ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
+            ]
+            if let cliExecutablePath {
+                environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
+            }
+            if let shimDirectoryPath {
+                environment["PATH"] = AgentCommandShimInstaller.pathValue(
+                    prepending: shimDirectoryPath,
+                    to: processInfo.environment["PATH"]
+                )
+            }
+            return environment
+        }
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)

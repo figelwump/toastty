@@ -284,6 +284,63 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func prepareManagedLaunchReturnsStructuredPlan() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "agent.prepare_managed_launch",
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                    "panelID": .string(server.panelID.uuidString),
+                    "cwd": .string("/tmp/repo"),
+                    "argv": .array([.string("codex"), .string("--model"), .string("gpt-5.4")]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let sessionID = try #require(response.result?.string("sessionID"))
+        #expect(response.result?.string("agent") == AgentKind.codex.rawValue)
+        #expect(response.result?.string("panelID") == server.panelID.uuidString)
+        #expect(response.result?.string("workspaceID") == server.workspaceID.uuidString)
+        #expect(response.result?.string("cwd") == "/tmp/repo")
+        guard case .array(let argv)? = response.result?["argv"] else {
+            Issue.record("expected argv array in response")
+            return
+        }
+        let argvStrings = argv.compactMap { value -> String? in
+            guard case .string(let stringValue) = value else { return nil }
+            return stringValue
+        }
+        #expect(argvStrings.count == 5)
+        #expect(argvStrings[0] == "codex")
+        #expect(argvStrings[1] == "-c")
+        #expect(argvStrings[2].contains("notify=[\"/bin/sh\",\""))
+        #expect(argvStrings[2].contains("codex-notify.sh"))
+        #expect(argvStrings[3] == "--model")
+        #expect(argvStrings[4] == "gpt-5.4")
+        guard case .object(let environment)? = response.result?["environment"] else {
+            Issue.record("expected environment object in response")
+            return
+        }
+        #expect(environment["TOASTTY_SESSION_ID"] == .string(sessionID))
+        #expect(environment["TOASTTY_PANEL_ID"] == .string(server.panelID.uuidString))
+        #expect(environment["TOASTTY_SOCKET_PATH"] == .string(socketPath))
+        #expect(environment["TOASTTY_CWD"] == .string("/tmp/repo"))
+    }
+
+    @Test
     func secondServerCannotStealALiveSocketPath() async {
         let socketPath = temporarySocketPath()
         let firstServer: (

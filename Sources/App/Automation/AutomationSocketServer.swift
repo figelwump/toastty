@@ -886,6 +886,36 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         payload: [String: AutomationJSONValue]
     ) throws -> [String: AutomationJSONValue]? {
         switch command {
+        case "agent.prepare_managed_launch":
+            guard let agentRaw = normalizedOptionalText(payload.string("agent")),
+                  let agent = AgentKind(rawValue: agentRaw) else {
+                throw AutomationSocketError.invalidPayload("agent must be a lowercase agent ID")
+            }
+            guard let rawPanelID = normalizedOptionalText(payload.string("panelID")) else {
+                throw AutomationSocketError.invalidPayload("panelID is required")
+            }
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+
+            let argv = payload.stringArray("argv")
+            guard argv.isEmpty == false else {
+                throw AutomationSocketError.invalidPayload("argv must be a non-empty string array")
+            }
+
+            let plan = try agentLaunchService.prepareManagedLaunch(
+                ManagedAgentLaunchRequest(
+                    agent: agent,
+                    panelID: panelID,
+                    argv: argv,
+                    cwd: normalizedOptionalText(payload.string("cwd"))
+                )
+            )
+            stateVersion += 1
+            var response = try automationObject(plan)
+            response["stateVersion"] = .int(stateVersion)
+            return response
+
         case "automation.ping":
             return [
                 "status": .string("ok"),
@@ -1760,6 +1790,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private func normalizedOptionalText(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func automationObject<T: Encodable>(_ value: T) throws -> [String: AutomationJSONValue] {
+        let data = try JSONEncoder().encode(value)
+        return try JSONDecoder().decode([String: AutomationJSONValue].self, from: data)
     }
 
     @MainActor

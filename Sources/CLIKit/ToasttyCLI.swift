@@ -13,6 +13,7 @@ struct CLIInvocation: Equatable {
 }
 
 enum CLICommand: Equatable {
+    case agentPrepareManagedLaunch(ManagedAgentLaunchRequest)
     case notify(title: String, body: String, workspaceID: UUID?, panelID: UUID?)
     case sessionStart(sessionID: String, agent: AgentKind, panelID: UUID, cwd: String?, repoRoot: String?)
     case sessionStatus(sessionID: String, panelID: UUID?, kind: SessionStatusKind, summary: String, detail: String?)
@@ -22,6 +23,9 @@ enum CLICommand: Equatable {
 
     func makeEventEnvelope(requestID: String = UUID().uuidString) -> AutomationEventEnvelope {
         switch self {
+        case .agentPrepareManagedLaunch:
+            preconditionFailure("managed launch preparation is handled as a request")
+
         case .notify(let title, let body, let workspaceID, let panelID):
             var payload: [String: AutomationJSONValue] = [
                 "title": .string(title),
@@ -111,6 +115,9 @@ enum CLICommand: Equatable {
 
     func successMessage(using response: AutomationResponseEnvelope) -> String {
         switch self {
+        case .agentPrepareManagedLaunch(let request):
+            let resolvedSessionID = response.result?.string("sessionID") ?? request.panelID.uuidString
+            return resolvedSessionID
         case .notify:
             return "notification emitted"
         case .sessionStart(let sessionID, _, _, _, _):
@@ -146,6 +153,12 @@ public enum ToasttyCLI {
         do {
             let invocation = try parse(arguments: arguments, environment: environment)
             switch invocation.command {
+            case .agentPrepareManagedLaunch(let request):
+                return try runManagedAgentPrepareCommand(
+                    options: invocation.options,
+                    request: request
+                )
+
             case .sessionIngestAgentEvent(let sessionID, let panelID, let source):
                 return try runSessionIngestAgentEvent(
                     options: invocation.options,
@@ -193,6 +206,12 @@ public enum ToasttyCLI {
         }
 
         switch command {
+        case "agent":
+            return CLIInvocation(
+                options: options,
+                command: try parseAgentCommand(Array(remainingArguments.dropFirst()), environment: environment)
+            )
+
         case "notify":
             return CLIInvocation(
                 options: options,
@@ -212,6 +231,7 @@ public enum ToasttyCLI {
 
     static let usage = """
     Usage:
+      toastty [--json] [--socket-path <path>] agent prepare-managed-launch --agent <id> --panel <id> --arg <value> [--arg <value> ...] [--cwd <path>]
       toastty [--json] [--socket-path <path>] notify <title> <body> [--workspace <id>] [--panel <id>]
       toastty [--json] [--socket-path <path>] session start --agent <id> --panel <id> [--session <id>] [--cwd <path>] [--repo-root <path>]
       toastty [--json] [--socket-path <path>] session status --session <id> [--panel <id>] --kind idle|working|needs_approval|ready|error --summary <text> [--detail <text>]
@@ -269,6 +289,63 @@ public enum ToasttyCLI {
             workspaceID: workspaceID,
             panelID: panelID
         )
+    }
+
+    private static func parseAgentCommand(
+        _ arguments: [String],
+        environment: [String: String]
+    ) throws -> CLICommand {
+        guard let subcommand = arguments.first else {
+            throw ToasttyCLIError.usage("agent requires a subcommand\n\n\(usage)")
+        }
+
+        let remainingArguments = Array(arguments.dropFirst())
+        switch subcommand {
+        case "prepare-managed-launch":
+            let parsed = try parseCommandArguments(
+                remainingArguments,
+                valueOptions: ["--agent", "--panel", "--cwd", "--arg"]
+            )
+
+            guard parsed.positionals.isEmpty else {
+                throw ToasttyCLIError.usage("agent prepare-managed-launch does not accept positional arguments\n\n\(usage)")
+            }
+
+            let agentValue = try requireResolvedValue(
+                flag: "--agent",
+                environmentKey: ToasttyLaunchContextEnvironment.agentKey,
+                in: parsed,
+                environment: environment
+            )
+            guard let agent = AgentKind(rawValue: agentValue.value) else {
+                throw ToasttyCLIError.usage("\(agentValue.source) must be a lowercase agent ID")
+            }
+
+            let argv = parsed.values("--arg")
+            guard argv.isEmpty == false else {
+                throw ToasttyCLIError.usage("agent prepare-managed-launch requires at least one --arg\n\n\(usage)")
+            }
+            guard argv.allSatisfy({ $0.isEmpty == false }) else {
+                throw ToasttyCLIError.usage("agent prepare-managed-launch does not allow empty --arg values\n\n\(usage)")
+            }
+
+            return .agentPrepareManagedLaunch(
+                ManagedAgentLaunchRequest(
+                    agent: agent,
+                    panelID: try parseRequiredUUID(
+                        flag: "--panel",
+                        environmentKey: ToasttyLaunchContextEnvironment.panelIDKey,
+                        in: parsed,
+                        environment: environment
+                    ),
+                    argv: argv,
+                    cwd: parsed.singleValue("--cwd")
+                )
+            )
+
+        default:
+            throw ToasttyCLIError.usage("unknown agent subcommand: \(subcommand)\n\n\(usage)")
+        }
     }
 
     private static func parseSessionCommand(
@@ -668,6 +745,24 @@ public enum ToasttyCLI {
             try writeStdout("processed \(result.processedCount) updates")
         }
 
+        return 0
+    }
+
+    private static func runManagedAgentPrepareCommand(
+        options: CLIOptions,
+        request: ManagedAgentLaunchRequest
+    ) throws -> Int32 {
+        let plan = try ManagedAgentLaunchSocketClient.prepareManagedLaunch(
+            request,
+            socketPath: options.socketPath
+        )
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let string = String(data: try encoder.encode(plan), encoding: .utf8) else {
+            throw ToasttyCLIError.runtime("failed to encode managed launch plan")
+        }
+        try writeStdout(string)
         return 0
     }
 }

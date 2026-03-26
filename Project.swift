@@ -330,6 +330,18 @@ let project = Project(
             ]
         ),
         .target(
+            name: "toastty-agent-shim",
+            destinations: .macOS,
+            product: .commandLineTool,
+            bundleId: "com.GiantThings.toastty.agent-shim",
+            deploymentTargets: .macOS("14.0"),
+            infoPlist: .default,
+            sources: ["Sources/AgentShim/**"],
+            dependencies: [
+                .target(name: "CoreState"),
+            ]
+        ),
+        .target(
             name: "CoreStateTests",
             destinations: .macOS,
             product: .unitTests,
@@ -372,6 +384,7 @@ let project = Project(
                 targets: [
                     .project(path: .relativeToRoot("."), target: "ToasttyApp"),
                     .project(path: .relativeToRoot("."), target: "toastty"),
+                    .project(path: .relativeToRoot("."), target: "toastty-agent-shim"),
                 ]
             ),
             testAction: .targets(
@@ -397,6 +410,7 @@ let project = Project(
                 targets: [
                     .project(path: .relativeToRoot("."), target: "ToasttyApp"),
                     .project(path: .relativeToRoot("."), target: "toastty"),
+                    .project(path: .relativeToRoot("."), target: "toastty-agent-shim"),
                 ]
             ),
             runAction: .runAction(

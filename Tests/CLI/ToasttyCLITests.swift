@@ -6,24 +6,30 @@ import Testing
 
 struct ToasttyCLITests {
     @Test
-    func agentCommandIsRejected() {
-        do {
-            _ = try ToasttyCLI.parse(
-                arguments: [
-                    "agent", "run", "codex",
-                ],
-                environment: [:]
-            )
-            Issue.record("expected parse failure")
-        } catch let error as ToasttyCLIError {
-            guard case .usage(let message) = error else {
-                Issue.record("expected usage error")
-                return
-            }
-            #expect(message.contains("unknown command: agent"))
-        } catch {
-            Issue.record("unexpected error: \(error)")
+    func agentPrepareManagedLaunchBuildsStructuredRequest() throws {
+        let panelID = UUID()
+        let invocation = try ToasttyCLI.parse(
+            arguments: [
+                "agent", "prepare-managed-launch",
+                "--agent", "codex",
+                "--panel", panelID.uuidString,
+                "--cwd", "/tmp/repo",
+                "--arg", "codex",
+                "--arg", "--model",
+                "--arg", "gpt-5.4",
+            ],
+            environment: [:]
+        )
+
+        guard case .agentPrepareManagedLaunch(let request) = invocation.command else {
+            Issue.record("expected managed launch preparation command")
+            return
         }
+
+        #expect(request.agent == .codex)
+        #expect(request.panelID == panelID)
+        #expect(request.cwd == "/tmp/repo")
+        #expect(request.argv == ["codex", "--model", "gpt-5.4"])
     }
 
     @Test

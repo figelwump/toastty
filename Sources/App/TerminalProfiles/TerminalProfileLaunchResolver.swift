@@ -13,7 +13,8 @@ enum TerminalProfileLaunchResolver {
         terminalState: TerminalPanelState,
         catalog: TerminalProfileCatalog,
         restoredTerminalPanelIDsAwaitingLaunch: Set<UUID>,
-        launchedProfiledPanelIDs: Set<UUID>
+        launchedProfiledPanelIDs: Set<UUID>,
+        baseEnvironmentVariables: [String: String] = [:]
     ) -> TerminalProfileLaunchResolution {
         guard launchedProfiledPanelIDs.contains(panelID) == false,
               let profileBinding = terminalState.profileBinding else {
@@ -33,11 +34,11 @@ enum TerminalProfileLaunchResolver {
 
         return .launch(
             TerminalSurfaceLaunchConfiguration(
-                environmentVariables: [
+                environmentVariables: baseEnvironmentVariables.merging([
                     "TOASTTY_PANEL_ID": panelID.uuidString,
                     "TOASTTY_TERMINAL_PROFILE_ID": profile.id,
                     "TOASTTY_LAUNCH_REASON": launchReason.rawValue,
-                ],
+                ], uniquingKeysWith: { _, new in new }),
                 initialInput: profile.startupCommand
             )
         )

@@ -9,6 +9,12 @@ APP_BUNDLE_NAME="${APP_NAME}.app"
 CLI_NAME="toastty"
 ARCHIVED_CLI_RELATIVE_PATH="usr/local/bin/${CLI_NAME}"
 BUNDLED_CLI_RELATIVE_PATH="Contents/Helpers/${CLI_NAME}"
+AGENT_SHIM_NAME="toastty-agent-shim"
+ARCHIVED_AGENT_SHIM_RELATIVE_PATHS=(
+  "usr/local/bin/${AGENT_SHIM_NAME}"
+  "usr/local/bin/toastty_agent_shim"
+)
+BUNDLED_AGENT_SHIM_RELATIVE_PATH="Contents/Helpers/${AGENT_SHIM_NAME}"
 GHOSTTY_RELEASE_XCFRAMEWORK_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.xcframework"
 GHOSTTY_RELEASE_METADATA_PATH="$ROOT_DIR/Dependencies/GhosttyKit.Release.metadata.env"
 SPARKLE_TOOLS_DIRECTORY=""
@@ -355,18 +361,49 @@ export_app() {
   ditto "$archived_app_path" "$EXPORTED_APP_PATH"
 }
 
+bundle_helper_into_exported_app() {
+  local helper_label="$1"
+  local archived_helper_path="$2"
+  local bundled_helper_path="$3"
+
+  [[ -x "$archived_helper_path" ]] || fail "archived ${helper_label} not found at $archived_helper_path"
+  log "Bundling ${helper_label} into exported app"
+  # Keep the helper outside Contents/MacOS so the lowercase CLI name cannot
+  # collide with the app executable on case-insensitive volumes.
+  mkdir -p "$(dirname "$bundled_helper_path")"
+  ditto "$archived_helper_path" "$bundled_helper_path"
+  chmod 755 "$bundled_helper_path"
+  [[ -x "$bundled_helper_path" ]] || fail "failed to bundle ${helper_label} into exported app at $bundled_helper_path"
+}
+
+resolve_archived_helper_path() {
+  local relative_path=""
+
+  for relative_path in "$@"; do
+    if [[ -x "$ARCHIVE_PATH/Products/$relative_path" ]]; then
+      printf '%s\n' "$ARCHIVE_PATH/Products/$relative_path"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 bundle_cli_into_exported_app() {
   local archived_cli_path="$ARCHIVE_PATH/Products/$ARCHIVED_CLI_RELATIVE_PATH"
   local bundled_cli_path="$EXPORTED_APP_PATH/$BUNDLED_CLI_RELATIVE_PATH"
 
-  [[ -x "$archived_cli_path" ]] || fail "archived CLI not found at $archived_cli_path"
-  log "Bundling ${CLI_NAME} CLI into exported app"
-  # Keep the helper outside Contents/MacOS so the lowercase CLI name cannot
-  # collide with the app executable on case-insensitive volumes.
-  mkdir -p "$(dirname "$bundled_cli_path")"
-  ditto "$archived_cli_path" "$bundled_cli_path"
-  chmod 755 "$bundled_cli_path"
-  [[ -x "$bundled_cli_path" ]] || fail "failed to bundle CLI into exported app at $bundled_cli_path"
+  bundle_helper_into_exported_app "${CLI_NAME} CLI" "$archived_cli_path" "$bundled_cli_path"
+}
+
+bundle_agent_shim_into_exported_app() {
+  local archived_agent_shim_path=""
+  local bundled_agent_shim_path="$EXPORTED_APP_PATH/$BUNDLED_AGENT_SHIM_RELATIVE_PATH"
+
+  archived_agent_shim_path="$(resolve_archived_helper_path "${ARCHIVED_AGENT_SHIM_RELATIVE_PATHS[@]}")" \
+    || fail "archived ${AGENT_SHIM_NAME} helper not found under ${ARCHIVE_PATH}/Products"
+
+  bundle_helper_into_exported_app "${AGENT_SHIM_NAME} helper" "$archived_agent_shim_path" "$bundled_agent_shim_path"
 }
 
 verify_exported_app() {
@@ -400,8 +437,10 @@ verify_exported_app() {
 
 resign_exported_app_for_distribution() {
   local bundled_cli_path="$EXPORTED_APP_PATH/$BUNDLED_CLI_RELATIVE_PATH"
+  local bundled_agent_shim_path="$EXPORTED_APP_PATH/$BUNDLED_AGENT_SHIM_RELATIVE_PATH"
 
   [[ -x "$bundled_cli_path" ]] || fail "exported app is missing bundled CLI at $bundled_cli_path"
+  [[ -x "$bundled_agent_shim_path" ]] || fail "exported app is missing bundled agent shim at $bundled_agent_shim_path"
   # Copying the archived app preserves ad-hoc signatures on Sparkle's nested
   # helper binaries, so re-sign the copied bundle recursively before packaging.
   log "Re-signing exported app bundle for distribution"
@@ -653,6 +692,7 @@ archive_app
 export_app
 verify_exported_app
 bundle_cli_into_exported_app
+bundle_agent_shim_into_exported_app
 resign_exported_app_for_distribution
 stage_dmg_contents
 create_dmg

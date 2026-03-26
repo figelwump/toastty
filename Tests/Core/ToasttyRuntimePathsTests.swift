@@ -17,6 +17,7 @@ struct ToasttyRuntimePathsTests {
         #expect(paths.configFileURL.path == "/tmp/toastty-home/.toastty/config")
         #expect(paths.workspaceLayoutsFileURL.path == "/tmp/toastty-home/.toastty/workspace-layout-profiles.json")
         #expect(paths.terminalProfilesFileURL.path == "/tmp/toastty-home/.toastty/terminal-profiles.toml")
+        #expect(paths.agentShimDirectoryURL.path == "/tmp/toastty-home/.toastty/bin")
         #expect(paths.defaultLogFileURL.path == "/tmp/toastty-home/Library/Logs/Toastty/toastty.log")
         #expect(paths.automationSocketFileURL == nil)
         #expect(paths.userDefaultsSuiteName == nil)
@@ -41,6 +42,7 @@ struct ToasttyRuntimePathsTests {
         #expect(first.configFileURL.path == "\(runtimeHomePath)/config")
         #expect(first.workspaceLayoutsFileURL.path == "\(runtimeHomePath)/workspace-layout-profiles.json")
         #expect(first.terminalProfilesFileURL.path == "\(runtimeHomePath)/terminal-profiles.toml")
+        #expect(first.agentShimDirectoryURL.path == "\(runtimeHomePath)/bin")
         #expect(first.defaultLogFileURL.path == "\(runtimeHomePath)/logs/toastty.log")
         #expect(first.automationSocketFileURL?.path.hasSuffix("/events-v1.sock") == true)
         #expect(first.automationSocketFileURL?.path.contains("toastty-runtime-") == true)
@@ -70,6 +72,7 @@ struct ToasttyRuntimePathsTests {
         #expect(firstLabel.hasPrefix("main-"))
         #expect(first.runtimeHomeURL?.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home")
         #expect(first.configFileURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/config")
+        #expect(first.agentShimDirectoryURL.path == "\(worktreeRootPath)/artifacts/dev-runs/worktree-\(firstLabel)/runtime-home/bin")
     }
 
     @Test
@@ -100,6 +103,7 @@ struct ToasttyRuntimePathsTests {
 
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("logs").path))
         #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("run").path))
+        #expect(FileManager.default.fileExists(atPath: runtimeHomeURL.appendingPathComponent("bin").path))
         let versionFileURL = runtimeHomeURL.appendingPathComponent("runtime-version.txt", isDirectory: false)
         let versionContents = try String(contentsOf: versionFileURL, encoding: .utf8)
         #expect(versionContents == "1\n")

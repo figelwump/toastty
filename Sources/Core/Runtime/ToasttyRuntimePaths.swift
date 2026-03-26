@@ -92,6 +92,16 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
             .appendingPathComponent(Self.socketFileName, isDirectory: false)
     }
 
+    public var agentShimDirectoryURL: URL {
+        if let runtimeHomeURL {
+            return runtimeHomeURL.appending(path: "bin", directoryHint: .isDirectory)
+        }
+
+        return URL(filePath: homeDirectoryPath)
+            .appending(path: Self.configDirectoryName, directoryHint: .isDirectory)
+            .appending(path: "bin", directoryHint: .isDirectory)
+    }
+
     public var instanceFileURL: URL? {
         runtimeHomeURL?.appending(path: Self.instanceFileName, directoryHint: .notDirectory)
     }
@@ -142,6 +152,10 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
         try fileManager.createDirectory(
             at: runtimeHomeURL.appending(path: Self.runDirectoryName, directoryHint: .isDirectory),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: agentShimDirectoryURL,
             withIntermediateDirectories: true
         )
         if let automationSocketFileURL {
