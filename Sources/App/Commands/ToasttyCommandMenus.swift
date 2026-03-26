@@ -142,6 +142,10 @@ struct ToasttyCommandMenus: Commands {
                 Label("Reload Configuration", systemImage: "arrow.clockwise")
             }
             .disabled(!supportsConfigurationReload)
+
+            Button("Install Shell Integration…") {
+                terminalProfilesMenuController.installShellIntegration()
+            }
         }
 
         CommandMenu("Terminal") {
@@ -168,10 +172,6 @@ struct ToasttyCommandMenus: Commands {
 
             Button("Manage Terminal Profiles…") {
                 terminalProfilesMenuController.openProfilesConfiguration()
-            }
-
-            Button("Install Shell Integration…") {
-                terminalProfilesMenuController.installShellIntegration()
             }
         }
 
