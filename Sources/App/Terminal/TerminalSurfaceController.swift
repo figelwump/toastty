@@ -116,7 +116,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         self.panelID = panelID
         self.delegate = delegate
         #if TOASTTY_HAS_GHOSTTY_KIT
-        let surfaceScrollView = TerminalSurfaceScrollView()
+        let surfaceScrollView = TerminalSurfaceScrollView(panelID: panelID)
         terminalSurfaceScrollView = surfaceScrollView
         terminalHostView = surfaceScrollView.terminalHostView
         hostedView = surfaceScrollView
@@ -540,6 +540,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
         }
 
+        let previousPresentationSignature = lastPresentationSignature
         let presentationSignature = SurfacePresentationSignature(
             logicalWidth: logicalWidth,
             logicalHeight: logicalHeight,
@@ -549,10 +550,30 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             focused: effectiveFocused,
             pixelSizingEnabled: usesBackingPixelSurfaceSizing
         )
-        let presentationChanged = presentationSignature != lastPresentationSignature
+        let presentationChanged = presentationSignature != previousPresentationSignature
         lastPresentationSignature = presentationSignature
 
         if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
+            let refreshReasons = immediateRefreshReasons(
+                previousPresentationSignature: previousPresentationSignature,
+                presentationSignature: presentationSignature,
+                resumedFromViewportDeferral: resumedFromViewportDeferral
+            )
+            ToasttyLog.info(
+                "Requesting immediate Ghostty surface refresh after terminal controller update",
+                category: .ghostty,
+                metadata: closeTransitionViewportMetadata(
+                    extra: [
+                        "refresh_reasons": refreshReasons.joined(separator: ","),
+                        "effective_focused": effectiveFocused ? "true" : "false",
+                        "host_is_effectively_visible": hostView.isEffectivelyVisible ? "true" : "false",
+                        "logical_width": String(logicalWidth),
+                        "logical_height": String(logicalHeight),
+                        "pixel_width": String(pixelWidth),
+                        "pixel_height": String(pixelHeight),
+                    ]
+                )
+            )
             requestImmediateSurfaceRefresh(ghosttySurface)
         }
         #else
@@ -1593,6 +1614,39 @@ extension TerminalSurfaceController {
             metadata[key] = value
         }
         return metadata
+    }
+
+    private func immediateRefreshReasons(
+        previousPresentationSignature: SurfacePresentationSignature?,
+        presentationSignature: SurfacePresentationSignature,
+        resumedFromViewportDeferral: Bool
+    ) -> [String] {
+        var reasons: [String] = []
+        if resumedFromViewportDeferral {
+            reasons.append("resume_from_viewport_deferral")
+        }
+        guard let previousPresentationSignature else {
+            reasons.append("initial_presentation")
+            return reasons
+        }
+        if previousPresentationSignature.logicalWidth != presentationSignature.logicalWidth ||
+            previousPresentationSignature.logicalHeight != presentationSignature.logicalHeight {
+            reasons.append("logical_size_change")
+        }
+        if previousPresentationSignature.pixelWidth != presentationSignature.pixelWidth ||
+            previousPresentationSignature.pixelHeight != presentationSignature.pixelHeight {
+            reasons.append("pixel_size_change")
+        }
+        if previousPresentationSignature.focused != presentationSignature.focused {
+            reasons.append("focus_change")
+        }
+        if previousPresentationSignature.pixelSizingEnabled != presentationSignature.pixelSizingEnabled {
+            reasons.append("pixel_sizing_mode_change")
+        }
+        if reasons.isEmpty {
+            reasons.append("presentation_change")
+        }
+        return reasons
     }
     #endif
 }

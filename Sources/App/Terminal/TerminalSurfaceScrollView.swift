@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 #if TOASTTY_HAS_GHOSTTY_KIT
 import GhosttyKit
 
@@ -12,6 +13,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
         case never
     }
 
+    private let panelID: UUID
     let terminalHostView: TerminalHostView
     private let scrollDocumentView: NSView
     private(set) var ghosttyCursorVisible = true
@@ -23,7 +25,8 @@ final class TerminalSurfaceScrollView: NSScrollView {
     private var lastSentRow: Int?
     var performBindingAction: ((String) -> Bool)?
 
-    init(terminalHostView: TerminalHostView = TerminalHostView()) {
+    init(panelID: UUID = UUID(), terminalHostView: TerminalHostView = TerminalHostView()) {
+        self.panelID = panelID
         self.terminalHostView = terminalHostView
         scrollDocumentView = NSView(frame: .zero)
         super.init(frame: .zero)
@@ -204,6 +207,34 @@ final class TerminalSurfaceScrollView: NSScrollView {
         let offsetY = contentOffsetY(for: viewportState)
         let currentOrigin = contentView.bounds.origin
         if abs(currentOrigin.x) > 0.001 || abs(currentOrigin.y - offsetY) > 0.001 {
+            let currentRow = currentViewportRow(
+                visibleRect: contentView.documentVisibleRect,
+                documentHeight: scrollDocumentView.frame.height,
+                viewportState: viewportState
+            )
+            let targetRow = min(
+                max(viewportState.offsetRows, 0),
+                max(viewportState.totalRows - viewportState.visibleRows, 0)
+            )
+            let shouldLogScrollSync = viewportState.isAtBottom == false ||
+                abs(currentOrigin.y - offsetY) > max(cellHeightPoints * 2, 24)
+            if shouldLogScrollSync {
+                ToasttyLog.info(
+                    "Programmatically syncing terminal scroll view to viewport state",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "current_row": String(currentRow),
+                        "target_row": String(targetRow),
+                        "total_rows": String(viewportState.totalRows),
+                        "visible_rows": String(viewportState.visibleRows),
+                        "is_at_bottom": viewportState.isAtBottom ? "true" : "false",
+                        "current_origin_y": String(format: "%.1f", currentOrigin.y),
+                        "target_origin_y": String(format: "%.1f", offsetY),
+                        "cell_height_points": String(format: "%.3f", cellHeightPoints),
+                    ]
+                )
+            }
             contentView.scroll(to: CGPoint(x: 0, y: offsetY))
         }
         lastSentRow = viewportState.offsetRows
@@ -264,6 +295,18 @@ final class TerminalSurfaceScrollView: NSScrollView {
         ) * cellHeightPoints
         let maxOffsetY = max(scrollDocumentView.frame.height - contentView.bounds.height, 0)
         return min(max(rawOffsetY, 0), maxOffsetY)
+    }
+
+    private func currentViewportRow(
+        visibleRect: CGRect,
+        documentHeight: CGFloat,
+        viewportState: TerminalViewportState
+    ) -> Int {
+        guard cellHeightPoints > 0 else { return 0 }
+        let scrollOffset = max(documentHeight - visibleRect.origin.y - visibleRect.height, 0)
+        let rawRow = Int((scrollOffset / cellHeightPoints).rounded(.down))
+        let maxOffsetRows = max(viewportState.totalRows - viewportState.visibleRows, 0)
+        return min(max(rawRow, 0), maxOffsetRows)
     }
 }
 #endif
