@@ -6,7 +6,6 @@ struct AppWindowSceneObserver: NSViewRepresentable {
     let windowID: UUID
     let desiredFrame: CGRectCodable?
     let windowTitle: String?
-    let sceneCoordinator: AppWindowSceneCoordinator
     let onWindowDidBecomeKey: @MainActor () -> Void
     let onWindowFrameChange: @MainActor (CGRectCodable) -> Void
     let onWindowCloseInitiated: @MainActor () -> Void
@@ -16,7 +15,6 @@ struct AppWindowSceneObserver: NSViewRepresentable {
         AppWindowSceneObserverCoordinator(
             windowID: windowID,
             windowTitle: windowTitle,
-            sceneCoordinator: sceneCoordinator,
             onWindowDidBecomeKey: onWindowDidBecomeKey,
             onWindowFrameChange: onWindowFrameChange,
             onWindowCloseInitiated: onWindowCloseInitiated,
@@ -36,7 +34,6 @@ struct AppWindowSceneObserver: NSViewRepresentable {
         context.coordinator.windowID = windowID
         context.coordinator.desiredFrame = desiredFrame?.cgRect
         context.coordinator.windowTitle = windowTitle
-        context.coordinator.sceneCoordinator = sceneCoordinator
         context.coordinator.onWindowDidBecomeKey = onWindowDidBecomeKey
         context.coordinator.onWindowFrameChange = onWindowFrameChange
         context.coordinator.onWindowCloseInitiated = onWindowCloseInitiated
@@ -77,7 +74,6 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     var windowID: UUID
     var desiredFrame: CGRect?
     var windowTitle: String?
-    var sceneCoordinator: AppWindowSceneCoordinator?
     var onWindowDidBecomeKey: @MainActor () -> Void
     var onWindowFrameChange: @MainActor (CGRectCodable) -> Void
     var onWindowCloseInitiated: @MainActor () -> Void
@@ -91,12 +87,10 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private let presentWindowCloseConfirmation: WindowCloseConfirmationPresenter
     private let closeWindow: WindowCloser
     private var isPresentingWindowCloseConfirmation = false
-    private var isClosingWindowProgrammatically = false
 
     init(
         windowID: UUID,
         windowTitle: String? = nil,
-        sceneCoordinator: AppWindowSceneCoordinator? = nil,
         onWindowDidBecomeKey: @escaping @MainActor () -> Void,
         onWindowFrameChange: @escaping @MainActor (CGRectCodable) -> Void,
         onWindowCloseInitiated: @escaping @MainActor () -> Void = {},
@@ -130,7 +124,6 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     ) {
         self.windowID = windowID
         self.windowTitle = windowTitle
-        self.sceneCoordinator = sceneCoordinator
         self.onWindowDidBecomeKey = onWindowDidBecomeKey
         self.onWindowFrameChange = onWindowFrameChange
         self.onWindowCloseInitiated = onWindowCloseInitiated
@@ -154,8 +147,6 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         if window.identifier != expectedIdentifier {
             window.identifier = expectedIdentifier
         }
-        window.isReleasedWhenClosed = true
-        registerWindowCloseHandlerIfNeeded()
         installNativeCloseButtonOverrideIfNeeded()
         applyWindowTitleIfNeeded()
         let notificationCenter = NotificationCenter.default
@@ -201,7 +192,6 @@ final class AppWindowSceneObserverCoordinator: NSObject {
                 queue: .main
             ) { [weak self] _ in
                 scheduleOnMainActor { [weak self] in
-                    self?.isClosingWindowProgrammatically = false
                     self?.onWindowWillClose()
                 }
             }
@@ -245,8 +235,6 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         }
         observerTokens.removeAll()
         isPresentingWindowCloseConfirmation = false
-        isClosingWindowProgrammatically = false
-        sceneCoordinator?.unregisterWindowCloseHandler(windowID: windowID)
         observedWindow = nil
     }
 
@@ -288,7 +276,8 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private func handleNativeCloseButton(_ sender: Any?) {
         guard let observedWindow else { return }
         guard shouldConfirmWindowClose else {
-            closeWindowProgrammatically()
+            onWindowCloseInitiated()
+            closeWindow(observedWindow)
             return
         }
         guard isPresentingWindowCloseConfirmation == false else {
@@ -296,26 +285,13 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         }
 
         isPresentingWindowCloseConfirmation = true
-        presentWindowCloseConfirmation(observedWindow) { [weak self] didConfirm in
+        presentWindowCloseConfirmation(observedWindow) { [weak self, weak observedWindow] didConfirm in
             guard let self else { return }
             self.isPresentingWindowCloseConfirmation = false
-            guard didConfirm else { return }
-            self.closeWindowProgrammatically()
+            guard didConfirm, let observedWindow else { return }
+            self.onWindowCloseInitiated()
+            self.closeWindow(observedWindow)
         }
-    }
-
-    private func registerWindowCloseHandlerIfNeeded() {
-        sceneCoordinator?.registerWindowCloseHandler(windowID: windowID) { [weak self] in
-            self?.closeWindowProgrammatically()
-        }
-    }
-
-    private func closeWindowProgrammatically() {
-        guard let observedWindow else { return }
-        guard isClosingWindowProgrammatically == false else { return }
-        isClosingWindowProgrammatically = true
-        onWindowCloseInitiated()
-        closeWindow(observedWindow)
     }
 
     private var normalizedWindowTitle: String? {

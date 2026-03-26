@@ -11,6 +11,9 @@ enum AppWindowSceneDismissalPolicy {
         if remainingWindowCount > 0 {
             return true
         }
+        // When the last state-backed window disappears, only the explicit
+        // native close path should tear the scene down. Otherwise SwiftUI can
+        // keep the scene alive and fall back to the global empty state.
         return closeWasRequested
     }
 }
@@ -51,7 +54,6 @@ enum AppWindowSceneBindingLossResolver {
 }
 
 struct AppWindowSceneHostView: View {
-    @Binding var sceneWindowID: UUID?
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
@@ -65,13 +67,19 @@ struct AppWindowSceneHostView: View {
     let automationStartupError: String?
     let disableAnimations: Bool
 
-    @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
-    // The scene's value keeps the WindowGroup instance associated with a
-    // specific app window ID while local state drives immediate rebinding.
+    @SceneStorage("toastty.window-id") private var sceneWindowIDValue: String?
+    // SceneStorage keeps the scene/window association across relaunches, while
+    // local state drives immediate rendering and rebinding during startup.
     @State private var boundWindowID: UUID?
     @State private var hasBoundWindow = false
+    @State private var restoredStoredWindowID = false
     @State private var shouldDismissAfterNextBindingLoss = false
+
+    private var storedSceneWindowID: UUID? {
+        sceneWindowIDValue.flatMap(UUID.init(uuidString:))
+    }
 
     private var stateWindowIDs: [UUID] {
         store.state.windows.map(\.id)
@@ -87,7 +95,6 @@ struct AppWindowSceneHostView: View {
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
-                    sceneCoordinator: sceneCoordinator,
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
                     openAgentProfilesConfiguration: openAgentProfilesConfiguration,
@@ -111,57 +118,34 @@ struct AppWindowSceneHostView: View {
     }
 
     private func synchronizeSceneBinding() {
-        if boundWindowID == nil {
-            boundWindowID = sceneWindowID
+        if restoredStoredWindowID == false {
+            restoredStoredWindowID = true
+            boundWindowID = storedSceneWindowID
         }
 
         if let boundWindowID, store.window(id: boundWindowID) != nil {
             hasBoundWindow = true
-            registerPresentedWindow(boundWindowID)
+            sceneCoordinator.registerPresentedWindow(windowID: boundWindowID)
             persistWindowID(boundWindowID)
             automationLifecycle?.markReady(runtimeError: automationStartupError)
         } else if hasBoundWindow {
-            let didConsumePanelCloseDismissalRequest =
-                boundWindowID.map { sceneCoordinator.consumeSceneDismissalAfterBindingLoss(windowID: $0) } == true
-            let closeWasRequested = shouldDismissAfterNextBindingLoss || didConsumePanelCloseDismissalRequest
             let resolution = AppWindowSceneBindingLossResolver.resolve(
                 previouslyHadBoundWindow: hasBoundWindow,
                 remainingWindowCount: store.state.windows.count,
-                closeWasRequested: closeWasRequested
-            )
-            let dismissalWindowID = boundWindowID
-            ToasttyLog.debug(
-                "Scene lost bound window",
-                category: .app,
-                metadata: [
-                    "bound_window_id": dismissalWindowID?.uuidString ?? "<none>",
-                    "close_was_requested": closeWasRequested ? "true" : "false",
-                    "should_dismiss_scene": resolution.shouldDismissScene ? "true" : "false",
-                ]
+                closeWasRequested: shouldDismissAfterNextBindingLoss
             )
             if let boundWindowID {
                 sceneCoordinator.unregisterPresentedWindow(windowID: boundWindowID)
             }
-            if resolution.shouldDismissScene, let dismissalWindowID {
-                let dismissWindow = self.dismissWindow
-                ToasttyLog.debug(
-                    "Requesting SwiftUI scene dismissal after bound window loss",
-                    category: .app,
-                    metadata: [
-                        "window_id": dismissalWindowID.uuidString,
-                    ]
-                )
-                Task { @MainActor in
-                    dismissWindow(id: AppWindowSceneID.value, value: dismissalWindowID)
-                }
-                hasBoundWindow = resolution.nextState.hasBoundWindow
-                shouldDismissAfterNextBindingLoss = resolution.nextState.shouldDismissAfterNextBindingLoss
-                return
-            }
             boundWindowID = resolution.nextState.boundWindowID
             hasBoundWindow = resolution.nextState.hasBoundWindow
-            sceneWindowID = resolution.nextState.sceneWindowIDValue.flatMap(UUID.init(uuidString:))
+            sceneWindowIDValue = resolution.nextState.sceneWindowIDValue
             shouldDismissAfterNextBindingLoss = resolution.nextState.shouldDismissAfterNextBindingLoss
+            if resolution.shouldDismissScene {
+                // A user explicitly closed this window, so dismiss the scene
+                // even when it was the last bound window in app state.
+                dismiss()
+            }
             return
         } else if let claimedWindowID = sceneCoordinator.claimWindowID(in: store.state) {
             bind(claimedWindowID)
@@ -171,42 +155,27 @@ struct AppWindowSceneHostView: View {
             in: store.state,
             excluding: Set(boundWindowID.map { [$0] } ?? [])
         )
-        for windowID in missingWindowIDs {
-            openWindow(id: AppWindowSceneID.value, value: windowID)
+        for _ in missingWindowIDs {
+            openWindow(id: AppWindowSceneID.value)
         }
     }
 
     private func bind(_ windowID: UUID) {
         boundWindowID = windowID
         hasBoundWindow = true
-        registerPresentedWindow(windowID)
+        sceneCoordinator.registerPresentedWindow(windowID: windowID)
         persistWindowID(windowID)
         automationLifecycle?.markReady(runtimeError: automationStartupError)
     }
 
     private func persistWindowID(_ windowID: UUID) {
-        guard sceneWindowID != windowID else { return }
-        sceneWindowID = windowID
+        let persistedValue = windowID.uuidString
+        guard sceneWindowIDValue != persistedValue else { return }
+        sceneWindowIDValue = persistedValue
     }
 
     private func handleWindowCloseInitiated() {
         shouldDismissAfterNextBindingLoss = true
-        guard let boundWindowID else { return }
-        let dismissWindow = self.dismissWindow
-        ToasttyLog.debug(
-            "Requesting SwiftUI scene dismissal after close initiation",
-            category: .app,
-            metadata: [
-                "window_id": boundWindowID.uuidString,
-            ]
-        )
-        Task { @MainActor in
-            dismissWindow(id: AppWindowSceneID.value, value: boundWindowID)
-        }
-    }
-
-    private func registerPresentedWindow(_ windowID: UUID) {
-        sceneCoordinator.registerPresentedWindow(windowID: windowID)
     }
 
     private var createWorkspaceAction: (() -> Void)? {

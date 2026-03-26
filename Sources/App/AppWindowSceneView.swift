@@ -9,7 +9,6 @@ struct AppWindowSceneView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
-    let sceneCoordinator: AppWindowSceneCoordinator
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfiguration: () -> Void
@@ -65,7 +64,6 @@ struct AppWindowSceneView: View {
                 windowID: windowID,
                 desiredFrame: windowState?.frame,
                 windowTitle: store.selectedWorkspace(in: windowID)?.title,
-                sceneCoordinator: sceneCoordinator,
                 onWindowDidBecomeKey: handleWindowDidBecomeKey,
                 onWindowFrameChange: handleWindowFrameChange,
                 onWindowCloseInitiated: onWindowCloseInitiated,
