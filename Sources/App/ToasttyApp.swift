@@ -345,6 +345,7 @@ final class DisplayShortcutInterceptor {
         case closePanel
         case createWorkspaceTab
         case focusNextUnreadPanel
+        case renameSelectedTab
         case selectWorkspaceTab(Int)
         case selectAdjacentTab(TabNavigationDirection)
         case switchWorkspace(Int)
@@ -398,6 +399,11 @@ final class DisplayShortcutInterceptor {
             return .focusNextUnreadPanel
         }
 
+        if Self.isRenameTabShortcut(event),
+           appOwnedShortcutWindowID() != nil {
+            return .renameSelectedTab
+        }
+
         switch DisplayShortcutConfig.action(for: event) {
         case .workspaceSwitch(let shortcutNumber):
             return .switchWorkspace(shortcutNumber)
@@ -416,6 +422,8 @@ final class DisplayShortcutInterceptor {
             createWorkspaceTab()
         case .focusNextUnreadPanel:
             focusNextUnreadPanel()
+        case .renameSelectedTab:
+            renameSelectedTab()
         case .selectWorkspaceTab(let shortcutNumber):
             selectWorkspaceTab(shortcutNumber: shortcutNumber)
         case .selectAdjacentTab(let direction):
@@ -509,6 +517,13 @@ final class DisplayShortcutInterceptor {
         return modifiers == [.command, .shift]
     }
 
+    static func isRenameTabShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.isARepeat == false else { return false }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.option, .shift] else { return false }
+        return Int(event.keyCode) == Int(kVK_ANSI_E)
+    }
+
     static func closePanelShortcutWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
         guard modalWindow == nil else { return nil }
         guard let keyWindow else { return nil }
@@ -565,6 +580,12 @@ final class DisplayShortcutInterceptor {
         // next unread target, swallow the shortcut rather than passing it to
         // the embedded terminal or default responder.
         return true
+    }
+
+    private func renameSelectedTab() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
     }
 
     private func switchWorkspace(shortcutNumber: Int) -> Bool {

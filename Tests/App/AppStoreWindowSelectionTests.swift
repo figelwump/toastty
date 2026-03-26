@@ -456,6 +456,40 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(store.pendingRenameWorkspaceRequest)
     }
 
+    func testRenameSelectedWorkspaceTabFromCommandSetsPendingRenameRequest() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+        let selectedTabID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        XCTAssertNil(store.pendingRenameWorkspaceTabRequest)
+        XCTAssertTrue(store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: windowID))
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceTabRequest,
+            PendingWorkspaceTabRenameRequest(windowID: windowID, workspaceID: workspaceID, tabID: selectedTabID)
+        )
+    }
+
+    func testRenameSelectedWorkspaceTabFromCommandRejectsSingleTabWorkspace() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+
+        XCTAssertFalse(store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: windowID))
+        XCTAssertNil(store.pendingRenameWorkspaceTabRequest)
+    }
+
+    func testConsumePendingRenameWorkspaceTabRequestOnlyReturnsMatchingWindow() {
+        let request = PendingWorkspaceTabRenameRequest(windowID: UUID(), workspaceID: UUID(), tabID: UUID())
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        store.pendingRenameWorkspaceTabRequest = request
+
+        XCTAssertNil(store.consumePendingWorkspaceTabRenameRequest(windowID: UUID()))
+        XCTAssertEqual(store.pendingRenameWorkspaceTabRequest, request)
+        XCTAssertEqual(store.consumePendingWorkspaceTabRenameRequest(windowID: request.windowID), request)
+        XCTAssertNil(store.pendingRenameWorkspaceTabRequest)
+    }
+
     func testCloseSelectedWorkspaceFromCommandRequestsFocusedWorkspaceClose() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let secondWorkspace = WorkspaceState.bootstrap(title: "Two")

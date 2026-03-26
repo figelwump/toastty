@@ -83,6 +83,9 @@ struct WorkspaceView: View {
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientTabRenameState()
         }
+        .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
+            consumePendingWorkspaceTabRenameRequestIfNeeded()
+        }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             pruneTransientTabRenameState()
         }
@@ -699,7 +702,7 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceTabContextMenu(workspaceID: UUID, tab: WorkspaceTabState) -> some View {
-        Button("Rename Tab") {
+        Button(ToasttyKeyboardShortcuts.renameTab.menuTitle("Rename Tab")) {
             beginTabRename(tab)
         }
 
@@ -788,6 +791,18 @@ struct WorkspaceView: View {
         if hoveredTabCloseButtonID == tabID {
             hoveredTabCloseButtonID = nil
         }
+    }
+
+    private func consumePendingWorkspaceTabRenameRequestIfNeeded() {
+        guard let request = store.consumePendingWorkspaceTabRenameRequest(windowID: windowID),
+              let workspace = selectedWorkspace,
+              workspace.id == request.workspaceID,
+              workspace.orderedTabs.count > 1,
+              let tab = workspace.tab(id: request.tabID) else {
+            return
+        }
+
+        beginTabRename(tab)
     }
 
     private func renameTextFieldAccessibilityID(for tabID: UUID) -> String {

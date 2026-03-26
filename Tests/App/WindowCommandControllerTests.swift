@@ -469,12 +469,15 @@ final class WindowCommandControllerTests: XCTestCase {
         let mainMenu = NSMenu(title: "Main")
         let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
         let workspaceMenu = NSMenu(title: "Workspace")
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        renameTabItem.keyEquivalentModifierMask = [.option, .shift]
         let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
         previousItem.keyEquivalentModifierMask = [.command, .shift]
         let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
         nextItem.keyEquivalentModifierMask = [.command, .shift]
         let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "a")
         unreadItem.keyEquivalentModifierMask = [.command, .shift]
+        workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(previousItem)
         workspaceMenu.addItem(nextItem)
         workspaceMenu.addItem(unreadItem)
@@ -488,15 +491,25 @@ final class WindowCommandControllerTests: XCTestCase {
 
         bridge.installIfNeeded()
 
+        XCTAssertTrue(renameTabItem.target === bridge)
+        XCTAssertEqual(renameTabItem.action, #selector(WorkspaceMenuBridge.renameSelectedTab(_:)))
         XCTAssertTrue(previousItem.target === bridge)
         XCTAssertEqual(previousItem.action, #selector(WorkspaceMenuBridge.selectPreviousTab(_:)))
         XCTAssertTrue(nextItem.target === bridge)
         XCTAssertEqual(nextItem.action, #selector(WorkspaceMenuBridge.selectNextTab(_:)))
         XCTAssertTrue(unreadItem.target === bridge)
         XCTAssertEqual(unreadItem.action, #selector(WorkspaceMenuBridge.focusNextUnreadPanel(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(renameTabItem))
         XCTAssertTrue(bridge.validateMenuItem(previousItem))
         XCTAssertTrue(bridge.validateMenuItem(nextItem))
         XCTAssertTrue(bridge.validateMenuItem(unreadItem))
+
+        bridge.renameSelectedTab(nil)
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceTabRequest,
+            PendingWorkspaceTabRenameRequest(windowID: windowID, workspaceID: workspaceID, tabID: firstTabID)
+        )
+        store.pendingRenameWorkspaceTabRequest = nil
 
         bridge.selectNextTab(nil)
         XCTAssertEqual(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID, secondTabID)
@@ -552,8 +565,11 @@ final class WindowCommandControllerTests: XCTestCase {
         newWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
         let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
         renameWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        renameTabItem.keyEquivalentModifierMask = [.option, .shift]
         let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
         closeWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(newWorkspaceItem)
         workspaceMenu.addItem(renameWorkspaceItem)
         workspaceMenu.addItem(closeWorkspaceItem)
@@ -571,10 +587,13 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(newWorkspaceItem.action, #selector(WorkspaceMenuBridge.createWorkspace(_:)))
         XCTAssertTrue(renameWorkspaceItem.target === bridge)
         XCTAssertEqual(renameWorkspaceItem.action, #selector(WorkspaceMenuBridge.renameWorkspace(_:)))
+        XCTAssertTrue(renameTabItem.target === bridge)
+        XCTAssertEqual(renameTabItem.action, #selector(WorkspaceMenuBridge.renameSelectedTab(_:)))
         XCTAssertTrue(closeWorkspaceItem.target === bridge)
         XCTAssertEqual(closeWorkspaceItem.action, #selector(WorkspaceMenuBridge.closeWorkspace(_:)))
         XCTAssertTrue(bridge.validateMenuItem(newWorkspaceItem))
         XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
         XCTAssertTrue(bridge.validateMenuItem(closeWorkspaceItem))
 
         bridge.renameWorkspace(nil)
@@ -618,6 +637,9 @@ final class WindowCommandControllerTests: XCTestCase {
         let workspaceMenu = NSMenu(title: "Workspace")
         let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
         renameWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        renameTabItem.keyEquivalentModifierMask = [.option, .shift]
+        workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(renameWorkspaceItem)
         workspaceItem.submenu = workspaceMenu
         mainMenu.addItem(workspaceItem)
@@ -632,6 +654,7 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(renameWorkspaceItem.target === bridge)
         XCTAssertEqual(renameWorkspaceItem.action, #selector(WorkspaceMenuBridge.renameWorkspace(_:)))
         XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
 
         bridge.renameWorkspace(nil)
 
@@ -659,12 +682,14 @@ final class WindowCommandControllerTests: XCTestCase {
         let workspaceMenu = NSMenu(title: "Workspace")
         let newWorkspaceItem = NSMenuItem(title: "New Workspace", action: nil, keyEquivalent: "n")
         let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
         let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
         let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
         let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
         let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "a")
         workspaceMenu.addItem(newWorkspaceItem)
         workspaceMenu.addItem(renameWorkspaceItem)
+        workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(closeWorkspaceItem)
         workspaceMenu.addItem(previousItem)
         workspaceMenu.addItem(nextItem)
@@ -681,6 +706,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
         XCTAssertFalse(bridge.validateMenuItem(newWorkspaceItem))
         XCTAssertFalse(bridge.validateMenuItem(renameWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
         XCTAssertFalse(bridge.validateMenuItem(closeWorkspaceItem))
         XCTAssertFalse(bridge.validateMenuItem(previousItem))
         XCTAssertFalse(bridge.validateMenuItem(nextItem))

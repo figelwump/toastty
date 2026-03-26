@@ -297,6 +297,15 @@ struct ToasttyCommandMenus: Commands {
             }
             .disabled(commandWorkspace == nil)
 
+            Button("Rename Tab") {
+                store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.renameTab.key,
+                modifiers: ToasttyKeyboardShortcuts.renameTab.modifiers
+            )
+            .disabled(store.canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID) == false)
+
             Button("Select Previous Tab") {
                 store.selectAdjacentWorkspaceTab(
                     preferredWindowID: preferredWindowID,

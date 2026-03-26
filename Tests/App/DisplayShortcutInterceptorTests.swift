@@ -83,6 +83,23 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isFocusNextUnreadShortcut(repeatedEvent))
     }
 
+    func testRenameTabShortcutMatchesOptionShiftPhysicalEOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "E", modifiers: [.option, .shift], keyCode: 0x0E)
+        let wrongKeyEvent = try makeKeyEvent(characters: "I", modifiers: [.option, .shift], keyCode: 0x22)
+        let plainOptionEvent = try makeKeyEvent(characters: "e", modifiers: [.option], keyCode: 0x0E)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "E",
+            modifiers: [.option, .shift],
+            keyCode: 0x0E,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isRenameTabShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isRenameTabShortcut(wrongKeyEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isRenameTabShortcut(plainOptionEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isRenameTabShortcut(repeatedEvent))
+    }
+
     func testClosePanelShortcutWindowIDReturnsKeyWorkspaceWindowIdentifier() {
         let windowID = UUID()
         let window = ShortcutTestWindow()

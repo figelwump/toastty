@@ -23,6 +23,12 @@ struct PendingWorkspaceRenameRequest: Equatable {
     let workspaceID: UUID
 }
 
+struct PendingWorkspaceTabRenameRequest: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let tabID: UUID
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -41,6 +47,9 @@ final class AppStore: ObservableObject {
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
     @Published var pendingRenameWorkspaceRequest: PendingWorkspaceRenameRequest?
+    /// Set by tab rename commands; the selected workspace view in the target
+    /// window observes this to enter inline-rename mode for the target tab.
+    @Published var pendingRenameWorkspaceTabRequest: PendingWorkspaceTabRenameRequest?
     @Published var pendingCloseWorkspaceRequest: PendingWorkspaceCloseRequest?
 
     private let reducer = AppReducer()
@@ -83,6 +92,7 @@ final class AppStore: ObservableObject {
             return false
         }
         state = next
+        prunePendingCommandRequests()
         let observers = Array(actionAppliedObservers.values)
         for observer in observers {
             observer(action, previousState, next)
@@ -287,6 +297,32 @@ final class AppStore: ObservableObject {
         return true
     }
 
+    func canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let workspace = commandSelection(preferredWindowID: preferredWindowID)?.workspace else { return false }
+        guard workspace.orderedTabs.count > 1,
+              let selectedTabID = workspace.resolvedSelectedTabID else {
+            return false
+        }
+        return workspace.tab(id: selectedTabID) != nil
+    }
+
+    @discardableResult
+    func renameSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return false }
+        let workspace = selection.workspace
+        guard workspace.orderedTabs.count > 1,
+              let selectedTabID = workspace.resolvedSelectedTabID,
+              workspace.tab(id: selectedTabID) != nil else {
+            return false
+        }
+        pendingRenameWorkspaceTabRequest = PendingWorkspaceTabRenameRequest(
+            windowID: selection.windowID,
+            workspaceID: workspace.id,
+            tabID: selectedTabID
+        )
+        return true
+    }
+
     @discardableResult
     func requestWorkspaceClose(workspaceID: UUID) -> Bool {
         guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID) else { return false }
@@ -323,6 +359,15 @@ final class AppStore: ObservableObject {
         return request
     }
 
+    func consumePendingWorkspaceTabRenameRequest(
+        windowID: UUID
+    ) -> PendingWorkspaceTabRenameRequest? {
+        guard let request = pendingRenameWorkspaceTabRequest,
+              request.windowID == windowID else { return nil }
+        pendingRenameWorkspaceTabRequest = nil
+        return request
+    }
+
     @discardableResult
     func confirmWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
         let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
@@ -336,6 +381,48 @@ final class AppStore: ObservableObject {
             pendingRenameWorkspaceRequest = nil
         }
         return didCloseWorkspace
+    }
+
+    private func prunePendingCommandRequests() {
+        if let request = pendingRenameWorkspaceRequest,
+           pendingRenameWorkspaceRequestIsValid(request) == false {
+            pendingRenameWorkspaceRequest = nil
+        }
+
+        if let request = pendingRenameWorkspaceTabRequest,
+           pendingRenameWorkspaceTabRequestIsValid(request) == false {
+            pendingRenameWorkspaceTabRequest = nil
+        }
+
+        if let request = pendingCloseWorkspaceRequest,
+           pendingWorkspaceCloseRequestIsValid(request) == false {
+            pendingCloseWorkspaceRequest = nil
+        }
+    }
+
+    private func pendingRenameWorkspaceRequestIsValid(_ request: PendingWorkspaceRenameRequest) -> Bool {
+        pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID)
+    }
+
+    private func pendingRenameWorkspaceTabRequestIsValid(_ request: PendingWorkspaceTabRenameRequest) -> Bool {
+        guard pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID),
+              let workspace = state.workspacesByID[request.workspaceID] else {
+            return false
+        }
+        return workspace.tab(id: request.tabID) != nil
+    }
+
+    private func pendingWorkspaceCloseRequestIsValid(_ request: PendingWorkspaceCloseRequest) -> Bool {
+        pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID)
+    }
+
+    private func pendingWorkspaceRequestExists(windowID: UUID, workspaceID: UUID) -> Bool {
+        guard let window = state.window(id: windowID),
+              window.workspaceIDs.contains(workspaceID),
+              state.workspacesByID[workspaceID] != nil else {
+            return false
+        }
+        return true
     }
 
     var selectedWindow: WindowState? {
