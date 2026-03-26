@@ -555,6 +555,7 @@ struct ToasttyApp: App {
         let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
         Self.prepareRuntimeEnvironment(processInfo: processInfo)
         Self.ensureTerminalProfilesTemplateExists()
+        Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
         Self.configureWindowPersistenceDefaults()
         let usesPersistentPreferences = AutomationConfig.parse(
             arguments: processInfo.arguments,
@@ -626,6 +627,7 @@ struct ToasttyApp: App {
                 environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
             }
             if let shimDirectoryPath {
+                environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
                 environment["PATH"] = AgentCommandShimInstaller.pathValue(
                     prepending: shimDirectoryPath,
                     to: processInfo.environment["PATH"]
@@ -772,6 +774,24 @@ struct ToasttyApp: App {
             hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
         )
         appLifecycleDelegate.configureStore(store)
+    }
+
+    private static func refreshManagedShellIntegrationSnippetIfInstalled(processInfo: ProcessInfo) {
+        do {
+            // Keep the managed snippet in sync for users who already opted into
+            // shell integration, but do not touch login shell files here.
+            _ = try ProfileShellIntegrationInstaller(
+                environment: processInfo.environment
+            ).refreshManagedSnippetIfInstalled()
+        } catch {
+            ToasttyLog.warning(
+                "Failed to refresh managed shell integration snippet",
+                category: .bootstrap,
+                metadata: [
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
     }
 
     var body: some Scene {

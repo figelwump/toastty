@@ -74,6 +74,8 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             contentsOf: homeDirectoryURL.appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.zsh"),
             encoding: .utf8
         )
+        XCTAssertTrue(snippetContents.contains("_toastty_restore_agent_shim_path"))
+        XCTAssertTrue(snippetContents.contains("TOASTTY_AGENT_SHIM_DIR"))
         XCTAssertTrue(snippetContents.contains("add-zsh-hook precmd _toastty_precmd"))
         XCTAssertTrue(snippetContents.contains("add-zsh-hook preexec _toastty_preexec"))
     }
@@ -162,6 +164,32 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertFalse(status.createsInitFile)
     }
 
+    func testRefreshManagedSnippetIfInstalledUpdatesStaleSnippetDuringRuntimeIsolation() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/shell-runtime"],
+            shellPathProvider: { "/bin/zsh" }
+        )
+        let managedSnippetURL = homeDirectoryURL
+            .appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.zsh")
+        try writeFile(
+            """
+            # Added by Toastty terminal profile shell integration
+            source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
+            """,
+            to: homeDirectoryURL.appendingPathComponent(".zshrc")
+        )
+        try writeFile("# stale snippet\n", to: managedSnippetURL)
+
+        let updated = try installer.refreshManagedSnippetIfInstalled()
+
+        XCTAssertTrue(updated)
+        let snippetContents = try String(contentsOf: managedSnippetURL, encoding: .utf8)
+        XCTAssertTrue(snippetContents.contains("_toastty_restore_agent_shim_path"))
+        XCTAssertTrue(snippetContents.contains("TOASTTY_AGENT_SHIM_DIR"))
+    }
+
     func testBashInstallationUsesProfileWhenBashProfileIsMissing() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         try writeFile(
@@ -191,6 +219,8 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             contentsOf: homeDirectoryURL.appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.bash"),
             encoding: .utf8
         )
+        XCTAssertTrue(snippetContents.contains("_toastty_restore_agent_shim_path"))
+        XCTAssertTrue(snippetContents.contains("TOASTTY_AGENT_SHIM_DIR"))
         XCTAssertTrue(snippetContents.contains("PROMPT_COMMAND=\"_toastty_prompt_command"))
     }
 
@@ -251,6 +281,63 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             XCTAssertEqual(path, "/tmp/toastty-runtime-home-tests/shell-runtime")
         }
     }
+
+    func testManagedZshSnippetRestoresAgentShimPathToFront() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; print -r -- \"$PATH\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": "/Users/vishal/.bun/bin:\(shimDirectory):/usr/bin",
+                "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
+        XCTAssertEqual(components.first, shimDirectory)
+        XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedBashSnippetRestoresAgentShimPathToFront() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; printf '%s\\n' \"$PATH\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": "/Users/vishal/.bun/bin:\(shimDirectory):/usr/bin",
+                "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+            ]
+        )
+
+        let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
+        XCTAssertEqual(components.first, shimDirectory)
+        XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
 }
 
 private func makeTemporaryHomeDirectory() throws -> URL {
@@ -258,6 +345,45 @@ private func makeTemporaryHomeDirectory() throws -> URL {
         .appendingPathComponent("toastty-shell-integration-tests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
     return directoryURL
+}
+
+@discardableResult
+private func writeStandaloneSnippet(_ contents: String, fileName: String) throws -> URL {
+    let directoryURL = try makeTemporaryHomeDirectory()
+    let snippetURL = directoryURL.appendingPathComponent(fileName)
+    try contents.write(to: snippetURL, atomically: true, encoding: .utf8)
+    return snippetURL
+}
+
+private func runProcess(
+    executableURL: URL,
+    arguments: [String],
+    environment: [String: String]
+) throws -> String {
+    let process = Process()
+    process.executableURL = executableURL
+    process.arguments = arguments
+    process.environment = environment
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+
+    try process.run()
+    process.waitUntilExit()
+
+    let stdout = String(
+        data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    ) ?? ""
+    let stderr = String(
+        data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+        encoding: .utf8
+    ) ?? ""
+
+    XCTAssertEqual(process.terminationStatus, 0, "stderr: \(stderr)")
+    return stdout
 }
 
 private func writeFile(_ contents: String, to fileURL: URL) throws {

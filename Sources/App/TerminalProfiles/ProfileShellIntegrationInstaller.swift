@@ -48,6 +48,15 @@ enum ProfileShellIntegrationShell: Equatable {
             # Toastty terminal profile shell integration.
             # - idle prompt: cwd
             # - running command: command
+            _toastty_restore_agent_shim_path() {
+            \tlocal shim_dir="${TOASTTY_AGENT_SHIM_DIR:-}"
+            \t[[ -n "$shim_dir" ]] || return
+
+            \ttypeset -gaU path
+            \tpath=("$shim_dir" "${(@)path:#$shim_dir}")
+            \texport PATH
+            }
+
             _toastty_emit_title() {
             \t[[ -t 1 ]] || return
             \t[[ -w /dev/tty ]] || return
@@ -71,17 +80,38 @@ enum ProfileShellIntegrationShell: Equatable {
             \t_toastty_emit_title "$cmd"
             }
 
-            if [[ -o interactive && -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
-            \tautoload -Uz add-zsh-hook
-            \tadd-zsh-hook precmd _toastty_precmd
-            \tadd-zsh-hook preexec _toastty_preexec
-            \ttypeset -g _TOASTTY_TITLE_HOOKS_INSTALLED=1
+            if [[ -o interactive ]]; then
+            \t_toastty_restore_agent_shim_path
+            \tif [[ -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
+            \t\tautoload -Uz add-zsh-hook
+            \t\tadd-zsh-hook precmd _toastty_precmd
+            \t\tadd-zsh-hook preexec _toastty_preexec
+            \t\ttypeset -g _TOASTTY_TITLE_HOOKS_INSTALLED=1
+            \tfi
             fi
             """
         case .bash:
             return """
             # Toastty terminal profile shell integration.
             # Updates the pane title to the current directory whenever the prompt returns.
+            _toastty_restore_agent_shim_path() {
+            \tlocal shim_dir="${TOASTTY_AGENT_SHIM_DIR:-}"
+            \t[[ -n "$shim_dir" ]] || return
+
+            \tlocal entry=""
+            \tlocal old_path="${PATH:-}"
+            \tlocal IFS=':'
+            \tlocal -a path_entries=()
+            \tread -r -a path_entries <<< "$old_path"
+
+            \tPATH="$shim_dir"
+            \tfor entry in "${path_entries[@]}"; do
+            \t\t[[ -n "$entry" && "$entry" != "$shim_dir" ]] || continue
+            \t\tPATH+=":$entry"
+            \tdone
+            \texport PATH
+            }
+
             _toastty_emit_title() {
             \t[[ $- == *i* ]] || return
             \t[[ -t 1 ]] || return
@@ -101,9 +131,12 @@ enum ProfileShellIntegrationShell: Equatable {
             \t_toastty_emit_title "$cwd"
             }
 
-            if [[ $- == *i* && -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
-            \tPROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-            \t_TOASTTY_TITLE_HOOKS_INSTALLED=1
+            if [[ $- == *i* ]]; then
+            \t_toastty_restore_agent_shim_path
+            \tif [[ -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
+            \t\tPROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+            \t\t_TOASTTY_TITLE_HOOKS_INSTALLED=1
+            \tfi
             fi
             """
         }
@@ -232,6 +265,26 @@ final class ProfileShellIntegrationInstaller {
 
     func install() throws -> ProfileShellIntegrationInstallResult {
         try install(plan: installationPlan())
+    }
+
+    func refreshManagedSnippetIfInstalled() throws -> Bool {
+        guard let shell = Self.detectedShell(from: shellPathProvider()) else {
+            return false
+        }
+
+        let plan = ProfileShellIntegrationInstallPlan(
+            shell: shell,
+            initFileURL: shell.preferredInitFileURL(homeDirectoryURL: homeDirectoryURL, fileManager: fileManager),
+            managedSnippetURL: homeDirectoryURL.appendingPathComponent(shell.managedSnippetRelativePath)
+        )
+        let initFileContents = try readFileIfPresent(at: plan.initFileURL)
+        let snippetExists = fileManager.fileExists(atPath: plan.managedSnippetURL.path)
+        guard snippetExists || contents(initFileContents, referencesManagedSnippetFor: plan) else {
+            return false
+        }
+
+        try ensureDirectoryExists(at: plan.managedSnippetURL.deletingLastPathComponent())
+        return try writeManagedSnippet(for: plan)
     }
 
     func installationStatus() throws -> ProfileShellIntegrationInstallStatus {

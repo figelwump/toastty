@@ -8,5 +8,6 @@ public enum ToasttyLaunchContextEnvironment {
     public static let repoRootKey = "TOASTTY_REPO_ROOT"
     public static let socketPathKey = "TOASTTY_SOCKET_PATH"
     public static let cliPathKey = "TOASTTY_CLI_PATH"
+    public static let agentShimDirectoryKey = "TOASTTY_AGENT_SHIM_DIR"
     public static let managedAgentShimBypassKey = "TOASTTY_MANAGED_AGENT_SHIM_BYPASS"
 }
