@@ -1341,9 +1341,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             )
             didMutate = store.send(.closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
 
-        case "workspace.focus-next-unread":
-            didMutate = store.focusNextUnreadPanelFromCommand(
-                preferredWindowID: try resolveWindowID(args: args)
+        case "workspace.focus-next-unread-or-active":
+            didMutate = store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: try resolveWindowID(args: args),
+                sessionRuntimeStore: sessionRuntimeStore
             )
 
         case "workspace.split.horizontal":

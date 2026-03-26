@@ -146,13 +146,16 @@ final class RenameWorkspaceCommandController {
 @MainActor
 final class WorkspaceTabCommandController {
     private let store: AppStore
+    private let sessionRuntimeStore: SessionRuntimeStore
     private let preferredWindowIDProvider: () -> UUID?
 
     init(
         store: AppStore,
+        sessionRuntimeStore: SessionRuntimeStore,
         preferredWindowIDProvider: @escaping () -> UUID? = { nil }
     ) {
         self.store = store
+        self.sessionRuntimeStore = sessionRuntimeStore
         self.preferredWindowIDProvider = preferredWindowIDProvider
     }
 
@@ -192,19 +195,25 @@ final class WorkspaceTabCommandController {
         )
     }
 
-    func canFocusNextUnreadPanel() -> Bool {
+    func canFocusNextUnreadOrActivePanel() -> Bool {
         guard let preferredWindowID = currentKeyWindowID() else {
             return false
         }
-        return store.canFocusNextUnreadPanelFromCommand(preferredWindowID: preferredWindowID)
+        return store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     @discardableResult
-    func focusNextUnreadPanel() -> Bool {
+    func focusNextUnreadOrActivePanel() -> Bool {
         guard let preferredWindowID = currentKeyWindowID() else {
             return false
         }
-        return store.focusNextUnreadPanelFromCommand(preferredWindowID: preferredWindowID)
+        return store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     private func currentKeyWindowID() -> UUID? {
@@ -292,7 +301,7 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         static let renameTab = "Rename Tab"
         static let selectPreviousTab = "Select Previous Tab"
         static let selectNextTab = "Select Next Tab"
-        static let jumpToNextUnread = "Jump to Next Unread"
+        static let jumpToNextUnreadOrActive = "Jump to Next Unread or Active"
     }
 
     private let createWorkspaceCommandController: CreateWorkspaceCommandController
@@ -349,8 +358,8 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
             in: workspaceMenu
         )
         configureItem(
-            titled: ItemTitle.jumpToNextUnread,
-            action: #selector(focusNextUnreadPanel(_:)),
+            titled: ItemTitle.jumpToNextUnreadOrActive,
+            action: #selector(focusNextUnreadOrActivePanel(_:)),
             in: workspaceMenu
         )
     }
@@ -386,8 +395,8 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     @objc
-    func focusNextUnreadPanel(_: Any?) {
-        _ = workspaceTabCommandController.focusNextUnreadPanel()
+    func focusNextUnreadOrActivePanel(_: Any?) {
+        _ = workspaceTabCommandController.focusNextUnreadOrActivePanel()
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
@@ -408,8 +417,8 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
             #selector(selectNextTab(_:)):
             return workspaceTabCommandController.canSelectAdjacentTab()
 
-        case #selector(focusNextUnreadPanel(_:)):
-            return workspaceTabCommandController.canFocusNextUnreadPanel()
+        case #selector(focusNextUnreadOrActivePanel(_:)):
+            return workspaceTabCommandController.canFocusNextUnreadOrActivePanel()
 
         default:
             return true

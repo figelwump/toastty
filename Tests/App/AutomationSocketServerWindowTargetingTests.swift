@@ -210,7 +210,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             let response = try sendRequest(
                 command: "automation.perform_action",
                 payload: [
-                    "action": "workspace.focus-next-unread",
+                    "action": "workspace.focus-next-unread-or-active",
                     "args": [:],
                 ],
                 socketPath: harness.socketPath
@@ -228,6 +228,110 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testFocusNextUnreadActionPrefersUnreadBeforeActiveFallback() async throws {
+        let fixture = makeSingleWindowUnreadAndActiveFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let startedAt = Date(timeIntervalSince1970: 1_700_000_200)
+            await MainActor.run {
+                harness.sessionRuntimeStore.startSession(
+                    sessionID: "sess-working-priority",
+                    agent: .codex,
+                    panelID: fixture.activePanelID,
+                    windowID: fixture.windowID,
+                    workspaceID: fixture.workspaceID,
+                    cwd: "/repo",
+                    repoRoot: "/repo",
+                    at: startedAt
+                )
+                harness.sessionRuntimeStore.updateStatus(
+                    sessionID: "sess-working-priority",
+                    status: SessionStatus(kind: .working, summary: "Working", detail: "Earlier active target"),
+                    at: startedAt.addingTimeInterval(1)
+                )
+            }
+
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread-or-active",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            let unreadTab = try XCTUnwrap(workspace.tabsByID[fixture.targetTabID])
+            XCTAssertEqual(state.selectedWindowID, fixture.windowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+            XCTAssertFalse(unreadTab.unreadPanelIDs.contains(fixture.targetPanelID))
+        }
+    }
+
+    func testFocusNextUnreadActionFallsBackToActivePanelWhenNoUnreadExists() async throws {
+        let fixture = makeSingleWindowActiveFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let startedAt = Date(timeIntervalSince1970: 1_700_000_220)
+            await MainActor.run {
+                harness.sessionRuntimeStore.startSession(
+                    sessionID: "sess-active-fallback",
+                    agent: .codex,
+                    panelID: fixture.targetPanelID,
+                    windowID: fixture.windowID,
+                    workspaceID: fixture.workspaceID,
+                    cwd: "/repo",
+                    repoRoot: "/repo",
+                    at: startedAt
+                )
+                harness.sessionRuntimeStore.updateStatus(
+                    sessionID: "sess-active-fallback",
+                    status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Review command"),
+                    at: startedAt.addingTimeInterval(1)
+                )
+            }
+
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread-or-active",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(state.selectedWindowID, fixture.windowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+        }
+    }
+
+    func testRemovedFocusNextUnreadActionIsRejected() async throws {
+        let fixture = makeSingleWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "unsupported action: workspace.focus-next-unread")
+        }
+    }
+
     func testFocusNextUnreadActionRequiresExplicitWindowWhenMultipleWindowsExist() async throws {
         let fixture = makeTwoWindowUnreadFixture()
 
@@ -235,7 +339,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             let response = try sendRequest(
                 command: "automation.perform_action",
                 payload: [
-                    "action": "workspace.focus-next-unread",
+                    "action": "workspace.focus-next-unread-or-active",
                     "args": [:],
                 ],
                 socketPath: harness.socketPath
@@ -256,7 +360,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             let response = try sendRequest(
                 command: "automation.perform_action",
                 payload: [
-                    "action": "workspace.focus-next-unread",
+                    "action": "workspace.focus-next-unread-or-active",
                     "args": [
                         "windowID": fixture.secondWindowID.uuidString,
                     ],
@@ -704,7 +808,12 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService
         )
-        return AutomationHarness(store: store, server: server, socketPath: socketPath)
+        return AutomationHarness(
+            store: store,
+            server: server,
+            socketPath: socketPath,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     private func sendRequest(
@@ -929,6 +1038,83 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         )
     }
 
+    private func makeSingleWindowUnreadAndActiveFixture() -> SingleWindowUnreadAndActiveFixture {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let activeTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let unreadTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [2]
+        )
+        let workspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab, activeTab, unreadTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        return SingleWindowUnreadAndActiveFixture(
+            state: state,
+            windowID: windowID,
+            workspaceID: workspace.id,
+            targetTabID: unreadTab.tab.id,
+            targetPanelID: unreadTab.panelIDs[2],
+            activePanelID: activeTab.panelIDs[1]
+        )
+    }
+
+    private func makeSingleWindowActiveFixture() -> SingleWindowActiveFixture {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let activeTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let workspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab, activeTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        return SingleWindowActiveFixture(
+            state: state,
+            windowID: windowID,
+            workspaceID: workspace.id,
+            targetTabID: activeTab.tab.id,
+            targetPanelID: activeTab.panelIDs[1]
+        )
+    }
+
     private func makeTwoWindowUnreadFixture() -> TwoWindowUnreadFixture {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let secondCurrentTab = makeUnreadNavigationTab(
@@ -982,6 +1168,7 @@ private struct AutomationHarness {
     let store: AppStore
     let server: AutomationSocketServer
     let socketPath: String
+    let sessionRuntimeStore: SessionRuntimeStore
 }
 
 private struct AutomationSocketTestResponse {
@@ -1005,6 +1192,23 @@ private struct SingleWindowFixture {
 }
 
 private struct SingleWindowUnreadFixture {
+    let state: AppState
+    let windowID: UUID
+    let workspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+}
+
+private struct SingleWindowUnreadAndActiveFixture {
+    let state: AppState
+    let windowID: UUID
+    let workspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+    let activePanelID: UUID
+}
+
+private struct SingleWindowActiveFixture {
     let state: AppState
     let windowID: UUID
     let workspaceID: UUID

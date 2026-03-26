@@ -153,6 +153,20 @@ final class SessionRuntimeStore: ObservableObject {
         sessionRegistry.panelStatus(for: panelID)
     }
 
+    func activePanelIDs(matching kinds: Set<SessionStatusKind>) -> Set<UUID> {
+        Set(
+            sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
+                guard let record = sessionRegistry.sessionsByID[sessionID],
+                      record.isActive,
+                      let status = record.status,
+                      kinds.contains(status.kind) else {
+                    return nil
+                }
+                return panelID
+            }
+        )
+    }
+
     func preferredUnreadStatusPanelID(in workspace: WorkspaceState) -> UUID? {
         guard workspace.unreadPanelIDs.isEmpty == false else {
             return nil

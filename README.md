@@ -50,6 +50,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
 | `Cmd+[` | Focus previous pane |
+| `Cmd+Shift+A` | Jump to next unread panel, or next active managed-session panel (`working`, `needs approval`, `error`) |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Ctrl+Arrow` | Resize split |
 | `Cmd+W` | Close focused panel |

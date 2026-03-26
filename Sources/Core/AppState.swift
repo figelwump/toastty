@@ -19,7 +19,7 @@ public struct WindowWorkspaceSelection: Equatable, Sendable {
     }
 }
 
-public struct UnreadPanelTarget: Equatable, Sendable {
+public struct PanelNavigationTarget: Equatable, Sendable {
     public let windowID: UUID
     public let workspaceID: UUID
     public let tabID: UUID
@@ -196,7 +196,24 @@ public struct AppState: Codable, Equatable, Sendable {
         workspaceID: UUID,
         tabID: UUID,
         focusedPanelID: UUID?
-    ) -> UnreadPanelTarget? {
+    ) -> PanelNavigationTarget? {
+        nextMatchingPanel(
+            fromWindowID: fromWindowID,
+            workspaceID: workspaceID,
+            tabID: tabID,
+            focusedPanelID: focusedPanelID
+        ) { tab, panelID in
+            tab.unreadPanelIDs.contains(panelID)
+        }
+    }
+
+    public func nextMatchingPanel(
+        fromWindowID: UUID,
+        workspaceID: UUID,
+        tabID: UUID,
+        focusedPanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> PanelNavigationTarget? {
         guard let currentWindow = window(id: fromWindowID),
               currentWindow.workspaceIDs.contains(workspaceID),
               let currentWorkspace = workspacesByID[workspaceID],
@@ -205,18 +222,23 @@ public struct AppState: Codable, Equatable, Sendable {
             return nil
         }
 
-        if let target = nextUnreadPanel(
+        if let target = nextMatchingPanel(
             in: currentWorkspace,
             windowID: fromWindowID,
             startingTabID: tabID,
-            focusedPanelID: focusedPanelID
+            focusedPanelID: focusedPanelID,
+            matches: matches
         ) {
             return target
         }
 
         for otherWorkspaceID in orderedIDs(after: workspaceID, in: currentWindow.workspaceIDs) {
             guard let workspace = workspacesByID[otherWorkspaceID] else { continue }
-            if let target = nextUnreadPanel(in: workspace, windowID: fromWindowID) {
+            if let target = nextMatchingPanel(
+                in: workspace,
+                windowID: fromWindowID,
+                matches: matches
+            ) {
                 return target
             }
         }
@@ -230,7 +252,11 @@ public struct AppState: Codable, Equatable, Sendable {
             )
             for workspaceID in orderedWorkspaceIDs {
                 guard let workspace = workspacesByID[workspaceID] else { continue }
-                if let target = nextUnreadPanel(in: workspace, windowID: windowID) {
+                if let target = nextMatchingPanel(
+                    in: workspace,
+                    windowID: windowID,
+                    matches: matches
+                ) {
                     return target
                 }
             }
@@ -243,14 +269,22 @@ public struct AppState: Codable, Equatable, Sendable {
         window.terminalFontSizePointsOverride ?? configuredTerminalFontBaselinePoints
     }
 
-    private func nextUnreadPanel(in workspace: WorkspaceState, windowID: UUID) -> UnreadPanelTarget? {
+    private func nextMatchingPanel(
+        in workspace: WorkspaceState,
+        windowID: UUID,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> PanelNavigationTarget? {
         let orderedTabIDs = orderedIDs(startingAt: workspace.resolvedSelectedTabID, in: workspace.tabIDs)
         for tabID in orderedTabIDs {
             guard let tab = workspace.tabsByID[tabID],
-                  let panelID = nextUnreadPanel(in: tab, skippingPanelID: nil) else {
+                  let panelID = nextMatchingPanel(
+                      in: tab,
+                      skippingPanelID: nil,
+                      matches: matches
+                  ) else {
                 continue
             }
-            return UnreadPanelTarget(
+            return PanelNavigationTarget(
                 windowID: windowID,
                 workspaceID: workspace.id,
                 tabID: tabID,
@@ -260,18 +294,23 @@ public struct AppState: Codable, Equatable, Sendable {
         return nil
     }
 
-    private func nextUnreadPanel(
+    private func nextMatchingPanel(
         in workspace: WorkspaceState,
         windowID: UUID,
         startingTabID: UUID,
-        focusedPanelID: UUID?
-    ) -> UnreadPanelTarget? {
+        focusedPanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> PanelNavigationTarget? {
         guard let startingTab = workspace.tabsByID[startingTabID] else {
             return nil
         }
 
-        if let panelID = nextUnreadPanel(in: startingTab, skippingPanelID: focusedPanelID) {
-            return UnreadPanelTarget(
+        if let panelID = nextMatchingPanel(
+            in: startingTab,
+            skippingPanelID: focusedPanelID,
+            matches: matches
+        ) {
+            return PanelNavigationTarget(
                 windowID: windowID,
                 workspaceID: workspace.id,
                 tabID: startingTabID,
@@ -281,10 +320,14 @@ public struct AppState: Codable, Equatable, Sendable {
 
         for otherTabID in orderedIDs(after: startingTabID, in: workspace.tabIDs) {
             guard let tab = workspace.tabsByID[otherTabID],
-                  let panelID = nextUnreadPanel(in: tab, skippingPanelID: nil) else {
+                  let panelID = nextMatchingPanel(
+                      in: tab,
+                      skippingPanelID: nil,
+                      matches: matches
+                  ) else {
                 continue
             }
-            return UnreadPanelTarget(
+            return PanelNavigationTarget(
                 windowID: windowID,
                 workspaceID: workspace.id,
                 tabID: otherTabID,
@@ -295,7 +338,11 @@ public struct AppState: Codable, Equatable, Sendable {
         return nil
     }
 
-    private func nextUnreadPanel(in tab: WorkspaceTabState, skippingPanelID: UUID?) -> UUID? {
+    private func nextMatchingPanel(
+        in tab: WorkspaceTabState,
+        skippingPanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> UUID? {
         let panelOrder = tab.layoutTree.allSlotInfos.map(\.panelID)
         guard panelOrder.isEmpty == false else { return nil }
 
@@ -304,14 +351,14 @@ public struct AppState: Codable, Equatable, Sendable {
             guard panelOrder.count > 1 else { return nil }
             for offset in 1 ..< panelOrder.count {
                 let panelID = panelOrder[(startIndex + offset) % panelOrder.count]
-                if tab.unreadPanelIDs.contains(panelID) {
+                if matches(tab, panelID) {
                     return panelID
                 }
             }
             return nil
         }
 
-        for panelID in panelOrder where tab.unreadPanelIDs.contains(panelID) {
+        for panelID in panelOrder where matches(tab, panelID) {
             return panelID
         }
         return nil

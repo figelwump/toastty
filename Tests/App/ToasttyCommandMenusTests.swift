@@ -105,7 +105,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
     }
 
     @MainActor
-    func testCanFocusNextUnreadPanelUsesResolvedCommandSelection() throws {
+    func testCanFocusNextUnreadOrActivePanelUsesResolvedCommandSelection() throws {
         let currentTab = makeUnreadMenuTab(
             focusedPanelIndex: 0,
             unreadPanelIndices: []
@@ -140,9 +140,54 @@ final class ToasttyCommandMenusTests: XCTestCase {
         )
 
         XCTAssertTrue(
-            ToasttyCommandMenus.canFocusNextUnreadPanel(
+            ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
                 state: state,
-                commandSelection: selection
+                commandSelection: selection,
+                activePanelIDs: []
+            )
+        )
+    }
+
+    @MainActor
+    func testCanFocusNextUnreadOrActivePanelFallsBackToActivePanelIDs() throws {
+        let currentTab = makeUnreadMenuTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let activeTab = makeUnreadMenuTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let workspace = makeUnreadMenuWorkspace(
+            title: "One",
+            tabs: [currentTab, activeTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+
+        let selection = WindowCommandSelection(
+            windowID: windowID,
+            window: try XCTUnwrap(state.window(id: windowID)),
+            workspace: try XCTUnwrap(state.workspacesByID[workspace.id])
+        )
+
+        XCTAssertTrue(
+            ToasttyCommandMenus.canFocusNextUnreadOrActivePanel(
+                state: state,
+                commandSelection: selection,
+                activePanelIDs: [activeTab.panelIDs[1]]
             )
         )
     }
@@ -224,6 +269,7 @@ private func makeProfileShortcutRegistry(
 }
 
 private struct UnreadMenuTabFixture {
+    let panelIDs: [UUID]
     let tab: WorkspaceTabState
 }
 
@@ -254,7 +300,7 @@ private func makeUnreadMenuTab(
         unreadPanelIDs: Set(unreadPanelIndices.map { panelIDs[$0] })
     )
 
-    return UnreadMenuTabFixture(tab: tab)
+    return UnreadMenuTabFixture(panelIDs: panelIDs, tab: tab)
 }
 
 private func makeUnreadMenuWorkspace(

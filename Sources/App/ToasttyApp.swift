@@ -338,13 +338,14 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
+    private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
 
     private enum ShortcutAction {
         case closePanel
         case createWorkspaceTab
-        case focusNextUnreadPanel
+        case focusNextUnreadOrActivePanel
         case renameSelectedTab
         case selectWorkspaceTab(Int)
         case selectAdjacentTab(TabNavigationDirection)
@@ -352,8 +353,13 @@ final class DisplayShortcutInterceptor {
         case focusPanel(Int)
     }
 
-    init(store: AppStore, focusedPanelCommandController: FocusedPanelCommandController) {
+    init(
+        store: AppStore,
+        sessionRuntimeStore: SessionRuntimeStore,
+        focusedPanelCommandController: FocusedPanelCommandController
+    ) {
         self.store = store
+        self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -394,9 +400,9 @@ final class DisplayShortcutInterceptor {
             return .closePanel
         }
 
-        if Self.isFocusNextUnreadShortcut(event),
+        if Self.isFocusNextUnreadOrActiveShortcut(event),
            appOwnedShortcutWindowID() != nil {
-            return .focusNextUnreadPanel
+            return .focusNextUnreadOrActivePanel
         }
 
         if Self.isRenameTabShortcut(event),
@@ -420,8 +426,8 @@ final class DisplayShortcutInterceptor {
             closeFocusedPanel()
         case .createWorkspaceTab:
             createWorkspaceTab()
-        case .focusNextUnreadPanel:
-            focusNextUnreadPanel()
+        case .focusNextUnreadOrActivePanel:
+            focusNextUnreadOrActivePanel()
         case .renameSelectedTab:
             renameSelectedTab()
         case .selectWorkspaceTab(let shortcutNumber):
@@ -507,7 +513,7 @@ final class DisplayShortcutInterceptor {
         return modifiers == [.command]
     }
 
-    static func isFocusNextUnreadShortcut(_ event: NSEvent) -> Bool {
+    static func isFocusNextUnreadOrActiveShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown,
               event.isARepeat == false,
               event.charactersIgnoringModifiers?.lowercased() == "a" else {
@@ -568,17 +574,20 @@ final class DisplayShortcutInterceptor {
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
     }
 
-    private func focusNextUnreadPanel() -> Bool {
+    private func focusNextUnreadOrActivePanel() -> Bool {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         guard store.commandSelection(preferredWindowID: preferredWindowID) != nil else {
             return false
         }
 
-        _ = store.focusNextUnreadPanelFromCommand(preferredWindowID: preferredWindowID)
+        _ = store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
         // Cmd+Shift+A is app-owned for normal workspace windows. If there is no
-        // next unread target, swallow the shortcut rather than passing it to
-        // the embedded terminal or default responder.
+        // next unread or active target, swallow the shortcut rather than
+        // passing it to the embedded terminal or default responder.
         return true
     }
 
@@ -826,6 +835,7 @@ struct ToasttyApp: App {
         )
         let workspaceTabCommandController = WorkspaceTabCommandController(
             store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         fileSplitMenuBridge = FileSplitMenuBridge(
@@ -858,6 +868,7 @@ struct ToasttyApp: App {
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController
         )
         _store = StateObject(wrappedValue: store)

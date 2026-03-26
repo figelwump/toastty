@@ -1,4 +1,6 @@
-# Jump to Next Unread Panel (Cmd+Shift+U)
+# Historical Plan: Jump to Next Unread Panel
+
+> Superseded in the shipped implementation. Toastty now uses `Cmd+Shift+A` for `Jump to Next Unread or Active`, which preserves the same traversal precedence for unread panels and falls back to active managed-session panels (`working`, `needs approval`, `error`) when no unread target exists. The remaining contents below are retained as historical planning notes for the original unread-only design.
 
 ## Context
 

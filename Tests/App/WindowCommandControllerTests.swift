@@ -450,7 +450,7 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(ownedCloseWorkspaceItem.action, #selector(FileCloseMenuBridge.performCloseWorkspace(_:)))
     }
 
-    func testWorkspaceMenuBridgeRetargetsAndValidatesTabAndUnreadItems() throws {
+    func testWorkspaceMenuBridgeRetargetsAndValidatesTabAndUnreadOrActiveItems() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
@@ -475,7 +475,7 @@ final class WindowCommandControllerTests: XCTestCase {
         previousItem.keyEquivalentModifierMask = [.command, .shift]
         let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
         nextItem.keyEquivalentModifierMask = [.command, .shift]
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "a")
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
         unreadItem.keyEquivalentModifierMask = [.command, .shift]
         workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(previousItem)
@@ -498,7 +498,7 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(nextItem.target === bridge)
         XCTAssertEqual(nextItem.action, #selector(WorkspaceMenuBridge.selectNextTab(_:)))
         XCTAssertTrue(unreadItem.target === bridge)
-        XCTAssertEqual(unreadItem.action, #selector(WorkspaceMenuBridge.focusNextUnreadPanel(_:)))
+        XCTAssertEqual(unreadItem.action, #selector(WorkspaceMenuBridge.focusNextUnreadOrActivePanel(_:)))
         XCTAssertTrue(bridge.validateMenuItem(renameTabItem))
         XCTAssertTrue(bridge.validateMenuItem(previousItem))
         XCTAssertTrue(bridge.validateMenuItem(nextItem))
@@ -517,7 +517,7 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.selectPreviousTab(nil)
         XCTAssertEqual(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID, firstTabID)
 
-        bridge.focusNextUnreadPanel(nil)
+        bridge.focusNextUnreadOrActivePanel(nil)
 
         let workspaceAfterUnreadJump = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(workspaceAfterUnreadJump.resolvedSelectedTabID, secondTabID)
@@ -686,7 +686,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
         let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
         let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread", action: nil, keyEquivalent: "a")
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
         workspaceMenu.addItem(newWorkspaceItem)
         workspaceMenu.addItem(renameWorkspaceItem)
         workspaceMenu.addItem(renameTabItem)
@@ -1557,6 +1557,7 @@ final class WindowCommandControllerTests: XCTestCase {
             ),
             workspaceTabCommandController: WorkspaceTabCommandController(
                 store: store,
+                sessionRuntimeStore: makeSessionRuntimeStore(store: store),
                 preferredWindowIDProvider: resolvedWindowIDProvider
             )
         )
@@ -1570,6 +1571,12 @@ final class WindowCommandControllerTests: XCTestCase {
             runtimeRegistry: runtimeRegistry,
             slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
         )
+    }
+
+    private func makeSessionRuntimeStore(store: AppStore) -> SessionRuntimeStore {
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        return sessionRuntimeStore
     }
 
     private func flushMainActorTasks() async {

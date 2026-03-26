@@ -87,7 +87,7 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
-    static let focusNextUnreadPanel = ToasttyKeyboardShortcut(
+    static let focusNextUnreadOrActivePanel = ToasttyKeyboardShortcut(
         "a",
         modifiers: [.command, .shift]
     )

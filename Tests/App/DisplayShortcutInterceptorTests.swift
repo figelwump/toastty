@@ -68,7 +68,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isClosePanelShortcut(repeatedEvent))
     }
 
-    func testFocusNextUnreadShortcutMatchesCommandShiftAOnly() throws {
+    func testFocusNextUnreadOrActiveShortcutMatchesCommandShiftAOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "A", modifiers: [.command, .shift], keyCode: 0x00)
         let plainCommandEvent = try makeKeyEvent(characters: "a", modifiers: [.command], keyCode: 0x00)
         let repeatedEvent = try makeKeyEvent(
@@ -78,9 +78,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             isARepeat: true
         )
 
-        XCTAssertTrue(DisplayShortcutInterceptor.isFocusNextUnreadShortcut(matchingEvent))
-        XCTAssertFalse(DisplayShortcutInterceptor.isFocusNextUnreadShortcut(plainCommandEvent))
-        XCTAssertFalse(DisplayShortcutInterceptor.isFocusNextUnreadShortcut(repeatedEvent))
+        XCTAssertTrue(DisplayShortcutInterceptor.isFocusNextUnreadOrActiveShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFocusNextUnreadOrActiveShortcut(plainCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isFocusNextUnreadOrActiveShortcut(repeatedEvent))
     }
 
     func testRenameTabShortcutMatchesOptionShiftPhysicalEOnly() throws {

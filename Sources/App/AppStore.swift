@@ -40,6 +40,11 @@ final class AppStore: ObservableObject {
     typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
     typealias WindowActivationHandler = @MainActor (UUID) -> Void
     private static let newWindowCascadeOffset: Double = 30
+    static let nextUnreadOrActiveFallbackStatusKinds: Set<SessionStatusKind> = [
+        .working,
+        .needsApproval,
+        .error,
+    ]
 
     @Published private(set) var state: AppState
     @Published private(set) var hasEverLaunchedAgent: Bool
@@ -197,27 +202,28 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func canFocusNextUnreadPanelFromCommand(preferredWindowID: UUID?) -> Bool {
-        nextUnreadPanelTarget(preferredWindowID: preferredWindowID) != nil
+    func canFocusNextUnreadOrActivePanelFromCommand(
+        preferredWindowID: UUID?,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) -> Bool {
+        nextUnreadOrActivePanelTarget(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        ) != nil
     }
 
     @discardableResult
-    func focusNextUnreadPanelFromCommand(preferredWindowID: UUID?) -> Bool {
-        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+    func focusNextUnreadOrActivePanelFromCommand(
+        preferredWindowID: UUID?,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) -> Bool {
+        guard let target = nextUnreadOrActivePanelTarget(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        ) else {
             return false
         }
-
-        let previousSelectedWindowID = state.selectedWindowID
-        guard send(.focusNextUnreadPanel(windowID: selection.windowID)) else {
-            return false
-        }
-
-        if let targetWindowID = state.selectedWindowID,
-           targetWindowID != previousSelectedWindowID {
-            windowActivationHandler(targetWindowID)
-        }
-
-        return true
+        return focusPanelTarget(target)
     }
 
     @discardableResult
@@ -472,17 +478,68 @@ final class AppStore: ObservableObject {
         return .newWindow
     }
 
-    private func nextUnreadPanelTarget(preferredWindowID: UUID?) -> UnreadPanelTarget? {
+    private func nextUnreadOrActivePanelTarget(
+        preferredWindowID: UUID?,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) -> PanelNavigationTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let selectedTabID = selection.workspace.resolvedSelectedTabID else {
             return nil
         }
-        return state.nextUnreadPanel(
+
+        if let unreadTarget = state.nextUnreadPanel(
             fromWindowID: selection.windowID,
             workspaceID: selection.workspace.id,
             tabID: selectedTabID,
             focusedPanelID: selection.workspace.focusedPanelID
+        ) {
+            return unreadTarget
+        }
+
+        guard let sessionRuntimeStore else {
+            return nil
+        }
+
+        let activePanelIDs = sessionRuntimeStore.activePanelIDs(
+            matching: Self.nextUnreadOrActiveFallbackStatusKinds
         )
+        guard activePanelIDs.isEmpty == false else {
+            return nil
+        }
+
+        return state.nextMatchingPanel(
+            fromWindowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            tabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        ) { _, panelID in
+            activePanelIDs.contains(panelID)
+        }
+    }
+
+    @discardableResult
+    private func focusPanelTarget(_ target: PanelNavigationTarget) -> Bool {
+        let previousSelectedWindowID = state.selectedWindowID
+        let targetWorkspaceID = target.workspaceID
+        let targetWindowID = target.windowID
+        let requiresWorkspaceSelection = state.selectedWorkspaceID(in: targetWindowID) != targetWorkspaceID
+
+        if state.selectedWindowID != targetWindowID || requiresWorkspaceSelection {
+            guard send(.selectWorkspace(windowID: targetWindowID, workspaceID: targetWorkspaceID)) else {
+                return false
+            }
+        }
+
+        guard send(.focusPanel(workspaceID: targetWorkspaceID, panelID: target.panelID)) else {
+            return false
+        }
+
+        if let selectedWindowID = state.selectedWindowID,
+           selectedWindowID != previousSelectedWindowID {
+            windowActivationHandler(selectedWindowID)
+        }
+
+        return true
     }
 
     private func windowLaunchSeed(from selection: WindowCommandSelection?) -> WindowLaunchSeed? {

@@ -222,8 +222,11 @@ Supported action IDs:
 - `workspace.focus-slot.right`
 - `workspace.focus-slot.up`
 - `workspace.focus-slot.down`
-- `workspace.focus-next-unread`
+- `workspace.focus-next-unread-or-active`
   - `args.windowID` is required when multiple windows exist
+  - first targets unread panels using the normal unread traversal order
+  - if no unread panel exists, falls back to managed-session panels whose live status is `working`, `needsApproval`, or `error`
+  - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
   - requires `args.panelID`
 - `workspace.resize-split.left`

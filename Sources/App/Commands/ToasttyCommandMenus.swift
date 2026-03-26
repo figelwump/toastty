@@ -140,10 +140,13 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.workspace
     }
 
-    private var canFocusNextUnreadPanel: Bool {
-        Self.canFocusNextUnreadPanel(
+    private var canFocusNextUnreadOrActivePanel: Bool {
+        Self.canFocusNextUnreadOrActivePanel(
             state: store.state,
-            commandSelection: commandSelection
+            commandSelection: commandSelection,
+            activePanelIDs: sessionRuntimeStore.activePanelIDs(
+                matching: AppStore.nextUnreadOrActiveFallbackStatusKinds
+            )
         )
     }
 
@@ -324,16 +327,17 @@ struct ToasttyCommandMenus: Commands {
             .keyboardShortcut("]", modifiers: [.command, .shift])
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
-            Button("Jump to Next Unread") {
-                store.focusNextUnreadPanelFromCommand(
-                    preferredWindowID: commandSelection?.windowID ?? preferredWindowID
+            Button("Jump to Next Unread or Active") {
+                store.focusNextUnreadOrActivePanelFromCommand(
+                    preferredWindowID: commandSelection?.windowID ?? preferredWindowID,
+                    sessionRuntimeStore: sessionRuntimeStore
                 )
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.focusNextUnreadPanel.key,
-                modifiers: ToasttyKeyboardShortcuts.focusNextUnreadPanel.modifiers
+                ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.key,
+                modifiers: ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.modifiers
             )
-            .disabled(canFocusNextUnreadPanel == false)
+            .disabled(canFocusNextUnreadOrActivePanel == false)
         }
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
@@ -489,21 +493,37 @@ struct ToasttyCommandMenus: Commands {
         return KeyEquivalent(digit)
     }
 
-    static func canFocusNextUnreadPanel(
+    static func canFocusNextUnreadOrActivePanel(
         state: AppState,
-        commandSelection: WindowCommandSelection?
+        commandSelection: WindowCommandSelection?,
+        activePanelIDs: Set<UUID>
     ) -> Bool {
         guard let selection = commandSelection,
               let selectedTabID = selection.workspace.resolvedSelectedTabID else {
             return false
         }
 
-        return state.nextUnreadPanel(
+        if state.nextUnreadPanel(
             fromWindowID: selection.windowID,
             workspaceID: selection.workspace.id,
             tabID: selectedTabID,
             focusedPanelID: selection.workspace.focusedPanelID
-        ) != nil
+        ) != nil {
+            return true
+        }
+
+        guard activePanelIDs.isEmpty == false else {
+            return false
+        }
+
+        return state.nextMatchingPanel(
+            fromWindowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            tabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        ) { _, panelID in
+            activePanelIDs.contains(panelID)
+        } != nil
     }
 
     nonisolated static func resolvedCommandWindowID(focusedWindowID: UUID?, keyWindowID: UUID?) -> UUID? {
