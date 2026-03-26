@@ -498,12 +498,27 @@ struct SidebarView: View {
         for panelID: UUID,
         in workspace: WorkspaceState
     ) -> Bool {
-        guard workspace.unreadPanelIDs.contains(panelID) else {
+        Self.showsUnreadSessionAccent(
+            for: panelID,
+            in: workspace,
+            selectedWorkspaceID: store.selectedWorkspaceID(in: windowID),
+            selectedPanelID: store.selectedWorkspace(in: windowID)?.focusedPanelID
+        )
+    }
+
+    static func showsUnreadSessionAccent(
+        for panelID: UUID,
+        in workspace: WorkspaceState,
+        selectedWorkspaceID: UUID?,
+        selectedPanelID: UUID?
+    ) -> Bool {
+        guard let tabID = workspace.tabID(containingPanelID: panelID),
+              workspace.tab(id: tabID)?.unreadPanelIDs.contains(panelID) == true else {
             return false
         }
 
-        if store.selectedWorkspaceID(in: windowID) == workspace.id,
-           workspace.focusedPanelID == panelID {
+        if selectedWorkspaceID == workspace.id,
+           selectedPanelID == panelID {
             return false
         }
 

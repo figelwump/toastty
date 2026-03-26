@@ -80,6 +80,57 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertTrue(SidebarView.canFocusSessionPanel(panelID, in: workspace))
     }
 
+    func testUnreadSessionAccentUsesPanelTabUnreadStateAcrossTabs() throws {
+        var backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
+        let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
+        let backgroundPanelID = try XCTUnwrap(backgroundTab.focusedPanelID)
+        let selectedPanelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        backgroundTab.unreadPanelIDs = [backgroundPanelID]
+        let workspaceID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "One",
+            selectedTabID: selectedTab.id,
+            tabIDs: [backgroundTab.id, selectedTab.id],
+            tabsByID: [
+                backgroundTab.id: backgroundTab,
+                selectedTab.id: selectedTab,
+            ]
+        )
+
+        XCTAssertTrue(
+            SidebarView.showsUnreadSessionAccent(
+                for: backgroundPanelID,
+                in: workspace,
+                selectedWorkspaceID: workspaceID,
+                selectedPanelID: selectedPanelID
+            )
+        )
+    }
+
+    func testUnreadSessionAccentSuppressesFocusedPanelInSelectedWorkspace() throws {
+        var selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
+        let selectedPanelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        selectedTab.unreadPanelIDs = [selectedPanelID]
+        let workspaceID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "One",
+            selectedTabID: selectedTab.id,
+            tabIDs: [selectedTab.id],
+            tabsByID: [selectedTab.id: selectedTab]
+        )
+
+        XCTAssertFalse(
+            SidebarView.showsUnreadSessionAccent(
+                for: selectedPanelID,
+                in: workspace,
+                selectedWorkspaceID: workspaceID,
+                selectedPanelID: selectedPanelID
+            )
+        )
+    }
+
     func testReadySessionDoesNotRenderStatusChipLabel() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "sess-ready",
