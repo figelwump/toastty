@@ -5,6 +5,8 @@ import Foundation
 enum DisplayShortcutAction: Equatable {
     case workspaceSwitch(Int)
     case panelFocus(Int)
+    case cycleWorkspaceNext
+    case cycleWorkspacePrevious
 }
 
 enum DisplayShortcutScope {
@@ -56,6 +58,9 @@ enum DisplayShortcutConfig {
     }
 
     static func action(for event: NSEvent) -> DisplayShortcutAction? {
+        if let cycleAction = workspaceCycleAction(for: event) {
+            return cycleAction
+        }
         if let shortcutNumber = shortcutNumber(for: event, scope: .panelFocus) {
             return .panelFocus(shortcutNumber)
         }
@@ -63,6 +68,20 @@ enum DisplayShortcutConfig {
             return .workspaceSwitch(shortcutNumber)
         }
         return nil
+    }
+
+    /// Detects Opt+Shift+[ / Opt+Shift+] for workspace cycling.
+    private static func workspaceCycleAction(for event: NSEvent) -> DisplayShortcutAction? {
+        let flags = event.modifierFlags.intersection(supportedModifiers)
+        guard flags == [.option, .shift] else { return nil }
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_LeftBracket):
+            return .cycleWorkspacePrevious
+        case Int(kVK_ANSI_RightBracket):
+            return .cycleWorkspaceNext
+        default:
+            return nil
+        }
     }
 
     private static func shortcutNumber(forKeyCode keyCode: UInt16) -> Int? {

@@ -3,6 +3,8 @@ import Carbon.HIToolbox
 @testable import ToasttyApp
 import XCTest
 
+// MARK: - DisplayShortcutConfigTests
+
 final class DisplayShortcutConfigTests: XCTestCase {
     func testWorkspaceSwitchShortcutLabelsUseOptionDigitGlyphs() {
         XCTAssertEqual(DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: 1), "⌥1")
@@ -109,5 +111,63 @@ final class DisplayShortcutConfigTests: XCTestCase {
         )
 
         XCTAssertEqual(DisplayShortcutConfig.action(for: event), .panelFocus(3))
+    }
+
+    func testActionReturnsCycleWorkspacePreviousForOptionShiftLeftBracket() throws {
+        let event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.option, .shift],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "{",
+                charactersIgnoringModifiers: "{",
+                isARepeat: false,
+                keyCode: UInt16(kVK_ANSI_LeftBracket)
+            )
+        )
+
+        XCTAssertEqual(DisplayShortcutConfig.action(for: event), .cycleWorkspacePrevious)
+    }
+
+    func testActionReturnsCycleWorkspaceNextForOptionShiftRightBracket() throws {
+        let event = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.option, .shift],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "}",
+                charactersIgnoringModifiers: "}",
+                isARepeat: false,
+                keyCode: UInt16(kVK_ANSI_RightBracket)
+            )
+        )
+
+        XCTAssertEqual(DisplayShortcutConfig.action(for: event), .cycleWorkspaceNext)
+    }
+
+    func testActionIgnoresBracketsWithoutOptionShift() throws {
+        // Option-only + bracket should not trigger cycling
+        let optionOnlyEvent = try XCTUnwrap(
+            NSEvent.keyEvent(
+                with: .keyDown,
+                location: .zero,
+                modifierFlags: [.option],
+                timestamp: 0,
+                windowNumber: 0,
+                context: nil,
+                characters: "[",
+                charactersIgnoringModifiers: "[",
+                isARepeat: false,
+                keyCode: UInt16(kVK_ANSI_LeftBracket)
+            )
+        )
+
+        XCTAssertNil(DisplayShortcutConfig.action(for: optionOnlyEvent))
     }
 }
