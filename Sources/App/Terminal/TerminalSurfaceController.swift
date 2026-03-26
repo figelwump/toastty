@@ -40,12 +40,18 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var closeTransitionViewportUpdatePending = false
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
     private var lastViewportState: TerminalViewportState?
+    #if DEBUG
+    private var closeTransitionViewportReplayObserverForTesting: ((CGSize, CGFloat) -> Void)?
+    private var skipCloseTransitionViewportReplayUpdateForTesting = false
+    #endif
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
     private let requiredStableViewportResumePasses = 2
     private let requiredAutomationInputStabilityInterval: TimeInterval = 0.5
+    private static let closeTransitionViewportReplayPollIntervalNanoseconds: UInt64 = 16_000_000
+    private static let closeTransitionViewportReplayMaxAttempts = 12
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -1310,19 +1316,36 @@ extension TerminalSurfaceController {
     }
 
     // Closing a split can briefly produce an intermediate resize before the
-    // surviving pane settles into its final frame. Replay the latest viewport
-    // one turn later so Ghostty only sees the stabilized size.
+    // surviving pane settles into its final frame. Keep the deferral armed
+    // across a short window so late layout passes still trigger the final
+    // replay instead of leaving Ghostty at the stale pre-close size.
     func armCloseTransitionViewportDeferral() {
         closeTransitionViewportReplayTask?.cancel()
         closeTransitionViewportDeferralArmed = true
         closeTransitionViewportUpdatePending = false
         closeTransitionViewportReplayTask = Task { @MainActor [weak self] in
-            await Task.yield()
+            for attempt in 0..<Self.closeTransitionViewportReplayMaxAttempts {
+                if attempt == 0 {
+                    await Task.yield()
+                } else {
+                    try? await Task.sleep(
+                        nanoseconds: Self.closeTransitionViewportReplayPollIntervalNanoseconds
+                    )
+                }
+                guard Task.isCancelled == false else { return }
+                guard let self else { return }
+                guard self.closeTransitionViewportDeferralArmed else {
+                    self.closeTransitionViewportReplayTask = nil
+                    return
+                }
+            }
+
             guard Task.isCancelled == false else { return }
             guard let self else { return }
             self.closeTransitionViewportReplayTask = nil
             guard self.closeTransitionViewportDeferralArmed else { return }
-            let shouldReplay = self.closeTransitionViewportUpdatePending
+            let shouldReplay = self.closeTransitionViewportUpdatePending ||
+                self.shouldForceCloseTransitionViewportReplay()
             self.closeTransitionViewportDeferralArmed = false
             self.closeTransitionViewportUpdatePending = false
             guard shouldReplay else { return }
@@ -1397,23 +1420,176 @@ extension TerminalSurfaceController {
         return true
     }
 
-    private func replayDeferredViewportUpdateIfNeeded() {
+    private func shouldForceCloseTransitionViewportReplay() -> Bool {
+        guard let replayContext = resolvedCloseTransitionViewportReplayContext() else {
+            return false
+        }
+
+        let logicalWidth = max(Int(replayContext.viewportSize.width.rounded(.down)), 1)
+        let logicalHeight = max(Int(replayContext.viewportSize.height.rounded(.down)), 1)
+        let pixelWidth = max(
+            Int((replayContext.viewportSize.width * replayContext.backingScaleFactor).rounded()),
+            1
+        )
+        let pixelHeight = max(
+            Int((replayContext.viewportSize.height * replayContext.backingScaleFactor).rounded()),
+            1
+        )
+
+        if let lastPresentationSignature {
+            return lastPresentationSignature.logicalWidth != logicalWidth ||
+                lastPresentationSignature.logicalHeight != logicalHeight ||
+                lastPresentationSignature.pixelWidth != pixelWidth ||
+                lastPresentationSignature.pixelHeight != pixelHeight
+        }
+
+        return pendingViewportSizeDiffers(
+            replayContext.viewportSize,
+            from: replayContext.pendingViewportUpdate.viewportSize
+        ) ||
+        abs(replayContext.backingScaleFactor - replayContext.pendingViewportUpdate.backingScaleFactor) > 0.001
+    }
+
+    private func resolvedCloseTransitionViewportReplayContext(
+    ) -> (
+        pendingViewportUpdate: PendingViewportUpdate,
+        sourceContainer: NSView,
+        viewportSize: CGSize,
+        backingScaleFactor: CGFloat
+    )? {
         guard let pendingViewportUpdate = latestViewportUpdate,
-              let sourceContainer = latestViewportSourceContainer else {
+              let sourceContainer = latestViewportSourceContainer ?? activeSourceContainer else {
+            return nil
+        }
+
+        let currentBoundsSize = sourceContainer.bounds.size
+        let hasUsableCurrentBounds = currentBoundsSize.width > 1 && currentBoundsSize.height > 1
+        let viewportSize = hasUsableCurrentBounds ? currentBoundsSize : pendingViewportUpdate.viewportSize
+        let backingScaleFactor = effectiveBackingScaleFactor(
+            for: sourceContainer,
+            fallback: pendingViewportUpdate.backingScaleFactor
+        )
+        return (pendingViewportUpdate, sourceContainer, viewportSize, backingScaleFactor)
+    }
+
+    private func pendingViewportSizeDiffers(_ lhs: CGSize, from rhs: CGSize) -> Bool {
+        abs(lhs.width - rhs.width) > 0.001 || abs(lhs.height - rhs.height) > 0.001
+    }
+
+    private func effectiveBackingScaleFactor(for view: NSView, fallback: CGFloat) -> CGFloat {
+        if let screenScale = view.window?.screen?.backingScaleFactor {
+            return max(screenScale, 1)
+        }
+        if let windowScale = view.window?.backingScaleFactor {
+            return max(windowScale, 1)
+        }
+        if let mainScale = NSScreen.main?.backingScaleFactor {
+            return max(mainScale, 1)
+        }
+        return max(fallback, 1)
+    }
+
+    private func replayDeferredViewportUpdateIfNeeded() {
+        guard let replayContext = resolvedCloseTransitionViewportReplayContext() else {
             return
         }
+        #if DEBUG
+        closeTransitionViewportReplayObserverForTesting?(
+            replayContext.viewportSize,
+            replayContext.backingScaleFactor
+        )
+        if skipCloseTransitionViewportReplayUpdateForTesting {
+            return
+        }
+        #endif
         update(
-            terminalState: pendingViewportUpdate.terminalState,
-            focused: pendingViewportUpdate.focused,
-            fontPoints: pendingViewportUpdate.fontPoints,
-            viewportSize: pendingViewportUpdate.viewportSize,
-            backingScaleFactor: pendingViewportUpdate.backingScaleFactor,
-            sourceContainer: sourceContainer,
-            attachment: pendingViewportUpdate.attachment
+            terminalState: replayContext.pendingViewportUpdate.terminalState,
+            focused: replayContext.pendingViewportUpdate.focused,
+            fontPoints: replayContext.pendingViewportUpdate.fontPoints,
+            viewportSize: replayContext.viewportSize,
+            backingScaleFactor: replayContext.backingScaleFactor,
+            sourceContainer: replayContext.sourceContainer,
+            attachment: replayContext.pendingViewportUpdate.attachment
         )
     }
     #endif
 }
+
+#if DEBUG && TOASTTY_HAS_GHOSTTY_KIT
+@MainActor
+extension TerminalSurfaceController {
+    func seedCloseTransitionViewportReplayStateForTesting(
+        terminalState: TerminalPanelState,
+        focused: Bool,
+        fontPoints: Double,
+        viewportSize: CGSize,
+        backingScaleFactor: CGFloat,
+        sourceContainer: NSView,
+        attachment: PanelHostAttachmentToken,
+        lastPresentationViewportSize: CGSize?,
+        lastPresentationBackingScaleFactor: CGFloat?
+    ) {
+        activeSourceContainer = sourceContainer
+        activeAttachment = attachment
+        pendingDetachAttachment = nil
+        recordLatestViewportUpdate(
+            terminalState: terminalState,
+            focused: focused,
+            fontPoints: fontPoints,
+            viewportSize: viewportSize,
+            backingScaleFactor: backingScaleFactor,
+            sourceContainer: sourceContainer,
+            attachment: attachment
+        )
+
+        if let lastPresentationViewportSize {
+            let presentationScale = max(lastPresentationBackingScaleFactor ?? backingScaleFactor, 1)
+            lastPresentationSignature = SurfacePresentationSignature(
+                logicalWidth: max(Int(lastPresentationViewportSize.width.rounded(.down)), 1),
+                logicalHeight: max(Int(lastPresentationViewportSize.height.rounded(.down)), 1),
+                pixelWidth: max(Int((lastPresentationViewportSize.width * presentationScale).rounded()), 1),
+                pixelHeight: max(Int((lastPresentationViewportSize.height * presentationScale).rounded()), 1),
+                scaleThousandths: Int((presentationScale * 1000).rounded()),
+                focused: focused,
+                pixelSizingEnabled: usesBackingPixelSurfaceSizing
+            )
+        } else {
+            lastPresentationSignature = nil
+        }
+    }
+
+    func installCloseTransitionViewportReplayObserverForTesting(
+        _ observer: @escaping (CGSize, CGFloat) -> Void
+    ) {
+        closeTransitionViewportReplayObserverForTesting = observer
+    }
+
+    func markCloseTransitionViewportUpdatePendingForTesting() {
+        closeTransitionViewportUpdatePending = true
+    }
+
+    func setSkipCloseTransitionViewportReplayUpdateForTesting(_ skip: Bool) {
+        skipCloseTransitionViewportReplayUpdateForTesting = skip
+    }
+
+    func runCloseTransitionViewportReplayForTesting(forceTimeout: Bool) {
+        closeTransitionViewportReplayTask?.cancel()
+        closeTransitionViewportReplayTask = nil
+        guard closeTransitionViewportDeferralArmed else { return }
+        guard forceTimeout else { return }
+        let shouldReplay = closeTransitionViewportUpdatePending ||
+            shouldForceCloseTransitionViewportReplay()
+        closeTransitionViewportDeferralArmed = false
+        closeTransitionViewportUpdatePending = false
+        guard shouldReplay else { return }
+        replayDeferredViewportUpdateIfNeeded()
+    }
+
+    var isCloseTransitionViewportUpdatePendingForTesting: Bool {
+        closeTransitionViewportUpdatePending
+    }
+}
+#endif
 
 private extension NSView {
     var hasHiddenAncestor: Bool {

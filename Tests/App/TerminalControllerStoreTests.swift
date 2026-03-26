@@ -129,6 +129,116 @@ final class TerminalControllerStoreTests: XCTestCase {
         XCTAssertTrue(controller.isCloseTransitionViewportDeferralArmed)
     }
 
+    func testCloseTransitionViewportDeferralKeepsPendingReplayArmedUntilTimeout() {
+        let store = TerminalControllerStore()
+        let panelID = UUID()
+        let delegate = TestTerminalSurfaceControllerDelegate()
+        let controller = store.controller(for: panelID, delegate: delegate)
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        let attachment = PanelHostAttachmentToken.next()
+        let terminalState = TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/tmp")
+        var observedViewportSize: CGSize?
+
+        controller.setSkipCloseTransitionViewportReplayUpdateForTesting(true)
+        controller.installCloseTransitionViewportReplayObserverForTesting { viewportSize, _ in
+            observedViewportSize = viewportSize
+        }
+        controller.seedCloseTransitionViewportReplayStateForTesting(
+            terminalState: terminalState,
+            focused: true,
+            fontPoints: AppState.defaultTerminalFontPoints,
+            viewportSize: container.bounds.size,
+            backingScaleFactor: 1,
+            sourceContainer: container,
+            attachment: attachment,
+            lastPresentationViewportSize: container.bounds.size,
+            lastPresentationBackingScaleFactor: 1
+        )
+
+        container.setFrameSize(CGSize(width: 320, height: 260))
+        controller.armCloseTransitionViewportDeferral()
+        controller.markCloseTransitionViewportUpdatePendingForTesting()
+        controller.runCloseTransitionViewportReplayForTesting(forceTimeout: false)
+
+        XCTAssertNil(observedViewportSize)
+        XCTAssertTrue(controller.isCloseTransitionViewportDeferralArmed)
+        XCTAssertTrue(controller.isCloseTransitionViewportUpdatePendingForTesting)
+    }
+
+    func testCloseTransitionViewportDeferralReplaysLatestViewportAtTimeoutAfterPendingUpdate() {
+        let store = TerminalControllerStore()
+        let panelID = UUID()
+        let delegate = TestTerminalSurfaceControllerDelegate()
+        let controller = store.controller(for: panelID, delegate: delegate)
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        let attachment = PanelHostAttachmentToken.next()
+        let terminalState = TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/tmp")
+        let finalViewportSize = CGSize(width: 320, height: 360)
+        var observedViewportSize: CGSize?
+
+        controller.setSkipCloseTransitionViewportReplayUpdateForTesting(true)
+        controller.installCloseTransitionViewportReplayObserverForTesting { viewportSize, _ in
+            observedViewportSize = viewportSize
+        }
+        controller.seedCloseTransitionViewportReplayStateForTesting(
+            terminalState: terminalState,
+            focused: true,
+            fontPoints: AppState.defaultTerminalFontPoints,
+            viewportSize: container.bounds.size,
+            backingScaleFactor: 1,
+            sourceContainer: container,
+            attachment: attachment,
+            lastPresentationViewportSize: container.bounds.size,
+            lastPresentationBackingScaleFactor: 1
+        )
+
+        container.setFrameSize(CGSize(width: 320, height: 260))
+        controller.armCloseTransitionViewportDeferral()
+        controller.markCloseTransitionViewportUpdatePendingForTesting()
+        container.setFrameSize(finalViewportSize)
+        controller.runCloseTransitionViewportReplayForTesting(forceTimeout: true)
+
+        XCTAssertEqual(observedViewportSize, finalViewportSize)
+        XCTAssertFalse(controller.isCloseTransitionViewportDeferralArmed)
+        XCTAssertFalse(controller.isCloseTransitionViewportUpdatePendingForTesting)
+    }
+
+    func testCloseTransitionViewportDeferralForcesReplayWhenContainerBoundsChangeWithoutPendingUpdate() {
+        let store = TerminalControllerStore()
+        let panelID = UUID()
+        let delegate = TestTerminalSurfaceControllerDelegate()
+        let controller = store.controller(for: panelID, delegate: delegate)
+        let container = NSView(frame: CGRect(x: 0, y: 0, width: 320, height: 180))
+        let attachment = PanelHostAttachmentToken.next()
+        let terminalState = TerminalPanelState(title: "Terminal", shell: "zsh", cwd: "/tmp")
+        let expectedViewportSize = CGSize(width: 320, height: 360)
+        var observedViewportSize: CGSize?
+
+        controller.setSkipCloseTransitionViewportReplayUpdateForTesting(true)
+        controller.installCloseTransitionViewportReplayObserverForTesting { viewportSize, _ in
+            observedViewportSize = viewportSize
+        }
+        controller.seedCloseTransitionViewportReplayStateForTesting(
+            terminalState: terminalState,
+            focused: true,
+            fontPoints: AppState.defaultTerminalFontPoints,
+            viewportSize: container.bounds.size,
+            backingScaleFactor: 1,
+            sourceContainer: container,
+            attachment: attachment,
+            lastPresentationViewportSize: container.bounds.size,
+            lastPresentationBackingScaleFactor: 1
+        )
+
+        container.setFrameSize(expectedViewportSize)
+        controller.armCloseTransitionViewportDeferral()
+        controller.runCloseTransitionViewportReplayForTesting(forceTimeout: true)
+
+        XCTAssertEqual(observedViewportSize, expectedViewportSize)
+        XCTAssertFalse(controller.isCloseTransitionViewportDeferralArmed)
+        XCTAssertFalse(controller.isCloseTransitionViewportUpdatePendingForTesting)
+    }
+
     func testApplyGhosttyScrollbarPreferenceChangeUpdatesMountedControllers() throws {
         let store = TerminalControllerStore()
         let panelID = UUID()
