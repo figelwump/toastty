@@ -1323,6 +1323,19 @@ extension TerminalSurfaceController {
         closeTransitionViewportReplayTask?.cancel()
         closeTransitionViewportDeferralArmed = true
         closeTransitionViewportUpdatePending = false
+        ToasttyLog.info(
+            "Armed close-transition viewport deferral for terminal surface",
+            category: .ghostty,
+            metadata: closeTransitionViewportMetadata(
+                extra: [
+                    "source_container_id": containerIdentifier(latestViewportSourceContainer ?? activeSourceContainer),
+                    "source_container_width": String(format: "%.1f", (latestViewportSourceContainer ?? activeSourceContainer)?.bounds.width ?? 0.0),
+                    "source_container_height": String(format: "%.1f", (latestViewportSourceContainer ?? activeSourceContainer)?.bounds.height ?? 0.0),
+                    "pending_viewport_width": String(format: "%.1f", latestViewportUpdate?.viewportSize.width ?? 0.0),
+                    "pending_viewport_height": String(format: "%.1f", latestViewportUpdate?.viewportSize.height ?? 0.0),
+                ]
+            )
+        )
         closeTransitionViewportReplayTask = Task { @MainActor [weak self] in
             for attempt in 0..<Self.closeTransitionViewportReplayMaxAttempts {
                 if attempt == 0 {
@@ -1344,8 +1357,19 @@ extension TerminalSurfaceController {
             guard let self else { return }
             self.closeTransitionViewportReplayTask = nil
             guard self.closeTransitionViewportDeferralArmed else { return }
-            let shouldReplay = self.closeTransitionViewportUpdatePending ||
-                self.shouldForceCloseTransitionViewportReplay()
+            let forcedReplay = self.shouldForceCloseTransitionViewportReplay()
+            let shouldReplay = self.closeTransitionViewportUpdatePending || forcedReplay
+            ToasttyLog.info(
+                "Evaluated close-transition viewport replay after close-panel settle window",
+                category: .ghostty,
+                metadata: self.closeTransitionViewportMetadata(
+                    extra: [
+                        "pending_update_seen": self.closeTransitionViewportUpdatePending ? "true" : "false",
+                        "forced_replay": forcedReplay ? "true" : "false",
+                        "will_replay": shouldReplay ? "true" : "false",
+                    ]
+                )
+            )
             self.closeTransitionViewportDeferralArmed = false
             self.closeTransitionViewportUpdatePending = false
             guard shouldReplay else { return }
@@ -1403,7 +1427,26 @@ extension TerminalSurfaceController {
         guard logicalSizeChanged || pixelSizeChanged else {
             return false
         }
+        let wasPending = closeTransitionViewportUpdatePending
         closeTransitionViewportUpdatePending = true
+        if wasPending == false {
+            ToasttyLog.info(
+                "Deferred Ghostty viewport resize during close-transition layout churn",
+                category: .ghostty,
+                metadata: closeTransitionViewportMetadata(
+                    extra: [
+                        "last_logical_width": String(lastPresentationSignature.logicalWidth),
+                        "last_logical_height": String(lastPresentationSignature.logicalHeight),
+                        "next_logical_width": String(logicalWidth),
+                        "next_logical_height": String(logicalHeight),
+                        "last_pixel_width": String(lastPresentationSignature.pixelWidth),
+                        "last_pixel_height": String(lastPresentationSignature.pixelHeight),
+                        "next_pixel_width": String(pixelWidth),
+                        "next_pixel_height": String(pixelHeight),
+                    ]
+                )
+            )
+        }
         logSurfaceDiagnostics(
             message: "Deferring Ghostty viewport resize during close-transition layout churn",
             extra: [
@@ -1491,8 +1534,25 @@ extension TerminalSurfaceController {
 
     private func replayDeferredViewportUpdateIfNeeded() {
         guard let replayContext = resolvedCloseTransitionViewportReplayContext() else {
+            ToasttyLog.info(
+                "Skipping close-transition viewport replay because no pending viewport context is available",
+                category: .ghostty,
+                metadata: closeTransitionViewportMetadata()
+            )
             return
         }
+        ToasttyLog.info(
+            "Replaying deferred close-transition viewport update",
+            category: .ghostty,
+            metadata: closeTransitionViewportMetadata(
+                extra: [
+                    "replay_viewport_width": String(format: "%.1f", replayContext.viewportSize.width),
+                    "replay_viewport_height": String(format: "%.1f", replayContext.viewportSize.height),
+                    "replay_backing_scale": String(format: "%.3f", replayContext.backingScaleFactor),
+                    "source_container_id": containerIdentifier(replayContext.sourceContainer),
+                ]
+            )
+        )
         #if DEBUG
         closeTransitionViewportReplayObserverForTesting?(
             replayContext.viewportSize,
@@ -1511,6 +1571,28 @@ extension TerminalSurfaceController {
             sourceContainer: replayContext.sourceContainer,
             attachment: replayContext.pendingViewportUpdate.attachment
         )
+    }
+
+    private func closeTransitionViewportMetadata(extra: [String: String] = [:]) -> [String: String] {
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "deferral_armed": closeTransitionViewportDeferralArmed ? "true" : "false",
+            "update_pending": closeTransitionViewportUpdatePending ? "true" : "false",
+        ]
+        if let activeAttachment {
+            metadata["attachment_id"] = activeAttachment.rawValue.uuidString
+            metadata["attachment_generation"] = String(activeAttachment.generation)
+        }
+        if let lastPresentationSignature {
+            metadata["presented_logical_width"] = String(lastPresentationSignature.logicalWidth)
+            metadata["presented_logical_height"] = String(lastPresentationSignature.logicalHeight)
+            metadata["presented_pixel_width"] = String(lastPresentationSignature.pixelWidth)
+            metadata["presented_pixel_height"] = String(lastPresentationSignature.pixelHeight)
+        }
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        return metadata
     }
     #endif
 }

@@ -114,14 +114,49 @@ final class TerminalStoreActionCoordinator {
         previousState: AppState,
         nextState: AppState
     ) {
-        guard let workspaceID = Self.workspaceID(containing: closedPanelID, state: previousState),
-              let nextWorkspace = nextState.workspacesByID[workspaceID] else {
+        guard let workspaceID = Self.workspaceID(containing: closedPanelID, state: previousState) else {
+            ToasttyLog.info(
+                "Skipping close-transition viewport deferral because the closed panel was not found in the previous workspace state",
+                category: .terminal,
+                metadata: [
+                    "closed_panel_id": closedPanelID.uuidString,
+                ]
+            )
+            return
+        }
+        guard let nextWorkspace = nextState.workspacesByID[workspaceID] else {
+            ToasttyLog.info(
+                "Skipping close-transition viewport deferral because the workspace no longer exists after closing the panel",
+                category: .terminal,
+                metadata: [
+                    "closed_panel_id": closedPanelID.uuidString,
+                    "workspace_id": workspaceID.uuidString,
+                ]
+            )
             return
         }
         let liveTerminalPanelIDs = Self.liveTerminalPanelIDs(in: nextWorkspace)
         guard liveTerminalPanelIDs.isEmpty == false else {
+            ToasttyLog.info(
+                "Skipping close-transition viewport deferral because no live terminal panels remain after closing the panel",
+                category: .terminal,
+                metadata: [
+                    "closed_panel_id": closedPanelID.uuidString,
+                    "workspace_id": workspaceID.uuidString,
+                ]
+            )
             return
         }
+        ToasttyLog.info(
+            "Arming close-transition viewport deferral after panel close",
+            category: .terminal,
+            metadata: [
+                "closed_panel_id": closedPanelID.uuidString,
+                "workspace_id": workspaceID.uuidString,
+                "live_terminal_panel_count": String(liveTerminalPanelIDs.count),
+                "live_terminal_panel_ids": Self.serializedPanelIDs(liveTerminalPanelIDs),
+            ]
+        )
         armCloseTransitionViewportDeferral(workspaceID, liveTerminalPanelIDs)
     }
 
@@ -177,6 +212,10 @@ final class TerminalStoreActionCoordinator {
             }
             panelIDs.insert(panelID)
         }
+    }
+
+    private static func serializedPanelIDs(_ panelIDs: Set<UUID>) -> String {
+        panelIDs.map(\.uuidString).sorted().joined(separator: ",")
     }
 
 }
