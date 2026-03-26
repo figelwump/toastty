@@ -1006,13 +1006,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             didMutate = store.send(.toggleFocusedPanelMode(workspaceID: try workspaceID()))
 
         case "app.font.increase":
-            didMutate = store.send(.increaseGlobalTerminalFont)
+            didMutate = store.send(.increaseWindowTerminalFont(windowID: try resolveWindowID(args: args)))
 
         case "app.font.decrease":
-            didMutate = store.send(.decreaseGlobalTerminalFont)
+            didMutate = store.send(.decreaseWindowTerminalFont(windowID: try resolveWindowID(args: args)))
 
         case "app.font.reset":
-            didMutate = store.send(.resetGlobalTerminalFont)
+            didMutate = store.send(.resetWindowTerminalFont(windowID: try resolveWindowID(args: args)))
 
         case "sidebar.workspaces.new":
             let windowID = try resolveWindowID(args: args)

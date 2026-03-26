@@ -6,6 +6,7 @@ struct AppWindowSceneObserver: NSViewRepresentable {
     let windowID: UUID
     let desiredFrame: CGRectCodable?
     let windowTitle: String?
+    let shouldConfirmWindowClose: Bool
     let onWindowDidBecomeKey: @MainActor () -> Void
     let onWindowFrameChange: @MainActor (CGRectCodable) -> Void
     let onWindowCloseInitiated: @MainActor () -> Void
@@ -18,7 +19,8 @@ struct AppWindowSceneObserver: NSViewRepresentable {
             onWindowDidBecomeKey: onWindowDidBecomeKey,
             onWindowFrameChange: onWindowFrameChange,
             onWindowCloseInitiated: onWindowCloseInitiated,
-            onWindowWillClose: onWindowWillClose
+            onWindowWillClose: onWindowWillClose,
+            shouldConfirmWindowClose: shouldConfirmWindowClose
         )
     }
 
@@ -34,6 +36,7 @@ struct AppWindowSceneObserver: NSViewRepresentable {
         context.coordinator.windowID = windowID
         context.coordinator.desiredFrame = desiredFrame?.cgRect
         context.coordinator.windowTitle = windowTitle
+        context.coordinator.shouldConfirmWindowClose = shouldConfirmWindowClose
         context.coordinator.onWindowDidBecomeKey = onWindowDidBecomeKey
         context.coordinator.onWindowFrameChange = onWindowFrameChange
         context.coordinator.onWindowCloseInitiated = onWindowCloseInitiated
@@ -83,7 +86,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private var observerTokens: [NSObjectProtocol] = []
     private let scheduleOnMainActor: MainActorScheduler
     private let defaultWindowTitle: WindowTitleProvider
-    private let shouldConfirmWindowClose: Bool
+    var shouldConfirmWindowClose: Bool
     private let presentWindowCloseConfirmation: WindowCloseConfirmationPresenter
     private let closeWindow: WindowCloser
     private var isPresentingWindowCloseConfirmation = false

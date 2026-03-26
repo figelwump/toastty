@@ -579,6 +579,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         hostedView.removeFromSuperview()
     }
 
+    #if !TOASTTY_HAS_GHOSTTY_KIT
+    func applyViewportState(_ viewportState: TerminalViewportState?) {
+        _ = viewportState
+    }
+
+    func applyGhosttyScrollbarPreferenceChange() {}
+    #endif
+
     @discardableResult
     func focusHostViewIfNeeded() -> Bool {
         guard let window = hostedView.window else { return false }

@@ -77,7 +77,8 @@ public struct AppReducer {
                 id: UUID(),
                 frame: initialFrame ?? CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
                 workspaceIDs: [workspace.id],
-                selectedWorkspaceID: workspace.id
+                selectedWorkspaceID: workspace.id,
+                terminalFontSizePointsOverride: seed?.windowTerminalFontSizePointsOverride
             )
 
             state.workspacesByID[workspace.id] = workspace
@@ -292,7 +293,10 @@ public struct AppReducer {
                 id: detachedWindowID,
                 frame: CGRectCodable(x: 160, y: 160, width: 1000, height: 680),
                 workspaceIDs: [detachedWorkspaceID],
-                selectedWorkspaceID: detachedWorkspaceID
+                selectedWorkspaceID: detachedWorkspaceID,
+                terminalFontSizePointsOverride: state.normalizedTerminalFontOverride(
+                    state.effectiveTerminalFontPoints(for: sourceLocation.windowID)
+                )
             )
 
             state.workspacesByID[detachedWorkspaceID] = detachedWorkspace
@@ -492,40 +496,19 @@ public struct AppReducer {
             state.defaultTerminalProfileID = normalizedProfileID
             return true
 
-        case .setGlobalTerminalFont(let points):
-            let clampedPoints = AppState.clampedTerminalFontPoints(points)
-            guard abs(state.globalTerminalFontPoints - clampedPoints) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = clampedPoints
-            return true
+        case .setWindowTerminalFont(let windowID, let points):
+            return setWindowTerminalFont(windowID: windowID, points: points, state: &state)
 
-        case .increaseGlobalTerminalFont:
-            let nextPoints = AppState.clampedTerminalFontPoints(
-                state.globalTerminalFontPoints + AppState.terminalFontStepPoints
-            )
-            guard abs(nextPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = nextPoints
-            return true
+        case .increaseWindowTerminalFont(let windowID):
+            return adjustWindowTerminalFont(windowID: windowID, step: AppState.terminalFontStepPoints, state: &state)
 
-        case .decreaseGlobalTerminalFont:
-            let nextPoints = AppState.clampedTerminalFontPoints(
-                state.globalTerminalFontPoints - AppState.terminalFontStepPoints
-            )
-            guard abs(nextPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = nextPoints
-            return true
+        case .decreaseWindowTerminalFont(let windowID):
+            return adjustWindowTerminalFont(windowID: windowID, step: -AppState.terminalFontStepPoints, state: &state)
 
-        case .resetGlobalTerminalFont:
-            let configuredBaseline = state.configuredTerminalFontPoints ?? AppState.defaultTerminalFontPoints
-            guard abs(state.globalTerminalFontPoints - configuredBaseline) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = configuredBaseline
+        case .resetWindowTerminalFont(let windowID):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            guard state.windows[windowIndex].terminalFontSizePointsOverride != nil else { return false }
+            state.windows[windowIndex].terminalFontSizePointsOverride = nil
             return true
 
         case .splitFocusedSlot(let workspaceID, let orientation):
@@ -641,6 +624,32 @@ public struct AppReducer {
             state.windows[windowIndex].sidebarVisible.toggle()
             return true
         }
+    }
+
+    private static func setWindowTerminalFont(windowID: UUID, points: Double, state: inout AppState) -> Bool {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        let normalizedOverride = state.normalizedTerminalFontOverride(points)
+        guard state.windows[windowIndex].terminalFontSizePointsOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].terminalFontSizePointsOverride = normalizedOverride
+        return true
+    }
+
+    private static func adjustWindowTerminalFont(windowID: UUID, step: Double, state: inout AppState) -> Bool {
+        guard state.window(id: windowID) != nil else { return false }
+        let previousPoints = state.effectiveTerminalFontPoints(for: windowID)
+        let nextPoints = AppState.clampedTerminalFontPoints(previousPoints + step)
+        guard abs(nextPoints - previousPoints) >= AppState.terminalFontComparisonEpsilon else {
+            return false
+        }
+        let normalizedOverride = state.normalizedTerminalFontOverride(nextPoints)
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        guard state.windows[windowIndex].terminalFontSizePointsOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].terminalFontSizePointsOverride = normalizedOverride
+        return true
     }
 
     @discardableResult
@@ -919,10 +928,10 @@ public struct AppReducer {
         window.workspaceIDs.remove(at: workspaceIndex)
 
         if window.workspaceIDs.isEmpty {
-            let removedWindowID = window.id
-            state.windows.remove(at: windowIndex)
-            if state.selectedWindowID == removedWindowID {
-                state.selectedWindowID = state.windows.first?.id
+            window.selectedWorkspaceID = nil
+            state.windows[windowIndex] = window
+            if state.selectedWindowID == nil {
+                state.selectedWindowID = window.id
             }
             return true
         }

@@ -130,8 +130,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
                 ),
             ],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
 
         let selection = WindowCommandSelection(
@@ -173,8 +172,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 

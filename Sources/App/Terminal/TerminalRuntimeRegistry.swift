@@ -79,7 +79,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private var stateObservation: AnyCancellable?
-    private var observedGlobalFontPoints: Double?
+    private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
@@ -485,7 +485,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
 private extension TerminalRuntimeRegistry {
     func bindStateObservation(to store: AppStore) {
         stateObservation?.cancel()
-        observedGlobalFontPoints = store.state.globalTerminalFontPoints
+        observedWindowFontPointsByID = effectiveWindowFontPointsByID(in: store.state)
         stateObservation = store.$state.sink { [weak self] state in
             self?.handleObservedStoreState(state)
         }
@@ -493,16 +493,12 @@ private extension TerminalRuntimeRegistry {
 
     func handleObservedStoreState(_ state: AppState) {
         synchronize(with: state)
-
-        if let previousPoints = observedGlobalFontPoints,
-           abs(previousPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon {
-            applyGhosttyGlobalFontChangeIfNeeded(
-                from: previousPoints,
-                to: state.globalTerminalFontPoints
-            )
-        }
-
-        observedGlobalFontPoints = state.globalTerminalFontPoints
+        let nextWindowFontPointsByID = effectiveWindowFontPointsByID(in: state)
+        applyGhosttyFontChangesIfNeeded(
+            from: observedWindowFontPointsByID,
+            to: nextWindowFontPointsByID
+        )
+        observedWindowFontPointsByID = nextWindowFontPointsByID
     }
 
     func scheduleFocusRestore(
@@ -536,6 +532,12 @@ private extension TerminalRuntimeRegistry {
         }
     }
 
+    func effectiveWindowFontPointsByID(in state: AppState) -> [UUID: Double] {
+        Dictionary(uniqueKeysWithValues: state.windows.map { window in
+            (window.id, state.effectiveTerminalFontPoints(for: window.id))
+        })
+    }
+
 }
 
 extension TerminalRuntimeRegistry {
@@ -550,8 +552,15 @@ private extension TerminalRuntimeRegistry {
         GhosttyRuntimeManager.shared.actionHandler = self
     }
 
-    func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
-        runtimeStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+    func applyGhosttyFontChangesIfNeeded(from previousPointsByWindowID: [UUID: Double], to nextPointsByWindowID: [UUID: Double]) {
+        for windowID in Set(previousPointsByWindowID.keys).union(nextPointsByWindowID.keys) {
+            guard let previousPoints = previousPointsByWindowID[windowID],
+                  let nextPoints = nextPointsByWindowID[windowID],
+                  abs(previousPoints - nextPoints) >= AppState.terminalFontComparisonEpsilon else {
+                continue
+            }
+            runtimeStore.applyGhosttyFontChange(windowID: windowID, from: previousPoints, to: nextPoints)
+        }
     }
 
     func splitSourceSurfaceState(for newPanelID: UUID) -> TerminalSplitSourceSurfaceState {
@@ -566,7 +575,7 @@ private extension TerminalRuntimeRegistry {
 private extension TerminalRuntimeRegistry {
     func configureGhosttyActionHandler() {}
 
-    func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
+    func applyGhosttyFontChangesIfNeeded(from _: [UUID: Double], to _: [UUID: Double]) {}
 }
 #endif
 

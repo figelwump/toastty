@@ -535,7 +535,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func closeLastPanelInLastTabClosesWorkspaceAndWindow() throws {
+    func closeLastPanelInLastTabClosesWorkspaceAndKeepsEmptyWindow() throws {
         var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
         let reducer = AppReducer()
         let windowID = try #require(state.windows.first?.id)
@@ -545,10 +545,12 @@ struct AppReducerTests {
 
         #expect(reducer.send(.closePanel(panelID: originalPanelID), state: &state))
 
-        #expect(state.window(id: windowID) == nil)
         #expect(state.workspacesByID[workspaceID] == nil)
-        #expect(state.windows.isEmpty)
-        #expect(state.selectedWindowID == nil)
+        let window = try #require(state.window(id: windowID))
+        #expect(window.workspaceIDs.isEmpty)
+        #expect(window.selectedWorkspaceID == nil)
+        #expect(state.windows.count == 1)
+        #expect(state.selectedWindowID == windowID)
         #expect(state.defaultTerminalProfileID == "zmx")
         try StateValidator.validate(state)
     }
@@ -675,8 +677,7 @@ struct AppReducerTests {
             windows: [],
             workspacesByID: [:],
             selectedWindowID: nil,
-            configuredTerminalFontPoints: 13,
-            globalTerminalFontPoints: 15
+            configuredTerminalFontPoints: 13
         )
         let reducer = AppReducer()
         let frame = CGRectCodable(x: 240, y: 180, width: 1440, height: 900)
@@ -691,7 +692,8 @@ struct AppReducerTests {
         #expect(window.frame == frame)
         #expect(workspace.title == "Workspace 1")
         #expect(state.configuredTerminalFontPoints == 13)
-        #expect(state.globalTerminalFontPoints == 15)
+        #expect(window.terminalFontSizePointsOverride == nil)
+        #expect(state.effectiveTerminalFontPoints(for: window.id) == 13)
 
         try StateValidator.validate(state)
     }
@@ -703,8 +705,7 @@ struct AppReducerTests {
             workspacesByID: [:],
             selectedWindowID: nil,
             configuredTerminalFontPoints: 13,
-            defaultTerminalProfileID: "zmx",
-            globalTerminalFontPoints: 15
+            defaultTerminalProfileID: "zmx"
         )
         let reducer = AppReducer()
 
@@ -730,14 +731,14 @@ struct AppReducerTests {
             workspacesByID: [:],
             selectedWindowID: nil,
             configuredTerminalFontPoints: 13,
-            defaultTerminalProfileID: "ssh-prod",
-            globalTerminalFontPoints: 15
+            defaultTerminalProfileID: "ssh-prod"
         )
         let reducer = AppReducer()
         let seed = WindowLaunchSeed(
             workspaceTitle: "Client Logs",
             terminalCWD: "~/src/../tmp/toastty",
-            terminalProfileBinding: TerminalProfileBinding(profileID: "zmx")
+            terminalProfileBinding: TerminalProfileBinding(profileID: "zmx"),
+            windowTerminalFontSizePointsOverride: 15
         )
 
         #expect(reducer.send(.createWindow(seed: seed, initialFrame: nil), state: &state))
@@ -754,6 +755,8 @@ struct AppReducerTests {
         #expect(workspace.title == "Client Logs")
         #expect(terminalState.cwd == ((NSHomeDirectory() + "/src/../tmp/toastty") as NSString).standardizingPath)
         #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+        #expect(window.terminalFontSizePointsOverride == 15)
+        #expect(state.effectiveTerminalFontPoints(for: window.id) == 15)
         try StateValidator.validate(state)
     }
 
@@ -763,8 +766,7 @@ struct AppReducerTests {
             windows: [],
             workspacesByID: [:],
             selectedWindowID: nil,
-            configuredTerminalFontPoints: 13,
-            globalTerminalFontPoints: 15
+            configuredTerminalFontPoints: 13
         )
         let reducer = AppReducer()
 
@@ -1064,6 +1066,24 @@ struct AppReducerTests {
         let updatedWindow = try #require(state.windows.first(where: { $0.id == windowID }))
         #expect(updatedWindow.workspaceIDs == [secondWorkspaceID])
         #expect(updatedWindow.selectedWorkspaceID == secondWorkspaceID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastWorkspaceKeepsEmptyWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.closeWorkspace(workspaceID: workspaceID), state: &state))
+
+        #expect(state.workspacesByID[workspaceID] == nil)
+        let updatedWindow = try #require(state.window(id: windowID))
+        #expect(updatedWindow.workspaceIDs.isEmpty)
+        #expect(updatedWindow.selectedWorkspaceID == nil)
+        #expect(state.windows.count == 1)
+        #expect(state.selectedWindowID == windowID)
         try StateValidator.validate(state)
     }
 
@@ -2003,90 +2023,105 @@ struct AppReducerTests {
     }
 
     @Test
-    func globalFontActionsAdjustAndResetFontSize() {
+    func windowFontActionsAdjustAndResetFontSize() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
         let defaultPoints = AppState.defaultTerminalFontPoints
         let step = AppState.terminalFontStepPoints
 
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints + step)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + step)
+        #expect(state.window(id: windowID)?.terminalFontSizePointsOverride == defaultPoints + step)
 
-        #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints)
+        #expect(reducer.send(.decreaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+        #expect(state.window(id: windowID)?.terminalFontSizePointsOverride == nil)
 
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints + (step * 2))
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + (step * 2))
 
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+        #expect(state.window(id: windowID)?.terminalFontSizePointsOverride == nil)
     }
 
     @Test
-    func configuredFontBaselineUpdatesConfiguredValueAndResetUsesIt() {
+    func configuredFontBaselineUpdatesConfiguredValueAndResetUsesIt() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: 14), state: &state))
         #expect(state.configuredTerminalFontPoints == 14)
-        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 14)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 14)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 15)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 14)
     }
 
     @Test
-    func configuredFontBaselineDoesNotOverrideUserAdjustedFont() {
+    func configuredFontBaselineDoesNotOverrideUserAdjustedFont() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
         let defaultPoints = AppState.defaultTerminalFontPoints
 
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints + AppState.terminalFontStepPoints)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + AppState.terminalFontStepPoints)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: 9), state: &state))
         #expect(state.configuredTerminalFontPoints == 9)
-        #expect(state.globalTerminalFontPoints == defaultPoints + AppState.terminalFontStepPoints)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + AppState.terminalFontStepPoints)
 
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 9)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 9)
     }
 
     @Test
-    func clearingConfiguredFontBaselineReturnsResetToDefault() {
+    func clearingConfiguredFontBaselineReturnsResetToDefault() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: 15), state: &state))
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 15)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 15)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: 18), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 18)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: nil), state: &state))
         #expect(state.configuredTerminalFontPoints == nil)
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 18)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.defaultTerminalFontPoints)
     }
 
     @Test
-    func globalFontActionsClampAtBounds() {
+    func windowFontActionsClampAtBounds() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
         let defaultPoints = AppState.defaultTerminalFontPoints
 
-        state.globalTerminalFontPoints = AppState.maxTerminalFontPoints
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == AppState.maxTerminalFontPoints)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: AppState.maxTerminalFontPoints + 10), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.maxTerminalFontPoints)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.maxTerminalFontPoints)
 
-        state.globalTerminalFontPoints = AppState.minTerminalFontPoints
-        #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == AppState.minTerminalFontPoints)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: AppState.minTerminalFontPoints), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.minTerminalFontPoints)
+        #expect(reducer.send(.decreaseWindowTerminalFont(windowID: windowID), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.minTerminalFontPoints)
 
-        state.globalTerminalFontPoints = defaultPoints
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == defaultPoints)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
 
-        #expect(reducer.send(.setGlobalTerminalFont(points: AppState.maxTerminalFontPoints + 10), state: &state))
-        #expect(state.globalTerminalFontPoints == AppState.maxTerminalFontPoints)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: defaultPoints), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
     }
 
     @Test
@@ -2516,8 +2551,7 @@ struct AppReducerTests {
                 currentWorkspace.id: currentWorkspace,
                 targetWorkspace.id: targetWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let reducer = AppReducer()
 
@@ -2557,8 +2591,7 @@ struct AppReducerTests {
                 )
             ],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let originalState = state
         let reducer = AppReducer()

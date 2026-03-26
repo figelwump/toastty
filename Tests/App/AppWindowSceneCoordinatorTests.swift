@@ -91,8 +91,7 @@ final class AppWindowSceneCoordinatorTests: XCTestCase {
         return AppState(
             windows: windows,
             workspacesByID: workspacesByID,
-            selectedWindowID: windows.first?.id,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windows.first?.id
         )
     }
 }

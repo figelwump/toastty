@@ -483,8 +483,8 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
-    func testAppFontActionDoesNotRequireWorkspaceTargetWhenMultipleWindowsExist() async throws {
-        let fixture = makeTwoWindowFixture()
+    func testAppFontActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
+        let fixture = makeSingleWindowFixture()
 
         try await withAutomationHarness(state: fixture.state) { harness in
             let response = try sendRequest(
@@ -499,8 +499,69 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertTrue(response.ok)
 
             let state = await MainActor.run { harness.store.state }
-            XCTAssertEqual(state.globalTerminalFontPoints, AppState.defaultTerminalFontPoints + 1)
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.windowID),
+                AppState.defaultTerminalFontPoints + 1
+            )
+        }
+    }
+
+    func testAppFontActionRequiresExplicitWindowWhenMultipleWindowsExist() async throws {
+        let fixture = makeTwoWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "app.font.increase",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "windowID is required when multiple windows exist")
+
+            let state = await MainActor.run { harness.store.state }
             XCTAssertEqual(state.selectedWindowID, fixture.firstWindowID)
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.firstWindowID),
+                AppState.defaultTerminalFontPoints
+            )
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.secondWindowID),
+                AppState.defaultTerminalFontPoints
+            )
+        }
+    }
+
+    func testAppFontActionUsesExplicitWindowSelection() async throws {
+        let fixture = makeTwoWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "app.font.increase",
+                    "args": [
+                        "windowID": fixture.secondWindowID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            XCTAssertEqual(state.selectedWindowID, fixture.firstWindowID)
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.firstWindowID),
+                AppState.defaultTerminalFontPoints
+            )
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.secondWindowID),
+                AppState.defaultTerminalFontPoints + 1
+            )
         }
     }
 
@@ -562,8 +623,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 ),
             ],
             workspacesByID: [workspaceID: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
 
         try await withAutomationHarness(state: state) { harness in
@@ -798,8 +858,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         return TwoWindowFixture(
             state: state,
@@ -825,8 +884,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             workspacesByID: [
                 workspace.id: workspace,
             ],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         return SingleWindowFixture(
             state: state,
@@ -860,8 +918,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 ),
             ],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         return SingleWindowUnreadFixture(
             state: state,
@@ -908,8 +965,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         return TwoWindowUnreadFixture(
             state: state,

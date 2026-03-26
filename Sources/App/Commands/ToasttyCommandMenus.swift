@@ -149,6 +149,7 @@ struct ToasttyCommandMenus: Commands {
 
     var body: some Commands {
         let preferredWindowID = preferredCommandWindowID
+        let fontCommandWindowID = store.commandWindowID(preferredWindowID: preferredWindowID)
 
         CommandGroup(replacing: .newItem) {
             Button("New Tab") {
@@ -178,19 +179,25 @@ struct ToasttyCommandMenus: Commands {
 
         CommandMenu("Terminal") {
             Button("Increase Terminal Font") {
-                store.send(.increaseGlobalTerminalFont)
+                guard let fontCommandWindowID else { return }
+                store.send(.increaseWindowTerminalFont(windowID: fontCommandWindowID))
             }
             .keyboardShortcut("+", modifiers: [.command])
+            .disabled(fontCommandWindowID == nil)
 
             Button("Decrease Terminal Font") {
-                store.send(.decreaseGlobalTerminalFont)
+                guard let fontCommandWindowID else { return }
+                store.send(.decreaseWindowTerminalFont(windowID: fontCommandWindowID))
             }
             .keyboardShortcut("-", modifiers: [.command])
+            .disabled(fontCommandWindowID == nil)
 
             Button("Reset Terminal Font") {
-                store.send(.resetGlobalTerminalFont)
+                guard let fontCommandWindowID else { return }
+                store.send(.resetWindowTerminalFont(windowID: fontCommandWindowID))
             }
             .keyboardShortcut("0", modifiers: [.command])
+            .disabled(fontCommandWindowID == nil)
 
             Divider()
 

@@ -82,8 +82,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
                 ),
             ],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -151,8 +150,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
                 ),
             ],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()

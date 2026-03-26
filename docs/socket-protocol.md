@@ -230,8 +230,11 @@ Supported action IDs:
 - `topbar.toggle.scratchpad`
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.font.decrease`
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.font.reset`
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `sidebar.workspaces.new`
   - `args.title` is optional
   - `args.windowID` is required when multiple windows exist

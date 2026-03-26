@@ -714,8 +714,7 @@ struct SessionRuntimeStoreTests {
             windows: [window],
             workspacesByID: [workspaceID: workspace],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
     }
 }

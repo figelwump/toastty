@@ -6,9 +6,10 @@ struct AppStateCodableTests {
     @Test
     func bootstrapUsesDefaultTerminalFontSize() {
         let state = AppState.bootstrap()
+        let windowID = try! #require(state.windows.first?.id)
 
         #expect(AppState.defaultTerminalFontPoints == 12)
-        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.defaultTerminalFontPoints)
     }
 
     @Test
@@ -153,6 +154,7 @@ struct AppStateCodableTests {
             ],
             selectedWindowID: windowID,
             defaultTerminalProfileID: "ssh-prod",
+            configuredTerminalFontPoints: nil,
             globalTerminalFontPoints: 14
         )
 
@@ -163,7 +165,8 @@ struct AppStateCodableTests {
 
         #expect(decoded.selectedWindowID == windowID)
         #expect(decoded.defaultTerminalProfileID == "ssh-prod")
-        #expect(decoded.globalTerminalFontPoints == 14)
+        #expect(decoded.window(id: windowID)?.terminalFontSizePointsOverride == 14)
+        #expect(decoded.effectiveTerminalFontPoints(for: windowID) == 14)
         #expect(decodedWorkspace.title == "Infra")
         #expect(decodedWorkspace.tabIDs == [decodedTabID])
         #expect(decodedWorkspace.selectedTabID == decodedTabID)
@@ -182,6 +185,32 @@ struct AppStateCodableTests {
         #expect(restoredTerminal.cwd == "/tmp/infra")
         #expect(restoredTerminal.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
         try StateValidator.validate(decoded)
+    }
+
+    @Test
+    func appStateLegacyGlobalFontMatchingConfiguredBaselineDoesNotPinWindowOverride() throws {
+        let windowID = UUID()
+        let workspace = WorkspaceState.bootstrap(title: "One")
+        let payload = LegacyAppStatePayload(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 40, y: 60, width: 1200, height: 800),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: LegacyWorkspacePayload(workspace)],
+            selectedWindowID: windowID,
+            defaultTerminalProfileID: nil,
+            configuredTerminalFontPoints: 14,
+            globalTerminalFontPoints: 14
+        )
+
+        let decoded = try JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(payload))
+
+        #expect(decoded.window(id: windowID)?.terminalFontSizePointsOverride == nil)
+        #expect(decoded.effectiveTerminalFontPoints(for: windowID) == 14)
     }
 
     @Test
@@ -226,6 +255,7 @@ private struct LegacyAppStatePayload: Codable {
     let workspacesByID: [UUID: LegacyWorkspacePayload]
     let selectedWindowID: UUID?
     let defaultTerminalProfileID: String?
+    let configuredTerminalFontPoints: Double?
     let globalTerminalFontPoints: Double
 }
 
@@ -239,4 +269,38 @@ private struct LegacyWorkspacePayload: Codable {
     let unreadPanelIDs: Set<UUID>
     let unreadNotificationCount: Int
     let recentlyClosedPanels: [ClosedPanelRecord]
+
+    init(
+        id: UUID,
+        title: String,
+        layoutTree: LayoutNode,
+        panels: [UUID: PanelState],
+        focusedPanelID: UUID?,
+        auxPanelVisibility: Set<PanelKind>,
+        unreadPanelIDs: Set<UUID>,
+        unreadNotificationCount: Int,
+        recentlyClosedPanels: [ClosedPanelRecord]
+    ) {
+        self.id = id
+        self.title = title
+        self.layoutTree = layoutTree
+        self.panels = panels
+        self.focusedPanelID = focusedPanelID
+        self.auxPanelVisibility = auxPanelVisibility
+        self.unreadPanelIDs = unreadPanelIDs
+        self.unreadNotificationCount = unreadNotificationCount
+        self.recentlyClosedPanels = recentlyClosedPanels
+    }
+
+    init(_ workspace: WorkspaceState) {
+        id = workspace.id
+        title = workspace.title
+        layoutTree = workspace.layoutTree
+        panels = workspace.panels
+        focusedPanelID = workspace.focusedPanelID
+        auxPanelVisibility = workspace.auxPanelVisibility
+        unreadPanelIDs = workspace.unreadPanelIDs
+        unreadNotificationCount = workspace.unreadWorkspaceNotificationCount
+        recentlyClosedPanels = workspace.recentlyClosedPanels
+    }
 }

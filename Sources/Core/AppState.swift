@@ -45,22 +45,19 @@ public struct AppState: Codable, Equatable, Sendable {
     public var selectedWindowID: UUID?
     public var configuredTerminalFontPoints: Double?
     public var defaultTerminalProfileID: String?
-    public var globalTerminalFontPoints: Double
 
     public init(
         windows: [WindowState],
         workspacesByID: [UUID: WorkspaceState],
         selectedWindowID: UUID?,
         configuredTerminalFontPoints: Double? = nil,
-        defaultTerminalProfileID: String? = nil,
-        globalTerminalFontPoints: Double
+        defaultTerminalProfileID: String? = nil
     ) {
         self.windows = windows
         self.workspacesByID = workspacesByID
         self.selectedWindowID = selectedWindowID
-        self.configuredTerminalFontPoints = configuredTerminalFontPoints
+        self.configuredTerminalFontPoints = configuredTerminalFontPoints.map(Self.clampedTerminalFontPoints)
         self.defaultTerminalProfileID = Self.normalizedTerminalProfileID(defaultTerminalProfileID)
-        self.globalTerminalFontPoints = globalTerminalFontPoints
     }
 
     public static func clampedTerminalFontPoints(_ points: Double) -> Double {
@@ -77,6 +74,26 @@ public struct AppState: Codable, Equatable, Sendable {
     public var defaultTerminalProfileBinding: TerminalProfileBinding? {
         guard let defaultTerminalProfileID else { return nil }
         return TerminalProfileBinding(profileID: defaultTerminalProfileID)
+    }
+
+    public var configuredTerminalFontBaselinePoints: Double {
+        configuredTerminalFontPoints ?? Self.defaultTerminalFontPoints
+    }
+
+    public func normalizedTerminalFontOverride(_ points: Double?) -> Double? {
+        guard let points else { return nil }
+        let clampedPoints = Self.clampedTerminalFontPoints(points)
+        guard abs(clampedPoints - configuredTerminalFontBaselinePoints) >= Self.terminalFontComparisonEpsilon else {
+            return nil
+        }
+        return clampedPoints
+    }
+
+    public func effectiveTerminalFontPoints(for windowID: UUID) -> Double {
+        guard let window = window(id: windowID) else {
+            return configuredTerminalFontBaselinePoints
+        }
+        return effectiveTerminalFontPoints(for: window)
     }
 
     public static func bootstrap(defaultTerminalProfileID: String? = nil) -> AppState {
@@ -98,8 +115,7 @@ public struct AppState: Codable, Equatable, Sendable {
             workspacesByID: [workspace.id: workspace],
             selectedWindowID: window.id,
             configuredTerminalFontPoints: nil,
-            defaultTerminalProfileID: normalizedDefaultTerminalProfileID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            defaultTerminalProfileID: normalizedDefaultTerminalProfileID
         )
     }
 
@@ -223,6 +239,10 @@ public struct AppState: Codable, Equatable, Sendable {
         return nil
     }
 
+    private func effectiveTerminalFontPoints(for window: WindowState) -> Double {
+        window.terminalFontSizePointsOverride ?? configuredTerminalFontBaselinePoints
+    }
+
     private func nextUnreadPanel(in workspace: WorkspaceState, windowID: UUID) -> UnreadPanelTarget? {
         let orderedTabIDs = orderedIDs(startingAt: workspace.resolvedSelectedTabID, in: workspace.tabIDs)
         for tabID in orderedTabIDs {
@@ -312,5 +332,53 @@ public struct AppState: Codable, Equatable, Sendable {
         }
         let nextIndex = ids.index(after: startIndex)
         return Array(ids[nextIndex...]) + Array(ids[..<startIndex])
+    }
+}
+
+extension AppState {
+    private enum CodingKeys: String, CodingKey {
+        case windows
+        case workspacesByID
+        case selectedWindowID
+        case configuredTerminalFontPoints
+        case defaultTerminalProfileID
+        case globalTerminalFontPoints
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let configuredTerminalFontPoints = try container.decodeIfPresent(
+            Double.self,
+            forKey: .configuredTerminalFontPoints
+        )
+
+        self.init(
+            windows: try container.decode([WindowState].self, forKey: .windows),
+            workspacesByID: try container.decode([UUID: WorkspaceState].self, forKey: .workspacesByID),
+            selectedWindowID: try container.decodeIfPresent(UUID.self, forKey: .selectedWindowID),
+            configuredTerminalFontPoints: configuredTerminalFontPoints,
+            defaultTerminalProfileID: try container.decodeIfPresent(String.self, forKey: .defaultTerminalProfileID)
+        )
+
+        if let legacyGlobalTerminalFontPoints = try container.decodeIfPresent(Double.self, forKey: .globalTerminalFontPoints) {
+            let migratedOverride = normalizedTerminalFontOverride(legacyGlobalTerminalFontPoints)
+            if let migratedOverride {
+                windows = windows.map { window in
+                    guard window.terminalFontSizePointsOverride == nil else { return window }
+                    var window = window
+                    window.terminalFontSizePointsOverride = migratedOverride
+                    return window
+                }
+            }
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(windows, forKey: .windows)
+        try container.encode(workspacesByID, forKey: .workspacesByID)
+        try container.encodeIfPresent(selectedWindowID, forKey: .selectedWindowID)
+        try container.encodeIfPresent(configuredTerminalFontPoints, forKey: .configuredTerminalFontPoints)
+        try container.encodeIfPresent(defaultTerminalProfileID, forKey: .defaultTerminalProfileID)
     }
 }

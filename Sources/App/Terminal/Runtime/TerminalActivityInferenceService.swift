@@ -97,6 +97,14 @@ final class TerminalActivityInferenceService {
             )
         }
 
+        for (panelID, workspaceID) in backgroundPanelWorkspaceIDs {
+            refreshPanelDisplayTitleOverrideFromVisibleTextIfNeeded(
+                panelID: panelID,
+                workspaceID: workspaceID,
+                state: state
+            )
+        }
+
         let now = Date()
         for (panelID, workspaceID) in selectedPanelWorkspaceIDs {
             refreshPanelBusyStateFromVisibleTextIfNeeded(

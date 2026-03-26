@@ -58,8 +58,7 @@ public enum AutomationFixtureLoader {
                 first.id: first,
                 second.id: second,
             ],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
     }
 
@@ -98,8 +97,7 @@ public enum AutomationFixtureLoader {
         return AppState(
             windows: [window],
             workspacesByID: [workspaceID: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
     }
 
@@ -117,8 +115,7 @@ public enum AutomationFixtureLoader {
         return AppState(
             windows: [window],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
     }
 

@@ -29,9 +29,28 @@ struct AppWindowSceneView: View {
         store.window(id: windowID)
     }
 
+    private var effectiveWindowFontPoints: Double? {
+        guard windowState != nil else { return nil }
+        return store.state.effectiveTerminalFontPoints(for: windowID)
+    }
+
+    private var showsEmptyState: Bool {
+        guard let windowState else { return true }
+        return windowState.workspaceIDs.isEmpty
+    }
+
+    private var shouldConfirmWindowClose: Bool {
+        guard let windowState else { return false }
+        guard windowState.workspaceIDs.isEmpty == false else { return false }
+        return !AutomationConfig.shouldBypassInteractiveConfirmation(
+            arguments: ProcessInfo.processInfo.arguments,
+            environment: ProcessInfo.processInfo.environment
+        )
+    }
+
     var body: some View {
         Group {
-            if windowState != nil {
+            if showsEmptyState == false {
                 AppWindowView(
                     windowID: windowID,
                     store: store,
@@ -64,6 +83,7 @@ struct AppWindowSceneView: View {
                 windowID: windowID,
                 desiredFrame: windowState?.frame,
                 windowTitle: store.selectedWorkspace(in: windowID)?.title,
+                shouldConfirmWindowClose: shouldConfirmWindowClose,
                 onWindowDidBecomeKey: handleWindowDidBecomeKey,
                 onWindowFrameChange: handleWindowFrameChange,
                 onWindowCloseInitiated: onWindowCloseInitiated,
@@ -74,7 +94,8 @@ struct AppWindowSceneView: View {
             hideFontHUDTask?.cancel()
             hideFontHUDTask = nil
         }
-        .onChange(of: store.state.globalTerminalFontPoints) { _, nextPoints in
+        .onChange(of: effectiveWindowFontPoints) { _, nextPoints in
+            guard let nextPoints else { return }
             fontHUDPoints = nextPoints
             hideFontHUDTask?.cancel()
             hideFontHUDTask = Task { @MainActor in

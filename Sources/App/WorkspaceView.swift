@@ -322,7 +322,7 @@ struct WorkspaceView: View {
                         terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
-                        globalFontPoints: store.state.globalTerminalFontPoints,
+                        windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
                         appIsActive: appIsActive,
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
@@ -927,7 +927,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
-    let globalFontPoints: Double
+    let windowFontPoints: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
@@ -947,7 +947,7 @@ private struct SlotPlacementView: View {
                     panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
                     terminalDisplayTitleOverride: terminalRuntimeRegistry.panelDisplayTitleOverride(for: placement.panelID),
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
-                    globalFontPoints: globalFontPoints,
+                    windowFontPoints: windowFontPoints,
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     store: store,
@@ -984,7 +984,7 @@ private struct PanelCardView: View {
     let panelSessionStatus: WorkspaceSessionStatus?
     let terminalDisplayTitleOverride: String?
     let shortcutNumber: Int?
-    let globalFontPoints: Double
+    let windowFontPoints: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
@@ -1040,7 +1040,7 @@ private struct PanelCardView: View {
                     panelID: panelID,
                     terminalState: terminalState,
                     focused: isFocused,
-                    globalFontPoints: globalFontPoints,
+                    windowFontPoints: windowFontPoints,
                     runtimeContext: terminalRuntimeContext
                 )
                 .overlay {

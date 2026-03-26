@@ -2,6 +2,8 @@
 import XCTest
 
 final class ToasttySettingsStoreTests: XCTestCase {
+    private let legacyTerminalFontSizeKey = "toastty.terminalFontSizePoints"
+
     func testLoadDefaultsHasEverLaunchedAgentToFalse() {
         let userDefaults = makeUserDefaults()
 
@@ -19,32 +21,33 @@ final class ToasttySettingsStoreTests: XCTestCase {
         XCTAssertTrue(settings.hasEverLaunchedAgent)
     }
 
-    func testPersistTerminalFontSizePointsStoresAndLoadsOverride() {
+    func testLegacyTerminalFontSizePointsLoadsStoredOverride() {
         let userDefaults = makeUserDefaults()
+        userDefaults.set(13.5, forKey: legacyTerminalFontSizeKey)
 
-        ToasttySettingsStore.persistTerminalFontSizePoints(13.5, userDefaults: userDefaults)
-        let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
-
-        XCTAssertEqual(settings.terminalFontSizePoints, 13.5)
+        XCTAssertEqual(
+            ToasttySettingsStore.legacyTerminalFontSizePoints(userDefaults: userDefaults),
+            13.5
+        )
     }
 
-    func testPersistTerminalFontSizePointsClearsStoredOverride() {
+    func testClearLegacyTerminalFontSizePointsRemovesStoredOverride() {
         let userDefaults = makeUserDefaults()
-        ToasttySettingsStore.persistTerminalFontSizePoints(16, userDefaults: userDefaults)
+        userDefaults.set(16.0, forKey: legacyTerminalFontSizeKey)
 
-        ToasttySettingsStore.persistTerminalFontSizePoints(nil, userDefaults: userDefaults)
-        let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
+        ToasttySettingsStore.clearLegacyTerminalFontSizePoints(userDefaults: userDefaults)
 
-        XCTAssertNil(settings.terminalFontSizePoints)
+        XCTAssertNil(ToasttySettingsStore.legacyTerminalFontSizePoints(userDefaults: userDefaults))
     }
 
-    func testPersistTerminalFontSizePointsClampsStoredOverride() {
+    func testLegacyTerminalFontSizePointsClampsStoredOverride() {
         let userDefaults = makeUserDefaults()
+        userDefaults.set(100.0, forKey: legacyTerminalFontSizeKey)
 
-        ToasttySettingsStore.persistTerminalFontSizePoints(100, userDefaults: userDefaults)
-        let settings = ToasttySettingsStore.load(userDefaults: userDefaults)
-
-        XCTAssertEqual(settings.terminalFontSizePoints, 24)
+        XCTAssertEqual(
+            ToasttySettingsStore.legacyTerminalFontSizePoints(userDefaults: userDefaults),
+            24
+        )
     }
 
     private func makeUserDefaults() -> UserDefaults {

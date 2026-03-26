@@ -28,8 +28,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -58,8 +57,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -93,8 +91,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -129,8 +126,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -152,8 +148,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let state = AppState(
             windows: [],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: nil
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -173,8 +168,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 )
             ],
             workspacesByID: [:],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -196,8 +190,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 )
             ],
             workspacesByID: [:],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -217,8 +210,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 )
             ],
             workspacesByID: [:],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -236,8 +228,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             windows: [],
             workspacesByID: [:],
             selectedWindowID: nil,
-            configuredTerminalFontPoints: 13,
-            globalTerminalFontPoints: 15
+            configuredTerminalFontPoints: 13
         )
         let store = AppStore(
             state: state,
@@ -254,7 +245,8 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(window.frame, expectedFrame)
         XCTAssertEqual(store.state.workspacesByID[workspaceID]?.title, "Workspace 1")
         XCTAssertEqual(store.state.configuredTerminalFontPoints, 13)
-        XCTAssertEqual(store.state.globalTerminalFontPoints, 15)
+        XCTAssertNil(window.terminalFontSizePointsOverride)
+        XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: window.id), 13)
     }
 
     func testCreateWindowFromCommandSeedsFromFocusedTerminalAndCascadesFrame() throws {
@@ -271,6 +263,8 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         terminalState.profileBinding = TerminalProfileBinding(profileID: "zmx")
         sourceWorkspace.panels[focusedPanelID] = .terminal(terminalState)
         state.workspacesByID[sourceWorkspaceID] = sourceWorkspace
+        state.configuredTerminalFontPoints = 13
+        state.windows[0].terminalFontSizePointsOverride = 16
 
         let sourceFrame = CGRectCodable(x: 320, y: 240, width: 1600, height: 960)
         let store = AppStore(
@@ -295,6 +289,8 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(newWindow.frame, CGRectCodable(x: 350, y: 210, width: 1600, height: 960))
         XCTAssertEqual(newTerminalState.cwd, "/tmp/toastty/new-window")
         XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "zmx"))
+        XCTAssertEqual(newWindow.terminalFontSizePointsOverride, 16)
+        XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: newWindow.id), 16)
     }
 
     func testCreateWindowFromCommandFallsBackToHomeDirectoryAndDefaultProfileFromNonTerminalFocus() throws {
@@ -302,6 +298,8 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
         let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
         let reducer = AppReducer()
+        state.configuredTerminalFontPoints = 13
+        state.windows[0].terminalFontSizePointsOverride = 17
 
         XCTAssertTrue(reducer.send(.toggleAuxPanel(workspaceID: sourceWorkspaceID, kind: .diff), state: &state))
         let workspaceWithDiff = try XCTUnwrap(state.workspacesByID[sourceWorkspaceID])
@@ -327,6 +325,8 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         XCTAssertEqual(newTerminalState.cwd, NSHomeDirectory())
         XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "ssh-prod"))
+        XCTAssertEqual(newWindow.terminalFontSizePointsOverride, 17)
+        XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: newWindow.id), 17)
     }
 
     func testCreateWindowFromCommandUsesProvidedFrameWithoutCascadeWhenNoSourceWindowExists() throws {
@@ -335,8 +335,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             windows: [],
             workspacesByID: [:],
             selectedWindowID: nil,
-            configuredTerminalFontPoints: 13,
-            globalTerminalFontPoints: 15
+            configuredTerminalFontPoints: 13
         )
         let store = AppStore(
             state: state,
@@ -349,6 +348,8 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let window = try XCTUnwrap(store.state.windows.first)
         XCTAssertEqual(window.frame, expectedFrame)
         XCTAssertEqual(store.state.selectedWindowID, window.id)
+        XCTAssertNil(window.terminalFontSizePointsOverride)
+        XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: window.id), 13)
     }
 
     func testCreateWorkspaceTabFromCommandSeedsFromFocusedTerminal() throws {
@@ -418,8 +419,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 )
             ],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -436,8 +436,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             state: AppState(
                 windows: [],
                 workspacesByID: [:],
-                selectedWindowID: nil,
-                globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+                selectedWindowID: nil
             ),
             persistTerminalFontPreference: false
         )
@@ -481,8 +480,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -501,8 +499,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             state: AppState(
                 windows: [],
                 workspacesByID: [:],
-                selectedWindowID: nil,
-                globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+                selectedWindowID: nil
             ),
             persistTerminalFontPreference: false
         )
@@ -526,6 +523,23 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(window.selectedWorkspaceID, firstWorkspaceID)
         XCTAssertNil(store.pendingCloseWorkspaceRequest)
         XCTAssertNil(store.state.workspacesByID[secondWorkspaceID])
+    }
+
+    func testConfirmWorkspaceCloseKeepsEmptyWindowWhenClosingLastWorkspace() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(store.requestWorkspaceClose(workspaceID: workspaceID))
+
+        XCTAssertTrue(store.confirmWorkspaceClose(windowID: windowID, workspaceID: workspaceID))
+
+        let window = try XCTUnwrap(store.window(id: windowID))
+        XCTAssertTrue(window.workspaceIDs.isEmpty)
+        XCTAssertNil(window.selectedWorkspaceID)
+        XCTAssertEqual(store.state.selectedWindowID, windowID)
+        XCTAssertEqual(store.state.windows.count, 1)
+        XCTAssertNil(store.pendingCloseWorkspaceRequest)
+        XCTAssertNil(store.state.workspacesByID[workspaceID])
     }
 
     func testRequestWorkspaceCloseDoesNotOverwriteDifferentPendingRequest() throws {
@@ -552,8 +566,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -594,8 +607,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondLayout.workspace.id: secondLayout.workspace,
             ],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let sessionStore = SessionRuntimeStore()
@@ -661,8 +673,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 )
             ],
             workspacesByID: [secondLayout.workspace.id: secondLayout.workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let sessionStore = SessionRuntimeStore()
@@ -716,8 +727,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondLayout.workspace.id: secondLayout.workspace,
             ],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let sessionStore = SessionRuntimeStore()
@@ -758,8 +768,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                     )
                 ],
                 workspacesByID: [workspace.id: workspace],
-                selectedWindowID: windowID,
-                globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+                selectedWindowID: windowID
             ),
             persistTerminalFontPreference: false
         )
@@ -813,8 +822,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
@@ -874,8 +882,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         var activatedWindowIDs: [UUID] = []
         let store = AppStore(

@@ -32,8 +32,7 @@ public struct WorkspaceLayoutSnapshot: Codable, Equatable, Sendable {
             windows: windows,
             workspacesByID: restoredWorkspaces,
             selectedWindowID: selectedWindowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
     }
 }

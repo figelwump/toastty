@@ -101,10 +101,12 @@ final class TerminalWindowRuntimeStore {
         }
     }
 
-    func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
-        for runtime in windowRuntimesByID.values {
-            runtime.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+    func applyGhosttyFontChange(windowID: UUID, from previousPoints: Double, to nextPoints: Double) {
+        guard previousPoints != nextPoints,
+              let runtime = windowRuntimesByID[windowID] else {
+            return
         }
+        runtime.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
     }
 
     func applyGhosttyScrollbarPreferenceChange() {

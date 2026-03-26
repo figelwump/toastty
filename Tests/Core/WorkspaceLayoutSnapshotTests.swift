@@ -51,8 +51,7 @@ struct WorkspaceLayoutSnapshotTests {
             ],
             workspacesByID: [workspaceID: workspace],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: 15,
-            globalTerminalFontPoints: 16
+            configuredTerminalFontPoints: 15
         )
 
         let snapshot = WorkspaceLayoutSnapshot(state: state)
@@ -86,7 +85,8 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(restoredWorkspace.recentlyClosedPanels.isEmpty)
 
         #expect(restoredState.configuredTerminalFontPoints == nil)
-        #expect(restoredState.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+        #expect(restoredState.windows.first?.terminalFontSizePointsOverride == nil)
+        #expect(restoredState.effectiveTerminalFontPoints(for: windowID) == AppState.defaultTerminalFontPoints)
 
         try StateValidator.validate(restoredState)
     }
@@ -141,8 +141,7 @@ struct WorkspaceLayoutSnapshotTests {
                 workspaceTwoID: workspaceTwo,
             ],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
@@ -196,8 +195,7 @@ struct WorkspaceLayoutSnapshotTests {
             ],
             workspacesByID: [workspaceID: workspace],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
@@ -275,8 +273,7 @@ struct WorkspaceLayoutSnapshotTests {
             ],
             workspacesByID: [workspaceID: workspace],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let snapshot = WorkspaceLayoutSnapshot(state: state)
@@ -352,8 +349,7 @@ struct WorkspaceLayoutSnapshotTests {
             ],
             workspacesByID: [workspace.id: restoredWorkspace],
             selectedWindowID: nil,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let snapshot = WorkspaceLayoutSnapshot(state: state)
@@ -433,8 +429,7 @@ struct WorkspaceLayoutSnapshotTests {
                 secondWorkspace.id: secondWorkspace,
             ],
             selectedWindowID: secondWindowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()

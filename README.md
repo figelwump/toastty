@@ -8,7 +8,7 @@ A native macOS terminal multiplexer built with Swift and powered by the [libghos
 
 Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, direct agent launching with real-time status in the sidebar, notifications and unread badges when agents need attention, and configurable terminal profiles for setups like `tmux`, `zmx`, or `ssh`.
 
-There are also little features throughout: keyboard shortcuts to navigate workspaces and panels, global font control for moving between different displays, and the performance and layout flexibility you'd expect from Ghostty.
+There are also little features throughout: keyboard shortcuts to navigate workspaces and panels, per-window font control for moving between different displays, and the performance and layout flexibility you'd expect from Ghostty.
 
 ## Getting Started
 
@@ -32,7 +32,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Window close confirmation** — `Cmd+W` and `File > Close` close the focused panel, while the red window button confirms before closing all terminals, tabs, and workspaces in that window
-- **Font control** — Increase, decrease, or reset terminal font size globally across all terminals at once, with UI changes remembered locally
+- **Font control** — Increase, decrease, or reset terminal font size per window, with new windows inheriting the source window's current size and layouts remembering window-local overrides
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Hot-reload configuration** — Change your config and reload it live from the menu bar
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
@@ -139,11 +139,11 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 3. `~/.config/ghostty/config`
 4. Ghostty defaults
 
-Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `UserDefaults` for UI-managed settings that should be remembered locally. Today that means:
+Toastty uses `~/.toastty/config` for user-authored defaults and a small amount of macOS `UserDefaults` state for UI behavior. Window-local font overrides are persisted with workspace/window layout snapshots instead of rewriting config files.
 
-- `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any UI override
+- `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
-- `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` update a local `UserDefaults` override instead of rewriting your config file
+- `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` update the active window's persisted layout state instead of rewriting your config file
 
 Example:
 
@@ -248,7 +248,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 Toastty is local-first. The app itself does not send usage analytics or cloud telemetry. The only outbound network connection is Sparkle's update check against `https://updates.toastty.dev/appcast.xml`.
 
 - Toastty writes user-authored config to `~/.toastty/config`, or to `TOASTTY_RUNTIME_HOME/config` for isolated dev/test runs. `TOASTTY_DEV_WORKTREE_ROOT` also enables that isolated runtime-home behavior by deriving a stable sandbox under the worktree.
-- Toastty stores UI-managed font overrides in the app's `UserDefaults` domain, or in an isolated defaults suite derived from the active runtime home.
+- Toastty persists window-local font overrides in its workspace layout snapshots, or in the active runtime home's snapshot file when runtime isolation is enabled.
 - Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`, or to the active runtime home's `workspace-layout-profiles.json` when runtime isolation is enabled.
 - By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`, or to the active runtime home's `logs/toastty.log` when runtime isolation is enabled.
 - Toastty requests macOS notification permission the first time it tries to deliver a desktop notification.

@@ -19,8 +19,7 @@ final class AppStateSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
 
         let selection = try XCTUnwrap(state.workspaceSelection(in: windowID))
@@ -54,8 +53,7 @@ final class AppStateSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
 
         let selection = try XCTUnwrap(state.workspaceSelection(containingWorkspaceID: secondWorkspace.id))
@@ -88,8 +86,7 @@ final class AppStateSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: secondWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: secondWindowID
         )
 
         let selection = try XCTUnwrap(state.selectedWorkspaceSelection())
@@ -120,8 +117,7 @@ final class AppStateSelectionTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: nil
         )
 
         XCTAssertNil(state.soleWorkspaceSelection())
@@ -132,11 +128,43 @@ final class AppStateSelectionTests: XCTestCase {
         let state = AppState(
             windows: [],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: nil
         )
 
         XCTAssertNil(state.soleWorkspaceSelection())
+    }
+
+    func testEffectiveTerminalFontPointsPrefersWindowOverrideOverConfiguredBaseline() throws {
+        let workspace = WorkspaceState.bootstrap(title: "One")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id,
+                    terminalFontSizePointsOverride: 17
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: 13
+        )
+
+        XCTAssertEqual(state.effectiveTerminalFontPoints(for: windowID), 17)
+    }
+
+    func testNormalizedTerminalFontOverrideReturnsNilWhenMatchingConfiguredBaseline() {
+        let state = AppState(
+            windows: [],
+            workspacesByID: [:],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: 14
+        )
+
+        XCTAssertNil(state.normalizedTerminalFontOverride(14))
+        XCTAssertEqual(state.normalizedTerminalFontOverride(15), 15)
     }
 
     func testNextUnreadPanelSkipsFocusedPanelAndWrapsWithinCurrentTab() throws {
@@ -164,8 +192,7 @@ final class AppStateSelectionTests: XCTestCase {
                 )
             ],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
 
         let target = try XCTUnwrap(
@@ -233,8 +260,7 @@ final class AppStateSelectionTests: XCTestCase {
                 siblingWorkspace.id: siblingWorkspace,
                 otherWindowWorkspace.id: otherWindowWorkspace,
             ],
-            selectedWindowID: currentWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: currentWindowID
         )
 
         let target = try XCTUnwrap(
@@ -273,8 +299,7 @@ final class AppStateSelectionTests: XCTestCase {
                 )
             ],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
 
         XCTAssertNil(

@@ -64,7 +64,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
   - `GHOSTTY_XCFRAMEWORK_SOURCE=/path/to/GhosttyKit.xcframework` to override source
 - **Config loading order:** `TOASTTY_GHOSTTY_CONFIG_PATH` > `$XDG_CONFIG_HOME/ghostty/config` > `~/.config/ghostty/config` > Ghostty defaults.
 - **Toastty config:** `~/.toastty/config` stores user-authored defaults such as `terminal-font-size` and `default-terminal-profile`.
-- **UI font override:** Toastty remembers menu-driven terminal font changes in `UserDefaults`; `Reset Terminal Font` clears that override and falls back to config or Ghostty baseline. Runtime-isolated dev/test runs use an isolated defaults suite instead of the shared app domain.
+- **UI font override:** Toastty remembers menu-driven terminal font changes per window in persisted layout state; `Reset Terminal Font` clears that window-local override and falls back to config or Ghostty baseline. Runtime-isolated dev/test runs persist that state inside the isolated runtime home.
 - **Host-side split styling:** `unfocused-split-opacity`, `unfocused-split-fill` (falls back to Ghostty `background`).
 - **Reload config at runtime:** `Toastty -> Reload Configuration` menu item.
 - When linked, `Project.swift` adds `TOASTTY_HAS_GHOSTTY_KIT` and linker flags (`-lc++`, `-framework Carbon`).

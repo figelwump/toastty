@@ -222,6 +222,39 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(closeInitiatedCallCount, 1)
     }
 
+    func testNativeCloseButtonUsesUpdatedConfirmationPolicy() throws {
+        var presentCallCount = 0
+        var closeInitiatedCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowCloseInitiated: {
+                closeInitiatedCallCount += 1
+            },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+        coordinator.shouldConfirmWindowClose = false
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertEqual(presentCallCount, 0)
+        XCTAssertTrue(window.didClose)
+        XCTAssertEqual(closeInitiatedCallCount, 1)
+    }
+
     func testDidExitFullScreenReinstallsNativeCloseButtonOverride() throws {
         var presentCallCount = 0
         let coordinator = AppWindowSceneObserverCoordinator(

@@ -47,10 +47,10 @@ public enum AppAction: Equatable, Sendable {
     case toggleFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
     case setDefaultTerminalProfile(profileID: String?)
-    case setGlobalTerminalFont(points: Double)
-    case increaseGlobalTerminalFont
-    case decreaseGlobalTerminalFont
-    case resetGlobalTerminalFont
+    case setWindowTerminalFont(windowID: UUID, points: Double)
+    case increaseWindowTerminalFont(windowID: UUID)
+    case decreaseWindowTerminalFont(windowID: UUID)
+    case resetWindowTerminalFont(windowID: UUID)
     case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
     case splitFocusedSlotInDirectionWithTerminalProfile(
@@ -117,14 +117,14 @@ public extension AppAction {
             return "setConfiguredTerminalFont"
         case .setDefaultTerminalProfile:
             return "setDefaultTerminalProfile"
-        case .setGlobalTerminalFont:
-            return "setGlobalTerminalFont"
-        case .increaseGlobalTerminalFont:
-            return "increaseGlobalTerminalFont"
-        case .decreaseGlobalTerminalFont:
-            return "decreaseGlobalTerminalFont"
-        case .resetGlobalTerminalFont:
-            return "resetGlobalTerminalFont"
+        case .setWindowTerminalFont:
+            return "setWindowTerminalFont"
+        case .increaseWindowTerminalFont:
+            return "increaseWindowTerminalFont"
+        case .decreaseWindowTerminalFont:
+            return "decreaseWindowTerminalFont"
+        case .resetWindowTerminalFont:
+            return "resetWindowTerminalFont"
         case .splitFocusedSlot:
             return "splitFocusedSlot"
         case .splitFocusedSlotInDirection:

@@ -27,8 +27,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let state = AppState(
             windows: [],
             workspacesByID: [:],
-            selectedWindowID: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: nil
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let controller = WindowCommandController(
@@ -41,7 +40,7 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(controller.closeWindow())
     }
 
-    func testCloseWindowRemovesWindowWhenClosingLastPanel() throws {
+    func testCloseWindowLeavesWindowEmptyWhenClosingLastPanel() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         XCTAssertTrue(store.send(.selectWindow(windowID: windowID)))
@@ -54,9 +53,10 @@ final class WindowCommandControllerTests: XCTestCase {
 
         XCTAssertTrue(controller.canCloseWindow())
         XCTAssertTrue(controller.closeWindow())
-        XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertNil(store.window(id: windowID))
-        XCTAssertNil(store.state.selectedWindowID)
+        let window = try XCTUnwrap(store.window(id: windowID))
+        XCTAssertTrue(window.workspaceIDs.isEmpty)
+        XCTAssertNil(window.selectedWorkspaceID)
+        XCTAssertEqual(store.state.selectedWindowID, windowID)
     }
 
     func testCloseWindowDoesNotFallbackWithoutKeyToasttyWindow() throws {
@@ -537,8 +537,7 @@ final class WindowCommandControllerTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let bridge = makeWorkspaceMenuBridge(

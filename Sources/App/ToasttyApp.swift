@@ -691,6 +691,9 @@ struct ToasttyApp: App {
         let terminalProfileStore = TerminalProfileStore()
         let initialToasttyConfig = usesPersistentPreferences ? ToasttyConfigStore.load() : ToasttyConfig()
         let initialToasttySettings = usesPersistentPreferences ? ToasttySettingsStore.load() : ToasttySettings()
+        let legacyTerminalFontSizePoints = usesPersistentPreferences
+            ? ToasttySettingsStore.legacyTerminalFontSizePoints()
+            : nil
         let initialDefaultTerminalProfileID = usesPersistentPreferences
             ? Self.resolvedDefaultTerminalProfileID(
                 configuredDefaultTerminalProfileID: initialToasttyConfig.defaultTerminalProfileID,
@@ -737,7 +740,7 @@ struct ToasttyApp: App {
                 to: store,
                 terminalProfileCatalog: terminalProfileStore.catalog,
                 toasttyConfig: initialToasttyConfig,
-                toasttySettings: initialToasttySettings
+                legacyTerminalFontSizePoints: legacyTerminalFontSizePoints
             )
             Self.ensureToasttyConfigTemplateExists()
         }
@@ -930,7 +933,6 @@ struct ToasttyApp: App {
         }
 
         let toasttyConfig = ToasttyConfigStore.load()
-        let toasttySettings = ToasttySettingsStore.load()
         Self.applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileStore.catalog,
@@ -944,7 +946,7 @@ struct ToasttyApp: App {
             Self.applyToasttyTerminalFontState(
                 to: store,
                 toasttyConfig: toasttyConfig,
-                toasttySettings: toasttySettings,
+                legacyTerminalFontSizePoints: nil,
                 ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
             )
             terminalRuntimeRegistry.applyGhosttyScrollbarPreferenceChange()
@@ -953,7 +955,7 @@ struct ToasttyApp: App {
             Self.applyToasttyTerminalFontState(
                 to: store,
                 toasttyConfig: toasttyConfig,
-                toasttySettings: toasttySettings,
+                legacyTerminalFontSizePoints: nil,
                 ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
             )
             terminalRuntimeRegistry.applyGhosttyScrollbarPreferenceChange()
@@ -962,7 +964,7 @@ struct ToasttyApp: App {
         Self.applyToasttyTerminalFontState(
             to: store,
             toasttyConfig: toasttyConfig,
-            toasttySettings: toasttySettings,
+            legacyTerminalFontSizePoints: nil,
             ghosttyConfiguredTerminalFontPoints: nil
         )
         #endif
@@ -1003,7 +1005,7 @@ struct ToasttyApp: App {
         to store: AppStore,
         terminalProfileCatalog: TerminalProfileCatalog,
         toasttyConfig: ToasttyConfig,
-        toasttySettings: ToasttySettings
+        legacyTerminalFontSizePoints: Double?
     ) {
         applyConfiguredDefaultTerminalProfile(
             to: store,
@@ -1021,7 +1023,7 @@ struct ToasttyApp: App {
         applyToasttyTerminalFontState(
             to: store,
             toasttyConfig: toasttyConfig,
-            toasttySettings: toasttySettings,
+            legacyTerminalFontSizePoints: legacyTerminalFontSizePoints,
             ghosttyConfiguredTerminalFontPoints: ghosttyConfiguredTerminalFontPoints
         )
     }
@@ -1066,19 +1068,31 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private static func applyToasttyTerminalFontState(
+    static func applyToasttyTerminalFontState(
         to store: AppStore,
         toasttyConfig: ToasttyConfig,
-        toasttySettings: ToasttySettings,
-        ghosttyConfiguredTerminalFontPoints: Double?
+        legacyTerminalFontSizePoints: Double?,
+        ghosttyConfiguredTerminalFontPoints: Double?,
+        clearLegacyTerminalFontSizePoints: @escaping () -> Void = {
+            ToasttySettingsStore.clearLegacyTerminalFontSizePoints()
+        }
     ) {
         let configuredBaseline = toasttyConfig.terminalFontSizePoints ?? ghosttyConfiguredTerminalFontPoints
         _ = store.send(.setConfiguredTerminalFont(points: configuredBaseline))
 
-        if let persistedFontSizePoints = toasttySettings.terminalFontSizePoints {
-            _ = store.send(.setGlobalTerminalFont(points: persistedFontSizePoints))
-        } else {
-            _ = store.send(.resetGlobalTerminalFont)
+        guard let legacyTerminalFontSizePoints else { return }
+        defer { clearLegacyTerminalFontSizePoints() }
+        guard store.state.windows.allSatisfy({ $0.terminalFontSizePointsOverride == nil }) else {
+            return
+        }
+
+        for windowID in store.state.windows.map(\.id) {
+            _ = store.send(
+                .setWindowTerminalFont(
+                    windowID: windowID,
+                    points: legacyTerminalFontSizePoints
+                )
+            )
         }
     }
 

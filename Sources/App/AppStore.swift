@@ -83,7 +83,6 @@ final class AppStore: ObservableObject {
             return false
         }
         state = next
-        persistTerminalFontPreferenceIfNeeded(action: action, previousState: previousState, nextState: next)
         let observers = Array(actionAppliedObservers.values)
         for observer in observers {
             observer(action, previousState, next)
@@ -366,23 +365,6 @@ final class AppStore: ObservableObject {
         ToasttySettingsStore.persistHasEverLaunchedAgent(true)
     }
 
-    private func persistTerminalFontPreferenceIfNeeded(action: AppAction, previousState: AppState, nextState: AppState) {
-        guard persistUserSettings else { return }
-        guard abs(previousState.globalTerminalFontPoints - nextState.globalTerminalFontPoints) >=
-            AppState.terminalFontComparisonEpsilon else {
-            return
-        }
-
-        switch action {
-        case .resetGlobalTerminalFont:
-            ToasttySettingsStore.persistTerminalFontSizePoints(nil)
-        case .increaseGlobalTerminalFont, .decreaseGlobalTerminalFont, .setGlobalTerminalFont:
-            ToasttySettingsStore.persistTerminalFontSizePoints(nextState.globalTerminalFontPoints)
-        default:
-            break
-        }
-    }
-
     private func createWorkspaceCommandTarget(preferredWindowID: UUID?) -> WorkspaceCommandTarget? {
         if let preferredWindowID {
             guard state.window(id: preferredWindowID) != nil else {
@@ -417,15 +399,22 @@ final class AppStore: ObservableObject {
     }
 
     private func windowLaunchSeed(from selection: WindowCommandSelection?) -> WindowLaunchSeed? {
-        guard let selection,
-              let focusedPanelID = selection.workspace.focusedPanelID,
+        guard let selection else { return nil }
+
+        let windowFontOverride = state.normalizedTerminalFontOverride(
+            state.effectiveTerminalFontPoints(for: selection.windowID)
+        )
+
+        guard let focusedPanelID = selection.workspace.focusedPanelID,
               case .terminal(let terminalState)? = selection.workspace.panels[focusedPanelID] else {
-            return nil
+            guard let windowFontOverride else { return nil }
+            return WindowLaunchSeed(windowTerminalFontSizePointsOverride: windowFontOverride)
         }
 
         return WindowLaunchSeed(
             terminalCWD: terminalState.workingDirectorySeed,
-            terminalProfileBinding: terminalState.profileBinding ?? state.defaultTerminalProfileBinding
+            terminalProfileBinding: terminalState.profileBinding ?? state.defaultTerminalProfileBinding,
+            windowTerminalFontSizePointsOverride: windowFontOverride
         )
     }
 
