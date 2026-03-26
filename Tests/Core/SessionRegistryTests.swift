@@ -58,6 +58,55 @@ struct SessionRegistryTests {
     }
 
     @Test
+    func sessionRegistryDecodesLegacyPayloadWithoutSessionOrder() throws {
+        var registry = SessionRegistry()
+        let now = Date(timeIntervalSince1970: 1_000)
+        let workspaceID = UUID()
+
+        registry.startSession(
+            sessionID: "later",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now.addingTimeInterval(1)
+        )
+        registry.updateStatus(
+            sessionID: "later",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Later"),
+            at: now.addingTimeInterval(2)
+        )
+
+        registry.startSession(
+            sessionID: "earlier",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "earlier",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Earlier"),
+            at: now.addingTimeInterval(3)
+        )
+
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let data = try encoder.encode(registry)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "sessionOrder")
+        let legacyData = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try decoder.decode(SessionRegistry.self, from: legacyData)
+        #expect(decoded.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["earlier", "later"])
+    }
+
+    @Test
     func startSessionReplacesExistingActiveSessionForPanel() throws {
         var registry = SessionRegistry()
         let now = Date(timeIntervalSince1970: 1000)
@@ -279,7 +328,7 @@ struct SessionRegistryTests {
     }
 
     @Test
-    func workspaceStatusesIncludeAllActiveSessionsSortedByPriorityAndRecency() throws {
+    func workspaceStatusesRemainInCreationOrderAcrossStatusUpdates() throws {
         var registry = SessionRegistry()
         let workspaceID = UUID()
         let now = Date(timeIntervalSince1970: 800)
@@ -332,9 +381,63 @@ struct SessionRegistryTests {
             at: now.addingTimeInterval(5)
         )
 
+        #expect(registry.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["working", "error", "latest-working"])
+
+        registry.updateStatus(
+            sessionID: "working",
+            status: SessionStatus(kind: .error, summary: "error", detail: "Tests failed"),
+            at: now.addingTimeInterval(6)
+        )
+        registry.updateStatus(
+            sessionID: "latest-working",
+            status: SessionStatus(kind: .ready, summary: "ready", detail: "Ready for review"),
+            at: now.addingTimeInterval(7)
+        )
+
         let workspaceStatuses = registry.workspaceStatuses(for: workspaceID)
-        #expect(workspaceStatuses.map(\.sessionID) == ["error", "latest-working", "working"])
-        #expect(workspaceStatuses.map(\.status.kind) == [.error, .working, .working])
+        #expect(workspaceStatuses.map(\.sessionID) == ["working", "error", "latest-working"])
+        #expect(workspaceStatuses.map(\.status.kind) == [.error, .error, .ready])
+    }
+
+    @Test
+    func workspaceStatusesPreserveInsertionOrderWhenSessionsShareStartedAt() {
+        var registry = SessionRegistry()
+        let workspaceID = UUID()
+        let now = Date(timeIntervalSince1970: 850)
+
+        registry.startSession(
+            sessionID: "zeta",
+            agent: .codex,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "zeta",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "First"),
+            at: now.addingTimeInterval(1)
+        )
+
+        registry.startSession(
+            sessionID: "alpha",
+            agent: .claude,
+            panelID: UUID(),
+            windowID: UUID(),
+            workspaceID: workspaceID,
+            cwd: nil,
+            repoRoot: nil,
+            at: now
+        )
+        registry.updateStatus(
+            sessionID: "alpha",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Second"),
+            at: now.addingTimeInterval(2)
+        )
+
+        #expect(registry.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["zeta", "alpha"])
     }
 
     @Test

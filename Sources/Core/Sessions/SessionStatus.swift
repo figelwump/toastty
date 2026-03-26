@@ -6,21 +6,6 @@ public enum SessionStatusKind: String, Codable, Equatable, Sendable {
     case needsApproval = "needs_approval"
     case ready
     case error
-
-    var activeWorkspacePriority: Int {
-        switch self {
-        case .error:
-            return 4
-        case .needsApproval:
-            return 3
-        case .working:
-            return 2
-        case .ready:
-            return 1
-        case .idle:
-            return 0
-        }
-    }
 }
 
 public struct SessionStatus: Codable, Equatable, Sendable {

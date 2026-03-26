@@ -648,7 +648,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func workspaceStatusesFollowTerminalDisplayOrder() throws {
+    func workspaceStatusesFollowSessionCreationOrder() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
         let sessionStore = SessionRuntimeStore()
@@ -683,7 +683,7 @@ struct SessionRuntimeStoreTests {
             workspaceID: selection.workspaceID,
             cwd: "/repo/left",
             repoRoot: "/repo",
-            at: startedAt.addingTimeInterval(1)
+            at: startedAt
         )
         sessionStore.updateStatus(
             sessionID: "sess-left",
@@ -692,7 +692,66 @@ struct SessionRuntimeStoreTests {
         )
 
         let statuses = sessionStore.workspaceStatuses(for: selection.workspaceID)
-        #expect(statuses.map(\.panelID) == [leftPanelID, rightPanelID])
+        #expect(statuses.map(\.panelID) == [rightPanelID, leftPanelID])
+    }
+
+    @Test
+    func workspaceStatusesStayStableWhenSelectedTabChanges() throws {
+        let appStore = AppStore(persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let workspaceID = selection.workspaceID
+        let originalTabID = try #require(selection.workspace.resolvedSelectedTabID)
+        let originalPanelID = try #require(selection.workspace.focusedPanelID)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-original-tab",
+            agent: .codex,
+            panelID: originalPanelID,
+            windowID: selection.windowID,
+            workspaceID: workspaceID,
+            cwd: "/repo/original",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-original-tab",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Original tab"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(appStore.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+        let workspaceWithNewTab = try #require(appStore.state.workspacesByID[workspaceID])
+        let newSelectedTabID = try #require(workspaceWithNewTab.resolvedSelectedTabID)
+        #expect(newSelectedTabID != originalTabID)
+        let newSelectedPanelID = try #require(workspaceWithNewTab.focusedPanelID)
+
+        sessionStore.startSession(
+            sessionID: "sess-new-tab",
+            agent: .claude,
+            panelID: newSelectedPanelID,
+            windowID: selection.windowID,
+            workspaceID: workspaceID,
+            cwd: "/repo/new",
+            repoRoot: "/repo",
+            at: startedAt.addingTimeInterval(2)
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-new-tab",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "New tab"),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(sessionStore.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["sess-original-tab", "sess-new-tab"])
+
+        #expect(appStore.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID)))
+        #expect(sessionStore.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["sess-original-tab", "sess-new-tab"])
+
+        #expect(appStore.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: newSelectedTabID)))
+        #expect(sessionStore.workspaceStatuses(for: workspaceID).map(\.sessionID) == ["sess-original-tab", "sess-new-tab"])
     }
 
     @Test
