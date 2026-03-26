@@ -3,7 +3,12 @@ import Foundation
 public struct AppReducer {
     private enum EmptyWorkspaceTabDisposition {
         case bootstrapReplacementTab
-        case removeWorkspace
+        case removeWorkspace(EmptyWindowDisposition)
+    }
+
+    private enum EmptyWindowDisposition {
+        case keepWindow
+        case removeWindow
     }
 
     public init() {}
@@ -115,7 +120,12 @@ public struct AppReducer {
 
         case .closeWorkspace(let workspaceID):
             guard let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) else { return false }
-            return removeWorkspace(workspaceID, windowID: windowID, state: &state)
+            return removeWorkspace(
+                workspaceID,
+                windowID: windowID,
+                emptyWindowDisposition: .keepWindow,
+                state: &state
+            )
 
         case .closeWorkspaceTab(let workspaceID, let tabID):
             guard let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) else { return false }
@@ -241,7 +251,7 @@ public struct AppReducer {
                     sourceLocation.tabID,
                     workspaceID: sourceLocation.workspaceID,
                     windowID: sourceLocation.windowID,
-                    emptyWorkspaceDisposition: .removeWorkspace,
+                    emptyWorkspaceDisposition: .removeWorkspace(.removeWindow),
                     state: &state
                 ) else {
                     return false
@@ -272,7 +282,7 @@ public struct AppReducer {
                     sourceLocation.tabID,
                     workspaceID: sourceLocation.workspaceID,
                     windowID: sourceLocation.windowID,
-                    emptyWorkspaceDisposition: .removeWorkspace,
+                    emptyWorkspaceDisposition: .removeWorkspace(.removeWindow),
                     state: &state
                 )
             }
@@ -346,7 +356,7 @@ public struct AppReducer {
                     sourceLocation.tabID,
                     workspaceID: sourceLocation.workspaceID,
                     windowID: sourceLocation.windowID,
-                    emptyWorkspaceDisposition: .removeWorkspace,
+                    emptyWorkspaceDisposition: .removeWorkspace(.keepWindow),
                     state: &state
                 )
             }
@@ -919,7 +929,12 @@ public struct AppReducer {
     }
 
     @discardableResult
-    private static func removeWorkspace(_ workspaceID: UUID, windowID: UUID, state: inout AppState) -> Bool {
+    private static func removeWorkspace(
+        _ workspaceID: UUID,
+        windowID: UUID,
+        emptyWindowDisposition: EmptyWindowDisposition = .removeWindow,
+        state: inout AppState
+    ) -> Bool {
         guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
         var window = state.windows[windowIndex]
         guard let workspaceIndex = window.workspaceIDs.firstIndex(of: workspaceID) else { return false }
@@ -928,10 +943,19 @@ public struct AppReducer {
         window.workspaceIDs.remove(at: workspaceIndex)
 
         if window.workspaceIDs.isEmpty {
-            window.selectedWorkspaceID = nil
-            state.windows[windowIndex] = window
-            if state.selectedWindowID == nil {
-                state.selectedWindowID = window.id
+            switch emptyWindowDisposition {
+            case .keepWindow:
+                window.selectedWorkspaceID = nil
+                state.windows[windowIndex] = window
+                if state.selectedWindowID == nil {
+                    state.selectedWindowID = window.id
+                }
+            case .removeWindow:
+                let removedWindowID = window.id
+                state.windows.remove(at: windowIndex)
+                if state.selectedWindowID == removedWindowID || state.selectedWindowID == nil {
+                    state.selectedWindowID = state.windows.first?.id
+                }
             }
             return true
         }
@@ -967,8 +991,13 @@ public struct AppReducer {
                     initialTerminalProfileBinding: state.defaultTerminalProfileBinding
                 )
                 workspace.appendTab(replacementTab, select: true)
-            case .removeWorkspace:
-                return removeWorkspace(workspaceID, windowID: windowID, state: &state)
+            case .removeWorkspace(let emptyWindowDisposition):
+                return removeWorkspace(
+                    workspaceID,
+                    windowID: windowID,
+                    emptyWindowDisposition: emptyWindowDisposition,
+                    state: &state
+                )
             }
         }
 

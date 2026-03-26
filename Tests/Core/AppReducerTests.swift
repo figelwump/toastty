@@ -1146,6 +1146,49 @@ struct AppReducerTests {
     }
 
     @Test
+    func moveOnlyPanelToWorkspaceInDifferentWindowRemovesSourceWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let sourceWindowID = try #require(state.windows.first?.id)
+        let sourceWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let panelID = try #require(state.workspacesByID[sourceWorkspaceID]?.focusedPanelID)
+
+        let targetWorkspace = WorkspaceState.bootstrap(title: "Workspace 2")
+        let targetWindowID = UUID()
+        let targetWindow = WindowState(
+            id: targetWindowID,
+            frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+            workspaceIDs: [targetWorkspace.id],
+            selectedWorkspaceID: targetWorkspace.id
+        )
+        state.workspacesByID[targetWorkspace.id] = targetWorkspace
+        state.windows.append(targetWindow)
+
+        #expect(
+            reducer.send(
+                .movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspace.id, targetSlotID: nil),
+                state: &state
+            )
+        )
+
+        #expect(state.workspacesByID[sourceWorkspaceID] == nil)
+        #expect(state.windows.count == 1)
+        #expect(state.windows.contains(where: { $0.id == sourceWindowID }) == false)
+        #expect(state.selectedWindowID == targetWindowID)
+
+        let survivingWindow = try #require(state.window(id: targetWindowID))
+        #expect(survivingWindow.workspaceIDs == [targetWorkspace.id])
+        #expect(survivingWindow.selectedWorkspaceID == targetWorkspace.id)
+
+        let updatedTargetWorkspace = try #require(state.workspacesByID[targetWorkspace.id])
+        #expect(updatedTargetWorkspace.panels[panelID] != nil)
+        #expect(updatedTargetWorkspace.focusedPanelID == panelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func detachPanelToNewWindowCreatesDetachedWorkspace() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
