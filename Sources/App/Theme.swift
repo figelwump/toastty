@@ -51,7 +51,7 @@ enum ToastyTheme {
     static let workspaceTabSelectedBorder = accent
     static let workspaceTabUnselectedBackground = Color(hex: 0x161616)
     static let workspaceTabUnselectedBorder = Color(hex: 0x1F1F1F)
-    static let workspaceTabUnselectedText = Color(hex: 0x888888)
+    static let workspaceTabUnselectedText = Color(hex: 0xA0A0A0)
     static let workspaceTabHoverBackground = Color(hex: 0x1C1C1C)
     static let workspaceTabHoverBorder = Color(hex: 0x2A2A2A)
     static let workspaceTabHoverText = Color(hex: 0xB8B8B8)
