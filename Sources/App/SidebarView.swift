@@ -23,25 +23,27 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let window = store.window(id: windowID) {
-                ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
-                    if let workspace = store.state.workspacesByID[workspaceID] {
-                        workspaceRow(
-                            workspaceID: workspaceID,
-                            workspace: workspace,
-                            shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
-                            isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
-                            index: index + 1
-                        )
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let window = store.window(id: windowID) {
+                        ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
+                            if let workspace = store.state.workspacesByID[workspaceID] {
+                                workspaceRow(
+                                    workspaceID: workspaceID,
+                                    workspace: workspace,
+                                    shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
+                                    isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
+                                    index: index + 1
+                                )
+                            }
+                        }
+                    } else {
+                        Text("No windows")
+                            .font(ToastyTheme.fontBody)
+                            .foregroundStyle(ToastyTheme.mutedText)
                     }
                 }
-            } else {
-                Text("No windows")
-                    .font(ToastyTheme.fontBody)
-                    .foregroundStyle(ToastyTheme.mutedText)
             }
-
-            Spacer(minLength: 0)
 
             Button {
                 cancelWorkspaceRename()
