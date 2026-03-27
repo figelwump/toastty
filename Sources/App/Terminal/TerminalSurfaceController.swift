@@ -552,13 +552,16 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         lastPresentationSignature = presentationSignature
 
         if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
+            let isInitialPresentation = previousPresentationSignature == nil
             let refreshReasons = immediateRefreshReasons(
                 previousPresentationSignature: previousPresentationSignature,
                 presentationSignature: presentationSignature,
                 resumedFromViewportDeferral: resumedFromViewportDeferral
             )
             ToasttyLog.info(
-                "Requesting immediate Ghostty surface refresh after terminal controller update",
+                isInitialPresentation
+                    ? "Requesting immediate Ghostty surface refresh for initial presentation"
+                    : "Scheduling Ghostty tick after terminal controller update (no hard refresh)",
                 category: .ghostty,
                 metadata: closeTransitionViewportMetadata(
                     extra: [
@@ -572,7 +575,11 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                     ]
                 )
             )
-            requestImmediateSurfaceRefresh(ghosttySurface)
+            if isInitialPresentation {
+                requestImmediateSurfaceRefresh(ghosttySurface)
+            } else {
+                ghosttyManager.requestImmediateTick()
+            }
         }
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
