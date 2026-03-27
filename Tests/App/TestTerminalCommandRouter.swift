@@ -5,6 +5,7 @@ import Foundation
 final class TestTerminalCommandRouter: TerminalCommandRouting {
     var sendSucceeds = true
     var defaultVisibleText: String?
+    var visibleTextByPanelID: [UUID: String] = [:]
     private(set) var sentTextByPanelID: [UUID: String] = [:]
 
     @discardableResult
@@ -14,6 +15,6 @@ final class TestTerminalCommandRouter: TerminalCommandRouting {
     }
 
     func readVisibleText(panelID: UUID) -> String? {
-        defaultVisibleText
+        visibleTextByPanelID[panelID] ?? defaultVisibleText
     }
 }

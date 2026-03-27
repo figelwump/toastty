@@ -98,7 +98,10 @@ final class AgentLaunchService {
             fileManager: fileManager,
             nowProvider: nowProvider,
             cliExecutablePathProvider: cliExecutablePathProvider,
-            socketPathProvider: socketPathProvider
+            socketPathProvider: socketPathProvider,
+            readVisibleText: { [weak terminalCommandRouter] panelID in
+                terminalCommandRouter?.readVisibleText(panelID: panelID)
+            }
         )
     }
 

@@ -342,6 +342,106 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesCurrentCodexHistoryInsertEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-03-27T18:46:24.000Z","dir":"to_tui","kind":"insert_history_cell","lines":3}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .historyUpdated, detail: "History updated")
+        ])
+    }
+
+    func testWatcherDeduplicatesRepeatedCurrentCodexHistoryInsertEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-03-27T18:46:24.000Z","dir":"to_tui","kind":"insert_history_cell","lines":1}
+                {"ts":"2026-03-27T18:46:24.000Z","dir":"to_tui","kind":"insert_history_cell","lines":1}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .historyUpdated, detail: "History updated")
+        ])
+    }
+
+    func testWatcherCoalescesCurrentCodexHistoryInsertBurstIntoSingleRefreshEvent() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-03-27T18:46:24.000Z","dir":"to_tui","kind":"insert_history_cell","lines":8}
+                {"ts":"2026-03-27T18:46:24.001Z","dir":"to_tui","kind":"insert_history_cell","lines":7}
+                {"ts":"2026-03-27T18:46:24.002Z","dir":"to_tui","kind":"insert_history_cell","lines":1}
+                {"ts":"2026-03-27T18:46:24.003Z","dir":"to_tui","kind":"insert_history_cell","lines":15}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .historyUpdated, detail: "History updated")
+        ])
+    }
+
+    func testWatcherEmitsTurnStartedBeforeHistoryRefreshFromSameWrite() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-03-27T18:46:24.000Z","dir":"to_tui","kind":"insert_history_cell","lines":3}
+                {"ts":"2026-03-27T18:46:24.010Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","items":[{"type":"text","text":"Run repo checks"}]}}
+                """,
+            expectedCount: 2
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnStarted, detail: "Run repo checks"),
+            CodexSessionLogEvent(kind: .historyUpdated, detail: "History updated")
+        ])
+    }
+
+    func testWatcherEmitsHistoryRefreshesForSeparateWrites() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let historyEvents = expectation(description: "History refresh events arrive across separate writes")
+        historyEvents.expectedFulfillmentCount = 2
+        historyEvents.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            guard event.kind == .historyUpdated else {
+                return
+            }
+            await recorder.append(event)
+            historyEvents.fulfill()
+        }
+
+        watcher.start()
+        try append(
+            #"{"ts":"2026-03-27T18:46:24.000Z","dir":"to_tui","kind":"insert_history_cell","lines":3}"# + "\n",
+            to: logURL
+        )
+        try await Task.sleep(nanoseconds: 100_000_000)
+        try append(
+            #"{"ts":"2026-03-27T18:46:25.000Z","dir":"to_tui","kind":"insert_history_cell","lines":2}"# + "\n",
+            to: logURL
+        )
+        await fulfillment(of: [historyEvents], timeout: 1, enforceOrder: true)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .historyUpdated, detail: "History updated"),
+            CodexSessionLogEvent(kind: .historyUpdated, detail: "History updated")
+        ])
+    }
+
     func testWatcherStripsNulBytesBeforeParsingLogLines() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()

@@ -287,6 +287,64 @@ struct AgentLaunchServiceTests {
         #expect(injectedCommand.contains("'--append-system-prompt=review only'"))
     }
 
+    @Test
+    func codexHistoryInsertRefreshesWorkingDetailImmediately() async throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        let agentCatalogProvider = TestAgentCatalogProvider()
+
+        let workspace = try #require(store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        terminalRouter.visibleTextByPanelID[panelID] = """
+        vishal@toastty ~/repo %
+        """
+
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        let result = try service.launch(profileID: "codex")
+        let injectedCommand = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+        terminalRouter.visibleTextByPanelID[result.panelID] = """
+        OpenAI Codex (v0.117.0)
+        • Running pwd and git status --short now, then I'll return just the count.
+        """
+        let logURL = URL(fileURLWithPath: try #require(extractEnvironmentValue(
+            key: "CODEX_TUI_SESSION_LOG_PATH",
+            from: injectedCommand
+        )))
+
+        try append(
+            """
+            {"ts":"2026-03-27T18:46:23.170Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","items":[{"type":"text","text":"Run repo checks"}]}}
+            {"ts":"2026-03-27T18:46:24.000Z","dir":"to_tui","kind":"insert_history_cell","lines":1}
+            """,
+            to: logURL
+        )
+
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if sessionRuntimeStore.sessionRegistry.activeSession(sessionID: result.sessionID)?.status ==
+                SessionStatus(
+                    kind: .working,
+                    summary: "Working",
+                    detail: "Running pwd and git status --short now, then I'll return just the count."
+                ) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        Issue.record("expected insert_history_cell watcher event to refresh working detail immediately")
+    }
+
     private func makeProjectRoot() throws -> URL {
         let projectRoot = FileManager.default.temporaryDirectory
             .appendingPathComponent("toastty-agent-tests-\(UUID().uuidString)", isDirectory: true)
@@ -357,5 +415,34 @@ struct AgentLaunchServiceTests {
         FileManager.default.createFile(atPath: url.path, contents: contents)
         let permissions: NSNumber = executable ? 0o755 : 0o644
         try FileManager.default.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
+    }
+
+    private func extractEnvironmentValue(key: String, from command: String) -> String? {
+        let pattern = "\(NSRegularExpression.escapedPattern(for: key))=([^\\s]+)"
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let range = NSRange(command.startIndex..<command.endIndex, in: command)
+        guard let match = regex.firstMatch(in: command, range: range),
+              match.numberOfRanges == 2,
+              let valueRange = Range(match.range(at: 1), in: command) else {
+            return nil
+        }
+        return String(command[valueRange]).trimmingCharacters(in: CharacterSet(charactersIn: "'\""))
+    }
+
+    private func append(_ string: String, to url: URL) throws {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        if FileManager.default.fileExists(atPath: url.path) == false {
+            FileManager.default.createFile(atPath: url.path, contents: Data())
+        }
+        let handle = try FileHandle(forWritingTo: url)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        let terminatedString = string.hasSuffix("\n") ? string : string + "\n"
+        try handle.write(contentsOf: Data(terminatedString.utf8))
     }
 }

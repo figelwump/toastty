@@ -3,6 +3,7 @@ import Foundation
 struct CodexSessionLogEvent: Equatable, Sendable {
     enum Kind: Equatable, Sendable {
         case turnStarted
+        case historyUpdated
         case approvalNeeded
         case taskCompleted
         case turnAborted
@@ -125,6 +126,7 @@ private extension CodexSessionLogWatcher {
         }
 
         bufferedRemainder.append(delta)
+        var pendingHistoryUpdate: CodexSessionLogEvent?
 
         while let newlineIndex = bufferedRemainder.firstIndex(of: newlineByte) {
             let lineData = bufferedRemainder.prefix(upTo: newlineIndex)
@@ -132,7 +134,22 @@ private extension CodexSessionLogWatcher {
             guard let event = parse(lineData: Data(lineData), seenKeys: &seenKeys) else {
                 continue
             }
+            if event.kind == .historyUpdated {
+                pendingHistoryUpdate = event
+                continue
+            }
+
+            if event.kind != .turnStarted,
+               let coalescedHistoryUpdate = pendingHistoryUpdate {
+                await eventHandler(coalescedHistoryUpdate)
+                pendingHistoryUpdate = nil
+            }
+
             await eventHandler(event)
+        }
+
+        if let pendingHistoryUpdate {
+            await eventHandler(pendingHistoryUpdate)
         }
     }
 
@@ -189,6 +206,14 @@ private extension CodexSessionLogWatcher {
         let fallbackLine = String(data: normalizedLineData, encoding: .utf8) ?? ""
 
         if let event = parseLegacyCodexEvent(
+            object: object,
+            fallbackLine: fallbackLine,
+            seenKeys: &seenKeys
+        ) {
+            return event
+        }
+
+        if let event = parseHistoryInsertEvent(
             object: object,
             fallbackLine: fallbackLine,
             seenKeys: &seenKeys
@@ -301,6 +326,32 @@ private extension CodexSessionLogWatcher {
         return CodexSessionLogEvent(
             kind: .turnStarted,
             detail: userTurnDetail(from: payload) ?? "Responding to your prompt"
+        )
+    }
+
+    static func parseHistoryInsertEvent(
+        object: [String: Any],
+        fallbackLine: String,
+        seenKeys: inout Set<String>
+    ) -> CodexSessionLogEvent? {
+        guard normalizedString(object["dir"]) == "to_tui",
+              normalizedString(object["kind"]) == "insert_history_cell" else {
+            return nil
+        }
+
+        let lineCount = (object["lines"] as? NSNumber)?.intValue ?? 0
+        guard lineCount > 0 else {
+            return nil
+        }
+
+        let dedupeKey = "insert_history_cell:\(fallbackLine)"
+        guard seenKeys.insert(dedupeKey).inserted else {
+            return nil
+        }
+
+        return CodexSessionLogEvent(
+            kind: .historyUpdated,
+            detail: "History updated"
         )
     }
 

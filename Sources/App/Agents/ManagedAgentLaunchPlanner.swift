@@ -16,6 +16,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let nowProvider: @Sendable () -> Date
     private let cliExecutablePathProvider: @Sendable () -> String?
     private let socketPathProvider: @Sendable () -> String
+    private let readVisibleText: @MainActor (UUID) -> String?
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
 
@@ -25,7 +26,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         fileManager: FileManager = .default,
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String?,
-        socketPathProvider: @escaping @Sendable () -> String
+        socketPathProvider: @escaping @Sendable () -> String,
+        readVisibleText: @escaping @MainActor (UUID) -> String?
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -33,6 +35,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.nowProvider = nowProvider
         self.cliExecutablePathProvider = cliExecutablePathProvider
         self.socketPathProvider = socketPathProvider
+        self.readVisibleText = readVisibleText
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -208,6 +211,20 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                 switch event.kind {
                 case .turnStarted:
                     status = SessionStatus(kind: .working, summary: "Working", detail: event.detail)
+                case .historyUpdated:
+                    guard let panelID = sessionRuntimeStore
+                        .sessionRegistry
+                        .activeSession(sessionID: sessionID)?
+                        .panelID,
+                          let visibleText = self.readVisibleText(panelID) else {
+                        return
+                    }
+                    _ = sessionRuntimeStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+                        panelID: panelID,
+                        visibleText: visibleText,
+                        at: self.nowProvider()
+                    )
+                    return
                 case .approvalNeeded:
                     status = SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: event.detail)
                 case .taskCompleted:
