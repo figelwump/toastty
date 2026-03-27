@@ -1280,7 +1280,13 @@ extension TerminalSurfaceController {
         #else
         let focusTarget = hostedView
         #endif
-        guard window.firstResponder !== focusTarget else { return }
+        let firstResponder = window.firstResponder
+        guard firstResponder !== focusTarget else { return }
+        guard !TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus(
+            firstResponder: firstResponder
+        ) else {
+            return
+        }
         window.makeFirstResponder(focusTarget)
     }
 

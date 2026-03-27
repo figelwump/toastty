@@ -20,11 +20,9 @@ final class TerminalFocusCoordinator {
             retryDelayNanoseconds: 16_000_000,
             isApplicationActive: { NSApp.isActive },
             shouldAvoidStealingKeyboardFocus: {
-                guard let keyWindow = NSApp.keyWindow,
-                      let textView = keyWindow.firstResponder as? NSTextView else {
-                    return false
-                }
-                return textView.isFieldEditor
+                TerminalFocusCoordinator.shouldAvoidStealingKeyboardFocus(
+                    firstResponder: NSApp.keyWindow?.firstResponder
+                )
             }
         )
     }
@@ -79,5 +77,20 @@ final class TerminalFocusCoordinator {
                 guard Task.isCancelled == false else { return }
             }
         }
+    }
+
+    static func shouldAvoidStealingKeyboardFocus(
+        in window: NSWindow?
+    ) -> Bool {
+        shouldAvoidStealingKeyboardFocus(firstResponder: window?.firstResponder)
+    }
+
+    static func shouldAvoidStealingKeyboardFocus(
+        firstResponder: NSResponder?
+    ) -> Bool {
+        guard let textView = firstResponder as? NSTextView else {
+            return false
+        }
+        return textView.isFieldEditor
     }
 }
