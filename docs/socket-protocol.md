@@ -190,6 +190,7 @@ Current fixture names:
 - `single-workspace`
 - `two-workspaces`
 - `split-workspace`
+- `workspace-tabs-wide`
 
 Result:
 
@@ -209,12 +210,22 @@ Result:
 
 Supported action IDs:
 
+- `workspace.tab.new`
+- `workspace.tab.select`
+  - requires `args.index` (1-based) or `args.tabID`
+- `workspace.tab.close`
+  - accepts `args.index` (1-based) or `args.tabID`
+  - if neither is provided, closes the selected tab
 - `workspace.split.horizontal`
 - `workspace.split.vertical`
 - `workspace.split.right`
 - `workspace.split.down`
 - `workspace.split.left`
 - `workspace.split.up`
+- `workspace.split.right.with-profile`
+  - requires `args.profileID`
+- `workspace.split.down.with-profile`
+  - requires `args.profileID`
 - `workspace.close-focused-panel`
 - `workspace.focus-slot.previous`
 - `workspace.focus-slot.next`
@@ -385,6 +396,7 @@ Result:
 - `title: String`
 - `cwd: String`
 - `shell: String`
+- `profileID: String | null`
 
 ### `automation.workspace_snapshot`
 
@@ -396,6 +408,10 @@ Request payload:
 Result:
 
 - `workspaceID: UUID string`
+- `tabCount: Int`
+- `selectedTabID: UUID string | null`
+- `selectedTabIndex: Int | null`
+- `tabIDs: [UUID string]`
 - `slotCount: Int`
 - `panelCount: Int`
 - `focusedPanelID: UUID string | null`
@@ -404,6 +420,8 @@ Result:
 - `slotPanelIDs: [UUID string]`
 - `slotMappings: [{ slotID, panelID }]`
 - `layoutSignature: String`
+
+`selectedTabIndex` is 1-based when present.
 
 ### `automation.workspace_render_snapshot`
 

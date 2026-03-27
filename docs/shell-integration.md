@@ -2,7 +2,9 @@
 
 Toastty's shell integration emits `OSC 2` title sequences so that panel headers show live working directories and running commands, even inside multiplexers like `tmux` or `zmx`.
 
-The easiest way to install is `Terminal > Install Shell Integration…` in Toastty — it writes the snippet and sources it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
+The easiest way to install is `Toastty > Install Shell Integration…` in Toastty — it writes the snippet and sources it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
+
+The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex` and `claude` invocations inside Toastty keep using Toastty's wrappers after shell startup files run.
 
 Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
 
@@ -14,6 +16,14 @@ Create `~/.toastty/shell/toastty-profile-shell-integration.zsh`:
 # Toastty terminal profile shell integration.
 # - idle prompt: cwd
 # - running command: command
+_toastty_restore_agent_shim_path() {
+	[[ -n "${TOASTTY_AGENT_SHIM_DIR:-}" ]] || return
+
+	typeset -gaU path
+	path=("$TOASTTY_AGENT_SHIM_DIR" "${(@)path:#$TOASTTY_AGENT_SHIM_DIR}")
+	export PATH
+}
+
 _toastty_emit_title() {
 	[[ -t 1 ]] || return
 	[[ -w /dev/tty ]] || return
@@ -37,11 +47,14 @@ _toastty_preexec() {
 	_toastty_emit_title "$cmd"
 }
 
-if [[ -o interactive && -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
-	autoload -Uz add-zsh-hook
-	add-zsh-hook precmd _toastty_precmd
-	add-zsh-hook preexec _toastty_preexec
-	typeset -g _TOASTTY_TITLE_HOOKS_INSTALLED=1
+if [[ -o interactive ]]; then
+	_toastty_restore_agent_shim_path
+	if [[ -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
+		autoload -Uz add-zsh-hook
+		add-zsh-hook precmd _toastty_precmd
+		add-zsh-hook preexec _toastty_preexec
+		typeset -g _TOASTTY_TITLE_HOOKS_INSTALLED=1
+	fi
 fi
 ```
 
@@ -58,6 +71,24 @@ Create `~/.toastty/shell/toastty-profile-shell-integration.bash`:
 ```bash
 # Toastty terminal profile shell integration.
 # Updates the pane title to the current directory whenever the prompt returns.
+_toastty_restore_agent_shim_path() {
+	local shim_dir="${TOASTTY_AGENT_SHIM_DIR:-}"
+	[[ -n "$shim_dir" ]] || return
+
+	local entry=""
+	local old_path="${PATH:-}"
+	local IFS=':'
+	local -a path_entries=()
+	read -r -a path_entries <<< "$old_path"
+
+	PATH="$shim_dir"
+	for entry in "${path_entries[@]}"; do
+		[[ -n "$entry" && "$entry" != "$shim_dir" ]] || continue
+		PATH+=":$entry"
+	done
+	export PATH
+}
+
 _toastty_emit_title() {
 	[[ $- == *i* ]] || return
 	[[ -t 1 ]] || return
@@ -77,9 +108,12 @@ _toastty_prompt_command() {
 	_toastty_emit_title "$cwd"
 }
 
-if [[ $- == *i* && -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
-	PROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
-	_TOASTTY_TITLE_HOOKS_INSTALLED=1
+if [[ $- == *i* ]]; then
+	_toastty_restore_agent_shim_path
+	if [[ -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
+		PROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+		_TOASTTY_TITLE_HOOKS_INSTALLED=1
+	fi
 fi
 ```
 
@@ -101,4 +135,5 @@ profiled multiplexer sessions.
 ## Related docs
 
 - [README](../README.md)
+- [Configuration](configuration.md)
 - [Terminal Profiles](terminal-profiles.md)

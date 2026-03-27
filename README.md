@@ -149,6 +149,8 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 
 Toastty uses `~/.toastty/config` for user-authored defaults and a small amount of macOS `UserDefaults` state for UI behavior. Window-local font overrides are persisted with workspace/window layout snapshots instead of rewriting config files.
 
+Use `Toastty > Manage Config…` to open or create the live config file, `Toastty > Open Config Reference…` to inspect the generated commented template, and `Toastty > Reload Configuration` to apply edits without relaunching. For the full Toastty-owned config reference, see [docs/configuration.md](docs/configuration.md).
+
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
 - `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed `codex` and `claude` wrappers into terminal `PATH` so manual invocations inside Toastty report session status automatically. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
@@ -174,6 +176,8 @@ Features:
 - optionally set a default profile for every new terminal open
 
 Profiles live in `~/.toastty/terminal-profiles.toml` for ordinary runs, or in the active runtime home's `terminal-profiles.toml` when runtime isolation is enabled. Set `TOASTTY_TERMINAL_PROFILES_PATH` if you want Toastty to load another file instead. Each profile defines the menu label, the panel-header badge label, a startup command that Toastty sends to the pane's login shell when the pane is created or restored, and an optional `shortcutKey`.
+
+Use `Terminal > Manage Terminal Profiles…` to open or create the profiles file from Toastty.
 
 ```toml
 [zmx]
@@ -208,7 +212,7 @@ their current profile bindings.
 
 #### Shell integration
 
-Use `Terminal > Install Shell Integration…` to set up live pane titles automatically.
+Use `Toastty > Install Shell Integration…` to set up live pane titles automatically.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:
@@ -284,6 +288,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 
 ## Documentation
 
+- [Configuration](docs/configuration.md) — `~/.toastty/config`, `config-reference`, menu actions, and Toastty-owned config keys
 - [Running Agents](docs/running-agents.md) — agents.toml configuration, profile IDs, instrumentation, launch flow, and manual integration
 - [CLI Reference](docs/cli-reference.md) — `toastty` CLI commands, flags, environment variables, and integration examples
 - [Building and Releasing](docs/building-and-releasing.md) — build from source, validation, signed DMGs, and GitHub release publishing

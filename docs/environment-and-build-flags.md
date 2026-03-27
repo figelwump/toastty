@@ -132,6 +132,20 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
+### `scripts/automation/workspace-tabs-smoke.sh`
+
+| Variable | Default | Effect |
+|---|---|---|
+| `RUN_ID` | timestamped `workspace-tabs-smoke-*` value | Run ID passed through to the app. |
+| `FIXTURE` | `workspace-tabs-wide` | Fixture passed through to the app before tab-count and screenshot assertions. |
+| `TOASTTY_WORKSPACE_TABS_RESTORE_FRONT_APP` | `1` | When truthy, the script restores the previously frontmost app after Toastty reaches automation readiness so local screenshot runs minimize focus theft. |
+| `DEV_RUN_ROOT` | `artifacts/dev-runs/<RUN_ID>` | Root directory for this workspace-tab smoke run's isolated derived data, runtime home, socket, and artifacts. |
+| `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
+| `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
+| `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
+| `SOCKET_PATH` | `/tmp/tt-<run-suffix>.sock` | Socket path passed through to the app. The default short path keeps the run under Unix socket path-length limits. |
+| `ARCH` | current machine arch | Build destination architecture. |
+
 ### `scripts/automation/shortcut-trace.sh`
 
 | Variable | Default | Effect |

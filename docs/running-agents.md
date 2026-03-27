@@ -124,6 +124,9 @@ If you do not want Toastty intercepting those commands, set this in
 enable-agent-command-shims = false
 ```
 
+For the full Toastty config reference, including the other supported keys in
+`~/.toastty/config`, see [Configuration](configuration.md).
+
 That opt-out affects only manual `codex` / `claude` invocations inside Toastty
 terminals. Agent menu launches still use the built-in profile-ID-based
 instrumentation described above.

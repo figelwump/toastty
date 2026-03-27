@@ -6,6 +6,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
 
 - `~/.toastty/config`
   - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, and `enable-agent-command-shims`.
+- `~/.toastty/config-reference`
+  - Generated commented reference for every supported Toastty config key. Toastty rewrites this file on launch and when you open `Toastty > Open Config Reference…`.
 - `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
   - Managed `codex` and `claude` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
 - macOS `UserDefaults` for Toastty
@@ -14,7 +16,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Named terminal profile definitions loaded at startup and on config reload.
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots, including window-local terminal font overrides.
-- `~/.toastty/shell/` (created by `Terminal > Install Shell Integration…`)
+- `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash).
 - By default, `~/Library/Logs/Toastty/toastty.log`
   - Structured JSON logs.
@@ -22,6 +24,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Rotated copy of the previous log file once the active log exceeds 5 MB.
 - When runtime isolation is enabled for an isolated dev/test run, either by setting `TOASTTY_RUNTIME_HOME` directly or by setting `TOASTTY_DEV_WORKTREE_ROOT` and letting Toastty derive a runtime home under `artifacts/dev-runs/`:
   - `<runtime-home>/config`
+  - `<runtime-home>/config-reference`
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/workspace-layout-profiles.json`
   - `<runtime-home>/logs/toastty.log`

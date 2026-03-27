@@ -12,6 +12,8 @@ Toastty loads terminal profiles from:
 
 `TOASTTY_TERMINAL_PROFILES_PATH` supports absolute paths and `~/`-prefixed paths.
 
+Use `Terminal > Manage Terminal Profiles…` to open or create the file from Toastty.
+
 ## File format
 
 Toastty accepts a narrow TOML-like profile file rather than the full TOML spec. In practice:
@@ -79,7 +81,7 @@ These shortcuts point at the same profile-specific actions exposed in the `Termi
 
 ## Shell integration and live titles
 
-Profile startup commands are good for bootstrapping a session, but long-lived multiplexers such as `tmux` or `zmx` take over the shell after launch. For Toastty to keep seeing live pane titles from inside those sessions, install Toastty's shell integration from `Terminal > Install Shell Integration…` or follow the manual setup instructions in the README.
+Profile startup commands are good for bootstrapping a session, but long-lived multiplexers such as `tmux` or `zmx` take over the shell after launch. For Toastty to keep seeing live pane titles from inside those sessions, install Toastty's shell integration from `Toastty > Install Shell Integration…` or follow the manual setup instructions in the README.
 
 Without shell integration:
 
@@ -129,6 +131,7 @@ This is the simplest form of a profile: create a pane, connect to a host, and le
 ## Related docs
 
 - [README](../README.md)
+- [Configuration](configuration.md)
 - [Ghostty Integration](ghostty-integration.md)
 - [Runtime Sandboxing](runtime-sandboxing.md)
 - [Environment and Launch Flags](environment-and-build-flags.md)

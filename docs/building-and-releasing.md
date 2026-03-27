@@ -74,7 +74,7 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 ## Validate
 
 ```bash
-# Full gate: generate + build + test
+# Full gate: generate + build + workspace-tabs smoke + test
 ./scripts/automation/check.sh
 
 # Smoke UI automation
@@ -82,6 +82,9 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 
 # Shortcut hint screenshot smoke
 ./scripts/automation/shortcut-hints-smoke.sh
+
+# Workspace tabs screenshot smoke
+./scripts/automation/workspace-tabs-smoke.sh
 
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
