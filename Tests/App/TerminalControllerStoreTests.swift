@@ -128,56 +128,6 @@ final class TerminalControllerStoreTests: XCTestCase {
 
         XCTAssertTrue(controller.isCloseTransitionViewportDeferralArmed)
     }
-
-    func testApplyGhosttyScrollbarPreferenceChangeUpdatesMountedControllers() throws {
-        let store = TerminalControllerStore()
-        let panelID = UUID()
-        let delegate = TestTerminalSurfaceControllerDelegate()
-        let controller = store.controller(for: panelID, delegate: delegate)
-        let scrollView = controller.surfaceScrollViewForTesting
-        let runtimeManager = GhosttyRuntimeManager.shared
-        let originalConfigPath = ProcessInfo.processInfo.environment["TOASTTY_GHOSTTY_CONFIG_PATH"]
-        let temporaryDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        let configURL = temporaryDirectory.appendingPathComponent("ghostty-config")
-
-        try FileManager.default.createDirectory(
-            at: temporaryDirectory,
-            withIntermediateDirectories: true
-        )
-        defer {
-            if let originalConfigPath {
-                setenv("TOASTTY_GHOSTTY_CONFIG_PATH", originalConfigPath, 1)
-            } else {
-                unsetenv("TOASTTY_GHOSTTY_CONFIG_PATH")
-            }
-            _ = runtimeManager.reloadConfiguration()
-            try? FileManager.default.removeItem(at: temporaryDirectory)
-        }
-
-        try "scrollbar = system\n".write(to: configURL, atomically: true, encoding: .utf8)
-        setenv("TOASTTY_GHOSTTY_CONFIG_PATH", configURL.path, 1)
-        XCTAssertTrue(runtimeManager.reloadConfiguration())
-
-        controller.applyViewportState(
-            TerminalViewportState(
-                panelID: panelID,
-                totalRows: 120,
-                offsetRows: 60,
-                visibleRows: 20
-            )
-        )
-        scrollView.applyCellHeightPoints(10)
-        store.applyGhosttyScrollbarPreferenceChange()
-        XCTAssertTrue(scrollView.hasVerticalScroller)
-
-        try "scrollbar = never\n".write(to: configURL, atomically: true, encoding: .utf8)
-        XCTAssertTrue(runtimeManager.reloadConfiguration())
-
-        store.applyGhosttyScrollbarPreferenceChange()
-
-        XCTAssertFalse(scrollView.hasVerticalScroller)
-    }
 }
 
 @MainActor

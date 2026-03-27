@@ -111,12 +111,6 @@ final class TerminalControllerStore {
         }
     }
 
-    func applyGhosttyScrollbarPreferenceChange() {
-        forEachController { controller in
-            controller.applyGhosttyScrollbarPreferenceChange()
-        }
-    }
-
     func currentGhosttySurface(for panelID: UUID) -> ghostty_surface_t? {
         controllers[panelID]?.currentGhosttySurface()
     }

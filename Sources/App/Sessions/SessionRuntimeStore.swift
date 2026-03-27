@@ -65,6 +65,18 @@ final class SessionRuntimeStore: ObservableObject {
             repoRoot: repoRoot,
             at: now
         )
+        ToasttyLog.info(
+            "Started managed session",
+            category: .terminal,
+            metadata: sessionStartMetadata(
+                sessionID: sessionID,
+                agent: agent,
+                panelID: panelID,
+                windowID: windowID,
+                workspaceID: workspaceID,
+                usesSessionStatusNotifications: usesSessionStatusNotifications
+            )
+        )
         publish(nextRegistry)
     }
 
@@ -246,6 +258,15 @@ final class SessionRuntimeStore: ObservableObject {
             "runtime_seconds": String(format: "%.3f", now.timeIntervalSince(record.startedAt)),
         ]
 
+        if let status = record.status {
+            if let summary = truncatedLogMetadataValue(status.summary, limit: 80) {
+                metadata["last_status_summary"] = summary
+            }
+            if let detail = truncatedLogMetadataValue(status.detail, limit: 160) {
+                metadata["last_status_detail"] = detail
+            }
+        }
+
         switch reason {
         case .explicit, .panelRemovedFromAppState:
             break
@@ -257,6 +278,24 @@ final class SessionRuntimeStore: ObservableObject {
         }
 
         return metadata
+    }
+
+    private func sessionStartMetadata(
+        sessionID: String,
+        agent: AgentKind,
+        panelID: UUID,
+        windowID: UUID,
+        workspaceID: UUID,
+        usesSessionStatusNotifications: Bool
+    ) -> [String: String] {
+        [
+            "session_id": sessionID,
+            "agent": agent.rawValue,
+            "panel_id": panelID.uuidString,
+            "window_id": windowID.uuidString,
+            "workspace_id": workspaceID.uuidString,
+            "uses_status_notifications": usesSessionStatusNotifications ? "true" : "false",
+        ]
     }
 
     private func handleActionableStatusTransitionIfNeeded(
@@ -498,4 +537,11 @@ private func normalizedNonEmpty(_ value: String?) -> String? {
         return nil
     }
     return trimmed
+}
+
+private func truncatedLogMetadataValue(_ value: String?, limit: Int) -> String? {
+    guard let normalized = normalizedNonEmpty(value) else { return nil }
+    guard normalized.count > limit else { return normalized }
+    let endIndex = normalized.index(normalized.startIndex, offsetBy: limit - 3)
+    return String(normalized[..<endIndex]) + "..."
 }

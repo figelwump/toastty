@@ -69,12 +69,6 @@ final class TerminalWindowRuntime {
         }
     }
 
-    func applyGhosttyScrollbarPreferenceChange() {
-        for runtime in workspaceRuntimesByID.values {
-            runtime.applyGhosttyScrollbarPreferenceChange()
-        }
-    }
-
     #if TOASTTY_HAS_GHOSTTY_KIT
     func panelID(forSurfaceHandle surfaceHandle: UInt) -> UUID? {
         for runtime in workspaceRuntimesByID.values {
