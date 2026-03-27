@@ -167,7 +167,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
             environment: ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/ref-runtime"]
         )
 
-        XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config.reference")
+        XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config-reference")
     }
 }
 

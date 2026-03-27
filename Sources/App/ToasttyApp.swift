@@ -832,8 +832,8 @@ struct ToasttyApp: App {
                 legacyTerminalFontSizePoints: legacyTerminalFontSizePoints
             )
             Self.ensureToasttyConfigTemplateExists()
-            Self.writeToasttyConfigReference()
         }
+        Self.writeToasttyConfigReference()
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,

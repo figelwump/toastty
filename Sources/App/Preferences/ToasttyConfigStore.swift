@@ -12,7 +12,7 @@ enum ToasttyConfigStore {
     private static let configDirectoryName = ".toastty"
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
-    private static let configReferenceFileName = "config.reference"
+    private static let configReferenceFileName = "config-reference"
 
     static func load(
         fileManager: FileManager = .default,
