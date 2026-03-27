@@ -225,7 +225,11 @@ Supported action IDs:
 - `workspace.focus-next-unread-or-active`
   - `args.windowID` is required when multiple windows exist
   - first targets unread panels using the normal unread traversal order
+  - unread traversal still wraps within the current workspace before moving on
   - if no unread panel exists, falls back to managed-session panels whose live status is `working`, `needsApproval`, or `error`
+  - active fallback scans the rest of the current workspace first, then sibling workspaces later in the current window's workspace order
+  - after that it scans later windows in window order, trying each window's selected workspace first and then the remaining workspaces in that window order
+  - only after those passes does it wrap back to earlier panels in the current workspace
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
   - requires `args.panelID`

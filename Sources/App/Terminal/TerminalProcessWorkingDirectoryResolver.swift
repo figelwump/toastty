@@ -512,12 +512,16 @@ final class TerminalProcessWorkingDirectoryResolver {
             if matchingIndices.count == 1 {
                 return matchingIndices[0]
             }
-            if matchingIndices.isEmpty == false {
-                guard preferNewestWhenAmbiguous else {
-                    return matchingIndices[0]
-                }
-                return matchingIndices.max(by: { candidateLoginPIDs[$0] < candidateLoginPIDs[$1] })
+            guard matchingIndices.isEmpty == false else {
+                // When we know which cwd this panel should own, binding any
+                // unmatched shell is worse than waiting for the right one to
+                // appear in a later scan.
+                return nil
             }
+            guard preferNewestWhenAmbiguous else {
+                return matchingIndices[0]
+            }
+            return matchingIndices.max(by: { candidateLoginPIDs[$0] < candidateLoginPIDs[$1] })
         }
 
         guard allowUnmatchedFallback else {
@@ -581,16 +585,16 @@ final class TerminalProcessWorkingDirectoryResolver {
                             ]
                         )
                     )
-                } else if matchingIndices.isEmpty, filteredCandidates.count > 1, preferNewestWhenAmbiguous {
+                } else if matchingIndices.isEmpty {
                     ToasttyLog.info(
-                        "No terminal process candidates matched expected cwd; falling back to newest login PID",
+                        "No terminal process candidates matched expected cwd; deferring registration",
                         category: .terminal,
                         metadata: registrationCandidateMetadata(
                             panelID: panelID,
                             candidates: filteredCandidates,
                             expectedWorkingDirectory: expectedWorkingDirectory,
                             additionalMetadata: [
-                                "prefer_newest_when_ambiguous": "true",
+                                "prefer_newest_when_ambiguous": preferNewestWhenAmbiguous ? "true" : "false",
                             ]
                         )
                     )

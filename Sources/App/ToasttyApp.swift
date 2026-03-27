@@ -864,6 +864,7 @@ struct ToasttyApp: App {
             )
             Self.ensureToasttyConfigTemplateExists()
         }
+        Self.writeToasttyConfigReference()
         self.systemNotificationResponseCoordinator = systemNotificationResponseCoordinator
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
@@ -1097,6 +1098,8 @@ struct ToasttyApp: App {
                 terminalProfilesMenuController: terminalProfilesMenuController,
                 supportsConfigurationReload: supportsConfigurationReload,
                 reloadConfiguration: reloadConfiguration,
+                openManageConfig: openManageConfig,
+                openConfigReference: openConfigReference,
                 openAgentProfilesConfiguration: openAgentProfilesConfiguration
             )
         }
@@ -1210,6 +1213,58 @@ struct ToasttyApp: App {
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
+        }
+    }
+
+    @MainActor
+    private func openManageConfig() {
+        do {
+            try ToasttyConfigStore.ensureTemplateExists()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Config"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let fileURL = ToasttyConfigStore.configFileURL()
+        guard NSWorkspace.shared.open(fileURL) else {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Config"
+            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+    }
+
+    @MainActor
+    private func openConfigReference() {
+        do {
+            try ToasttyConfigStore.writeConfigReference()
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Config Reference"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let fileURL = ToasttyConfigStore.configReferenceFileURL()
+        guard NSWorkspace.shared.open(fileURL) else {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open Config Reference"
+            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
         }
     }
 
@@ -1389,6 +1444,21 @@ struct ToasttyApp: App {
                 category: .bootstrap,
                 metadata: [
                     "path": ToasttyConfigStore.configFileURL().path,
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+    }
+
+    private static func writeToasttyConfigReference() {
+        do {
+            try ToasttyConfigStore.writeConfigReference()
+        } catch {
+            ToasttyLog.warning(
+                "Failed to write Toastty config reference",
+                category: .bootstrap,
+                metadata: [
+                    "path": ToasttyConfigStore.configReferenceFileURL().path,
                     "error": error.localizedDescription,
                 ]
             )

@@ -43,8 +43,10 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 |---|---|
 | `Cmd+N` | New window |
 | `Cmd+B` | Show or hide sidebar |
+| `Cmd+T` | New tab |
 | `Cmd+Shift+N` | New workspace |
 | `Cmd+Shift+E` | Rename workspace |
+| `Option+Shift+E` | Rename tab |
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
@@ -56,6 +58,11 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+W` | Close focused panel |
 | `Cmd+Ctrl+=` | Equalize splits |
 | `Option+1`–`Option+9` | Switch workspace |
+| `Cmd+1`–`Cmd+9` | Switch tab |
+| `Cmd+Shift+[` | Previous tab |
+| `Cmd+Shift+]` | Next tab |
+| `Option+Shift+[` | Previous tab (wrapping, terminal-proof) |
+| `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
 | `Cmd+Ctrl+<key>` | Launch agent profile (when profile defines `shortcutKey`) |
 | `Cmd+Ctrl+<key>` / `Cmd+Ctrl+Shift+<key>` | Profile split right / split down (when profile defines `shortcutKey`) |

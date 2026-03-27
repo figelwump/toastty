@@ -14,6 +14,7 @@ enum ToasttyConfigStore {
     private static let configDirectoryName = ".toastty"
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
+    private static let configReferenceFileName = "config-reference"
 
     static func load(
         fileManager: FileManager = .default,
@@ -80,6 +81,37 @@ enum ToasttyConfigStore {
         } catch let error as CocoaError where error.code == .fileWriteFileExists {
             return
         }
+    }
+
+    /// Writes (or overwrites) the reference config file with the full commented
+    /// template so users can see every supported option. Called on every launch.
+    static func writeConfigReference(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws {
+        let referenceURL = configReferenceFileURL(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
+        try fileManager.createDirectory(
+            at: referenceURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let contents = Data(render(config: ToasttyConfig()).utf8)
+        try contents.write(to: referenceURL)
+    }
+
+    static func configReferenceFileURL(
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryPath,
+            environment: environment
+        )
+        return runtimePaths.configDirectoryURL
+            .appending(path: configReferenceFileName, directoryHint: .notDirectory)
     }
 
     private static func parse(contents: String) -> ToasttyConfig {

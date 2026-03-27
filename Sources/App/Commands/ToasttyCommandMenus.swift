@@ -113,6 +113,8 @@ struct ToasttyCommandMenus: Commands {
     let terminalProfilesMenuController: TerminalProfilesMenuController
     let supportsConfigurationReload: Bool
     let reloadConfiguration: () -> Void
+    let openManageConfig: () -> Void
+    let openConfigReference: () -> Void
     let openAgentProfilesConfiguration: () -> Void
 
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
@@ -181,6 +183,14 @@ struct ToasttyCommandMenus: Commands {
         }
 
         CommandGroup(after: .appInfo) {
+            Divider()
+
+            Button("Manage Config…", action: openManageConfig)
+
+            Button("Open Config Reference…", action: openConfigReference)
+
+            Divider()
+
             Button(action: reloadConfiguration) {
                 Label("Reload Configuration", systemImage: "arrow.clockwise")
             }
@@ -327,7 +337,7 @@ struct ToasttyCommandMenus: Commands {
             .keyboardShortcut("]", modifiers: [.command, .shift])
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
-            Button("Jump to Next Unread or Active") {
+            Button("Jump to Next Active") {
                 store.focusNextUnreadOrActivePanelFromCommand(
                     preferredWindowID: commandSelection?.windowID ?? preferredWindowID,
                     sessionRuntimeStore: sessionRuntimeStore
