@@ -307,6 +307,120 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesCurrentCodexUserTurnOperationEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-03-27T18:46:23.170Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","items":[{"type":"text","text":"Investigate why cdx tracking is stale in Toastty"}],"cwd":"/tmp/workspace"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Investigate why cdx tracking is stale in Toastty"
+            )
+        ])
+    }
+
+    func testWatcherIgnoresRepeatedCurrentCodexUserTurnOperationEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-03-27T18:46:23.170Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","items":[{"type":"text","text":"Investigate why cdx tracking is stale in Toastty"}]}}
+                {"ts":"2026-03-27T18:46:23.170Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","items":[{"type":"text","text":"Investigate why cdx tracking is stale in Toastty"}]}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Investigate why cdx tracking is stale in Toastty"
+            )
+        ])
+    }
+
+    func testWatcherStripsNulBytesBeforeParsingLogLines() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let completionEvent = expectation(description: "Task complete event arrives from NUL-heavy line")
+        completionEvent.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            completionEvent.fulfill()
+        }
+
+        watcher.start()
+
+        let rawLine = #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-nul","msg":{"type":"task_complete","last_agent_message":"Finished updating the launch path."}}}"#
+        var nulHeavyLine = Data()
+        for byte in rawLine.utf8 {
+            nulHeavyLine.append(byte)
+            if byte == UInt8(ascii: "{") || byte == UInt8(ascii: "\"") || byte == UInt8(ascii: ":") {
+                nulHeavyLine.append(0)
+            }
+        }
+        nulHeavyLine.append(UInt8(ascii: "\n"))
+
+        try append(nulHeavyLine, to: logURL)
+
+        await fulfillment(of: [completionEvent], timeout: 1)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .taskCompleted, detail: "Finished updating the launch path.")
+        ])
+    }
+
+    func testWatcherBuffersSplitLogLineAcrossWrites() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+        let promptEvent = expectation(description: "Prompt event arrives after completing split line")
+        promptEvent.assertForOverFulfill = true
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 10_000_000
+        ) { event in
+            await recorder.append(event)
+            promptEvent.fulfill()
+        }
+
+        watcher.start()
+
+        let line =
+            #"{"ts":"2026-03-27T18:46:23.170Z","dir":"from_tui","kind":"op","payload":{"type":"user_turn","items":[{"type":"text","text":"Investigate split writes in the Codex log watcher"}]}}"#
+        let lineData = Data(line.utf8)
+        let splitIndex = lineData.count / 2
+
+        try append(lineData.prefix(splitIndex), to: logURL)
+        try await Task.sleep(nanoseconds: 100_000_000)
+        let eventsAfterFirstWrite = await recorder.snapshot()
+        XCTAssertEqual(eventsAfterFirstWrite, [])
+
+        var trailingData = Data(lineData.dropFirst(splitIndex))
+        trailingData.append(UInt8(ascii: "\n"))
+        try append(trailingData, to: logURL)
+
+        await fulfillment(of: [promptEvent], timeout: 1)
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: "Investigate split writes in the Codex log watcher"
+            )
+        ])
+    }
+
     func testWatcherDeduplicatesRepeatedUserPromptPreviewEvents() async throws {
         let logURL = try makeLogURL()
         let recorder = EventRecorder()
@@ -379,10 +493,14 @@ final class CodexSessionLogWatcherTests: XCTestCase {
     }
 
     private func append(_ string: String, to url: URL) throws {
+        try append(Data(string.utf8), to: url)
+    }
+
+    private func append(_ data: Data, to url: URL) throws {
         let handle = try FileHandle(forWritingTo: url)
         defer { try? handle.close() }
         try handle.seekToEnd()
-        try handle.write(contentsOf: Data(string.utf8))
+        try handle.write(contentsOf: data)
     }
 
     private func recordEvents(

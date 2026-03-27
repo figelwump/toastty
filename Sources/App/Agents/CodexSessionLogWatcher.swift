@@ -58,7 +58,7 @@ private extension CodexSessionLogWatcher {
         Task.detached(priority: .utility) {
             var handle: FileHandle?
             var offset: UInt64 = 0
-            var bufferedRemainder = ""
+            var bufferedRemainder = Data()
             var seenKeys: Set<String> = []
             defer { close(&handle) }
 
@@ -100,7 +100,7 @@ private extension CodexSessionLogWatcher {
         from logURL: URL,
         handle: inout FileHandle?,
         offset: inout UInt64,
-        bufferedRemainder: inout String,
+        bufferedRemainder: inout Data,
         seenKeys: inout Set<String>,
         eventHandler: @escaping EventHandler
     ) async {
@@ -115,24 +115,28 @@ private extension CodexSessionLogWatcher {
     }
 
     static func processDelta(
-        _ delta: String,
-        bufferedRemainder: inout String,
+        _ delta: Data,
+        bufferedRemainder: inout Data,
         seenKeys: inout Set<String>,
         eventHandler: @escaping EventHandler
     ) async {
-        let combined = bufferedRemainder + delta
-        let lines = combined.components(separatedBy: "\n")
-        bufferedRemainder = lines.last ?? ""
+        guard delta.isEmpty == false else {
+            return
+        }
 
-        for line in lines.dropLast() {
-            guard let event = parse(line: line, seenKeys: &seenKeys) else {
+        bufferedRemainder.append(delta)
+
+        while let newlineIndex = bufferedRemainder.firstIndex(of: newlineByte) {
+            let lineData = bufferedRemainder.prefix(upTo: newlineIndex)
+            bufferedRemainder.removeSubrange(...newlineIndex)
+            guard let event = parse(lineData: Data(lineData), seenKeys: &seenKeys) else {
                 continue
             }
             await eventHandler(event)
         }
     }
 
-    static func readDelta(from logURL: URL, handle: inout FileHandle?, offset: inout UInt64) -> String? {
+    static func readDelta(from logURL: URL, handle: inout FileHandle?, offset: inout UInt64) -> Data? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: logURL.path),
               let fileSize = attributes[.size] as? NSNumber else {
             close(&handle)
@@ -160,7 +164,7 @@ private extension CodexSessionLogWatcher {
             try fileHandle.seek(toOffset: offset)
             let data = try fileHandle.readToEnd() ?? Data()
             offset += UInt64(data.count)
-            return String(data: data, encoding: .utf8)
+            return data.isEmpty ? nil : data
         } catch {
             close(&handle)
             return nil
@@ -168,20 +172,43 @@ private extension CodexSessionLogWatcher {
     }
 
     static func parseBufferedRemainder(
-        _ bufferedRemainder: String,
+        _ bufferedRemainder: Data,
         seenKeys: inout Set<String>
     ) -> CodexSessionLogEvent? {
-        let trimmedRemainder = bufferedRemainder.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedRemainder.isEmpty == false else {
+        guard bufferedRemainder.isEmpty == false else {
             return nil
         }
-        return parse(line: trimmedRemainder, seenKeys: &seenKeys)
+        return parse(lineData: bufferedRemainder, seenKeys: &seenKeys)
     }
 
-    static func parse(line: String, seenKeys: inout Set<String>) -> CodexSessionLogEvent? {
-        guard let data = line.data(using: .utf8),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              normalizedString(object["dir"]) == "to_tui",
+    static func parse(lineData: Data, seenKeys: inout Set<String>) -> CodexSessionLogEvent? {
+        guard let normalizedLineData = normalizedJSONLineData(from: lineData),
+              let object = try? JSONSerialization.jsonObject(with: normalizedLineData) as? [String: Any] else {
+            return nil
+        }
+        let fallbackLine = String(data: normalizedLineData, encoding: .utf8) ?? ""
+
+        if let event = parseLegacyCodexEvent(
+            object: object,
+            fallbackLine: fallbackLine,
+            seenKeys: &seenKeys
+        ) {
+            return event
+        }
+
+        return parseOperationEvent(
+            object: object,
+            fallbackLine: fallbackLine,
+            seenKeys: &seenKeys
+        )
+    }
+
+    static func parseLegacyCodexEvent(
+        object: [String: Any],
+        fallbackLine: String,
+        seenKeys: inout Set<String>
+    ) -> CodexSessionLogEvent? {
+        guard normalizedString(object["dir"]) == "to_tui",
               normalizedString(object["kind"]) == "codex_event",
               let payload = object["payload"] as? [String: Any],
               let message = payload["msg"] as? [String: Any],
@@ -191,7 +218,7 @@ private extension CodexSessionLogWatcher {
 
         switch type {
         case "user_message":
-            let dedupeKey = "user_message:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            let dedupeKey = "user_message:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .turnStarted,
@@ -199,12 +226,12 @@ private extension CodexSessionLogWatcher {
             )
 
         case "task_started":
-            let dedupeKey = "task_started:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            let dedupeKey = "task_started:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(kind: .turnStarted, detail: "Responding to your prompt")
 
         case "exec_command_begin":
-            let dedupeKey = "exec_command_begin:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            let dedupeKey = "exec_command_begin:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .turnStarted,
@@ -212,7 +239,7 @@ private extension CodexSessionLogWatcher {
             )
 
         case "patch_apply_begin":
-            let dedupeKey = "patch_apply_begin:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            let dedupeKey = "patch_apply_begin:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .turnStarted,
@@ -220,7 +247,7 @@ private extension CodexSessionLogWatcher {
             )
 
         case "task_complete":
-            let dedupeKey = "task_complete:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            let dedupeKey = "task_complete:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .taskCompleted,
@@ -228,7 +255,7 @@ private extension CodexSessionLogWatcher {
             )
 
         case "turn_aborted":
-            let dedupeKey = "turn_aborted:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            let dedupeKey = "turn_aborted:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
 
@@ -241,13 +268,40 @@ private extension CodexSessionLogWatcher {
             guard type.hasSuffix("_approval_request") || type == "request_user_input" else {
                 return nil
             }
-            let dedupeKey = "approval:\(eventIdentifier(from: payload, message: message, fallback: line))"
+            let dedupeKey = "approval:\(eventIdentifier(from: payload, message: message, fallback: fallbackLine))"
             guard seenKeys.insert(dedupeKey).inserted else { return nil }
             return CodexSessionLogEvent(
                 kind: .approvalNeeded,
                 detail: approvalDetail(type: type, message: message)
             )
         }
+    }
+
+    static func parseOperationEvent(
+        object: [String: Any],
+        fallbackLine: String,
+        seenKeys: inout Set<String>
+    ) -> CodexSessionLogEvent? {
+        guard normalizedString(object["dir"]) == "from_tui",
+              normalizedString(object["kind"]) == "op",
+              let payload = object["payload"] as? [String: Any],
+              let type = normalizedString(payload["type"]) else {
+            return nil
+        }
+
+        guard type == "user_turn" else {
+            return nil
+        }
+
+        let dedupeKey = "op_user_turn:\(operationEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+        guard seenKeys.insert(dedupeKey).inserted else {
+            return nil
+        }
+
+        return CodexSessionLogEvent(
+            kind: .turnStarted,
+            detail: userTurnDetail(from: payload) ?? "Responding to your prompt"
+        )
     }
 
     static func approvalDetail(type: String, message: [String: Any]) -> String {
@@ -355,6 +409,64 @@ private extension CodexSessionLogWatcher {
         return fallback
     }
 
+    static func operationEventIdentifier(
+        from object: [String: Any],
+        payload: [String: Any],
+        fallback: String
+    ) -> String {
+        for key in ["id", "turn_id", "request_id"] {
+            if let value = normalizedString(payload[key]) {
+                return value
+            }
+        }
+        if let timestamp = normalizedString(object["ts"]) {
+            return timestamp
+        }
+        return fallback
+    }
+
+    static func userTurnDetail(from payload: [String: Any]) -> String? {
+        if let items = payload["items"] as? [Any] {
+            for case let item as [String: Any] in items {
+                guard normalizedString(item["type"]) == "text" else {
+                    continue
+                }
+                if let summary = normalizedSummaryText(item["text"], limit: 140) {
+                    return summary
+                }
+            }
+        }
+
+        return normalizedSummaryText(payload["text"], limit: 140)
+    }
+
+    static func normalizedJSONLineData(from lineData: Data) -> Data? {
+        guard lineData.isEmpty == false else {
+            return nil
+        }
+
+        let filteredBytes = lineData.filter { $0 != nulByte }
+        guard filteredBytes.isEmpty == false else {
+            return nil
+        }
+
+        let firstContentIndex = filteredBytes.firstIndex(where: { isNonWhitespaceByte($0) })
+        guard let firstContentIndex else {
+            return nil
+        }
+
+        let lastContentIndex = filteredBytes.lastIndex(where: { isNonWhitespaceByte($0) })
+        guard let lastContentIndex else {
+            return nil
+        }
+
+        return Data(filteredBytes[firstContentIndex...lastContentIndex])
+    }
+
+    static func isNonWhitespaceByte(_ byte: UInt8) -> Bool {
+        !whitespaceBytes.contains(byte)
+    }
+
     static func fileName(from object: [String: Any]) -> String? {
         if let name = normalizedSummaryText(object["name"], limit: 80) {
             return name
@@ -395,4 +507,8 @@ private extension CodexSessionLogWatcher {
         try? handle?.close()
         handle = nil
     }
+
+    static let newlineByte = UInt8(ascii: "\n")
+    static let nulByte: UInt8 = 0
+    static let whitespaceBytes: Set<UInt8> = [9, 10, 13, 32]
 }
