@@ -97,11 +97,16 @@ enum AgentLaunchInstrumentation {
 
             let settingsURL = artifactsDirectoryURL.appendingPathComponent("claude-settings.json", isDirectory: false)
             try writeJSONObject(mergedSettings, to: settingsURL)
+            let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(
+                for: .claude,
+                argv: existingSettings.argvWithoutSettings
+            )
 
             return PreparedAgentLaunchCommand(
                 argv: insertingArguments(
                     ["--settings", settingsURL.path],
-                    into: existingSettings.argvWithoutSettings
+                    into: existingSettings.argvWithoutSettings,
+                    afterIndex: insertionIndex
                 ),
                 environment: [:],
                 artifacts: PreparedAgentLaunchArtifacts(
@@ -144,11 +149,13 @@ enum AgentLaunchInstrumentation {
 
             let logURL = artifactsDirectoryURL.appendingPathComponent("codex-session.jsonl", isDirectory: false)
             let notifyArray = tomlStringArrayLiteral(["/bin/sh", notifyScriptURL.path])
+            let insertionIndex = ManagedAgentCommandResolver.launchInsertionIndex(for: .codex, argv: argv)
 
             return PreparedAgentLaunchCommand(
                 argv: insertingArguments(
                     ["-c", "notify=\(notifyArray)"],
-                    into: argv
+                    into: argv,
+                    afterIndex: insertionIndex
                 ),
                 environment: [
                     "CODEX_TUI_RECORD_SESSION": "1",
@@ -421,11 +428,18 @@ private extension AgentLaunchInstrumentation {
         return "'\(escaped)'"
     }
 
-    static func insertingArguments(_ arguments: [String], into argv: [String]) -> [String] {
-        guard let executable = argv.first else {
+    static func insertingArguments(
+        _ arguments: [String],
+        into argv: [String],
+        afterIndex: Int
+    ) -> [String] {
+        guard argv.isEmpty == false else {
             return arguments
         }
-        return [executable] + arguments + Array(argv.dropFirst())
+        let boundedIndex = min(max(afterIndex, 0), argv.count - 1)
+        return Array(argv.prefix(boundedIndex + 1))
+            + arguments
+            + Array(argv.dropFirst(boundedIndex + 1))
     }
 
     static func normalizedNonEmptyValue(_ value: String?) -> String? {

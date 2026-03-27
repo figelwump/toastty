@@ -820,7 +820,8 @@ struct ToasttyApp: App {
         do {
             shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: initialToasttyConfig.enableAgentCommandShims,
-                runtimePaths: runtimePaths
+                runtimePaths: runtimePaths,
+                agentProfiles: agentCatalogStore.catalog
             )
         } catch {
             shimDirectoryPath = nil
@@ -1030,9 +1031,13 @@ struct ToasttyApp: App {
 
     private static func synchronizeManagedAgentCommandShims(
         enabled: Bool,
-        runtimePaths: ToasttyRuntimePaths
+        runtimePaths: ToasttyRuntimePaths,
+        agentProfiles: AgentCatalog
     ) throws -> String? {
-        try AgentCommandShimInstaller(runtimePaths: runtimePaths)
+        try AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles)
+        )
             .syncInstallation(enabled: enabled)?
             .directoryURL
             .path
@@ -1132,7 +1137,8 @@ struct ToasttyApp: App {
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
-                runtimePaths: runtimePaths
+                runtimePaths: runtimePaths,
+                agentProfiles: agentCatalogStore.catalog
             )
             Self.configureBaseLaunchEnvironmentProvider(
                 terminalRuntimeRegistry: terminalRuntimeRegistry,

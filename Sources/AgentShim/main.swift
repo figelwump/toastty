@@ -7,17 +7,25 @@ private enum AgentCommandShim {
         arguments: [String],
         environment: [String: String]
     ) -> Int32 {
-        guard let invocation = Invocation(arguments: arguments) else {
+        guard let commandName = Invocation.commandName(arguments: arguments) else {
             fputs("toastty-agent-shim: unsupported invocation\n", stderr)
             return 64
         }
 
         guard let realBinaryPath = resolveRealBinaryPath(
-            commandName: invocation.commandName,
+            commandName: commandName,
             environment: environment
         ) else {
-            fputs("\(invocation.commandName): command not found\n", stderr)
+            fputs("\(commandName): command not found\n", stderr)
             return 127
+        }
+
+        guard let invocation = Invocation(arguments: arguments) else {
+            return spawnAndWait(
+                executablePath: realBinaryPath,
+                argv: arguments,
+                environment: environment
+            )
         }
 
         if shouldPassThrough(environment: environment) {
@@ -321,17 +329,23 @@ private struct Invocation {
     let argv: [String]
 
     init?(arguments: [String]) {
-        guard arguments.isEmpty == false else {
-            return nil
-        }
-
-        let commandName = URL(fileURLWithPath: arguments[0]).lastPathComponent
-        guard let agent = AgentKind(rawValue: commandName) else {
+        guard let commandName = Self.commandName(arguments: arguments),
+              let agent = ManagedAgentCommandResolver.inferManagedAgent(
+                  commandName: commandName,
+                  argv: arguments
+              ) else {
             return nil
         }
         self.commandName = commandName
         self.agent = agent
         self.argv = arguments
+    }
+
+    static func commandName(arguments: [String]) -> String? {
+        guard arguments.isEmpty == false else {
+            return nil
+        }
+        return URL(fileURLWithPath: arguments[0]).lastPathComponent
     }
 }
 

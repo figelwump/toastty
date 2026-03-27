@@ -84,6 +84,80 @@ final class AgentLaunchInstrumentationTests: XCTestCase {
         )
     }
 
+    func testPrepareCodexLaunchInsertsNotifyAfterWrappedCodexCommand() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .codex,
+            argv: [
+                "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
+                "--workdir=/tmp/repo",
+                "codex",
+                "--dangerously-bypass-approvals-and-sandbox",
+            ],
+            cliExecutablePath: "/bin/sh",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        XCTAssertEqual(
+            preparedLaunch.argv,
+            [
+                "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
+                "--workdir=/tmp/repo",
+                "codex",
+                "-c",
+                "notify=[\"/bin/sh\",\"\(try XCTUnwrap(preparedLaunch.artifacts?.directoryURL.appendingPathComponent("codex-notify.sh").path))\"]",
+                "--dangerously-bypass-approvals-and-sandbox",
+            ]
+        )
+    }
+
+    func testPrepareClaudeLaunchInsertsSettingsAfterWrappedClaudeCommand() throws {
+        let fileManager = FileManager.default
+        let sessionID = "test-\(UUID().uuidString)"
+
+        let preparedLaunch = try AgentLaunchInstrumentation.prepare(
+            agent: .claude,
+            argv: [
+                "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
+                "claude",
+                "--dangerously-skip-permissions",
+            ],
+            cliExecutablePath: "/bin/sh",
+            sessionID: sessionID,
+            workingDirectory: nil,
+            fileManager: fileManager
+        )
+
+        defer {
+            if let artifacts = preparedLaunch.artifacts {
+                try? fileManager.removeItem(at: artifacts.directoryURL)
+            }
+        }
+
+        let settingsIndex = try XCTUnwrap(preparedLaunch.argv.firstIndex(of: "--settings"))
+        let settingsPath = try XCTUnwrap(preparedLaunch.argv[safe: settingsIndex + 1])
+        XCTAssertEqual(
+            Array(preparedLaunch.argv.prefix(4)),
+            [
+                "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
+                "claude",
+                "--settings",
+                settingsPath,
+            ]
+        )
+        XCTAssertEqual(preparedLaunch.argv.last, "--dangerously-skip-permissions")
+    }
+
     func testPreparedClaudeHookScriptLogsTelemetryFailuresWithoutWritingToStdout() throws {
         let fileManager = FileManager.default
         let sessionID = "test-\(UUID().uuidString)"

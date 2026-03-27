@@ -30,6 +30,32 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         }
     }
 
+    func testSyncInstallationCreatesConfiguredWrapperLinksWhenEnabled() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        let installer = AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            managedCommandNames: ["codex", "claude", "run-sandboxed.sh", "agent-safehouse"],
+            helperExecutablePathProvider: { helperURL.path }
+        )
+
+        let syncedInstallation = try installer.syncInstallation(enabled: true)
+        let installation = try XCTUnwrap(syncedInstallation)
+
+        for commandName in ["run-sandboxed.sh", "agent-safehouse"] {
+            let linkURL = installation.directoryURL.appendingPathComponent(commandName, isDirectory: false)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: linkURL.path))
+            XCTAssertEqual(
+                try FileManager.default.destinationOfSymbolicLink(atPath: linkURL.path),
+                helperURL.path
+            )
+        }
+    }
+
     func testSyncInstallationRemovesEmptyManagedShimDirectoryWhenDisabled() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let helperURL = try makeExecutableHelper(in: homeDirectoryURL)

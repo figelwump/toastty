@@ -25,19 +25,22 @@ enum AgentCommandShimInstallerError: LocalizedError, Equatable {
 }
 
 final class AgentCommandShimInstaller {
-    private static let managedCommandNames = ["codex", "claude"]
+    private static let defaultManagedCommandNames: Set<String> = ["codex", "claude"]
 
     private let runtimePaths: ToasttyRuntimePaths
     private let fileManager: FileManager
     private let helperExecutablePathProvider: @Sendable () -> String?
+    private let managedCommandNames: Set<String>
 
     init(
         runtimePaths: ToasttyRuntimePaths,
         fileManager: FileManager = .default,
+        managedCommandNames: Set<String> = AgentCommandShimInstaller.defaultManagedCommandNames,
         helperExecutablePathProvider: @escaping @Sendable () -> String? = ToasttyBundledExecutableLocator.defaultAgentShimExecutablePath
     ) {
         self.runtimePaths = runtimePaths
         self.fileManager = fileManager
+        self.managedCommandNames = managedCommandNames
         self.helperExecutablePathProvider = helperExecutablePathProvider
     }
 
@@ -52,7 +55,7 @@ final class AgentCommandShimInstaller {
         let directoryURL = runtimePaths.agentShimDirectoryURL
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 
-        for commandName in Self.managedCommandNames {
+        for commandName in managedCommandNames.sorted() {
             let linkURL = directoryURL.appendingPathComponent(commandName, isDirectory: false)
             let pathStatus = Self.pathStatus(at: linkURL.path)
             if pathStatus.exists {
@@ -82,7 +85,7 @@ final class AgentCommandShimInstaller {
     func removeInstallationIfPresent() throws {
         let directoryURL = runtimePaths.agentShimDirectoryURL
 
-        for commandName in Self.managedCommandNames {
+        for commandName in managedCommandNames.sorted() {
             let linkURL = directoryURL.appendingPathComponent(commandName, isDirectory: false)
             if Self.pathStatus(at: linkURL.path).isSymlink {
                 try fileManager.removeItem(at: linkURL)

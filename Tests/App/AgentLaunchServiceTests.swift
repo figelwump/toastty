@@ -288,6 +288,49 @@ struct AgentLaunchServiceTests {
     }
 
     @Test
+    func launchInjectsCodexOverridesAfterWrappedCodexCommand() throws {
+        let store = AppStore(persistTerminalFontPreference: false)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let terminalRouter = TestTerminalCommandRouter()
+        let agentCatalogProvider = TestAgentCatalogProvider(
+            profiles: [
+                AgentProfile(
+                    id: "codex",
+                    displayName: "Codex",
+                    argv: [
+                        "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
+                        "--workdir=/tmp/toastty project",
+                        "codex",
+                        "--dangerously-bypass-approvals-and-sandbox",
+                    ]
+                )
+            ]
+        )
+
+        let service = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRouter,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogProvider,
+            cliExecutablePathProvider: { "/bin/sh" },
+            socketPathProvider: { "/tmp/toastty-tests.sock" }
+        )
+
+        _ = try service.launch(profileID: "codex")
+
+        let workspace = try #require(store.selectedWorkspace)
+        let panelID = try #require(workspace.focusedPanelID)
+        let injectedCommand = try #require(terminalRouter.sentTextByPanelID[panelID])
+        #expect(
+            injectedCommand.contains(
+                "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh '--workdir=/tmp/toastty project' codex -c "
+            )
+        )
+        #expect(injectedCommand.contains("--dangerously-bypass-approvals-and-sandbox"))
+    }
+
+    @Test
     func codexHistoryInsertRefreshesWorkingDetailImmediately() async throws {
         let store = AppStore(persistTerminalFontPreference: false)
         let sessionRuntimeStore = SessionRuntimeStore()
