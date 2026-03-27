@@ -359,6 +359,11 @@ struct AutomationSocketServerTests {
 
         try waitForSocket(at: socketPath)
 
+        let initialHasEverLaunchedAgent = await MainActor.run {
+            server.store.hasEverLaunchedAgent
+        }
+        #expect(initialHasEverLaunchedAgent == false)
+
         let response = try sendRequest(
             AutomationRequestEnvelope(
                 requestID: UUID().uuidString,
@@ -402,6 +407,10 @@ struct AutomationSocketServerTests {
         #expect(environment["TOASTTY_PANEL_ID"] == .string(server.panelID.uuidString))
         #expect(environment["TOASTTY_SOCKET_PATH"] == .string(socketPath))
         #expect(environment["TOASTTY_CWD"] == .string("/tmp/repo"))
+        let hasEverLaunchedAgent = await MainActor.run {
+            server.store.hasEverLaunchedAgent
+        }
+        #expect(hasEverLaunchedAgent)
     }
 
     @Test

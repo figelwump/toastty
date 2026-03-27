@@ -911,6 +911,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                     cwd: normalizedOptionalText(payload.string("cwd"))
                 )
             )
+            store.recordSuccessfulAgentLaunch()
             stateVersion += 1
             var response = try automationObject(plan)
             response["stateVersion"] = .int(stateVersion)
