@@ -4,11 +4,13 @@
   <img src="docs/assets/toastty-hero.png" alt="Toastty — built for coding with agents" width="1840">
 </p>
 
-A native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
+Toastty is a flexible, native, powerful home for working with agents.
 
-Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, direct agent launching with real-time status in the sidebar, notifications and unread badges when agents need attention, and configurable terminal profiles for setups like `tmux`, `zmx`, or `ssh`.
+It's a native macOS terminal multiplexer built with Swift and powered by the [libghostty](https://ghostty.org) rendering engine.
 
-There are also little features throughout: keyboard shortcuts to navigate workspaces and panels, per-window font control for moving between different displays, and the performance and layout flexibility you'd expect from Ghostty.
+Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, real-time coding agent status in the sidebar, notifications and unread badges when agents need attention, and .
+
+There are also little features throughout: configurable terminal profiles for setups like `tmux`, `zmx`, or `ssh`, keyboard shortcuts to navigate workspaces and panels, horizontal tabs per-workspace, and window-local font control.
 
 ## Getting Started
 
@@ -25,16 +27,17 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 ## Features
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
-- **Independent windows** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list, seeded from the active terminal's cwd and profile
+- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then working sessions.
+- **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar (shell integration required)
+- **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
+- **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`
 - **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu or top bar, with live sidebar status and notifications
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
-- **Window close confirmation** — `Cmd+W` and `File > Close` close the focused panel, while the red window button confirms before closing all terminals, tabs, and workspaces in that window
 - **Font control** — Increase, decrease, or reset terminal font size per window, with new windows inheriting the source window's current size and layouts remembering window-local overrides
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
-- **Hot-reload configuration** — Change your config and reload it live from the menu bar
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
 ## Keyboard Shortcuts
