@@ -95,14 +95,13 @@ final class TerminalProcessWorkingDirectoryResolver {
         guard newChildren.isEmpty == false else {
             // Child not visible yet — mark for deferred registration during poll loop.
             markPendingDeferredRegistration(panelID: panelID)
-            ToasttyLog.info(
+            ToasttyLog.debug(
                 "No new child process detected after surface creation; deferring registration",
                 category: .terminal,
                 metadata: [
                     "panel_id": panelID.uuidString,
                     "previous_child_count": String(previousChildren.count),
                     "current_child_count": String(currentChildren.count),
-                    "expected_cwd_sample": Self.truncatedWorkingDirectorySample(canonicalExpectedWorkingDirectory),
                 ]
             )
             return
@@ -120,18 +119,13 @@ final class TerminalProcessWorkingDirectoryResolver {
             requireResolvedShellWorkingDirectory: restoredLaunchPanelIDs.contains(panelID)
         ) else {
             markPendingDeferredRegistration(panelID: panelID)
-            ToasttyLog.info(
+            ToasttyLog.debug(
                 "Ambiguous new child process candidates after surface creation; deferring registration",
                 category: .terminal,
-                metadata: registrationCandidateMetadata(
-                    panelID: panelID,
-                    candidates: candidates,
-                    expectedWorkingDirectory: canonicalExpectedWorkingDirectory,
-                    additionalMetadata: [
-                        "selection_source": "snapshot_diff",
-                        "candidate_count": String(candidates.count),
-                    ]
-                )
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "candidate_count": String(candidates.count),
+                ]
             )
             return
         }
@@ -467,7 +461,7 @@ final class TerminalProcessWorkingDirectoryResolver {
             return nil
         }
 
-        ToasttyLog.info(
+        ToasttyLog.debug(
             "Assigning deferred terminal process candidate by launch order",
             category: .terminal,
             metadata: [
