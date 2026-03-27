@@ -5,7 +5,9 @@ Toastty is designed to run locally on your machine. The app itself does not send
 ## What Toastty writes locally
 
 - `~/.toastty/config`
-  - User-authored Toastty defaults such as `terminal-font-size` and `default-terminal-profile`.
+  - User-authored Toastty defaults such as `terminal-font-size`, `default-terminal-profile`, and `enable-agent-command-shims`.
+- `~/.toastty/bin/` for ordinary runs, or `<runtime-home>/bin/` when runtime isolation is enabled and agent command shims are enabled
+  - Managed `codex` and `claude` wrapper symlinks used to track manual agent invocations inside Toastty terminals.
 - macOS `UserDefaults` for Toastty
   - UI-managed settings that Toastty remembers locally, currently the terminal font-size override changed from the menu.
 - `~/.toastty/terminal-profiles.toml`

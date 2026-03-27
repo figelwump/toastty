@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 final class ToasttyConfigStoreTests: XCTestCase {
-    func testLoadParsesTerminalFontSizeAndDefaultTerminalProfile() throws {
+    func testLoadParsesTerminalFontSizeDefaultTerminalProfileAndAgentShimFlag() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let configURL = ToasttyConfigStore.configFileURL(
             homeDirectoryPath: homeDirectoryURL.path,
@@ -16,6 +16,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         try """
         terminal-font-size = 14
         default-terminal-profile = "zmx"
+        enable-agent-command-shims = false
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
         let config = ToasttyConfigStore.load(
@@ -25,6 +26,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
 
         XCTAssertEqual(config.terminalFontSizePoints, 14)
         XCTAssertEqual(config.defaultTerminalProfileID, "zmx")
+        XCTAssertFalse(config.enableAgentCommandShims)
     }
 
     func testLoadStripsInlineCommentsOutsideQuotedProfileIDs() throws {
@@ -49,6 +51,29 @@ final class ToasttyConfigStoreTests: XCTestCase {
 
         XCTAssertEqual(config.terminalFontSizePoints, 14)
         XCTAssertEqual(config.defaultTerminalProfileID, "ssh#prod")
+        XCTAssertTrue(config.enableAgentCommandShims)
+    }
+
+    func testLoadDefaultsAgentCommandShimsToEnabledWhenKeyIsMissing() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        terminal-font-size = 14
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let config = ToasttyConfigStore.load(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+
+        XCTAssertTrue(config.enableAgentCommandShims)
     }
 
     func testEnsureTemplateExistsWritesCommentedExamples() throws {
@@ -78,6 +103,13 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # including ordinary split shortcuts like Cmd+D and Cmd+Shift+D.
             # Existing terminals keep their current profiles.
             # default-terminal-profile = "zmx"
+
+            # enable-agent-command-shims controls whether Toastty prepends
+            # managed codex/claude wrappers into terminal PATH so manual
+            # invocations report session status automatically.
+            # Set this to false if you do not want Toastty intercepting
+            # those commands in Toastty terminals.
+            # enable-agent-command-shims = false
 
             """
         )

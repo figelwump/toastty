@@ -310,6 +310,31 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
     }
 
+    func testManagedZshSnippetLeavesPathUnchangedWithoutAgentShimDirectory() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let originalPath = "/Users/vishal/.bun/bin:/usr/bin"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; print -r -- \"$PATH\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": originalPath,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), originalPath)
+    }
+
     func testManagedBashSnippetRestoresAgentShimPathToFront() throws {
         let snippetURL = try writeStandaloneSnippet(
             ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
@@ -337,6 +362,32 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
         XCTAssertEqual(components.first, shimDirectory)
         XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedBashSnippetLeavesPathUnchangedWithoutAgentShimDirectory() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.bash.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.bash"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let originalPath = "/Users/vishal/.bun/bin:/usr/bin"
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/bash"),
+            arguments: [
+                "--noprofile",
+                "--norc",
+                "-ic",
+                "source \"$1\"; printf '%s\\n' \"$PATH\"",
+                "toastty-bash-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "PATH": originalPath,
+            ]
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), originalPath)
     }
 }
 

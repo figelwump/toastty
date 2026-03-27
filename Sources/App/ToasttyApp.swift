@@ -526,6 +526,9 @@ struct ToasttyApp: App {
     private let automationSocketServer: AutomationSocketServer?
     private let automationStartupError: String?
     private let disableAnimations: Bool
+    private let runtimePaths: ToasttyRuntimePaths
+    private let agentLaunchSocketPath: String
+    private let agentLaunchCLIExecutablePath: String?
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
@@ -603,38 +606,31 @@ struct ToasttyApp: App {
         Self.logProfileShortcutWarnings(initialProfileShortcutRegistry.warningMessages)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let cliExecutablePath = AgentLaunchService.defaultCLIExecutablePath()
-        let shimInstallation: AgentCommandShimInstallation?
+        let shimDirectoryPath: String?
         do {
-            shimInstallation = try AgentCommandShimInstaller(runtimePaths: runtimePaths).install()
+            shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
+                enabled: initialToasttyConfig.enableAgentCommandShims,
+                runtimePaths: runtimePaths
+            )
         } catch {
-            shimInstallation = nil
+            shimDirectoryPath = nil
             ToasttyLog.warning(
-                "Failed to install managed agent command shims",
+                "Failed to synchronize managed agent command shims",
                 category: .bootstrap,
                 metadata: [
                     "directory": runtimePaths.agentShimDirectoryURL.path,
+                    "enabled": initialToasttyConfig.enableAgentCommandShims ? "true" : "false",
                     "error": error.localizedDescription,
                 ]
             )
         }
-        let shimDirectoryPath = shimInstallation?.directoryURL.path
-        terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
-            var environment: [String: String] = [
-                ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
-                ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
-            ]
-            if let cliExecutablePath {
-                environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
-            }
-            if let shimDirectoryPath {
-                environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
-                environment["PATH"] = AgentCommandShimInstaller.pathValue(
-                    prepending: shimDirectoryPath,
-                    to: processInfo.environment["PATH"]
-                )
-            }
-            return environment
-        }
+        Self.configureBaseLaunchEnvironmentProvider(
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            socketPath: socketPath,
+            cliExecutablePath: cliExecutablePath,
+            shimDirectoryPath: shimDirectoryPath,
+            basePath: processInfo.environment["PATH"]
+        )
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         terminalRuntimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
@@ -704,6 +700,9 @@ struct ToasttyApp: App {
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
+        self.runtimePaths = runtimePaths
+        agentLaunchSocketPath = socketPath
+        agentLaunchCLIExecutablePath = cliExecutablePath
         appResignActiveObserver = AppResignActiveObserver { [weak terminalRuntimeRegistry] in
             terminalRuntimeRegistry?.synchronizeGhosttySurfaceFocusFromApplicationState()
         }
@@ -794,6 +793,42 @@ struct ToasttyApp: App {
         }
     }
 
+    private static func synchronizeManagedAgentCommandShims(
+        enabled: Bool,
+        runtimePaths: ToasttyRuntimePaths
+    ) throws -> String? {
+        try AgentCommandShimInstaller(runtimePaths: runtimePaths)
+            .syncInstallation(enabled: enabled)?
+            .directoryURL
+            .path
+    }
+
+    private static func configureBaseLaunchEnvironmentProvider(
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        socketPath: String,
+        cliExecutablePath: String?,
+        shimDirectoryPath: String?,
+        basePath: String?
+    ) {
+        terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
+            var environment: [String: String] = [
+                ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
+                ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
+            ]
+            if let cliExecutablePath {
+                environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
+            }
+            if let shimDirectoryPath {
+                environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
+                environment["PATH"] = AgentCommandShimInstaller.pathValue(
+                    prepending: shimDirectoryPath,
+                    to: basePath
+                )
+            }
+            return environment
+        }
+    }
+
     var body: some Scene {
         WindowGroup(id: AppWindowSceneID.value) {
             AppWindowSceneHostView(
@@ -858,6 +893,28 @@ struct ToasttyApp: App {
 
         let toasttyConfig = ToasttyConfigStore.load()
         let toasttySettings = ToasttySettingsStore.load()
+        do {
+            let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
+                enabled: toasttyConfig.enableAgentCommandShims,
+                runtimePaths: runtimePaths
+            )
+            Self.configureBaseLaunchEnvironmentProvider(
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                socketPath: agentLaunchSocketPath,
+                cliExecutablePath: agentLaunchCLIExecutablePath,
+                shimDirectoryPath: shimDirectoryPath,
+                basePath: ProcessInfo.processInfo.environment["PATH"]
+            )
+        } catch {
+            failureMessages.append("Failed to update managed agent command shims: \(error.localizedDescription)")
+            Self.configureBaseLaunchEnvironmentProvider(
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
+                socketPath: agentLaunchSocketPath,
+                cliExecutablePath: agentLaunchCLIExecutablePath,
+                shimDirectoryPath: nil,
+                basePath: ProcessInfo.processInfo.environment["PATH"]
+            )
+        }
         Self.applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileStore.catalog,

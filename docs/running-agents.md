@@ -112,6 +112,29 @@ When you trigger an agent launch (menu click, keyboard shortcut, or socket comma
 
 When the agent process exits and the session is stopped, Toastty cleans up the temporary artifacts directory automatically.
 
+## Manual command shims
+
+Outside the Agent menu, Toastty can also track manual `codex` and `claude`
+invocations typed directly into Toastty terminals. By default, Toastty prepends
+managed wrappers for those commands into the terminal `PATH`, and those wrappers
+prepare the same managed-session context before handing off to the real binary.
+
+If you do not want Toastty intercepting those commands, set this in
+`~/.toastty/config`:
+
+```toml
+enable-agent-command-shims = false
+```
+
+That opt-out affects only manual `codex` / `claude` invocations inside Toastty
+terminals. Agent menu launches still use the built-in profile-ID-based
+instrumentation described above.
+
+If you change this flag while Toastty is already running, new terminals and new
+shell processes pick it up immediately. Existing shells may need a new shell or
+pane before their `PATH` and `TOASTTY_AGENT_SHIM_DIR` environment fully match
+the new setting.
+
 ## Session context environment
 
 Every agent launched through Toastty receives these environment variables, set inline in the rendered shell command:

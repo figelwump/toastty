@@ -1,4 +1,5 @@
 import CoreState
+import Darwin
 import Foundation
 
 struct AgentCommandShimInstallation: Equatable {
@@ -8,6 +9,7 @@ struct AgentCommandShimInstallation: Equatable {
 
 enum AgentCommandShimInstallerError: LocalizedError, Equatable {
     case helperUnavailable(path: String?)
+    case managedCommandConflict(path: String)
 
     var errorDescription: String? {
         switch self {
@@ -16,11 +18,15 @@ enum AgentCommandShimInstallerError: LocalizedError, Equatable {
                 return "Toastty could not find its managed agent shim helper at \(path)."
             }
             return "Toastty could not resolve its managed agent shim helper."
+        case .managedCommandConflict(let path):
+            return "Toastty will not overwrite an existing non-symlink agent command at \(path)."
         }
     }
 }
 
 final class AgentCommandShimInstaller {
+    private static let managedCommandNames = ["codex", "claude"]
+
     private let runtimePaths: ToasttyRuntimePaths
     private let fileManager: FileManager
     private let helperExecutablePathProvider: @Sendable () -> String?
@@ -46,9 +52,13 @@ final class AgentCommandShimInstaller {
         let directoryURL = runtimePaths.agentShimDirectoryURL
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
 
-        for commandName in ["codex", "claude"] {
+        for commandName in Self.managedCommandNames {
             let linkURL = directoryURL.appendingPathComponent(commandName, isDirectory: false)
-            if fileManager.fileExists(atPath: linkURL.path) {
+            let pathStatus = Self.pathStatus(at: linkURL.path)
+            if pathStatus.exists {
+                guard pathStatus.isSymlink else {
+                    throw AgentCommandShimInstallerError.managedCommandConflict(path: linkURL.path)
+                }
                 try fileManager.removeItem(at: linkURL)
             }
             try fileManager.createSymbolicLink(atPath: linkURL.path, withDestinationPath: helperPath)
@@ -58,6 +68,35 @@ final class AgentCommandShimInstaller {
             directoryURL: directoryURL,
             helperPath: helperPath
         )
+    }
+
+    func syncInstallation(enabled: Bool) throws -> AgentCommandShimInstallation? {
+        if enabled {
+            return try install()
+        }
+
+        try removeInstallationIfPresent()
+        return nil
+    }
+
+    func removeInstallationIfPresent() throws {
+        let directoryURL = runtimePaths.agentShimDirectoryURL
+
+        for commandName in Self.managedCommandNames {
+            let linkURL = directoryURL.appendingPathComponent(commandName, isDirectory: false)
+            if Self.pathStatus(at: linkURL.path).isSymlink {
+                try fileManager.removeItem(at: linkURL)
+            }
+        }
+
+        guard let remainingEntries = try? fileManager.contentsOfDirectory(
+            at: directoryURL,
+            includingPropertiesForKeys: nil
+        ), remainingEntries.isEmpty else {
+            return
+        }
+
+        try? fileManager.removeItem(at: directoryURL)
     }
 
     static func pathValue(
@@ -70,6 +109,14 @@ final class AgentCommandShimInstaller {
             .filter { $0.isEmpty == false && $0 != directoryPath }
         components.insert(directoryPath, at: 0)
         return components.joined(separator: ":")
+    }
+
+    private static func pathStatus(at path: String) -> (exists: Bool, isSymlink: Bool) {
+        var statBuffer = stat()
+        guard lstat(path, &statBuffer) == 0 else {
+            return (false, false)
+        }
+        return (true, (statBuffer.st_mode & S_IFMT) == S_IFLNK)
     }
 }
 

@@ -4,11 +4,13 @@ import Foundation
 struct ToasttyConfig: Equatable {
     var terminalFontSizePoints: Double?
     var defaultTerminalProfileID: String?
+    var enableAgentCommandShims = true
 }
 
 enum ToasttyConfigStore {
     private static let terminalFontSizeKey = "terminal-font-size"
     private static let defaultTerminalProfileKey = "default-terminal-profile"
+    private static let enableAgentCommandShimsKey = "enable-agent-command-shims"
     private static let configDirectoryName = ".toastty"
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
@@ -99,6 +101,10 @@ enum ToasttyConfigStore {
                 guard let parsed = parseString(value) else { continue }
                 config.defaultTerminalProfileID = AppState.normalizedTerminalProfileID(parsed)
 
+            case enableAgentCommandShimsKey:
+                guard let parsed = parseBool(value) else { continue }
+                config.enableAgentCommandShims = parsed
+
             default:
                 continue
             }
@@ -121,9 +127,18 @@ enum ToasttyConfigStore {
             "# including ordinary split shortcuts like Cmd+D and Cmd+Shift+D.",
             "# Existing terminals keep their current profiles.",
             "# default-terminal-profile = \"zmx\"",
+            "",
+            "# enable-agent-command-shims controls whether Toastty prepends",
+            "# managed codex/claude wrappers into terminal PATH so manual",
+            "# invocations report session status automatically.",
+            "# Set this to false if you do not want Toastty intercepting",
+            "# those commands in Toastty terminals.",
+            "# enable-agent-command-shims = false",
         ]
 
-        if config.terminalFontSizePoints != nil || config.defaultTerminalProfileID != nil {
+        if config.terminalFontSizePoints != nil
+            || config.defaultTerminalProfileID != nil
+            || config.enableAgentCommandShims == false {
             lines.append("")
         }
 
@@ -133,6 +148,10 @@ enum ToasttyConfigStore {
 
         if let points = config.terminalFontSizePoints {
             lines.append("\(terminalFontSizeKey) = \(format(points: points))")
+        }
+
+        if config.enableAgentCommandShims == false {
+            lines.append("\(enableAgentCommandShimsKey) = false")
         }
 
         return lines.joined(separator: "\n") + "\n"
@@ -155,6 +174,17 @@ enum ToasttyConfigStore {
             return "\"\(value)\""
         }
         return encoded
+    }
+
+    private static func parseBool<S: StringProtocol>(_ rawValue: S) -> Bool? {
+        switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "true", "1", "yes", "on":
+            return true
+        case "false", "0", "no", "off":
+            return false
+        default:
+            return nil
+        }
     }
 
     private static func format(points: Double) -> String {

@@ -141,6 +141,7 @@ Toastty uses `~/.toastty/config` for user-authored defaults and uses macOS `User
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
+- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed `codex` and `claude` wrappers into terminal `PATH` so manual invocations inside Toastty report session status automatically. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
 - `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` update a local `UserDefaults` override instead of rewriting your config file
 
 Example:
@@ -148,6 +149,7 @@ Example:
 ```toml
 terminal-font-size = 13
 default-terminal-profile = "zmx"
+# enable-agent-command-shims = false
 ```
 
 ### Terminal profiles
