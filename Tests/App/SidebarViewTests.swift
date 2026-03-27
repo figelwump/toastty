@@ -234,12 +234,70 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    private func pumpMainRunLoop() {
+    func testSelectingLowWorkspaceScrollsSidebarToRevealIt() throws {
+        let workspaces = (1...12).map { WorkspaceState.bootstrap(title: "Workspace \($0)") }
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 220),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: workspaces.first?.id
+                )
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(
+            rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 220),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+
+        let scrollView = try XCTUnwrap(findSubview(ofType: NSScrollView.self, in: hostingView))
+        let initialOffset = scrollView.contentView.bounds.origin.y
+
+        _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: try XCTUnwrap(workspaces.last?.id)))
+        pumpMainRunLoop(duration: 0.3)
+        hostingView.layoutSubtreeIfNeeded()
+
+        let scrolledOffset = scrollView.contentView.bounds.origin.y
+        XCTAssertGreaterThan(
+            scrolledOffset,
+            initialOffset + 20,
+            "Expected sidebar selection to scroll the list when the selected workspace starts off-screen"
+        )
+    }
+
+    private func pumpMainRunLoop(duration: TimeInterval = 0) {
         let expectation = expectation(description: "Flush SwiftUI update")
         DispatchQueue.main.async {
             expectation.fulfill()
         }
         wait(for: [expectation], timeout: 1)
+
+        guard duration > 0 else { return }
+        RunLoop.main.run(until: Date().addingTimeInterval(duration))
     }
 
     private func makeSidebarHostingView(
@@ -341,5 +399,22 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return values
+    }
+
+    private func findSubview<ViewType: NSView>(
+        ofType type: ViewType.Type,
+        in rootView: NSView
+    ) -> ViewType? {
+        if let typedView = rootView as? ViewType {
+            return typedView
+        }
+
+        for subview in rootView.subviews {
+            if let match = findSubview(ofType: type, in: subview) {
+                return match
+            }
+        }
+
+        return nil
     }
 }

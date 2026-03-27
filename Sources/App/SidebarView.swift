@@ -21,27 +21,46 @@ struct SidebarView: View {
         return lineHeight
     }()
 
+    private var selectedWorkspaceID: UUID? {
+        store.selectedWorkspaceID(in: windowID)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 4) {
-                    if let window = store.window(id: windowID) {
-                        ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
-                            if let workspace = store.state.workspacesByID[workspaceID] {
-                                workspaceRow(
-                                    workspaceID: workspaceID,
-                                    workspace: workspace,
-                                    shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
-                                    isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
-                                    index: index + 1
-                                )
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let window = store.window(id: windowID) {
+                            ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
+                                if let workspace = store.state.workspacesByID[workspaceID] {
+                                    workspaceRow(
+                                        workspaceID: workspaceID,
+                                        workspace: workspace,
+                                        shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
+                                        isSelected: selectedWorkspaceID == workspaceID,
+                                        index: index + 1
+                                    )
+                                    .id(workspaceID)
+                                }
                             }
+                        } else {
+                            Text("No windows")
+                                .font(ToastyTheme.fontBody)
+                                .foregroundStyle(ToastyTheme.mutedText)
                         }
-                    } else {
-                        Text("No windows")
-                            .font(ToastyTheme.fontBody)
-                            .foregroundStyle(ToastyTheme.mutedText)
                     }
+                    .padding(.horizontal, 8)
+                }
+                // Keep the titlebar region opaque while letting rows scroll
+                // underneath it instead of showing through the traffic-light area.
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    sidebarTitlebarCover
+                }
+                .onAppear {
+                    scrollToSelectedWorkspace(using: proxy, animated: false)
+                }
+                .onChange(of: selectedWorkspaceID) { _, _ in
+                    scrollToSelectedWorkspace(using: proxy, animated: true)
                 }
             }
 
@@ -79,10 +98,9 @@ struct SidebarView: View {
             }
             .buttonStyle(SidebarRowButtonStyle())
             .accessibilityIdentifier("sidebar.workspaces.new")
+            .padding(.horizontal, 8)
         }
-        .padding(.top, ToastyTheme.sidebarTopPadding)
         .padding(.bottom, 10)
-        .padding(.horizontal, 8)
         .background(ToastyTheme.chromeBackground)
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
@@ -94,6 +112,14 @@ struct SidebarView: View {
                   let workspace = store.state.workspacesByID[request.workspaceID] else { return }
             beginWorkspaceRename(workspace)
         }
+    }
+
+    private var sidebarTitlebarCover: some View {
+        Rectangle()
+            .fill(ToastyTheme.chromeBackground)
+            .frame(maxWidth: .infinity)
+            .frame(height: ToastyTheme.sidebarTopPadding)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -478,6 +504,23 @@ struct SidebarView: View {
 
     private func requestWorkspaceClose(workspaceID: UUID) {
         _ = store.requestWorkspaceClose(workspaceID: workspaceID)
+    }
+
+    private func scrollToSelectedWorkspace(
+        using proxy: ScrollViewProxy,
+        animated: Bool
+    ) {
+        guard let selectedWorkspaceID else { return }
+
+        Task { @MainActor in
+            if animated {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    proxy.scrollTo(selectedWorkspaceID)
+                }
+            } else {
+                proxy.scrollTo(selectedWorkspaceID)
+            }
+        }
     }
 
     private func pruneTransientSidebarState() {
