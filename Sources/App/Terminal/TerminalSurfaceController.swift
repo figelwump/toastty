@@ -96,12 +96,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         case initialPixelFollowup = "initial_pixel_followup"
         case steadyLogical = "steady_logical"
         case steadyPixel = "steady_pixel"
+        case closeTransitionWidthNudge = "close_transition_width_nudge"
+        case closeTransitionWidthRestore = "close_transition_width_restore"
 
         var usesPixelUnits: Bool {
             switch self {
             case .initialLogicalProbe, .steadyLogical:
                 return false
-            case .initialPixelFollowup, .steadyPixel:
+            case .initialPixelFollowup, .steadyPixel, .closeTransitionWidthNudge, .closeTransitionWidthRestore:
                 return true
             }
         }
@@ -1448,6 +1450,7 @@ extension TerminalSurfaceController {
               let sourceContainer = latestViewportSourceContainer else {
             return
         }
+        let previousPresentationSignature = lastPresentationSignature
         let currentBounds = sourceContainer.bounds.size
         let currentBackingScaleFactor = sourceContainer.window?.screen?.backingScaleFactor ??
             sourceContainer.window?.backingScaleFactor ??
@@ -1474,6 +1477,148 @@ extension TerminalSurfaceController {
             sourceContainer: sourceContainer,
             attachment: pendingViewportUpdate.attachment
         )
+        applyCloseTransitionWidthPerturbationIfNeeded(
+            previousPresentationSignature: previousPresentationSignature,
+            currentBackingScaleFactor: currentBackingScaleFactor,
+            focused: pendingViewportUpdate.focused,
+            sourceContainer: sourceContainer,
+            attachment: pendingViewportUpdate.attachment
+        )
+    }
+
+    private func applyCloseTransitionWidthPerturbationIfNeeded(
+        previousPresentationSignature: SurfacePresentationSignature?,
+        currentBackingScaleFactor: CGFloat,
+        focused: Bool,
+        sourceContainer: NSView,
+        attachment: PanelHostAttachmentToken
+    ) {
+        guard usesBackingPixelSurfaceSizing,
+              let ghosttySurface,
+              let previousPresentationSignature,
+              let currentPresentationSignature = lastPresentationSignature else {
+            return
+        }
+
+        let widthUnchanged = previousPresentationSignature.logicalWidth == currentPresentationSignature.logicalWidth &&
+            previousPresentationSignature.pixelWidth == currentPresentationSignature.pixelWidth
+        let heightChanged = previousPresentationSignature.logicalHeight != currentPresentationSignature.logicalHeight ||
+            previousPresentationSignature.pixelHeight != currentPresentationSignature.pixelHeight
+        guard widthUnchanged, heightChanged else {
+            return
+        }
+
+        let baselineMeasuredSize = ghostty_surface_size(ghosttySurface)
+        let baselinePixelWidth = Int(baselineMeasuredSize.width_px)
+        let baselinePixelHeight = Int(baselineMeasuredSize.height_px)
+        let baselineColumns = Int(baselineMeasuredSize.columns)
+        let cellWidthPx = Int(baselineMeasuredSize.cell_width_px)
+        guard baselineColumns > 1,
+              cellWidthPx > 0,
+              baselinePixelWidth > cellWidthPx else {
+            return
+        }
+
+        let scale = Double(max(currentBackingScaleFactor, 1))
+        let effectiveFocused = focused && terminalHostView.isEffectivelyVisible
+        // Height-only close replays can leave Claude Code behaving as if the
+        // old PTY winsize is still active until a later width change lands.
+        // Nudge the width just enough to change columns, then restore it.
+        ToasttyLog.info(
+            "Applying close-transition width perturbation workaround",
+            category: .ghostty,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "baseline_pixel_width": String(baselinePixelWidth),
+                "baseline_pixel_height": String(baselinePixelHeight),
+                "baseline_columns": String(baselineColumns),
+                "baseline_rows": String(baselineMeasuredSize.rows),
+                "cell_width_px": String(cellWidthPx),
+            ]
+        )
+
+        var nudgedMeasuredSize: ghostty_surface_size_s?
+        var nudgedPixelWidth: Int?
+        for step in 1 ... 3 {
+            let candidatePixelWidth = baselinePixelWidth - (cellWidthPx * step)
+            guard candidatePixelWidth > cellWidthPx else { break }
+            let candidateLogicalWidth = max(Int((Double(candidatePixelWidth) / scale).rounded(.down)), 1)
+            let candidateMeasuredSize = dispatchGhosttySurfaceSize(
+                ghosttySurface,
+                requestedWidth: candidatePixelWidth,
+                requestedHeight: baselinePixelHeight,
+                logicalWidth: candidateLogicalWidth,
+                logicalHeight: currentPresentationSignature.logicalHeight,
+                pixelWidth: candidatePixelWidth,
+                pixelHeight: baselinePixelHeight,
+                scale: scale,
+                focused: effectiveFocused,
+                sourceContainer: sourceContainer,
+                attachment: attachment,
+                resumedFromViewportDeferral: false,
+                reason: .closeTransitionWidthNudge
+            )
+            if Int(candidateMeasuredSize.columns) != baselineColumns {
+                nudgedMeasuredSize = candidateMeasuredSize
+                nudgedPixelWidth = candidatePixelWidth
+                break
+            }
+        }
+
+        if let nudgedMeasuredSize, let nudgedPixelWidth {
+            let restoredMeasuredSize = dispatchGhosttySurfaceSize(
+                ghosttySurface,
+                requestedWidth: baselinePixelWidth,
+                requestedHeight: baselinePixelHeight,
+                logicalWidth: currentPresentationSignature.logicalWidth,
+                logicalHeight: currentPresentationSignature.logicalHeight,
+                pixelWidth: baselinePixelWidth,
+                pixelHeight: baselinePixelHeight,
+                scale: scale,
+                focused: effectiveFocused,
+                sourceContainer: sourceContainer,
+                attachment: attachment,
+                resumedFromViewportDeferral: false,
+                reason: .closeTransitionWidthRestore
+            )
+            let restoredColumns = Int(restoredMeasuredSize.columns)
+            guard restoredColumns == baselineColumns else {
+                ToasttyLog.info(
+                    "Close-transition width perturbation restore did not return to baseline columns",
+                    category: .ghostty,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "baseline_columns": String(baselineColumns),
+                        "restored_columns": String(restoredColumns),
+                        "restored_rows": String(restoredMeasuredSize.rows),
+                    ]
+                )
+                return
+            }
+            ToasttyLog.info(
+                "Applied close-transition width perturbation workaround",
+                category: .ghostty,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "nudged_pixel_width": String(nudgedPixelWidth),
+                    "nudged_columns": String(nudgedMeasuredSize.columns),
+                    "restored_columns": String(restoredColumns),
+                    "restored_rows": String(restoredMeasuredSize.rows),
+                ]
+            )
+            ghosttyManager.requestImmediateTick()
+        } else {
+            ToasttyLog.info(
+                "Skipped close-transition width perturbation workaround because width nudge did not change columns",
+                category: .ghostty,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "baseline_pixel_width": String(baselinePixelWidth),
+                    "baseline_columns": String(baselineColumns),
+                    "cell_width_px": String(cellWidthPx),
+                ]
+            )
+        }
     }
     #endif
 }
