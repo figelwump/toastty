@@ -197,14 +197,61 @@ public struct AppState: Codable, Equatable, Sendable {
         tabID: UUID,
         focusedPanelID: UUID?
     ) -> PanelNavigationTarget? {
-        nextMatchingPanel(
-            fromWindowID: fromWindowID,
-            workspaceID: workspaceID,
-            tabID: tabID,
-            focusedPanelID: focusedPanelID
-        ) { tab, panelID in
-            tab.unreadPanelIDs.contains(panelID)
+        guard let currentWindow = window(id: fromWindowID),
+              currentWindow.workspaceIDs.contains(workspaceID),
+              let currentWorkspace = workspacesByID[workspaceID],
+              currentWorkspace.tabsByID[tabID] != nil,
+              currentWorkspace.tabIDs.contains(tabID) else {
+            return nil
         }
+
+        if let target = nextUnreadPanelWrappingCurrentWorkspace(
+            in: currentWorkspace,
+            windowID: fromWindowID,
+            startingTabID: tabID,
+            focusedPanelID: focusedPanelID,
+            matches: { tab, panelID in
+                tab.unreadPanelIDs.contains(panelID)
+            }
+        ) {
+            return target
+        }
+
+        for otherWorkspaceID in orderedIDs(after: workspaceID, in: currentWindow.workspaceIDs) {
+            guard let workspace = workspacesByID[otherWorkspaceID] else { continue }
+            if let target = nextMatchingPanel(
+                in: workspace,
+                windowID: fromWindowID,
+                matches: { tab, panelID in
+                    tab.unreadPanelIDs.contains(panelID)
+                }
+            ) {
+                return target
+            }
+        }
+
+        let orderedWindowIDs = orderedIDs(after: fromWindowID, in: windows.map(\.id))
+        for windowID in orderedWindowIDs {
+            guard let window = window(id: windowID) else { continue }
+            let orderedWorkspaceIDs = orderedIDs(
+                startingAt: window.selectedWorkspaceID ?? window.workspaceIDs.first,
+                in: window.workspaceIDs
+            )
+            for workspaceID in orderedWorkspaceIDs {
+                guard let workspace = workspacesByID[workspaceID] else { continue }
+                if let target = nextMatchingPanel(
+                    in: workspace,
+                    windowID: windowID,
+                    matches: { tab, panelID in
+                        tab.unreadPanelIDs.contains(panelID)
+                    }
+                ) {
+                    return target
+                }
+            }
+        }
+
+        return nil
     }
 
     public func nextMatchingPanel(
@@ -262,6 +309,18 @@ public struct AppState: Codable, Equatable, Sendable {
             }
         }
 
+        // Keep the current workspace non-wrapping on the first pass so sibling
+        // workspaces and windows are considered before we loop back locally.
+        if let target = nextMatchingPanel(
+            in: currentWorkspace,
+            windowID: fromWindowID,
+            wrappingBeforeTabID: tabID,
+            focusedPanelID: focusedPanelID,
+            matches: matches
+        ) {
+            return target
+        }
+
         return nil
     }
 
@@ -279,7 +338,8 @@ public struct AppState: Codable, Equatable, Sendable {
             guard let tab = workspace.tabsByID[tabID],
                   let panelID = nextMatchingPanel(
                       in: tab,
-                      skippingPanelID: nil,
+                      startingAfterPanelID: nil,
+                      wrap: true,
                       matches: matches
                   ) else {
                 continue
@@ -307,7 +367,54 @@ public struct AppState: Codable, Equatable, Sendable {
 
         if let panelID = nextMatchingPanel(
             in: startingTab,
-            skippingPanelID: focusedPanelID,
+            startingAfterPanelID: focusedPanelID,
+            wrap: false,
+            matches: matches
+        ) {
+            return PanelNavigationTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: startingTabID,
+                panelID: panelID
+            )
+        }
+
+        for otherTabID in idsAfter(startingTabID, in: workspace.tabIDs) {
+            guard let tab = workspace.tabsByID[otherTabID],
+                  let panelID = nextMatchingPanel(
+                      in: tab,
+                      startingAfterPanelID: nil,
+                      wrap: true,
+                      matches: matches
+                  ) else {
+                continue
+            }
+            return PanelNavigationTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: otherTabID,
+                panelID: panelID
+            )
+        }
+
+        return nil
+    }
+
+    private func nextUnreadPanelWrappingCurrentWorkspace(
+        in workspace: WorkspaceState,
+        windowID: UUID,
+        startingTabID: UUID,
+        focusedPanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> PanelNavigationTarget? {
+        guard let startingTab = workspace.tabsByID[startingTabID] else {
+            return nil
+        }
+
+        if let panelID = nextMatchingPanel(
+            in: startingTab,
+            startingAfterPanelID: focusedPanelID,
+            wrap: true,
             matches: matches
         ) {
             return PanelNavigationTarget(
@@ -322,7 +429,8 @@ public struct AppState: Codable, Equatable, Sendable {
             guard let tab = workspace.tabsByID[otherTabID],
                   let panelID = nextMatchingPanel(
                       in: tab,
-                      skippingPanelID: nil,
+                      startingAfterPanelID: nil,
+                      wrap: true,
                       matches: matches
                   ) else {
                 continue
@@ -340,20 +448,22 @@ public struct AppState: Codable, Equatable, Sendable {
 
     private func nextMatchingPanel(
         in tab: WorkspaceTabState,
-        skippingPanelID: UUID?,
+        startingAfterPanelID: UUID?,
+        wrap: Bool,
         matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
     ) -> UUID? {
         let panelOrder = tab.layoutTree.allSlotInfos.map(\.panelID)
         guard panelOrder.isEmpty == false else { return nil }
 
-        if let skippingPanelID,
-           let startIndex = panelOrder.firstIndex(of: skippingPanelID) {
-            guard panelOrder.count > 1 else { return nil }
-            for offset in 1 ..< panelOrder.count {
-                let panelID = panelOrder[(startIndex + offset) % panelOrder.count]
-                if matches(tab, panelID) {
-                    return panelID
-                }
+        if let startingAfterPanelID,
+           let startIndex = panelOrder.firstIndex(of: startingAfterPanelID) {
+            for panelID in panelOrder[panelOrder.index(after: startIndex)...] where matches(tab, panelID) {
+                return panelID
+            }
+
+            guard wrap, panelOrder.count > 1 else { return nil }
+            for panelID in panelOrder[..<startIndex] where matches(tab, panelID) {
+                return panelID
             }
             return nil
         }
@@ -362,6 +472,87 @@ public struct AppState: Codable, Equatable, Sendable {
             return panelID
         }
         return nil
+    }
+
+    private func nextMatchingPanel(
+        in workspace: WorkspaceState,
+        windowID: UUID,
+        wrappingBeforeTabID: UUID,
+        focusedPanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> PanelNavigationTarget? {
+        for earlierTabID in idsBefore(wrappingBeforeTabID, in: workspace.tabIDs) {
+            guard let tab = workspace.tabsByID[earlierTabID],
+                  let panelID = nextMatchingPanel(
+                      in: tab,
+                      startingAfterPanelID: nil,
+                      wrap: true,
+                      matches: matches
+                  ) else {
+                continue
+            }
+            return PanelNavigationTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: earlierTabID,
+                panelID: panelID
+            )
+        }
+
+        guard let wrappingTab = workspace.tabsByID[wrappingBeforeTabID],
+              let panelID = nextMatchingPanel(
+                  in: wrappingTab,
+                  endingBeforePanelID: focusedPanelID,
+                  matches: matches
+              ) else {
+            return nil
+        }
+        return PanelNavigationTarget(
+            windowID: windowID,
+            workspaceID: workspace.id,
+            tabID: wrappingBeforeTabID,
+            panelID: panelID
+        )
+    }
+
+    private func nextMatchingPanel(
+        in tab: WorkspaceTabState,
+        endingBeforePanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> UUID? {
+        let panelOrder = tab.layoutTree.allSlotInfos.map(\.panelID)
+        guard panelOrder.isEmpty == false else { return nil }
+
+        if let endingBeforePanelID,
+           let endIndex = panelOrder.firstIndex(of: endingBeforePanelID) {
+            for panelID in panelOrder[..<endIndex] where matches(tab, panelID) {
+                return panelID
+            }
+            return nil
+        }
+
+        for panelID in panelOrder where matches(tab, panelID) {
+            return panelID
+        }
+        return nil
+    }
+
+    private func idsAfter(_ startID: UUID, in ids: [UUID]) -> [UUID] {
+        guard let startIndex = ids.firstIndex(of: startID) else {
+            return ids
+        }
+        let nextIndex = ids.index(after: startIndex)
+        guard nextIndex < ids.endIndex else {
+            return []
+        }
+        return Array(ids[nextIndex...])
+    }
+
+    private func idsBefore(_ endID: UUID, in ids: [UUID]) -> [UUID] {
+        guard let endIndex = ids.firstIndex(of: endID) else {
+            return []
+        }
+        return Array(ids[..<endIndex])
     }
 
     private func orderedIDs(startingAt startID: UUID?, in ids: [UUID]) -> [UUID] {

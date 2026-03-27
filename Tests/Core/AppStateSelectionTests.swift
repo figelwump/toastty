@@ -427,6 +427,64 @@ final class AppStateSelectionTests: XCTestCase {
         XCTAssertEqual(target.tabID, siblingWorkspaceTab.tab.id)
         XCTAssertEqual(target.panelID, siblingWorkspaceTab.panelIDs[0])
     }
+
+    func testNextMatchingPanelLeavesCurrentWorkspaceBeforeWrappingBackWithinIt() throws {
+        let currentTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let currentWorkspace = makeWorkspaceFixture(
+            title: "One",
+            tabs: [currentTab],
+            selectedTabIndex: 0
+        )
+        let siblingWorkspaceTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let siblingWorkspace = makeWorkspaceFixture(
+            title: "Two",
+            tabs: [siblingWorkspaceTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [currentWorkspace.id, siblingWorkspace.id],
+                    selectedWorkspaceID: currentWorkspace.id
+                )
+            ],
+            workspacesByID: [
+                currentWorkspace.id: currentWorkspace,
+                siblingWorkspace.id: siblingWorkspace,
+            ],
+            selectedWindowID: windowID
+        )
+        let matchingPanelIDs: Set<UUID> = [
+            currentTab.panelIDs[0],
+            currentTab.panelIDs[1],
+            siblingWorkspaceTab.panelIDs[0],
+        ]
+
+        let target = try XCTUnwrap(
+            state.nextMatchingPanel(
+                fromWindowID: windowID,
+                workspaceID: currentWorkspace.id,
+                tabID: currentTab.tab.id,
+                focusedPanelID: currentTab.panelIDs[1]
+            ) { _, panelID in
+                matchingPanelIDs.contains(panelID)
+            }
+        )
+
+        XCTAssertEqual(target.windowID, windowID)
+        XCTAssertEqual(target.workspaceID, siblingWorkspace.id)
+        XCTAssertEqual(target.tabID, siblingWorkspaceTab.tab.id)
+        XCTAssertEqual(target.panelID, siblingWorkspaceTab.panelIDs[0])
+    }
 }
 
 private struct TabFixture {

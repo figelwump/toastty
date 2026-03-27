@@ -868,6 +868,64 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
     }
 
+    func testFocusNextUnreadOrActivePanelFromCommandSkipsFocusedWorkingOnlyTarget() throws {
+        let tab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let workspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [tab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [workspace.id],
+                        selectedWorkspaceID: workspace.id
+                    )
+                ],
+                workspacesByID: [workspace.id: workspace],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_055)
+        sessionStore.startSession(
+            sessionID: "sess-working",
+            agent: .codex,
+            panelID: tab.panelIDs[0],
+            windowID: windowID,
+            workspaceID: workspace.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-working",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Only target"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertFalse(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        XCTAssertEqual(store.state.selectedWindowID, windowID)
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[workspace.id])
+        XCTAssertEqual(updatedWorkspace.selectedTabID, tab.tab.id)
+        XCTAssertEqual(updatedWorkspace.focusedPanelID, tab.panelIDs[0])
+    }
+
     func testFocusNextUnreadOrActivePanelFromCommandUsesFocusedWindowOverGlobalSelection() throws {
         let firstTab = makeUnreadCommandTab(
             focusedPanelIndex: 0,
@@ -1170,6 +1228,119 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
         XCTAssertEqual(updatedWorkspace.selectedTabID, secondWorkingTab.tab.id)
         XCTAssertEqual(updatedWorkspace.focusedPanelID, secondWorkingTab.panelIDs[2])
+    }
+
+    func testFocusNextUnreadOrActivePanelCyclesBeyondCurrentWorkspace() throws {
+        let currentTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let currentWorkspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [currentTab],
+            selectedTabIndex: 0
+        )
+
+        let siblingTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let siblingWorkspace = makeUnreadCommandWorkspace(
+            title: "Two",
+            tabs: [siblingTab],
+            selectedTabIndex: 0
+        )
+
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [currentWorkspace.id, siblingWorkspace.id],
+                    selectedWorkspaceID: currentWorkspace.id
+                )
+            ],
+            workspacesByID: [
+                currentWorkspace.id: currentWorkspace,
+                siblingWorkspace.id: siblingWorkspace,
+            ],
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_200)
+
+        sessionStore.startSession(
+            sessionID: "sess-current-first",
+            agent: .codex,
+            panelID: currentTab.panelIDs[0],
+            windowID: windowID,
+            workspaceID: currentWorkspace.id,
+            cwd: "/repo/current-first",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-current-first",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Current first"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        sessionStore.startSession(
+            sessionID: "sess-current-second",
+            agent: .claude,
+            panelID: currentTab.panelIDs[1],
+            windowID: windowID,
+            workspaceID: currentWorkspace.id,
+            cwd: "/repo/current-second",
+            repoRoot: "/repo",
+            at: startedAt.addingTimeInterval(2)
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-current-second",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Current second"),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        sessionStore.startSession(
+            sessionID: "sess-sibling",
+            agent: .codex,
+            panelID: siblingTab.panelIDs[0],
+            windowID: windowID,
+            workspaceID: siblingWorkspace.id,
+            cwd: "/repo/sibling",
+            repoRoot: "/repo",
+            at: startedAt.addingTimeInterval(4)
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-sibling",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Sibling"),
+            at: startedAt.addingTimeInterval(5)
+        )
+
+        XCTAssertTrue(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        let currentWorkspaceAfterFirstJump = try XCTUnwrap(store.state.workspacesByID[currentWorkspace.id])
+        XCTAssertEqual(store.state.selectedWorkspaceID(in: windowID), currentWorkspace.id)
+        XCTAssertEqual(currentWorkspaceAfterFirstJump.focusedPanelID, currentTab.panelIDs[1])
+
+        XCTAssertTrue(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        let siblingWorkspaceAfterSecondJump = try XCTUnwrap(store.state.workspacesByID[siblingWorkspace.id])
+        XCTAssertEqual(store.state.selectedWorkspaceID(in: windowID), siblingWorkspace.id)
+        XCTAssertEqual(siblingWorkspaceAfterSecondJump.focusedPanelID, siblingTab.panelIDs[0])
     }
 
     private func makeTwoPanelWorkspace(title: String) -> (workspace: WorkspaceState, leftPanelID: UUID, rightPanelID: UUID) {
