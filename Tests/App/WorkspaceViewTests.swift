@@ -72,6 +72,21 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceTabLeadingPaddingDoesNotReserveHiddenSidebarTitlebarSpace() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabLeadingPadding(sidebarVisible: true),
+            ToastyTheme.workspaceTabLeadingPadding
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabLeadingPadding(sidebarVisible: false),
+            ToastyTheme.workspaceTabLeadingPadding
+        )
+        XCTAssertNotEqual(
+            WorkspaceView.workspaceTabLeadingPadding(sidebarVisible: false),
+            ToastyTheme.topBarLeadingPaddingWithoutSidebar
+        )
+    }
+
     func testWorkspaceTabSelectedBorderFadesWhenAppIsInactive() throws {
         let activeBorder = try XCTUnwrap(
             NSColor(ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: true))

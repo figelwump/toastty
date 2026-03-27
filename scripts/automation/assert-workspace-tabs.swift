@@ -27,7 +27,7 @@ private enum WorkspaceTabAssertionError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .invalidArguments:
-            return "usage: swift scripts/automation/assert-workspace-tabs.swift <two-tabs.png> <nine-tabs.png> <ten-tabs.png>"
+            return "usage: swift scripts/automation/assert-workspace-tabs.swift <two-tabs.png> <two-tabs-hidden-sidebar.png> <nine-tabs.png> <ten-tabs.png>"
         case .imageLoadFailed(let path):
             return "failed to load image: \(path)"
         case .assertionFailed(let message):
@@ -120,7 +120,17 @@ private func assertCondition(_ condition: @autoclosure () -> Bool, _ message: St
 }
 
 private func firstTabRun(in image: ImageSampler, rowY: Int) throws -> ClosedRange<Int> {
-    let startSearchX = scaled(sidebarWidthPoints + sidebarDividerWidthPoints, scale: Double(image.width) / windowWidthPoints)
+    try firstTabRun(
+        in: image,
+        rowY: rowY,
+        startSearchX: scaled(
+            sidebarWidthPoints + sidebarDividerWidthPoints,
+            scale: Double(image.width) / windowWidthPoints
+        )
+    )
+}
+
+private func firstTabRun(in image: ImageSampler, rowY: Int, startSearchX: Int) throws -> ClosedRange<Int> {
     var x = startSearchX
     while x < image.width && isNear(image.color(topX: x, topY: rowY), chromeBackground, tolerance: 10) {
         x += 1
@@ -250,6 +260,26 @@ private func assertTwoTabScreenshot(path: String) throws {
     try assertCondition(accentPixelCount > scaled(120, scale: scale), "selected tab border does not use the accent color")
 }
 
+private func assertHiddenSidebarTwoTabScreenshot(path: String) throws {
+    let image = try ImageSampler(path: path)
+    let scale = Double(image.width) / windowWidthPoints
+    let rowY = scaled(
+        topBarHeightPoints + topBarDividerHeightPoints + tabBarVerticalPaddingPoints + tabHeightPoints - 4,
+        scale: scale
+    )
+
+    let firstRun = try firstTabRun(in: image, rowY: rowY, startSearchX: 0)
+    let expectedStartX = scaled(tabLeadingPaddingPoints, scale: scale)
+    try assertCondition(
+        abs(firstRun.lowerBound - expectedStartX) <= scaled(3, scale: scale),
+        "hidden-sidebar tab strip did not align to the left edge"
+    )
+    try assertCondition(
+        firstRun.lowerBound < scaled(sidebarWidthPoints * 0.25, scale: scale),
+        "hidden-sidebar tab strip is still offset as if the sidebar were visible"
+    )
+}
+
 private func assertBadgeVisibility(path: String, tabIndex: Int, expectedVisible: Bool) throws {
     let image = try ImageSampler(path: path)
     let scale = Double(image.width) / windowWidthPoints
@@ -281,12 +311,13 @@ private func assertNineAndTenTabScreenshots(ninePath: String, tenPath: String) t
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    guard arguments.count == 3 else {
+    guard arguments.count == 4 else {
         throw WorkspaceTabAssertionError.invalidArguments
     }
 
     try assertTwoTabScreenshot(path: arguments[0])
-    try assertNineAndTenTabScreenshots(ninePath: arguments[1], tenPath: arguments[2])
+    try assertHiddenSidebarTwoTabScreenshot(path: arguments[1])
+    try assertNineAndTenTabScreenshots(ninePath: arguments[2], tenPath: arguments[3])
 } catch {
     fputs("\(error)\n", stderr)
     exit(1)

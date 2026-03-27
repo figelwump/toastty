@@ -248,6 +248,19 @@ capture_screenshot() {
   printf '%s\n' "$path"
 }
 
+capture_state() {
+  local response
+  response="$(send_request "automation.dump_state" '{}')"
+  local path
+  path="$(extract_string_field "$response" "path")"
+  if [[ -z "$path" || ! -f "$path" ]]; then
+    echo "error: state dump path missing or file not found" >&2
+    echo "state response: $response" >&2
+    exit 1
+  fi
+  printf '%s\n' "$path"
+}
+
 send_request "automation.ping" '{}' >/dev/null
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
 
@@ -257,6 +270,15 @@ perform_action "workspace.tab.new"
 perform_action "workspace.tab.select" '{"index":1}'
 assert_tab_snapshot 2 1
 TWO_TABS_SCREENSHOT_PATH="$(capture_screenshot "workspace-tabs-2")"
+
+perform_action "window.sidebar.toggle"
+HIDDEN_SIDEBAR_STATE_PATH="$(capture_state)"
+if ! jq -e '.windows[0].sidebarVisible == false' "$HIDDEN_SIDEBAR_STATE_PATH" >/dev/null; then
+  echo "error: expected hidden sidebar state after toggle" >&2
+  echo "state dump: $HIDDEN_SIDEBAR_STATE_PATH" >&2
+  exit 1
+fi
+TWO_TABS_HIDDEN_SIDEBAR_SCREENSHOT_PATH="$(capture_screenshot "workspace-tabs-2-hidden-sidebar")"
 
 perform_action "workspace.tab.select" '{"index":2}'
 assert_tab_snapshot 2 2
@@ -288,12 +310,14 @@ assert_tab_snapshot 9 ""
 
 swift "$ROOT_DIR/scripts/automation/assert-workspace-tabs.swift" \
   "$TWO_TABS_SCREENSHOT_PATH" \
+  "$TWO_TABS_HIDDEN_SIDEBAR_SCREENSHOT_PATH" \
   "$NINE_TABS_SCREENSHOT_PATH" \
   "$TEN_TABS_SCREENSHOT_PATH"
 
 echo "ready file: $READY_FILE"
 echo "socket path: $SOCKET_PATH"
 echo "two-tab screenshot: $TWO_TABS_SCREENSHOT_PATH"
+echo "two-tab hidden-sidebar screenshot: $TWO_TABS_HIDDEN_SIDEBAR_SCREENSHOT_PATH"
 echo "nine-tab screenshot: $NINE_TABS_SCREENSHOT_PATH"
 echo "ten-tab screenshot: $TEN_TABS_SCREENSHOT_PATH"
 echo "app log: $LOG_FILE"

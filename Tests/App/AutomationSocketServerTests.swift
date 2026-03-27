@@ -348,6 +348,53 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func automationPerformActionCanToggleSidebar() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(
+                socketPath: socketPath,
+                automationConfig: AutomationConfig(
+                    runID: "toggle-sidebar",
+                    fixtureName: nil,
+                    artifactsDirectory: nil,
+                    socketPath: socketPath,
+                    disableAnimations: true,
+                    fixedLocaleIdentifier: nil,
+                    fixedTimeZoneIdentifier: nil
+                )
+            )
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let initialSidebarVisible = await MainActor.run {
+            server.store.state.windows.first?.sidebarVisible
+        }
+        #expect(initialSidebarVisible == true)
+
+        let response = try sendRequest(
+            AutomationRequestEnvelope(
+                requestID: UUID().uuidString,
+                command: "automation.perform_action",
+                payload: [
+                    "action": .string("window.sidebar.toggle"),
+                    "args": .object([:]),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let toggledSidebarVisible = await MainActor.run {
+            server.store.state.windows.first?.sidebarVisible
+        }
+        #expect(toggledSidebarVisible == false)
+    }
+
+    @Test
     func prepareManagedLaunchReturnsStructuredPlan() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {

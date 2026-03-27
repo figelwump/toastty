@@ -45,6 +45,12 @@ struct WorkspaceView: View {
         return .badge(shortcutLabel)
     }
 
+    /// The tab strip lives below the titlebar, so it should not reserve
+    /// traffic-light/sidebar-toggle clearance when the sidebar is hidden.
+    nonisolated static func workspaceTabLeadingPadding(sidebarVisible _: Bool) -> CGFloat {
+        ToastyTheme.workspaceTabLeadingPadding
+    }
+
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
         WorkspaceAgentTopBarModel(
             catalog: agentCatalogStore.catalog,
@@ -188,9 +194,7 @@ struct WorkspaceView: View {
                 }
                 .padding(
                     .leading,
-                    sidebarVisible
-                        ? ToastyTheme.workspaceTabLeadingPaddingWithSidebar
-                        : ToastyTheme.topBarLeadingPaddingWithoutSidebar
+                    Self.workspaceTabLeadingPadding(sidebarVisible: sidebarVisible)
                 )
                 .padding(.vertical, 4)
             }

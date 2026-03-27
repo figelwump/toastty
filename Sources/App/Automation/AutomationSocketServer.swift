@@ -1504,6 +1504,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             let title = args.string("title")
             didMutate = store.send(.createWorkspace(windowID: windowID, title: title))
 
+        case "window.sidebar.toggle":
+            didMutate = store.send(.toggleSidebar(windowID: try resolveWindowID(args: args)))
+
         default:
             throw AutomationSocketError.invalidPayload("unsupported action: \(actionID)")
         }
