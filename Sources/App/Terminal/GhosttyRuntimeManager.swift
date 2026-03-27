@@ -12,16 +12,6 @@ protocol GhosttyRuntimeActionHandling: AnyObject {
     func handleGhosttyCloseSurfaceRequest(surfaceHandle: UInt?, confirmed: Bool) -> Bool
 }
 
-struct GhosttyScrollbarState: Equatable, Sendable {
-    let totalRows: Int
-    let offsetRows: Int
-    let visibleRows: Int
-}
-
-enum GhosttyScrollbarPreference: String, Sendable {
-    case system
-    case never
-}
 struct GhosttyRuntimeAction: Sendable {
     enum Intent: Sendable {
         case split(SlotSplitDirection)
@@ -29,7 +19,6 @@ struct GhosttyRuntimeAction: Sendable {
         case resizeSplit(SplitResizeDirection, amount: Int)
         case equalizeSplits
         case toggleFocusedPanelMode
-        case scrollbar(GhosttyScrollbarState)
         case setTerminalTitle(String)
         case setTerminalCWD(String)
         case showChildExited(exitCode: Int)
@@ -52,8 +41,6 @@ struct GhosttyRuntimeAction: Sendable {
             return "equalize_splits"
         case .toggleFocusedPanelMode:
             return "toggle_focused_panel_mode"
-        case .scrollbar:
-            return "scrollbar"
         case .setTerminalTitle:
             return "set_terminal_title"
         case .setTerminalCWD:
@@ -209,16 +196,6 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
 
     case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
         intent = .toggleFocusedPanelMode
-
-    case GHOSTTY_ACTION_SCROLLBAR:
-        let scrollbar = action.action.scrollbar
-        intent = .scrollbar(
-            GhosttyScrollbarState(
-                totalRows: Int(scrollbar.total),
-                offsetRows: Int(scrollbar.offset),
-                visibleRows: Int(scrollbar.len)
-            )
-        )
 
     case GHOSTTY_ACTION_SET_TITLE:
         let title = action.action.set_title.title.map { String(cString: $0) } ?? ""
@@ -837,7 +814,6 @@ final class GhosttyRuntimeManager {
     private var app: ghostty_app_t?
     private var config: ghostty_config_t?
     private(set) var configuredTerminalFontPoints: Double?
-    private(set) var configuredScrollbarPreference: GhosttyScrollbarPreference = .system
     private var isTickScheduled = false
     private var surfaceHandleByHostViewHandle: [UInt: UInt] = [:]
     private var hostViewBySurfaceHandle: [UInt: WeakTerminalHostViewBox] = [:]
@@ -857,7 +833,6 @@ final class GhosttyRuntimeManager {
         let configSource = Self.loadGhosttyConfig(config)
         Self.logGhosttyConfigDiagnostics(config, source: configSource)
         configuredTerminalFontPoints = Self.resolveConfiguredTerminalFontPoints(config)
-        configuredScrollbarPreference = Self.resolveConfiguredScrollbarPreference(config)
         Self.applyHostStyle(config)
         ghostty_config_finalize(config)
 
@@ -1081,7 +1056,6 @@ final class GhosttyRuntimeManager {
         let configSource = Self.loadGhosttyConfig(newConfig)
         Self.logGhosttyConfigDiagnostics(newConfig, source: configSource)
         configuredTerminalFontPoints = Self.resolveConfiguredTerminalFontPoints(newConfig)
-        configuredScrollbarPreference = Self.resolveConfiguredScrollbarPreference(newConfig)
         Self.applyHostStyle(newConfig)
         ghostty_config_finalize(newConfig)
 
@@ -1101,7 +1075,6 @@ final class GhosttyRuntimeManager {
             metadata: [
                 "source": configSource.rawValue,
                 "configured_font_points": configuredTerminalFontPoints.map { String(format: "%.2f", $0) } ?? "unset",
-                "scrollbar_preference": configuredScrollbarPreference.rawValue,
             ]
         )
         return true
@@ -1522,54 +1495,6 @@ final class GhosttyRuntimeManager {
             ]
         )
         return clampedFontPoints
-    }
-
-    private static func resolveConfiguredScrollbarPreference(
-        _ config: ghostty_config_t
-    ) -> GhosttyScrollbarPreference {
-        let defaultValue = GhosttyScrollbarPreference.system
-        var configuredScrollbarPointer: UnsafePointer<Int8>?
-        let key = "scrollbar"
-        guard ghostty_config_get(
-            config,
-            &configuredScrollbarPointer,
-            key,
-            UInt(key.lengthOfBytes(using: .utf8))
-        ) else {
-            ToasttyLog.info(
-                "Ghostty config missing scrollbar preference; using default",
-                category: .ghostty,
-                metadata: [
-                    "key": key,
-                    "default": defaultValue.rawValue,
-                ]
-            )
-            return defaultValue
-        }
-        guard let configuredScrollbarPointer else {
-            return defaultValue
-        }
-        let rawPreference = String(cString: configuredScrollbarPointer)
-        guard let resolvedPreference = GhosttyScrollbarPreference(rawValue: rawPreference) else {
-            ToasttyLog.warning(
-                "Ghostty config scrollbar preference was invalid; using default",
-                category: .ghostty,
-                metadata: [
-                    "key": key,
-                    "raw_value": rawPreference,
-                    "default": defaultValue.rawValue,
-                ]
-            )
-            return defaultValue
-        }
-        ToasttyLog.info(
-            "Resolved Ghostty scrollbar preference",
-            category: .ghostty,
-            metadata: [
-                "value": resolvedPreference.rawValue,
-            ]
-        )
-        return resolvedPreference
     }
 
     private static func normalizedWorkingDirectoryValue(_ value: String?) -> String? {

@@ -107,12 +107,6 @@ final class TerminalWindowRuntimeStore {
         }
     }
 
-    func applyGhosttyScrollbarPreferenceChange() {
-        for runtime in windowRuntimesByID.values {
-            runtime.applyGhosttyScrollbarPreferenceChange()
-        }
-    }
-
     #if TOASTTY_HAS_GHOSTTY_KIT
     func registerPendingSplitSourceIfNeeded(
         workspaceID: UUID,
@@ -156,29 +150,7 @@ final class TerminalWindowRuntimeStore {
     }
 
     func armCloseTransitionViewportDeferral(workspaceID: UUID, panelIDs: Set<UUID>) {
-        let runtime = existingRuntime(for: workspaceID)
-        let metadata: [String: String] = [
-            "workspace_id": workspaceID.uuidString,
-            "window_id": windowIDByWorkspaceID[workspaceID]?.uuidString ?? "nil",
-            "panel_count": String(panelIDs.count),
-            "panel_ids": Self.serializedPanelIDs(panelIDs),
-        ]
-        guard let runtime else {
-            ToasttyLog.info(
-                "Skipping close-transition viewport deferral because no workspace runtime exists",
-                category: .terminal,
-                metadata: metadata
-            )
-            return
-        }
-        ToasttyLog.info(
-            "Forwarding close-transition viewport deferral to workspace runtime",
-            category: .terminal,
-            metadata: metadata.merging([
-                "runtime_workspace_id": runtime.workspaceID.uuidString,
-            ]) { _, new in new }
-        )
-        runtime.armCloseTransitionViewportDeferral(for: panelIDs)
+        existingRuntime(for: workspaceID)?.armCloseTransitionViewportDeferral(for: panelIDs)
     }
 
     #if DEBUG
@@ -233,10 +205,6 @@ final class TerminalWindowRuntimeStore {
             return windowRuntime.existingRuntime(for: workspaceID)
         }
         return nil
-    }
-
-    private static func serializedPanelIDs(_ panelIDs: Set<UUID>) -> String {
-        panelIDs.map(\.uuidString).sorted().joined(separator: ",")
     }
 
     private func migrateController(

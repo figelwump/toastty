@@ -39,19 +39,12 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var closeTransitionViewportDeferralArmed = false
     private var closeTransitionViewportUpdatePending = false
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
-    private var lastViewportState: TerminalViewportState?
-    #if DEBUG
-    private var closeTransitionViewportReplayObserverForTesting: ((CGSize, CGFloat) -> Void)?
-    private var skipCloseTransitionViewportReplayUpdateForTesting = false
-    #endif
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
     private let requiredStableViewportResumePasses = 2
     private let requiredAutomationInputStabilityInterval: TimeInterval = 0.5
-    private static let closeTransitionViewportReplayPollIntervalNanoseconds: UInt64 = 16_000_000
-    private static let closeTransitionViewportReplayMaxAttempts = 12
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -78,6 +71,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let pixelWidth: Int
         let pixelHeight: Int
         let scaleThousandths: Int
+        let focused: Bool
         let pixelSizingEnabled: Bool
     }
 
@@ -115,16 +109,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         self.panelID = panelID
         self.delegate = delegate
         #if TOASTTY_HAS_GHOSTTY_KIT
-        let surfaceScrollView = TerminalSurfaceScrollView(panelID: panelID)
+        let surfaceScrollView = TerminalSurfaceScrollView()
         terminalSurfaceScrollView = surfaceScrollView
         terminalHostView = surfaceScrollView.terminalHostView
         hostedView = surfaceScrollView
-        surfaceScrollView.performBindingAction = { [weak self] action in
-            self?.performBindingActionIfPossible(action) ?? false
-        }
-        surfaceScrollView.applyScrollbarPreference(
-            Self.scrollbarPreference(from: ghosttyManager.configuredScrollbarPreference)
-        )
         terminalHostView.requestFirstResponderIfNeeded = { [weak self] in
             guard let self else { return }
             self.ensureFirstResponderIfNeeded(
@@ -165,14 +153,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         return attachedToContainer && attachedToWindow ? .ready(activeAttachment) : .attached(activeAttachment)
     }
 
-    private func containerIdentifier(_ view: NSView?) -> String {
-        guard let view else { return "nil" }
-        return String(describing: ObjectIdentifier(view))
-    }
-
     func attachHost(to container: NSView, attachment: PanelHostAttachmentToken) {
         if let activeAttachment, attachment.generation < activeAttachment.generation {
-            ToasttyLog.info(
+            ToasttyLog.debug(
                 "Ignoring stale panel host attachment",
                 category: .terminal,
                 metadata: [
@@ -188,12 +171,9 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         pendingDetachTask?.cancel()
         pendingDetachTask = nil
         pendingDetachAttachment = nil
-        let previousAttachment = activeAttachment
-        let previousContainer = activeSourceContainer
         let sourceContainerChanged = activeSourceContainer !== container
         let hostedViewWillReattach = hostedView.superview !== container
         let attachmentChanged = activeAttachment != attachment
-        let crossContainerMove = previousContainer != nil && sourceContainerChanged
         // Claim the newest token even if the move is deferred so stale callbacks
         // from the previous SwiftUI container cannot reclaim the host. The
         // controller continues to receive attachHost/update retries while
@@ -208,8 +188,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 metadata: [
                     "panel_id": panelID.uuidString,
                     "attachment_id": attachment.rawValue.uuidString,
-                    "previous_container_id": containerIdentifier(previousContainer),
-                    "target_container_id": containerIdentifier(container),
                     "target_has_window": container.window == nil ? "false" : "true",
                     "target_hidden": container.isHidden ? "true" : "false",
                     "target_hidden_ancestor": container.hasHiddenAncestor ? "true" : "false",
@@ -234,25 +212,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 hostedView.topAnchor.constraint(equalTo: container.topAnchor),
                 hostedView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             ])
-        }
-
-        if crossContainerMove && hostedViewWillReattach {
-            ToasttyLog.info(
-                "Attached terminal host to container",
-                category: .terminal,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                    "attachment_id": attachment.rawValue.uuidString,
-                    "attachment_generation": String(attachment.generation),
-                    "previous_attachment_id": previousAttachment?.rawValue.uuidString ?? "nil",
-                    "previous_attachment_generation": previousAttachment.map { String($0.generation) } ?? "nil",
-                    "previous_container_id": containerIdentifier(previousContainer),
-                    "active_container_id": containerIdentifier(activeSourceContainer),
-                    "hosted_view_superview_matches_target": hostedView.superview === container ? "true" : "false",
-                    "target_has_window": container.window == nil ? "false" : "true",
-                    "attachment_changed": attachmentChanged ? "true" : "false",
-                ]
-            )
         }
 
         #if TOASTTY_HAS_GHOSTTY_KIT
@@ -297,7 +256,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         guard let currentAttachment = activeAttachment else { return }
         guard attachment == currentAttachment else {
             if attachment.generation < currentAttachment.generation {
-                ToasttyLog.info(
+                ToasttyLog.debug(
                     "Ignoring stale panel host detach",
                     category: .terminal,
                     metadata: [
@@ -539,47 +498,20 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             )
         }
 
-        let previousPresentationSignature = lastPresentationSignature
         let presentationSignature = SurfacePresentationSignature(
             logicalWidth: logicalWidth,
             logicalHeight: logicalHeight,
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             scaleThousandths: Int((xScale * 1000).rounded()),
+            focused: effectiveFocused,
             pixelSizingEnabled: usesBackingPixelSurfaceSizing
         )
-        let presentationChanged = presentationSignature != previousPresentationSignature
+        let presentationChanged = presentationSignature != lastPresentationSignature
         lastPresentationSignature = presentationSignature
 
         if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
-            let isInitialPresentation = previousPresentationSignature == nil
-            let refreshReasons = immediateRefreshReasons(
-                previousPresentationSignature: previousPresentationSignature,
-                presentationSignature: presentationSignature,
-                resumedFromViewportDeferral: resumedFromViewportDeferral
-            )
-            ToasttyLog.info(
-                isInitialPresentation
-                    ? "Requesting immediate Ghostty surface refresh for initial presentation"
-                    : "Scheduling Ghostty tick after terminal controller update (no hard refresh)",
-                category: .ghostty,
-                metadata: closeTransitionViewportMetadata(
-                    extra: [
-                        "refresh_reasons": refreshReasons.joined(separator: ","),
-                        "effective_focused": effectiveFocused ? "true" : "false",
-                        "host_is_effectively_visible": hostView.isEffectivelyVisible ? "true" : "false",
-                        "logical_width": String(logicalWidth),
-                        "logical_height": String(logicalHeight),
-                        "pixel_width": String(pixelWidth),
-                        "pixel_height": String(pixelHeight),
-                    ]
-                )
-            )
-            if isInitialPresentation {
-                requestImmediateSurfaceRefresh(ghosttySurface)
-            } else {
-                ghosttyManager.requestImmediateTick()
-            }
+            requestImmediateSurfaceRefresh(ghosttySurface)
         }
         #else
         fallbackView.update(terminalState: terminalState, unavailableReason: "Ghostty terminal runtime not enabled in this build")
@@ -625,9 +557,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         closeTransitionViewportReplayTask = nil
         closeTransitionViewportDeferralArmed = false
         closeTransitionViewportUpdatePending = false
-        lastViewportState = nil
-        terminalSurfaceScrollView.applyViewportState(nil)
-        terminalSurfaceScrollView.applyCellHeightPoints(nil)
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -860,36 +789,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ghosttySurface
     }
 
-    @discardableResult
-    func scrollToBottomIfPossible() -> Bool {
-        performBindingActionIfPossible("scroll_to_bottom")
-    }
-
-    @discardableResult
-    func scrollToRowIfPossible(_ row: Int) -> Bool {
-        performBindingActionIfPossible("scroll_to_row:\(max(row, 0))")
-    }
-
-    @discardableResult
-    func performBindingActionIfPossible(_ action: String) -> Bool {
-        guard let ghosttySurface else { return false }
-        return invokeGhosttyBindingAction(action, on: ghosttySurface)
-    }
-
-    #if DEBUG
-    var surfaceScrollViewForTesting: TerminalSurfaceScrollView {
-        terminalSurfaceScrollView
-    }
-    #endif
-
-    func applyViewportState(_ viewportState: TerminalViewportState?) {
-        lastViewportState = viewportState
-        synchronizeScrollbarPresentation()
-    }
-
-    func applyGhosttyScrollbarPreferenceChange() {
-        synchronizeScrollbarPresentation()
-    }
     private func resolvedGhosttyConfiguredFontBaselinePoints() -> Double {
         let configuredPoints = ghosttyManager.configuredTerminalFontPoints ?? AppState.defaultTerminalFontPoints
         return AppState.clampedTerminalFontPoints(configuredPoints)
@@ -1256,7 +1155,6 @@ extension TerminalSurfaceController {
         )
         guard metrics != lastRenderMetrics else { return }
         lastRenderMetrics = metrics
-        synchronizeScrollbarPresentation()
 
         ToasttyLog.debug(
             "Ghostty surface render metrics",
@@ -1275,34 +1173,6 @@ extension TerminalSurfaceController {
                 "pixel_sizing": metrics.pixelSizingEnabled ? "true" : "false",
             ]
         )
-    }
-
-    private func synchronizeScrollbarPresentation() {
-        terminalSurfaceScrollView.applyScrollbarPreference(
-            Self.scrollbarPreference(from: ghosttyManager.configuredScrollbarPreference)
-        )
-        terminalSurfaceScrollView.applyViewportState(lastViewportState)
-        terminalSurfaceScrollView.applyCellHeightPoints(currentCellHeightPoints())
-    }
-
-    private func currentCellHeightPoints() -> CGFloat? {
-        guard let lastRenderMetrics,
-              lastRenderMetrics.cellHeightPx > 0,
-              lastRenderMetrics.scaleThousandths > 0 else {
-            return nil
-        }
-        return CGFloat(lastRenderMetrics.cellHeightPx) * 1000 / CGFloat(lastRenderMetrics.scaleThousandths)
-    }
-
-    private static func scrollbarPreference(
-        from configuredPreference: GhosttyScrollbarPreference
-    ) -> TerminalSurfaceScrollView.ScrollbarPreference {
-        switch configuredPreference {
-        case .system:
-            return .system
-        case .never:
-            return .never
-        }
     }
 
     private func swapToFallbackIfNeeded() {
@@ -1342,60 +1212,19 @@ extension TerminalSurfaceController {
     }
 
     // Closing a split can briefly produce an intermediate resize before the
-    // surviving pane settles into its final frame. Keep the deferral armed
-    // across a short window so late layout passes still trigger the final
-    // replay instead of leaving Ghostty at the stale pre-close size.
+    // surviving pane settles into its final frame. Replay the latest viewport
+    // one turn later so Ghostty only sees the stabilized size.
     func armCloseTransitionViewportDeferral() {
         closeTransitionViewportReplayTask?.cancel()
         closeTransitionViewportDeferralArmed = true
         closeTransitionViewportUpdatePending = false
-        ToasttyLog.info(
-            "Armed close-transition viewport deferral for terminal surface",
-            category: .ghostty,
-            metadata: closeTransitionViewportMetadata(
-                extra: [
-                    "source_container_id": containerIdentifier(latestViewportSourceContainer ?? activeSourceContainer),
-                    "source_container_width": String(format: "%.1f", (latestViewportSourceContainer ?? activeSourceContainer)?.bounds.width ?? 0.0),
-                    "source_container_height": String(format: "%.1f", (latestViewportSourceContainer ?? activeSourceContainer)?.bounds.height ?? 0.0),
-                    "pending_viewport_width": String(format: "%.1f", latestViewportUpdate?.viewportSize.width ?? 0.0),
-                    "pending_viewport_height": String(format: "%.1f", latestViewportUpdate?.viewportSize.height ?? 0.0),
-                ]
-            )
-        )
         closeTransitionViewportReplayTask = Task { @MainActor [weak self] in
-            for attempt in 0..<Self.closeTransitionViewportReplayMaxAttempts {
-                if attempt == 0 {
-                    await Task.yield()
-                } else {
-                    try? await Task.sleep(
-                        nanoseconds: Self.closeTransitionViewportReplayPollIntervalNanoseconds
-                    )
-                }
-                guard Task.isCancelled == false else { return }
-                guard let self else { return }
-                guard self.closeTransitionViewportDeferralArmed else {
-                    self.closeTransitionViewportReplayTask = nil
-                    return
-                }
-            }
-
+            await Task.yield()
             guard Task.isCancelled == false else { return }
             guard let self else { return }
             self.closeTransitionViewportReplayTask = nil
             guard self.closeTransitionViewportDeferralArmed else { return }
-            let forcedReplay = self.shouldForceCloseTransitionViewportReplay()
-            let shouldReplay = self.closeTransitionViewportUpdatePending || forcedReplay
-            ToasttyLog.info(
-                "Evaluated close-transition viewport replay after close-panel settle window",
-                category: .ghostty,
-                metadata: self.closeTransitionViewportMetadata(
-                    extra: [
-                        "pending_update_seen": self.closeTransitionViewportUpdatePending ? "true" : "false",
-                        "forced_replay": forcedReplay ? "true" : "false",
-                        "will_replay": shouldReplay ? "true" : "false",
-                    ]
-                )
-            )
+            let shouldReplay = self.closeTransitionViewportUpdatePending
             self.closeTransitionViewportDeferralArmed = false
             self.closeTransitionViewportUpdatePending = false
             guard shouldReplay else { return }
@@ -1453,26 +1282,7 @@ extension TerminalSurfaceController {
         guard logicalSizeChanged || pixelSizeChanged else {
             return false
         }
-        let wasPending = closeTransitionViewportUpdatePending
         closeTransitionViewportUpdatePending = true
-        if wasPending == false {
-            ToasttyLog.info(
-                "Deferred Ghostty viewport resize during close-transition layout churn",
-                category: .ghostty,
-                metadata: closeTransitionViewportMetadata(
-                    extra: [
-                        "last_logical_width": String(lastPresentationSignature.logicalWidth),
-                        "last_logical_height": String(lastPresentationSignature.logicalHeight),
-                        "next_logical_width": String(logicalWidth),
-                        "next_logical_height": String(logicalHeight),
-                        "last_pixel_width": String(lastPresentationSignature.pixelWidth),
-                        "last_pixel_height": String(lastPresentationSignature.pixelHeight),
-                        "next_pixel_width": String(pixelWidth),
-                        "next_pixel_height": String(pixelHeight),
-                    ]
-                )
-            )
-        }
         logSurfaceDiagnostics(
             message: "Deferring Ghostty viewport resize during close-transition layout churn",
             extra: [
@@ -1489,244 +1299,23 @@ extension TerminalSurfaceController {
         return true
     }
 
-    private func shouldForceCloseTransitionViewportReplay() -> Bool {
-        guard let replayContext = resolvedCloseTransitionViewportReplayContext() else {
-            return false
-        }
-
-        let logicalWidth = max(Int(replayContext.viewportSize.width.rounded(.down)), 1)
-        let logicalHeight = max(Int(replayContext.viewportSize.height.rounded(.down)), 1)
-        let pixelWidth = max(
-            Int((replayContext.viewportSize.width * replayContext.backingScaleFactor).rounded()),
-            1
-        )
-        let pixelHeight = max(
-            Int((replayContext.viewportSize.height * replayContext.backingScaleFactor).rounded()),
-            1
-        )
-
-        if let lastPresentationSignature {
-            return lastPresentationSignature.logicalWidth != logicalWidth ||
-                lastPresentationSignature.logicalHeight != logicalHeight ||
-                lastPresentationSignature.pixelWidth != pixelWidth ||
-                lastPresentationSignature.pixelHeight != pixelHeight
-        }
-
-        return pendingViewportSizeDiffers(
-            replayContext.viewportSize,
-            from: replayContext.pendingViewportUpdate.viewportSize
-        ) ||
-        abs(replayContext.backingScaleFactor - replayContext.pendingViewportUpdate.backingScaleFactor) > 0.001
-    }
-
-    private func resolvedCloseTransitionViewportReplayContext(
-    ) -> (
-        pendingViewportUpdate: PendingViewportUpdate,
-        sourceContainer: NSView,
-        viewportSize: CGSize,
-        backingScaleFactor: CGFloat
-    )? {
-        guard let pendingViewportUpdate = latestViewportUpdate,
-              let sourceContainer = latestViewportSourceContainer ?? activeSourceContainer else {
-            return nil
-        }
-
-        let currentBoundsSize = sourceContainer.bounds.size
-        let hasUsableCurrentBounds = currentBoundsSize.width > 1 && currentBoundsSize.height > 1
-        let viewportSize = hasUsableCurrentBounds ? currentBoundsSize : pendingViewportUpdate.viewportSize
-        let backingScaleFactor = effectiveBackingScaleFactor(
-            for: sourceContainer,
-            fallback: pendingViewportUpdate.backingScaleFactor
-        )
-        return (pendingViewportUpdate, sourceContainer, viewportSize, backingScaleFactor)
-    }
-
-    private func pendingViewportSizeDiffers(_ lhs: CGSize, from rhs: CGSize) -> Bool {
-        abs(lhs.width - rhs.width) > 0.001 || abs(lhs.height - rhs.height) > 0.001
-    }
-
-    private func effectiveBackingScaleFactor(for view: NSView, fallback: CGFloat) -> CGFloat {
-        if let screenScale = view.window?.screen?.backingScaleFactor {
-            return max(screenScale, 1)
-        }
-        if let windowScale = view.window?.backingScaleFactor {
-            return max(windowScale, 1)
-        }
-        if let mainScale = NSScreen.main?.backingScaleFactor {
-            return max(mainScale, 1)
-        }
-        return max(fallback, 1)
-    }
-
     private func replayDeferredViewportUpdateIfNeeded() {
-        guard let replayContext = resolvedCloseTransitionViewportReplayContext() else {
-            ToasttyLog.info(
-                "Skipping close-transition viewport replay because no pending viewport context is available",
-                category: .ghostty,
-                metadata: closeTransitionViewportMetadata()
-            )
+        guard let pendingViewportUpdate = latestViewportUpdate,
+              let sourceContainer = latestViewportSourceContainer else {
             return
         }
-        ToasttyLog.info(
-            "Replaying deferred close-transition viewport update",
-            category: .ghostty,
-            metadata: closeTransitionViewportMetadata(
-                extra: [
-                    "replay_viewport_width": String(format: "%.1f", replayContext.viewportSize.width),
-                    "replay_viewport_height": String(format: "%.1f", replayContext.viewportSize.height),
-                    "replay_backing_scale": String(format: "%.3f", replayContext.backingScaleFactor),
-                    "source_container_id": containerIdentifier(replayContext.sourceContainer),
-                ]
-            )
-        )
-        #if DEBUG
-        closeTransitionViewportReplayObserverForTesting?(
-            replayContext.viewportSize,
-            replayContext.backingScaleFactor
-        )
-        if skipCloseTransitionViewportReplayUpdateForTesting {
-            return
-        }
-        #endif
         update(
-            terminalState: replayContext.pendingViewportUpdate.terminalState,
-            focused: replayContext.pendingViewportUpdate.focused,
-            fontPoints: replayContext.pendingViewportUpdate.fontPoints,
-            viewportSize: replayContext.viewportSize,
-            backingScaleFactor: replayContext.backingScaleFactor,
-            sourceContainer: replayContext.sourceContainer,
-            attachment: replayContext.pendingViewportUpdate.attachment
+            terminalState: pendingViewportUpdate.terminalState,
+            focused: pendingViewportUpdate.focused,
+            fontPoints: pendingViewportUpdate.fontPoints,
+            viewportSize: pendingViewportUpdate.viewportSize,
+            backingScaleFactor: pendingViewportUpdate.backingScaleFactor,
+            sourceContainer: sourceContainer,
+            attachment: pendingViewportUpdate.attachment
         )
-    }
-
-    private func closeTransitionViewportMetadata(extra: [String: String] = [:]) -> [String: String] {
-        var metadata: [String: String] = [
-            "panel_id": panelID.uuidString,
-            "deferral_armed": closeTransitionViewportDeferralArmed ? "true" : "false",
-            "update_pending": closeTransitionViewportUpdatePending ? "true" : "false",
-        ]
-        if let activeAttachment {
-            metadata["attachment_id"] = activeAttachment.rawValue.uuidString
-            metadata["attachment_generation"] = String(activeAttachment.generation)
-        }
-        if let lastPresentationSignature {
-            metadata["presented_logical_width"] = String(lastPresentationSignature.logicalWidth)
-            metadata["presented_logical_height"] = String(lastPresentationSignature.logicalHeight)
-            metadata["presented_pixel_width"] = String(lastPresentationSignature.pixelWidth)
-            metadata["presented_pixel_height"] = String(lastPresentationSignature.pixelHeight)
-        }
-        for (key, value) in extra {
-            metadata[key] = value
-        }
-        return metadata
-    }
-
-    private func immediateRefreshReasons(
-        previousPresentationSignature: SurfacePresentationSignature?,
-        presentationSignature: SurfacePresentationSignature,
-        resumedFromViewportDeferral: Bool
-    ) -> [String] {
-        var reasons: [String] = []
-        if resumedFromViewportDeferral {
-            reasons.append("resume_from_viewport_deferral")
-        }
-        guard let previousPresentationSignature else {
-            reasons.append("initial_presentation")
-            return reasons
-        }
-        if previousPresentationSignature.logicalWidth != presentationSignature.logicalWidth ||
-            previousPresentationSignature.logicalHeight != presentationSignature.logicalHeight {
-            reasons.append("logical_size_change")
-        }
-        if previousPresentationSignature.pixelWidth != presentationSignature.pixelWidth ||
-            previousPresentationSignature.pixelHeight != presentationSignature.pixelHeight {
-            reasons.append("pixel_size_change")
-        }
-        if previousPresentationSignature.pixelSizingEnabled != presentationSignature.pixelSizingEnabled {
-            reasons.append("pixel_sizing_mode_change")
-        }
-        if reasons.isEmpty {
-            reasons.append("presentation_change")
-        }
-        return reasons
     }
     #endif
 }
-
-#if DEBUG && TOASTTY_HAS_GHOSTTY_KIT
-@MainActor
-extension TerminalSurfaceController {
-    func seedCloseTransitionViewportReplayStateForTesting(
-        terminalState: TerminalPanelState,
-        focused: Bool,
-        fontPoints: Double,
-        viewportSize: CGSize,
-        backingScaleFactor: CGFloat,
-        sourceContainer: NSView,
-        attachment: PanelHostAttachmentToken,
-        lastPresentationViewportSize: CGSize?,
-        lastPresentationBackingScaleFactor: CGFloat?
-    ) {
-        activeSourceContainer = sourceContainer
-        activeAttachment = attachment
-        pendingDetachAttachment = nil
-        recordLatestViewportUpdate(
-            terminalState: terminalState,
-            focused: focused,
-            fontPoints: fontPoints,
-            viewportSize: viewportSize,
-            backingScaleFactor: backingScaleFactor,
-            sourceContainer: sourceContainer,
-            attachment: attachment
-        )
-
-        if let lastPresentationViewportSize {
-            let presentationScale = max(lastPresentationBackingScaleFactor ?? backingScaleFactor, 1)
-            lastPresentationSignature = SurfacePresentationSignature(
-                logicalWidth: max(Int(lastPresentationViewportSize.width.rounded(.down)), 1),
-                logicalHeight: max(Int(lastPresentationViewportSize.height.rounded(.down)), 1),
-                pixelWidth: max(Int((lastPresentationViewportSize.width * presentationScale).rounded()), 1),
-                pixelHeight: max(Int((lastPresentationViewportSize.height * presentationScale).rounded()), 1),
-                scaleThousandths: Int((presentationScale * 1000).rounded()),
-                pixelSizingEnabled: usesBackingPixelSurfaceSizing
-            )
-        } else {
-            lastPresentationSignature = nil
-        }
-    }
-
-    func installCloseTransitionViewportReplayObserverForTesting(
-        _ observer: @escaping (CGSize, CGFloat) -> Void
-    ) {
-        closeTransitionViewportReplayObserverForTesting = observer
-    }
-
-    func markCloseTransitionViewportUpdatePendingForTesting() {
-        closeTransitionViewportUpdatePending = true
-    }
-
-    func setSkipCloseTransitionViewportReplayUpdateForTesting(_ skip: Bool) {
-        skipCloseTransitionViewportReplayUpdateForTesting = skip
-    }
-
-    func runCloseTransitionViewportReplayForTesting(forceTimeout: Bool) {
-        closeTransitionViewportReplayTask?.cancel()
-        closeTransitionViewportReplayTask = nil
-        guard closeTransitionViewportDeferralArmed else { return }
-        guard forceTimeout else { return }
-        let shouldReplay = closeTransitionViewportUpdatePending ||
-            shouldForceCloseTransitionViewportReplay()
-        closeTransitionViewportDeferralArmed = false
-        closeTransitionViewportUpdatePending = false
-        guard shouldReplay else { return }
-        replayDeferredViewportUpdateIfNeeded()
-    }
-
-    var isCloseTransitionViewportUpdatePendingForTesting: Bool {
-        closeTransitionViewportUpdatePending
-    }
-}
-#endif
 
 private extension NSView {
     var hasHiddenAncestor: Bool {

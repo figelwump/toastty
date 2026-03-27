@@ -67,8 +67,7 @@ final class TerminalProcessWorkingDirectoryResolver {
     /// to find the newly spawned login/shell process. Non-blocking — if the shell
     /// hasn't spawned yet, caches the login PID and upgrades lazily during CWD polls.
     func registerNewChild(panelID: UUID, previousChildren: Set<pid_t>, expectedWorkingDirectory: String?) {
-        let canonicalExpectedWorkingDirectory = Self.canonicalWorkingDirectory(expectedWorkingDirectory)
-        if let canonicalExpectedWorkingDirectory {
+        if let canonicalExpectedWorkingDirectory = Self.canonicalWorkingDirectory(expectedWorkingDirectory) {
             expectedWorkingDirectoryByPanelID[panelID] = canonicalExpectedWorkingDirectory
         } else {
             expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
@@ -80,14 +79,13 @@ final class TerminalProcessWorkingDirectoryResolver {
         guard newChildren.isEmpty == false else {
             // Child not visible yet — mark for deferred registration during poll loop.
             markPendingDeferredRegistration(panelID: panelID)
-            ToasttyLog.info(
+            ToasttyLog.debug(
                 "No new child process detected after surface creation; deferring registration",
                 category: .terminal,
                 metadata: [
                     "panel_id": panelID.uuidString,
                     "previous_child_count": String(previousChildren.count),
                     "current_child_count": String(currentChildren.count),
-                    "expected_cwd_sample": Self.truncatedWorkingDirectorySample(canonicalExpectedWorkingDirectory),
                 ]
             )
             return
@@ -104,34 +102,17 @@ final class TerminalProcessWorkingDirectoryResolver {
             preferNewestWhenAmbiguous: true
         ) else {
             markPendingDeferredRegistration(panelID: panelID)
-            ToasttyLog.info(
+            ToasttyLog.debug(
                 "Ambiguous new child process candidates after surface creation; deferring registration",
                 category: .terminal,
-                metadata: registrationCandidateMetadata(
-                    panelID: panelID,
-                    candidates: candidates,
-                    expectedWorkingDirectory: canonicalExpectedWorkingDirectory,
-                    additionalMetadata: [
-                        "selection_source": "snapshot_diff",
-                        "candidate_count": String(candidates.count),
-                    ]
-                )
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "candidate_count": String(candidates.count),
+                ]
             )
             return
         }
 
-        ToasttyLog.info(
-            "Selected terminal process registration candidate",
-            category: .terminal,
-            metadata: registrationCandidateMetadata(
-                panelID: panelID,
-                candidates: [selectedCandidate],
-                expectedWorkingDirectory: canonicalExpectedWorkingDirectory,
-                additionalMetadata: [
-                    "selection_source": "snapshot_diff",
-                ]
-            )
-        )
         cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "snapshot_diff")
     }
 
@@ -269,18 +250,6 @@ final class TerminalProcessWorkingDirectoryResolver {
             preferNewestWhenAmbiguous: false
         ) {
             // Found an untracked child — assign it to this panel.
-            ToasttyLog.info(
-                "Selected terminal process registration candidate",
-                category: .terminal,
-                metadata: registrationCandidateMetadata(
-                    panelID: panelID,
-                    candidates: [selectedCandidate],
-                    expectedWorkingDirectory: expectedWorkingDirectoryByPanelID[panelID],
-                    additionalMetadata: [
-                        "selection_source": "deferred_scan",
-                    ]
-                )
-            )
             cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "deferred_scan")
             return
         }
@@ -292,18 +261,6 @@ final class TerminalProcessWorkingDirectoryResolver {
             return
         }
 
-        ToasttyLog.info(
-            "Selected terminal process registration candidate",
-            category: .terminal,
-            metadata: registrationCandidateMetadata(
-                panelID: panelID,
-                candidates: [selectedCandidate],
-                expectedWorkingDirectory: expectedWorkingDirectoryByPanelID[panelID],
-                additionalMetadata: [
-                    "selection_source": "deferred_ordered_scan",
-                ]
-            )
-        )
         cacheLoginOrShell(panelID: panelID, loginPID: selectedCandidate.loginPID, source: "deferred_ordered_scan")
     }
 
@@ -381,7 +338,7 @@ final class TerminalProcessWorkingDirectoryResolver {
             return nil
         }
 
-        ToasttyLog.info(
+        ToasttyLog.debug(
             "Assigning deferred terminal process candidate by launch order",
             category: .terminal,
             metadata: [
@@ -454,101 +411,33 @@ final class TerminalProcessWorkingDirectoryResolver {
         preferNewestWhenAmbiguous: Bool
     ) -> RegistrationCandidate? {
         guard !candidates.isEmpty else { return nil }
-        let expectedWorkingDirectory = expectedWorkingDirectoryByPanelID[panelID]
-        let matchingIndices: [Int]
-        if let expectedWorkingDirectory {
-            matchingIndices = candidates.indices.filter {
-                Self.canonicalWorkingDirectory(candidates[$0].shellWorkingDirectory) == expectedWorkingDirectory
-            }
-        } else {
-            matchingIndices = []
-        }
 
         if let candidateIndex = Self.preferredRegistrationCandidateIndex(
-            expectedWorkingDirectory: expectedWorkingDirectory,
+            expectedWorkingDirectory: expectedWorkingDirectoryByPanelID[panelID],
             candidateWorkingDirectories: candidates.map(\.shellWorkingDirectory),
             candidateLoginPIDs: candidates.map(\.loginPID),
             preferNewestWhenAmbiguous: preferNewestWhenAmbiguous
         ) {
-            if let expectedWorkingDirectory {
-                if matchingIndices.count > 1 {
-                    ToasttyLog.info(
-                        "Multiple terminal process candidates matched expected cwd; applying deterministic tiebreak",
-                        category: .terminal,
-                        metadata: registrationCandidateMetadata(
-                            panelID: panelID,
-                            candidates: candidates,
-                            expectedWorkingDirectory: expectedWorkingDirectory,
-                            additionalMetadata: [
-                                "match_count": String(matchingIndices.count),
-                                "prefer_newest_when_ambiguous": preferNewestWhenAmbiguous ? "true" : "false",
-                            ]
-                        )
-                    )
-                } else if matchingIndices.isEmpty, candidates.count > 1, preferNewestWhenAmbiguous {
-                    ToasttyLog.info(
-                        "No terminal process candidates matched expected cwd; falling back to newest login PID",
-                        category: .terminal,
-                        metadata: registrationCandidateMetadata(
-                            panelID: panelID,
-                            candidates: candidates,
-                            expectedWorkingDirectory: expectedWorkingDirectory,
-                            additionalMetadata: [
-                                "prefer_newest_when_ambiguous": "true",
-                            ]
-                        )
-                    )
+            if let expectedWorkingDirectory = expectedWorkingDirectoryByPanelID[panelID] {
+                let matchingIndices = candidates.indices.filter {
+                    Self.canonicalWorkingDirectory(candidates[$0].shellWorkingDirectory) == expectedWorkingDirectory
                 }
-            } else if candidates.count > 1, preferNewestWhenAmbiguous {
-                ToasttyLog.info(
-                    "Selecting terminal process candidate without expected cwd; using newest login PID",
-                    category: .terminal,
-                    metadata: registrationCandidateMetadata(
-                        panelID: panelID,
-                        candidates: candidates,
-                        expectedWorkingDirectory: nil,
-                        additionalMetadata: [
-                            "prefer_newest_when_ambiguous": "true",
+                if matchingIndices.count > 1 {
+                    ToasttyLog.debug(
+                        "Multiple login candidates matched expected cwd; applying deterministic tiebreak",
+                        category: .terminal,
+                        metadata: [
+                            "panel_id": panelID.uuidString,
+                            "match_count": String(matchingIndices.count),
+                            "expected_cwd": expectedWorkingDirectory,
                         ]
                     )
-                )
+                }
             }
             return candidates[candidateIndex]
         }
 
         return nil
-    }
-
-    private func registrationCandidateMetadata(
-        panelID: UUID,
-        candidates: [RegistrationCandidate],
-        expectedWorkingDirectory: String?,
-        additionalMetadata: [String: String] = [:]
-    ) -> [String: String] {
-        var metadata: [String: String] = [
-            "panel_id": panelID.uuidString,
-            "candidate_count": String(candidates.count),
-            "expected_cwd_present": expectedWorkingDirectory == nil ? "false" : "true",
-            "expected_cwd_sample": Self.truncatedWorkingDirectorySample(expectedWorkingDirectory),
-            "candidate_summary": candidates
-                .map { candidate in
-                    let shellPID = candidate.shellPID.map(String.init) ?? "nil"
-                    let shellWorkingDirectory = Self.truncatedWorkingDirectorySample(candidate.shellWorkingDirectory)
-                    return "login=\(candidate.loginPID),shell=\(shellPID),cwd=\(shellWorkingDirectory)"
-                }
-                .joined(separator: " | "),
-        ]
-        for (key, value) in additionalMetadata {
-            metadata[key] = value
-        }
-        return metadata
-    }
-
-    private static func truncatedWorkingDirectorySample(_ workingDirectory: String?) -> String {
-        guard let workingDirectory = canonicalWorkingDirectory(workingDirectory) else {
-            return "nil"
-        }
-        return String(workingDirectory.prefix(80))
     }
 
     private static func canonicalWorkingDirectory(_ value: String?) -> String? {

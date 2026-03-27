@@ -844,7 +844,6 @@ struct ToasttyApp: App {
                 toasttySettings: toasttySettings,
                 ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
             )
-            terminalRuntimeRegistry.applyGhosttyScrollbarPreferenceChange()
         } else {
             failureMessages.append("Failed to reload embedded Ghostty configuration.")
             Self.applyToasttyTerminalFontState(
@@ -853,7 +852,6 @@ struct ToasttyApp: App {
                 toasttySettings: toasttySettings,
                 ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
             )
-            terminalRuntimeRegistry.applyGhosttyScrollbarPreferenceChange()
         }
         #else
         Self.applyToasttyTerminalFontState(
