@@ -91,6 +91,22 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         case unstableBounds = "unstable_bounds"
     }
 
+    private enum SurfaceSizeDispatchReason: String {
+        case initialLogicalProbe = "initial_logical_probe"
+        case initialPixelFollowup = "initial_pixel_followup"
+        case steadyLogical = "steady_logical"
+        case steadyPixel = "steady_pixel"
+
+        var usesPixelUnits: Bool {
+            switch self {
+            case .initialLogicalProbe, .steadyLogical:
+                return false
+            case .initialPixelFollowup, .steadyPixel:
+                return true
+            }
+        }
+    }
+
     private struct SurfaceDiagnostics {
         var attachCount = 0
         var updateCount = 0
@@ -423,6 +439,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ghostty_surface_set_content_scale(ghosttySurface, xScale, yScale)
         let pixelWidth = max(Int((viewportSize.width * backingScaleFactor).rounded()), 1)
         let pixelHeight = max(Int((viewportSize.height * backingScaleFactor).rounded()), 1)
+        let effectiveFocused = focused && hostView.isEffectivelyVisible
         if shouldDeferCloseTransitionViewportResize(
             logicalWidth: logicalWidth,
             logicalHeight: logicalHeight,
@@ -435,8 +452,21 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         var measuredSizeForLogging: ghostty_surface_size_s?
 
         if hasDeterminedSurfaceSizingMode == false {
-            ghostty_surface_set_size(ghosttySurface, UInt32(logicalWidth), UInt32(logicalHeight))
-            let measuredSize = ghostty_surface_size(ghosttySurface)
+            let measuredSize = dispatchGhosttySurfaceSize(
+                ghosttySurface,
+                requestedWidth: logicalWidth,
+                requestedHeight: logicalHeight,
+                logicalWidth: logicalWidth,
+                logicalHeight: logicalHeight,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight,
+                scale: xScale,
+                focused: effectiveFocused,
+                sourceContainer: sourceContainer,
+                attachment: attachment,
+                resumedFromViewportDeferral: resumedFromViewportDeferral,
+                reason: .initialLogicalProbe
+            )
             measuredSizeForLogging = measuredSize
 
             if hasUsableViewport {
@@ -451,8 +481,21 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 )
 
                 if usesBackingPixelSurfaceSizing {
-                    ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
-                    measuredSizeForLogging = ghostty_surface_size(ghosttySurface)
+                    measuredSizeForLogging = dispatchGhosttySurfaceSize(
+                        ghosttySurface,
+                        requestedWidth: pixelWidth,
+                        requestedHeight: pixelHeight,
+                        logicalWidth: logicalWidth,
+                        logicalHeight: logicalHeight,
+                        pixelWidth: pixelWidth,
+                        pixelHeight: pixelHeight,
+                        scale: xScale,
+                        focused: effectiveFocused,
+                        sourceContainer: sourceContainer,
+                        attachment: attachment,
+                        resumedFromViewportDeferral: resumedFromViewportDeferral,
+                        reason: .initialPixelFollowup
+                    )
                     ToasttyLog.debug(
                         "Enabled backing-pixel Ghostty surface sizing for high-DPI rendering",
                         category: .ghostty,
@@ -470,9 +513,37 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                 }
             }
         } else if usesBackingPixelSurfaceSizing {
-            ghostty_surface_set_size(ghosttySurface, UInt32(pixelWidth), UInt32(pixelHeight))
+            measuredSizeForLogging = dispatchGhosttySurfaceSize(
+                ghosttySurface,
+                requestedWidth: pixelWidth,
+                requestedHeight: pixelHeight,
+                logicalWidth: logicalWidth,
+                logicalHeight: logicalHeight,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight,
+                scale: xScale,
+                focused: effectiveFocused,
+                sourceContainer: sourceContainer,
+                attachment: attachment,
+                resumedFromViewportDeferral: resumedFromViewportDeferral,
+                reason: .steadyPixel
+            )
         } else {
-            ghostty_surface_set_size(ghosttySurface, UInt32(logicalWidth), UInt32(logicalHeight))
+            measuredSizeForLogging = dispatchGhosttySurfaceSize(
+                ghosttySurface,
+                requestedWidth: logicalWidth,
+                requestedHeight: logicalHeight,
+                logicalWidth: logicalWidth,
+                logicalHeight: logicalHeight,
+                pixelWidth: pixelWidth,
+                pixelHeight: pixelHeight,
+                scale: xScale,
+                focused: effectiveFocused,
+                sourceContainer: sourceContainer,
+                attachment: attachment,
+                resumedFromViewportDeferral: resumedFromViewportDeferral,
+                reason: .steadyLogical
+            )
         }
 
         logRenderMetricsIfNeeded(
@@ -487,7 +558,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         // Keep steady-state controller updates on the cached visibility path.
         // Event-driven host callbacks already maintain effective visibility, and
         // recomputing it here regressed typing, scrolling, and TUI cadence.
-        let effectiveFocused = focused && hostView.isEffectivelyVisible
         ensureFirstResponderIfNeeded(focused: effectiveFocused)
         if focused {
             hostView.synchronizeGhosttySurfaceFocusFromApplicationState()
@@ -1239,6 +1309,61 @@ extension TerminalSurfaceController {
     private func requestImmediateSurfaceRefresh(_ surface: ghostty_surface_t) {
         ghosttyManager.requestImmediateTick()
         ghostty_surface_refresh(surface)
+    }
+
+    private func dispatchGhosttySurfaceSize(
+        _ surface: ghostty_surface_t,
+        requestedWidth: Int,
+        requestedHeight: Int,
+        logicalWidth: Int,
+        logicalHeight: Int,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        scale: Double,
+        focused: Bool,
+        sourceContainer: NSView,
+        attachment: PanelHostAttachmentToken,
+        resumedFromViewportDeferral: Bool,
+        reason: SurfaceSizeDispatchReason
+    ) -> ghostty_surface_size_s {
+        ghostty_surface_set_size(surface, UInt32(requestedWidth), UInt32(requestedHeight))
+        let measuredSize = ghostty_surface_size(surface)
+        let presentationChangedEstimate = SurfacePresentationSignature(
+            logicalWidth: logicalWidth,
+            logicalHeight: logicalHeight,
+            pixelWidth: pixelWidth,
+            pixelHeight: pixelHeight,
+            scaleThousandths: Int((scale * 1000).rounded()),
+            focused: focused,
+            pixelSizingEnabled: reason.usesPixelUnits
+        ) != lastPresentationSignature
+        ToasttyLog.info(
+            "Dispatched Ghostty surface size update",
+            category: .ghostty,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "reason": reason.rawValue,
+                "requested_units": reason.usesPixelUnits ? "pixels" : "logical",
+                "requested_width": String(requestedWidth),
+                "requested_height": String(requestedHeight),
+                "logical_width": String(logicalWidth),
+                "logical_height": String(logicalHeight),
+                "pixel_width": String(pixelWidth),
+                "pixel_height": String(pixelHeight),
+                "scale": String(format: "%.3f", scale),
+                "reported_width_px": String(measuredSize.width_px),
+                "reported_height_px": String(measuredSize.height_px),
+                "attachment_id": attachment.rawValue.uuidString,
+                "source_container_id": describeObjectIdentity(sourceContainer),
+                "resumed_from_viewport_deferral": resumedFromViewportDeferral ? "true" : "false",
+                "presentation_changed_estimate": presentationChangedEstimate ? "true" : "false",
+            ]
+        )
+        return measuredSize
+    }
+
+    private func describeObjectIdentity(_ object: AnyObject) -> String {
+        String(describing: Unmanaged.passUnretained(object).toOpaque())
     }
 
     func synchronizeGhosttySurfaceFocusFromApplicationState() {
