@@ -26,6 +26,360 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testWorkspaceSnapshotIncludesTabMetadata() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let snapshotResponse = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(snapshotResponse.ok)
+            XCTAssertEqual(snapshotResponse.result["tabCount"] as? Int, 2)
+            XCTAssertEqual(snapshotResponse.result["selectedTabIndex"] as? Int, 2)
+            let tabIDs = try XCTUnwrap(snapshotResponse.result["tabIDs"] as? [String])
+            XCTAssertEqual(tabIDs.count, 2)
+            XCTAssertEqual(snapshotResponse.result["selectedTabID"] as? String, tabIDs[1])
+        }
+    }
+
+    func testWorkspaceTabActionsCreateSelectAndCloseTabsByIndex() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let firstCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(firstCreateResponse.ok)
+
+            let secondCreateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.new",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(secondCreateResponse.ok)
+
+            let selectResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "index": 1,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectResponse.ok)
+
+            var state = await MainActor.run { harness.store.state }
+            let workspaceAfterSelect = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspaceAfterSelect.tabIDs.count, 3)
+            XCTAssertEqual(workspaceAfterSelect.resolvedSelectedTabID, workspaceAfterSelect.tabIDs[0])
+
+            let closeResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.close",
+                    "args": [
+                        "index": 3,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeResponse.ok)
+
+            state = await MainActor.run { harness.store.state }
+            let workspaceAfterClose = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspaceAfterClose.tabIDs.count, 2)
+            XCTAssertEqual(workspaceAfterClose.resolvedSelectedTabID, workspaceAfterClose.tabIDs[0])
+        }
+    }
+
+    func testWorkspaceTabActionsSupportTabIDTargetingAndSelectedTabCloseFallback() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            for _ in 0 ..< 2 {
+                let createResponse = try sendRequest(
+                    command: "automation.perform_action",
+                    payload: [
+                        "action": "workspace.tab.new",
+                        "args": [:],
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(createResponse.ok)
+            }
+
+            let initialSnapshotResponse = try sendRequest(
+                command: "automation.workspace_snapshot",
+                payload: [:],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(initialSnapshotResponse.ok)
+            let initialTabIDs = try XCTUnwrap(initialSnapshotResponse.result["tabIDs"] as? [String])
+            XCTAssertEqual(initialTabIDs.count, 3)
+
+            let selectByTabIDResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "tabID": initialTabIDs[0],
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(selectByTabIDResponse.ok)
+
+            var state = await MainActor.run { harness.store.state }
+            var workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
+
+            let closeByTabIDResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.close",
+                    "args": [
+                        "tabID": initialTabIDs[2],
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeByTabIDResponse.ok)
+
+            state = await MainActor.run { harness.store.state }
+            workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspace.tabIDs.count, 2)
+            XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
+            XCTAssertFalse(workspace.tabIDs.map(\.uuidString).contains(initialTabIDs[2]))
+
+            let closeSelectedTabResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.select",
+                    "args": [
+                        "tabID": initialTabIDs[1],
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeSelectedTabResponse.ok)
+
+            let closeFallbackResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.tab.close",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeFallbackResponse.ok)
+
+            state = await MainActor.run { harness.store.state }
+            workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(workspace.tabIDs.count, 1)
+            XCTAssertEqual(workspace.resolvedSelectedTabID?.uuidString, initialTabIDs[0])
+            XCTAssertEqual(workspace.tabIDs.map(\.uuidString), [initialTabIDs[0]])
+        }
+    }
+
+    func testFocusNextUnreadActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
+        let fixture = makeSingleWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread-or-active",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            let unreadTab = try XCTUnwrap(workspace.tabsByID[fixture.targetTabID])
+            XCTAssertEqual(state.selectedWindowID, fixture.windowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+            XCTAssertFalse(unreadTab.unreadPanelIDs.contains(fixture.targetPanelID))
+        }
+    }
+
+    func testFocusNextUnreadActionPrefersUnreadBeforeActiveFallback() async throws {
+        let fixture = makeSingleWindowUnreadAndActiveFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let startedAt = Date(timeIntervalSince1970: 1_700_000_200)
+            await MainActor.run {
+                harness.sessionRuntimeStore.startSession(
+                    sessionID: "sess-working-priority",
+                    agent: .codex,
+                    panelID: fixture.activePanelID,
+                    windowID: fixture.windowID,
+                    workspaceID: fixture.workspaceID,
+                    cwd: "/repo",
+                    repoRoot: "/repo",
+                    at: startedAt
+                )
+                harness.sessionRuntimeStore.updateStatus(
+                    sessionID: "sess-working-priority",
+                    status: SessionStatus(kind: .working, summary: "Working", detail: "Earlier active target"),
+                    at: startedAt.addingTimeInterval(1)
+                )
+            }
+
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread-or-active",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            let unreadTab = try XCTUnwrap(workspace.tabsByID[fixture.targetTabID])
+            XCTAssertEqual(state.selectedWindowID, fixture.windowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+            XCTAssertFalse(unreadTab.unreadPanelIDs.contains(fixture.targetPanelID))
+        }
+    }
+
+    func testFocusNextUnreadActionFallsBackToActivePanelWhenNoUnreadExists() async throws {
+        let fixture = makeSingleWindowActiveFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let startedAt = Date(timeIntervalSince1970: 1_700_000_220)
+            await MainActor.run {
+                harness.sessionRuntimeStore.startSession(
+                    sessionID: "sess-active-fallback",
+                    agent: .codex,
+                    panelID: fixture.targetPanelID,
+                    windowID: fixture.windowID,
+                    workspaceID: fixture.workspaceID,
+                    cwd: "/repo",
+                    repoRoot: "/repo",
+                    at: startedAt
+                )
+                harness.sessionRuntimeStore.updateStatus(
+                    sessionID: "sess-active-fallback",
+                    status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Review command"),
+                    at: startedAt.addingTimeInterval(1)
+                )
+            }
+
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread-or-active",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.workspaceID])
+            XCTAssertEqual(state.selectedWindowID, fixture.windowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+        }
+    }
+
+    func testRemovedFocusNextUnreadActionIsRejected() async throws {
+        let fixture = makeSingleWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "unsupported action: workspace.focus-next-unread")
+        }
+    }
+
+    func testFocusNextUnreadActionRequiresExplicitWindowWhenMultipleWindowsExist() async throws {
+        let fixture = makeTwoWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread-or-active",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "windowID is required when multiple windows exist")
+
+            let state = await MainActor.run { harness.store.state }
+            XCTAssertEqual(state.selectedWindowID, fixture.firstWindowID)
+        }
+    }
+
+    func testFocusNextUnreadActionUsesExplicitWindowSelection() async throws {
+        let fixture = makeTwoWindowUnreadFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.focus-next-unread-or-active",
+                    "args": [
+                        "windowID": fixture.secondWindowID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            let workspace = try XCTUnwrap(state.workspacesByID[fixture.secondWorkspaceID])
+            let unreadTab = try XCTUnwrap(workspace.tabsByID[fixture.targetTabID])
+            XCTAssertEqual(state.selectedWindowID, fixture.secondWindowID)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, fixture.targetTabID)
+            XCTAssertEqual(workspace.focusedPanelID, fixture.targetPanelID)
+            XCTAssertFalse(unreadTab.unreadPanelIDs.contains(fixture.targetPanelID))
+        }
+    }
+
     func testWorkspaceActionRequiresExplicitTargetWhenMultipleWindowsExist() async throws {
         let fixture = makeTwoWindowFixture()
 
@@ -233,8 +587,8 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
-    func testAppFontActionDoesNotRequireWorkspaceTargetWhenMultipleWindowsExist() async throws {
-        let fixture = makeTwoWindowFixture()
+    func testAppFontActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
+        let fixture = makeSingleWindowFixture()
 
         try await withAutomationHarness(state: fixture.state) { harness in
             let response = try sendRequest(
@@ -249,8 +603,69 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertTrue(response.ok)
 
             let state = await MainActor.run { harness.store.state }
-            XCTAssertEqual(state.globalTerminalFontPoints, AppState.defaultTerminalFontPoints + 1)
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.windowID),
+                AppState.defaultTerminalFontPoints + 1
+            )
+        }
+    }
+
+    func testAppFontActionRequiresExplicitWindowWhenMultipleWindowsExist() async throws {
+        let fixture = makeTwoWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "app.font.increase",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertFalse(response.ok)
+            XCTAssertEqual(response.errorMessage, "windowID is required when multiple windows exist")
+
+            let state = await MainActor.run { harness.store.state }
             XCTAssertEqual(state.selectedWindowID, fixture.firstWindowID)
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.firstWindowID),
+                AppState.defaultTerminalFontPoints
+            )
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.secondWindowID),
+                AppState.defaultTerminalFontPoints
+            )
+        }
+    }
+
+    func testAppFontActionUsesExplicitWindowSelection() async throws {
+        let fixture = makeTwoWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "app.font.increase",
+                    "args": [
+                        "windowID": fixture.secondWindowID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            XCTAssertEqual(state.selectedWindowID, fixture.firstWindowID)
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.firstWindowID),
+                AppState.defaultTerminalFontPoints
+            )
+            XCTAssertEqual(
+                state.effectiveTerminalFontPoints(for: fixture.secondWindowID),
+                AppState.defaultTerminalFontPoints + 1
+            )
         }
     }
 
@@ -276,6 +691,59 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
 
             XCTAssertTrue(response.ok)
             XCTAssertEqual(response.result["profileID"] as? String, "smoke-profile")
+        }
+    }
+
+    func testTerminalStateTargetsBackgroundTabPanelByPanelID() async throws {
+        var backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
+        guard let panelID = backgroundTab.focusedPanelID,
+              case .terminal(var terminalState)? = backgroundTab.panels[panelID] else {
+            XCTFail("expected bootstrap tab to include a focused terminal")
+            return
+        }
+        terminalState.profileBinding = TerminalProfileBinding(profileID: "background-profile")
+        backgroundTab.panels[panelID] = .terminal(terminalState)
+
+        let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "One",
+            selectedTabID: selectedTab.id,
+            tabIDs: [backgroundTab.id, selectedTab.id],
+            tabsByID: [
+                backgroundTab.id: backgroundTab,
+                selectedTab.id: selectedTab,
+            ]
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+
+        try await withAutomationHarness(state: state) { harness in
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "panelID": panelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["workspaceID"] as? String, workspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, panelID.uuidString)
+            XCTAssertEqual(response.result["title"] as? String, "Background Agent")
+            XCTAssertEqual(response.result["profileID"] as? String, "background-profile")
         }
     }
 
@@ -340,7 +808,12 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService
         )
-        return AutomationHarness(store: store, server: server, socketPath: socketPath)
+        return AutomationHarness(
+            store: store,
+            server: server,
+            socketPath: socketPath,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
     }
 
     private func sendRequest(
@@ -494,8 +967,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 firstWorkspace.id: firstWorkspace,
                 secondWorkspace.id: secondWorkspace,
             ],
-            selectedWindowID: firstWindowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: firstWindowID
         )
         return TwoWindowFixture(
             state: state,
@@ -521,13 +993,173 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             workspacesByID: [
                 workspace.id: workspace,
             ],
-            selectedWindowID: windowID,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: windowID
         )
         return SingleWindowFixture(
             state: state,
             windowID: windowID,
             workspaceID: workspace.id
+        )
+    }
+
+    private func makeSingleWindowUnreadFixture() -> SingleWindowUnreadFixture {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let unreadTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [2]
+        )
+        let workspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab, unreadTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        return SingleWindowUnreadFixture(
+            state: state,
+            windowID: windowID,
+            workspaceID: workspace.id,
+            targetTabID: unreadTab.tab.id,
+            targetPanelID: unreadTab.panelIDs[2]
+        )
+    }
+
+    private func makeSingleWindowUnreadAndActiveFixture() -> SingleWindowUnreadAndActiveFixture {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let activeTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let unreadTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [2]
+        )
+        let workspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab, activeTab, unreadTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        return SingleWindowUnreadAndActiveFixture(
+            state: state,
+            windowID: windowID,
+            workspaceID: workspace.id,
+            targetTabID: unreadTab.tab.id,
+            targetPanelID: unreadTab.panelIDs[2],
+            activePanelID: activeTab.panelIDs[1]
+        )
+    }
+
+    private func makeSingleWindowActiveFixture() -> SingleWindowActiveFixture {
+        let currentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let activeTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let workspace = makeUnreadNavigationWorkspace(
+            title: "One",
+            tabs: [currentTab, activeTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        return SingleWindowActiveFixture(
+            state: state,
+            windowID: windowID,
+            workspaceID: workspace.id,
+            targetTabID: activeTab.tab.id,
+            targetPanelID: activeTab.panelIDs[1]
+        )
+    }
+
+    private func makeTwoWindowUnreadFixture() -> TwoWindowUnreadFixture {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondCurrentTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondUnreadTab = makeUnreadNavigationTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [1]
+        )
+        let secondWorkspace = makeUnreadNavigationWorkspace(
+            title: "Two",
+            tabs: [secondCurrentTab, secondUnreadTab],
+            selectedTabIndex: 0
+        )
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 48, y: 48, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID
+        )
+        return TwoWindowUnreadFixture(
+            state: state,
+            firstWindowID: firstWindowID,
+            secondWindowID: secondWindowID,
+            secondWorkspaceID: secondWorkspace.id,
+            targetTabID: secondUnreadTab.tab.id,
+            targetPanelID: secondUnreadTab.panelIDs[1]
         )
     }
 }
@@ -536,6 +1168,7 @@ private struct AutomationHarness {
     let store: AppStore
     let server: AutomationSocketServer
     let socketPath: String
+    let sessionRuntimeStore: SessionRuntimeStore
 }
 
 private struct AutomationSocketTestResponse {
@@ -558,8 +1191,112 @@ private struct SingleWindowFixture {
     let workspaceID: UUID
 }
 
+private struct SingleWindowUnreadFixture {
+    let state: AppState
+    let windowID: UUID
+    let workspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+}
+
+private struct SingleWindowUnreadAndActiveFixture {
+    let state: AppState
+    let windowID: UUID
+    let workspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+    let activePanelID: UUID
+}
+
+private struct SingleWindowActiveFixture {
+    let state: AppState
+    let windowID: UUID
+    let workspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+}
+
+private struct TwoWindowUnreadFixture {
+    let state: AppState
+    let firstWindowID: UUID
+    let secondWindowID: UUID
+    let secondWorkspaceID: UUID
+    let targetTabID: UUID
+    let targetPanelID: UUID
+}
+
+private struct UnreadNavigationTabFixture {
+    let tab: WorkspaceTabState
+    let panelIDs: [UUID]
+}
+
 private enum AutomationSocketTestError: Error {
     case missingResponse
     case socketFailure(String, Int32)
     case socketPathTooLong
+}
+
+private func makeUnreadNavigationTab(
+    focusedPanelIndex: Int,
+    unreadPanelIndices: Set<Int>,
+    panelCount: Int = 3
+) -> UnreadNavigationTabFixture {
+    let panelIDs = (0 ..< panelCount).map { _ in UUID() }
+    let panels = Dictionary(uniqueKeysWithValues: panelIDs.enumerated().map { index, panelID in
+        (
+            panelID,
+            PanelState.terminal(
+                TerminalPanelState(
+                    title: "Terminal \(index + 1)",
+                    shell: "zsh",
+                    cwd: NSHomeDirectory()
+                )
+            )
+        )
+    })
+
+    let tab = WorkspaceTabState(
+        id: UUID(),
+        layoutTree: makeUnreadNavigationLayout(panelIDs: panelIDs),
+        panels: panels,
+        focusedPanelID: panelIDs[focusedPanelIndex],
+        unreadPanelIDs: Set(unreadPanelIndices.map { panelIDs[$0] })
+    )
+
+    return UnreadNavigationTabFixture(tab: tab, panelIDs: panelIDs)
+}
+
+private func makeUnreadNavigationWorkspace(
+    title: String,
+    tabs: [UnreadNavigationTabFixture],
+    selectedTabIndex: Int
+) -> WorkspaceState {
+    let tabIDs = tabs.map(\.tab.id)
+    return WorkspaceState(
+        id: UUID(),
+        title: title,
+        selectedTabID: tabIDs[selectedTabIndex],
+        tabIDs: tabIDs,
+        tabsByID: Dictionary(uniqueKeysWithValues: tabs.map { ($0.tab.id, $0.tab) })
+    )
+}
+
+private func makeUnreadNavigationLayout(panelIDs: [UUID]) -> LayoutNode {
+    precondition(panelIDs.isEmpty == false)
+
+    var iterator = panelIDs.makeIterator()
+    let firstPanelID = iterator.next()!
+    var layout = LayoutNode.slot(slotID: UUID(), panelID: firstPanelID)
+
+    while let panelID = iterator.next() {
+        layout = .split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: layout,
+            second: .slot(slotID: UUID(), panelID: panelID)
+        )
+    }
+
+    return layout
 }

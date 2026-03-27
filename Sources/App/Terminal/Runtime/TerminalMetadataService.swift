@@ -208,12 +208,14 @@ final class TerminalMetadataService {
     func registerChildPIDAfterSurfaceCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String?
+        expectedWorkingDirectory: String?,
+        isRestoredLaunch: Bool
     ) {
         processWorkingDirectoryResolver.registerNewChild(
             panelID: panelID,
             previousChildren: previousChildren,
-            expectedWorkingDirectory: expectedWorkingDirectory
+            expectedWorkingDirectory: expectedWorkingDirectory,
+            isRestoredLaunch: isRestoredLaunch
         )
     }
 
@@ -227,13 +229,22 @@ final class TerminalMetadataService {
         guard let registry,
               let workspaceID = registry.workspaceID(containing: panelID, state: state),
               let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             return false
         }
         guard shouldSuppressBootstrapWorkingDirectory(
             normalizedWorkingDirectory,
             panelID: panelID,
+            terminalState: terminalState,
+            source: source
+        ) == false else {
+            return false
+        }
+        guard shouldRejectImmediateRestoredLaunchProcessOverride(
+            normalizedWorkingDirectory,
+            panelID: panelID,
+            workspaceID: workspaceID,
             terminalState: terminalState,
             source: source
         ) == false else {
@@ -386,13 +397,55 @@ final class TerminalMetadataService {
         }
     }
 
+    private func shouldRejectImmediateRestoredLaunchProcessOverride(
+        _ incomingWorkingDirectory: String,
+        panelID: UUID,
+        workspaceID: UUID,
+        terminalState: TerminalPanelState,
+        source: String
+    ) -> Bool {
+        guard Self.isImmediateSurfaceProcessRefreshSource(source) else {
+            return false
+        }
+        guard let restoredLaunchWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(
+            terminalState.launchWorkingDirectory
+        ),
+        TerminalRuntimeRegistry.cwdValuesDiffer(restoredLaunchWorkingDirectory, incomingWorkingDirectory) else {
+            return false
+        }
+
+        let currentWorkingDirectory = TerminalRuntimeRegistry.normalizedCWDValue(terminalState.cwd)
+        guard currentWorkingDirectory == nil ||
+            TerminalRuntimeRegistry.cwdValuesDiffer(currentWorkingDirectory ?? restoredLaunchWorkingDirectory, restoredLaunchWorkingDirectory) == false else {
+            return false
+        }
+
+        ToasttyLog.info(
+            "Rejected process-derived cwd override during restored surface launch",
+            category: .terminal,
+            metadata: [
+                "workspace_id": workspaceID.uuidString,
+                "panel_id": panelID.uuidString,
+                "source": source,
+                "launch_cwd_sample": String(restoredLaunchWorkingDirectory.prefix(120)),
+                "current_cwd_sample": currentWorkingDirectory.map { String($0.prefix(120)) } ?? "nil",
+                "incoming_cwd_sample": String(incomingWorkingDirectory.prefix(120)),
+            ]
+        )
+        return true
+    }
+
+    private static func isImmediateSurfaceProcessRefreshSource(_ source: String) -> Bool {
+        source == "surface_create_process" || source.hasPrefix("surface_create_process_retry_")
+    }
+
     private func effectiveNativeGhosttyCWD(
         for cwd: String?,
         panelID: UUID,
         terminalState: TerminalPanelState
     ) -> String? {
         guard let incomingCWD = TerminalRuntimeRegistry.normalizedCWDValue(cwd) else {
-            return cwd
+            return nil
         }
         guard shouldSuppressBootstrapWorkingDirectory(
             incomingCWD,
@@ -617,7 +670,7 @@ final class TerminalMetadataService {
         }
         return DesktopNotificationContext(
             workspaceTitle: workspace.title,
-            panelLabel: panelID.flatMap { workspace.panels[$0]?.notificationLabel }
+            panelLabel: panelID.flatMap { workspace.panelState(for: $0)?.notificationLabel }
         )
     }
 
@@ -630,7 +683,7 @@ final class TerminalMetadataService {
         state: AppState
     ) -> Bool {
         guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             ToasttyLog.debug(
                 "Skipping terminal metadata update for non-terminal panel",
@@ -926,7 +979,7 @@ final class TerminalMetadataService {
             return true
         }
         guard let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal(let terminalState) = panelState else {
             return false
         }

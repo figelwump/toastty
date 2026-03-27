@@ -7,7 +7,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
     let panelID: UUID
     let terminalState: TerminalPanelState
     let focused: Bool
-    let globalFontPoints: Double
+    let windowFontPoints: Double
     let runtimeContext: TerminalWindowRuntimeContext
 
     @MainActor
@@ -41,7 +41,7 @@ struct TerminalPanelHostView: NSViewRepresentable {
             controller.update(
                 terminalState: terminalState,
                 focused: focused,
-                fontPoints: globalFontPoints,
+                fontPoints: windowFontPoints,
                 viewportSize: view.bounds.size,
                 backingScaleFactor: scale,
                 sourceContainer: view,

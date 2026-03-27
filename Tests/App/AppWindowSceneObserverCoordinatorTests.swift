@@ -1,5 +1,6 @@
 @testable import ToasttyApp
 import AppKit
+import CoreState
 import XCTest
 
 @MainActor
@@ -48,6 +49,26 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.title, "Workspace 1")
     }
 
+    func testAttachAppliesDesiredFrameOnInitialWindowBinding() {
+        let desiredFrame = CGRect(x: 180, y: 220, width: 900, height: 700)
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = desiredFrame
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, desiredFrame)
+        XCTAssertEqual(window.frame, desiredFrame)
+    }
+
     func testAttachPersistsWindowIdentifierFromWindowID() {
         let windowID = UUID()
         let coordinator = AppWindowSceneObserverCoordinator(
@@ -64,14 +85,21 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.identifier?.rawValue, windowID.uuidString)
     }
 
-    func testAttachRetargetsNativeCloseButtonToOrderWindowOut() throws {
+    func testAttachRetargetsNativeCloseButtonToPresentWindowCloseConfirmation() throws {
         var willCloseCallCount = 0
+        var presentedWindow: NSWindow?
+        var confirmationHandler: (@MainActor (Bool) -> Void)?
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
             onWindowFrameChange: { _ in },
             onWindowWillClose: {
                 willCloseCallCount += 1
+            },
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { window, completion in
+                presentedWindow = window
+                confirmationHandler = completion
             },
             scheduleOnMainActor: { operation in
                 Task { @MainActor in
@@ -89,16 +117,176 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
 
         _ = target.perform(action, with: closeButton)
 
-        XCTAssertTrue(window.didOrderOut)
+        XCTAssertTrue(presentedWindow === window)
+        XCTAssertNotNil(confirmationHandler)
+        XCTAssertFalse(window.didClose)
         XCTAssertEqual(willCloseCallCount, 0)
     }
 
-    func testDidExitFullScreenReinstallsNativeCloseButtonOverride() throws {
+    func testConfirmingNativeCloseButtonConfirmationClosesWindow() throws {
+        var confirmationHandler: (@MainActor (Bool) -> Void)?
+        var closeInitiatedCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowCloseInitiated: {
+                closeInitiatedCallCount += 1
+            },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, completion in
+                confirmationHandler = completion
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+        let confirmClose = try XCTUnwrap(confirmationHandler)
+        confirmClose(true)
+
+        XCTAssertTrue(window.didClose)
+        XCTAssertEqual(closeInitiatedCallCount, 1)
+    }
+
+    func testCancelingNativeCloseButtonConfirmationKeepsWindowAlive() throws {
+        var confirmationHandler: (@MainActor (Bool) -> Void)?
+        var closeInitiatedCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowCloseInitiated: {
+                closeInitiatedCallCount += 1
+            },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, completion in
+                confirmationHandler = completion
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+        let cancelClose = try XCTUnwrap(confirmationHandler)
+        cancelClose(false)
+
+        XCTAssertFalse(window.didClose)
+        XCTAssertEqual(closeInitiatedCallCount, 0)
+    }
+
+    func testNativeCloseButtonDoesNotPresentDuplicateConfirmationWhilePending() throws {
+        var presentCallCount = 0
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
             onWindowFrameChange: { _ in },
             onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertEqual(presentCallCount, 1)
+    }
+
+    func testNativeCloseButtonClosesWindowImmediatelyWhenConfirmationDisabled() throws {
+        var closeInitiatedCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowCloseInitiated: {
+                closeInitiatedCallCount += 1
+            },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: false,
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertTrue(window.didClose)
+        XCTAssertEqual(closeInitiatedCallCount, 1)
+    }
+
+    func testNativeCloseButtonUsesUpdatedConfirmationPolicy() throws {
+        var presentCallCount = 0
+        var closeInitiatedCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowCloseInitiated: {
+                closeInitiatedCallCount += 1
+            },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+        coordinator.shouldConfirmWindowClose = false
+
+        let closeButton = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let target = try XCTUnwrap(closeButton.target as? NSObject)
+        let action = try XCTUnwrap(closeButton.action)
+
+        _ = target.perform(action, with: closeButton)
+
+        XCTAssertEqual(presentCallCount, 0)
+        XCTAssertTrue(window.didClose)
+        XCTAssertEqual(closeInitiatedCallCount, 1)
+    }
+
+    func testDidExitFullScreenReinstallsNativeCloseButtonOverride() throws {
+        var presentCallCount = 0
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
             scheduleOnMainActor: { operation in
                 Task { @MainActor in
                     operation()
@@ -124,15 +312,20 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         let action = try XCTUnwrap(closeButton.action)
         _ = target.perform(action, with: closeButton)
 
-        XCTAssertTrue(window.didOrderOut)
+        XCTAssertEqual(presentCallCount, 1)
     }
 
     func testDidDeminiaturizeReinstallsNativeCloseButtonOverride() throws {
+        var presentCallCount = 0
         let coordinator = AppWindowSceneObserverCoordinator(
             windowID: UUID(),
             onWindowDidBecomeKey: {},
             onWindowFrameChange: { _ in },
             onWindowWillClose: {},
+            shouldConfirmWindowClose: true,
+            presentWindowCloseConfirmation: { _, _ in
+                presentCallCount += 1
+            },
             scheduleOnMainActor: { operation in
                 Task { @MainActor in
                     operation()
@@ -158,7 +351,7 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         let action = try XCTUnwrap(closeButton.action)
         _ = target.perform(action, with: closeButton)
 
-        XCTAssertTrue(window.didOrderOut)
+        XCTAssertEqual(presentCallCount, 1)
     }
 
     func testAttachLeavesWindowChromeConfigurationToSceneStyle() {
@@ -200,6 +393,137 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         coordinator.attach(to: window)
 
         XCTAssertEqual(window.title, "Toastty")
+    }
+
+    func testApplyDesiredFrameSkipsReplayingMostRecentlyPublishedWindowFrame() {
+        let recorder = ScheduledCallbackRecorder()
+        var publishedFrame: CGRectCodable?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { frame in
+                publishedFrame = frame
+            },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+        let firstFrame = CGRect(x: 120, y: 140, width: 640, height: 480)
+        let secondFrame = CGRect(x: 820, y: 140, width: 640, height: 480)
+
+        coordinator.attach(to: window)
+
+        window.setFrame(firstFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        XCTAssertFalse(recorder.callbacks.isEmpty)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        XCTAssertEqual(publishedFrame?.cgRect, firstFrame)
+
+        window.setFrame(secondFrame, display: false)
+        recorder.callbacks.removeAll()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = publishedFrame?.cgRect
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 0)
+        XCTAssertNil(window.lastSetFrame)
+        XCTAssertEqual(window.frame, secondFrame)
+    }
+
+    func testApplyDesiredFrameStillAppliesExplicitExternalFrameChange() {
+        let recorder = ScheduledCallbackRecorder()
+        var publishedFrame: CGRectCodable?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { frame in
+                publishedFrame = frame
+            },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+        let liveFrame = CGRect(x: 120, y: 140, width: 640, height: 480)
+        let externallyRequestedFrame = CGRect(x: 260, y: 320, width: 900, height: 700)
+
+        coordinator.attach(to: window)
+
+        window.setFrame(liveFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        XCTAssertFalse(recorder.callbacks.isEmpty)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        XCTAssertEqual(publishedFrame?.cgRect, liveFrame)
+
+        recorder.callbacks.removeAll()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = externallyRequestedFrame
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, externallyRequestedFrame)
+        XCTAssertEqual(window.frame, externallyRequestedFrame)
+    }
+
+    func testApplyDesiredFrameRecoversAfterSuppressingOlderPublishedFrameEcho() {
+        let recorder = ScheduledCallbackRecorder()
+        var publishedFrame: CGRectCodable?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { frame in
+                publishedFrame = frame
+            },
+            onWindowWillClose: {},
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+        let firstFrame = CGRect(x: 120, y: 140, width: 640, height: 480)
+        let secondFrame = CGRect(x: 820, y: 140, width: 640, height: 480)
+
+        coordinator.attach(to: window)
+
+        window.setFrame(firstFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+
+        window.setFrame(secondFrame, display: false)
+        recorder.callbacks.removeAll()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = firstFrame
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 0)
+        XCTAssertEqual(window.frame, secondFrame)
+
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        XCTAssertEqual(publishedFrame?.cgRect, secondFrame)
+
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = firstFrame
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, firstFrame)
+        XCTAssertEqual(window.frame, firstFrame)
     }
 
     func testApplyWindowTitleUpdatesAttachedWindowWhenWorkspaceTitleChanges() {
@@ -250,14 +574,27 @@ private final class ScheduledCallbackRecorder: @unchecked Sendable {
 
 private final class TestWindow: NSWindow {
     var forcedIsKeyWindow = false
-    var didOrderOut = false
+    var didClose = false
+    var setFrameCallCount = 0
+    var lastSetFrame: NSRect?
 
     override var isKeyWindow: Bool {
         forcedIsKeyWindow
     }
 
-    override func orderOut(_ sender: Any?) {
-        didOrderOut = true
+    override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        setFrameCallCount += 1
+        lastSetFrame = frameRect
+        super.setFrame(frameRect, display: flag)
+    }
+
+    override func close() {
+        didClose = true
+    }
+
+    func resetSetFrameTracking() {
+        setFrameCallCount = 0
+        lastSetFrame = nil
     }
 
     init() {

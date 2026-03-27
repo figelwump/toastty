@@ -113,7 +113,7 @@ final class FocusedPanelCommandController {
 
         let resolvedWorkspaceID = workspace.id
         let closedPanelWasFocused = workspace.focusedPanelID == panelID
-        let panelState = workspace.panels[panelID]
+        let panelState = workspace.panelState(for: panelID)
         var didPromptForConfirmation = false
         if shouldConfirmClose,
            panelState?.kind == .terminal {
@@ -172,16 +172,16 @@ final class FocusedPanelCommandController {
 
         if let preferredWorkspaceID,
            let workspace = store.state.workspacesByID[preferredWorkspaceID],
-           workspace.panels[panelID] != nil,
-           workspace.layoutTree.slotContaining(panelID: panelID) != nil {
+           workspace.panelState(for: panelID) != nil,
+           workspace.slotID(containingPanelID: panelID) != nil {
             return workspace
         }
 
         for window in store.state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = store.state.workspacesByID[workspaceID],
-                      workspace.panels[panelID] != nil,
-                      workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
+                      workspace.panelState(for: panelID) != nil,
+                      workspace.slotID(containingPanelID: panelID) != nil else {
                     continue
                 }
                 return workspace

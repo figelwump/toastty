@@ -21,15 +21,21 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             "Rename Workspace\t⇧⌘E"
         )
         XCTAssertEqual(
+            ToasttyKeyboardShortcuts.renameTab.menuTitle("Rename Tab"),
+            "Rename Tab\t⌥⇧E"
+        )
+        XCTAssertEqual(
             ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"),
             "Close workspace\t⇧⌘W"
         )
     }
 
     func testShortcutDefinitionsMatchExpectedGlyphs() {
+        XCTAssertEqual(ToasttyKeyboardShortcuts.newWindow.symbolLabel, "⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⌘B")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.renameTab.symbolLabel, "⌥⇧E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.closeWorkspace.symbolLabel, "⇧⌘W")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusPreviousPane.symbolLabel, "⌘[")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusNextPane.symbolLabel, "⌘]")
@@ -37,9 +43,11 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
 
     func testShortcutDefinitionsRemainUnique() {
         let shortcuts = [
+            ToasttyKeyboardShortcuts.newWindow,
             ToasttyKeyboardShortcuts.toggleSidebar,
             ToasttyKeyboardShortcuts.newWorkspace,
             ToasttyKeyboardShortcuts.renameWorkspace,
+            ToasttyKeyboardShortcuts.renameTab,
             ToasttyKeyboardShortcuts.closeWorkspace,
             ToasttyKeyboardShortcuts.toggleFocusedPanel,
             ToasttyKeyboardShortcuts.splitHorizontal,

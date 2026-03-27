@@ -117,8 +117,19 @@ struct ToasttyCommandMenus: Commands {
 
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
 
+    private var preferredCommandWindowID: UUID? {
+        // SwiftUI focused-scene propagation can lag briefly behind AppKit when a
+        // new window becomes key, so prefer the live AppKit key window and only
+        // fall back to the last focused-scene value when no Toastty key window
+        // is currently available.
+        Self.resolvedCommandWindowID(
+            focusedWindowID: focusedWindowID,
+            keyWindowID: currentToasttyKeyWindowID(in: store)
+        )
+    }
+
     private var commandSelection: WindowCommandSelection? {
-        store.commandSelection(preferredWindowID: focusedWindowID)
+        store.commandSelection(preferredWindowID: preferredCommandWindowID)
     }
 
     private var commandWindow: WindowState? {
@@ -129,6 +140,16 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.workspace
     }
 
+    private var canFocusNextUnreadOrActivePanel: Bool {
+        Self.canFocusNextUnreadOrActivePanel(
+            state: store.state,
+            commandSelection: commandSelection,
+            activePanelIDs: sessionRuntimeStore.activePanelIDs(
+                matching: AppStore.nextUnreadOrActiveFallbackStatusKinds
+            )
+        )
+    }
+
     private var terminalProfileMenuModel: TerminalProfileMenuModel {
         TerminalProfileMenuModel(
             catalog: terminalProfileStore.catalog,
@@ -137,6 +158,28 @@ struct ToasttyCommandMenus: Commands {
     }
 
     var body: some Commands {
+        let preferredWindowID = preferredCommandWindowID
+        let fontCommandWindowID = store.commandWindowID(preferredWindowID: preferredWindowID)
+
+        CommandGroup(replacing: .newItem) {
+            Button("New Tab") {
+                store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newTab.key,
+                modifiers: ToasttyKeyboardShortcuts.newTab.modifiers
+            )
+            .disabled(commandWorkspace == nil)
+
+            Button("New Window") {
+                store.createWindowFromCommand(preferredWindowID: preferredWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newWindow.key,
+                modifiers: ToasttyKeyboardShortcuts.newWindow.modifiers
+            )
+        }
+
         CommandGroup(after: .appInfo) {
             Button(action: reloadConfiguration) {
                 Label("Reload Configuration", systemImage: "arrow.clockwise")
@@ -150,19 +193,25 @@ struct ToasttyCommandMenus: Commands {
 
         CommandMenu("Terminal") {
             Button("Increase Terminal Font") {
-                store.send(.increaseGlobalTerminalFont)
+                guard let fontCommandWindowID else { return }
+                store.send(.increaseWindowTerminalFont(windowID: fontCommandWindowID))
             }
             .keyboardShortcut("+", modifiers: [.command])
+            .disabled(fontCommandWindowID == nil)
 
             Button("Decrease Terminal Font") {
-                store.send(.decreaseGlobalTerminalFont)
+                guard let fontCommandWindowID else { return }
+                store.send(.decreaseWindowTerminalFont(windowID: fontCommandWindowID))
             }
             .keyboardShortcut("-", modifiers: [.command])
+            .disabled(fontCommandWindowID == nil)
 
             Button("Reset Terminal Font") {
-                store.send(.resetGlobalTerminalFont)
+                guard let fontCommandWindowID else { return }
+                store.send(.resetWindowTerminalFont(windowID: fontCommandWindowID))
             }
             .keyboardShortcut("0", modifiers: [.command])
+            .disabled(fontCommandWindowID == nil)
 
             Divider()
 
@@ -188,16 +237,16 @@ struct ToasttyCommandMenus: Commands {
 
         CommandMenu("Workspace") {
             Button("New Workspace") {
-                store.createWorkspaceFromCommand(preferredWindowID: focusedWindowID)
+                store.createWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
                 ToasttyKeyboardShortcuts.newWorkspace.key,
                 modifiers: ToasttyKeyboardShortcuts.newWorkspace.modifiers
             )
-            .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: focusedWindowID) == false)
+            .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: preferredWindowID) == false)
 
             Button("Rename Workspace") {
-                store.renameSelectedWorkspaceFromCommand(preferredWindowID: focusedWindowID)
+                store.renameSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
                 ToasttyKeyboardShortcuts.renameWorkspace.key,
@@ -206,7 +255,7 @@ struct ToasttyCommandMenus: Commands {
             .disabled(commandWorkspace == nil)
 
             Button("Close Workspace") {
-                store.closeSelectedWorkspaceFromCommand(preferredWindowID: focusedWindowID)
+                store.closeSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
                 ToasttyKeyboardShortcuts.closeWorkspace.key,
@@ -243,6 +292,52 @@ struct ToasttyCommandMenus: Commands {
                     )
                 }
             }
+
+            Divider()
+
+            Button("New Tab") {
+                store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+            }
+            .disabled(commandWorkspace == nil)
+
+            Button("Rename Tab") {
+                store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.renameTab.key,
+                modifiers: ToasttyKeyboardShortcuts.renameTab.modifiers
+            )
+            .disabled(store.canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID) == false)
+
+            Button("Select Previous Tab") {
+                store.selectAdjacentWorkspaceTab(
+                    preferredWindowID: preferredWindowID,
+                    direction: .previous
+                )
+            }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
+
+            Button("Select Next Tab") {
+                store.selectAdjacentWorkspaceTab(
+                    preferredWindowID: preferredWindowID,
+                    direction: .next
+                )
+            }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
+
+            Button("Jump to Next Unread or Active") {
+                store.focusNextUnreadOrActivePanelFromCommand(
+                    preferredWindowID: commandSelection?.windowID ?? preferredWindowID,
+                    sessionRuntimeStore: sessionRuntimeStore
+                )
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.key,
+                modifiers: ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.modifiers
+            )
+            .disabled(canFocusNextUnreadOrActivePanel == false)
         }
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
@@ -332,21 +427,23 @@ struct ToasttyCommandMenus: Commands {
         }
     }
 
+
     @ViewBuilder
     private func terminalProfileActionButton(
         section: TerminalProfileMenuModel.Section,
         action: TerminalProfileMenuModel.Section.Action
     ) -> some View {
+        let preferredWindowID = preferredCommandWindowID
         let button = Button(action.title) {
             _ = terminalProfilesMenuController.splitFocusedSlot(
                 profileID: section.profileID,
                 direction: action.direction,
-                preferredWindowID: focusedWindowID
+                preferredWindowID: preferredWindowID
             )
         }
         .disabled(
             terminalProfilesMenuController.canSplitFocusedSlotWithTerminalProfile(
-                preferredWindowID: focusedWindowID
+                preferredWindowID: preferredWindowID
             ) == false
         )
 
@@ -394,6 +491,43 @@ struct ToasttyCommandMenus: Commands {
             return nil
         }
         return KeyEquivalent(digit)
+    }
+
+    static func canFocusNextUnreadOrActivePanel(
+        state: AppState,
+        commandSelection: WindowCommandSelection?,
+        activePanelIDs: Set<UUID>
+    ) -> Bool {
+        guard let selection = commandSelection,
+              let selectedTabID = selection.workspace.resolvedSelectedTabID else {
+            return false
+        }
+
+        if state.nextUnreadPanel(
+            fromWindowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            tabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        ) != nil {
+            return true
+        }
+
+        guard activePanelIDs.isEmpty == false else {
+            return false
+        }
+
+        return state.nextMatchingPanel(
+            fromWindowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            tabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        ) { _, panelID in
+            activePanelIDs.contains(panelID)
+        } != nil
+    }
+
+    nonisolated static func resolvedCommandWindowID(focusedWindowID: UUID?, keyWindowID: UUID?) -> UUID? {
+        keyWindowID ?? focusedWindowID
     }
 }
 

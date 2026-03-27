@@ -1,6 +1,16 @@
 import Foundation
 
 public struct AppReducer {
+    private enum EmptyWorkspaceTabDisposition {
+        case bootstrapReplacementTab
+        case removeWorkspace(EmptyWindowDisposition)
+    }
+
+    private enum EmptyWindowDisposition {
+        case keepWindow
+        case removeWindow
+    }
+
     public init() {}
 
     @discardableResult
@@ -30,13 +40,21 @@ public struct AppReducer {
             markWorkspaceScopedNotificationsRead(workspaceID: workspaceID, state: &state)
             return true
 
+        case .selectWorkspaceTab(let workspaceID, let tabID):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard workspace.tabsByID[tabID] != nil else { return false }
+            guard workspace.selectedTabID != tabID else { return false }
+            workspace.selectedTabID = tabID
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
         case .createWorkspace(let windowID, let title):
             guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
 
             let resolvedTitle = title ?? nextWorkspaceTitle(in: state.windows[windowIndex], state: state)
             let workspace = WorkspaceState.bootstrap(
                 title: resolvedTitle,
-                defaultTerminalProfileBinding: state.defaultTerminalProfileBinding
+                initialTerminalProfileBinding: state.defaultTerminalProfileBinding
             )
 
             state.workspacesByID[workspace.id] = workspace
@@ -44,16 +62,28 @@ public struct AppReducer {
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
             return true
 
-        case .createWindow(let initialWorkspaceTitle, let initialFrame):
+        case .createWorkspaceTab(let workspaceID, let seed):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            let tab = WorkspaceTabState.bootstrap(
+                initialTerminalCWD: seed?.terminalCWD,
+                initialTerminalProfileBinding: seed?.terminalProfileBinding ?? state.defaultTerminalProfileBinding
+            )
+            workspace.appendTab(tab, select: true)
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
+        case .createWindow(let seed, let initialFrame):
             let workspace = WorkspaceState.bootstrap(
-                title: initialWorkspaceTitle ?? "Workspace 1",
-                defaultTerminalProfileBinding: state.defaultTerminalProfileBinding
+                title: normalizedWorkspaceTitle(seed?.workspaceTitle) ?? "Workspace 1",
+                initialTerminalCWD: seed?.terminalCWD,
+                initialTerminalProfileBinding: seed?.terminalProfileBinding ?? state.defaultTerminalProfileBinding
             )
             let window = WindowState(
                 id: UUID(),
                 frame: initialFrame ?? CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
                 workspaceIDs: [workspace.id],
-                selectedWorkspaceID: workspace.id
+                selectedWorkspaceID: workspace.id,
+                terminalFontSizePointsOverride: seed?.windowTerminalFontSizePointsOverride
             )
 
             state.workspacesByID[workspace.id] = workspace
@@ -73,13 +103,38 @@ public struct AppReducer {
             state.workspacesByID[workspaceID] = workspace
             return true
 
+        case .setWorkspaceTabCustomTitle(let workspaceID, let tabID, let title):
+            guard var workspace = state.workspacesByID[workspaceID] else { return false }
+            guard workspace.tabIDs.count > 1 else { return false }
+            let normalizedTitle = normalizedMetadataValue(title)
+            guard workspace.tabsByID[tabID] != nil else { return false }
+            guard title == nil || normalizedTitle != nil else { return false }
+            guard workspace.tab(id: tabID)?.customTitle != normalizedTitle else { return false }
+            guard workspace.updateTab(id: tabID, { tab in
+                tab.customTitle = normalizedTitle
+            }) else {
+                return false
+            }
+            state.workspacesByID[workspaceID] = workspace
+            return true
+
         case .closeWorkspace(let workspaceID):
             guard let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) else { return false }
-            return removeWorkspace(workspaceID, windowID: windowID, state: &state)
+            return removeWorkspace(
+                workspaceID,
+                windowID: windowID,
+                emptyWindowDisposition: .keepWindow,
+                state: &state
+            )
+
+        case .closeWorkspaceTab(let workspaceID, let tabID):
+            guard let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) else { return false }
+            return removeWorkspaceTab(tabID, workspaceID: workspaceID, windowID: windowID, state: &state)
 
         case .focusPanel(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.panels[panelID] != nil else { return false }
+            guard let tabID = workspace.tabID(containingPanelID: panelID) else { return false }
+            workspace.selectedTabID = tabID
             workspace.focusedPanelID = panelID
             _ = workspace.unreadPanelIDs.remove(panelID)
             workspace.unreadWorkspaceNotificationCount = 0
@@ -88,8 +143,9 @@ public struct AppReducer {
 
         case .movePanelToSlot(let panelID, let targetSlotID):
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
-            guard let targetWorkspaceID = locateWorkspaceID(containingSlotID: targetSlotID, in: state) else { return false }
-            guard sourceLocation.workspaceID == targetWorkspaceID else { return false }
+            guard let targetLocation = locateSlot(targetSlotID, in: state) else { return false }
+            guard sourceLocation.workspaceID == targetLocation.workspaceID else { return false }
+            guard sourceLocation.tabID == targetLocation.tabID else { return false }
             guard var workspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
             guard sourceLocation.slotID != targetSlotID else { return false }
 
@@ -113,7 +169,7 @@ public struct AppReducer {
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard var sourceWorkspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
             guard var targetWorkspace = state.workspacesByID[targetWorkspaceID] else { return false }
-            guard let panelState = sourceWorkspace.panels[panelID] else { return false }
+            guard let panelState = sourceWorkspace.panelState(for: panelID) else { return false }
 
             if sourceLocation.workspaceID == targetWorkspaceID {
                 guard let slotDestination = targetSlotID else { return false }
@@ -130,15 +186,19 @@ public struct AppReducer {
             let sourceRemoval = sourceWorkspace.layoutTree.removingPanel(panelID)
             guard sourceRemoval.removed else { return false }
 
-            var updatedSourceWorkspace: WorkspaceState?
+            var shouldRemoveSourceTab = false
             let didTransferUnreadBadge = sourceWorkspace.unreadPanelIDs.remove(panelID) != nil
             sourceWorkspace.panels.removeValue(forKey: panelID)
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.layoutTree = updatedSourceTree
                 _ = sourceWorkspace.synchronizeFocusedPanelToLayout()
-                updatedSourceWorkspace = sourceWorkspace
             } else {
-                updatedSourceWorkspace = nil
+                shouldRemoveSourceTab = true
+            }
+
+            if let targetSlotID,
+               let targetTabID = targetWorkspace.tabID(containingSlotID: targetSlotID) {
+                targetWorkspace.selectedTabID = targetTabID
             }
 
             targetWorkspace.panels[panelID] = panelState
@@ -158,10 +218,19 @@ public struct AppReducer {
                 targetWorkspace.unreadPanelIDs.insert(panelID)
             }
 
-            if let updatedSourceWorkspace {
-                state.workspacesByID[sourceLocation.workspaceID] = updatedSourceWorkspace
+            if shouldRemoveSourceTab {
+                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
+                guard removeWorkspaceTab(
+                    sourceLocation.tabID,
+                    workspaceID: sourceLocation.workspaceID,
+                    windowID: sourceLocation.windowID,
+                    emptyWorkspaceDisposition: .removeWorkspace(.removeWindow),
+                    state: &state
+                ) else {
+                    return false
+                }
             } else {
-                removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
+                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
             }
             state.workspacesByID[targetWorkspaceID] = targetWorkspace
             return true
@@ -169,7 +238,7 @@ public struct AppReducer {
         case .detachPanelToNewWindow(let panelID):
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard var sourceWorkspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
-            guard let panelState = sourceWorkspace.panels[panelID] else { return false }
+            guard let panelState = sourceWorkspace.panelState(for: panelID) else { return false }
 
             let sourceRemoval = sourceWorkspace.layoutTree.removingPanel(panelID)
             guard sourceRemoval.removed else { return false }
@@ -181,7 +250,14 @@ public struct AppReducer {
                 _ = sourceWorkspace.synchronizeFocusedPanelToLayout()
                 state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
             } else {
-                removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
+                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
+                removeWorkspaceTab(
+                    sourceLocation.tabID,
+                    workspaceID: sourceLocation.workspaceID,
+                    windowID: sourceLocation.windowID,
+                    emptyWorkspaceDisposition: .removeWorkspace(.removeWindow),
+                    state: &state
+                )
             }
 
             let detachedWorkspaceID = UUID()
@@ -200,7 +276,10 @@ public struct AppReducer {
                 id: detachedWindowID,
                 frame: CGRectCodable(x: 160, y: 160, width: 1000, height: 680),
                 workspaceIDs: [detachedWorkspaceID],
-                selectedWorkspaceID: detachedWorkspaceID
+                selectedWorkspaceID: detachedWorkspaceID,
+                terminalFontSizePointsOverride: state.normalizedTerminalFontOverride(
+                    state.effectiveTerminalFontPoints(for: sourceLocation.windowID)
+                )
             )
 
             state.workspacesByID[detachedWorkspaceID] = detachedWorkspace
@@ -211,7 +290,8 @@ public struct AppReducer {
         case .closePanel(let panelID):
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard var workspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
-            guard let panelState = workspace.panels[panelID] else { return false }
+            guard let panelState = workspace.panelState(for: panelID) else { return false }
+            workspace.selectedTabID = sourceLocation.tabID
             let wasFocusedPanel = workspace.focusedPanelID == panelID
             let previousSlotIDBeforeRemoval = wasFocusedPanel
                 ? workspace.focusTargetSlotID(from: sourceLocation.slotID, direction: .previous)
@@ -245,7 +325,13 @@ public struct AppReducer {
                 state.workspacesByID[sourceLocation.workspaceID] = workspace
             } else {
                 state.workspacesByID[sourceLocation.workspaceID] = workspace
-                removeWorkspace(sourceLocation.workspaceID, windowID: sourceLocation.windowID, state: &state)
+                removeWorkspaceTab(
+                    sourceLocation.tabID,
+                    workspaceID: sourceLocation.workspaceID,
+                    windowID: sourceLocation.windowID,
+                    emptyWorkspaceDisposition: .removeWorkspace(.keepWindow),
+                    state: &state
+                )
             }
             return true
 
@@ -292,6 +378,7 @@ public struct AppReducer {
             guard kind != .terminal else { return false }
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.focusedPanelModeActive == false else { return false }
+            let selectedTabID = workspace.resolvedSelectedTabID
 
             if let existingPanelID = workspace.panels.first(where: { $0.value.kind == kind })?.key {
                 let removal = workspace.layoutTree.removingPanel(existingPanelID)
@@ -308,7 +395,14 @@ public struct AppReducer {
                     }
                     state.workspacesByID[workspaceID] = workspace
                 } else if let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) {
-                    removeWorkspace(workspaceID, windowID: windowID, state: &state)
+                    guard let selectedTabID else { return false }
+                    state.workspacesByID[workspaceID] = workspace
+                    removeWorkspaceTab(
+                        selectedTabID,
+                        workspaceID: workspaceID,
+                        windowID: windowID,
+                        state: &state
+                    )
                 }
                 return true
             }
@@ -385,40 +479,19 @@ public struct AppReducer {
             state.defaultTerminalProfileID = normalizedProfileID
             return true
 
-        case .setGlobalTerminalFont(let points):
-            let clampedPoints = AppState.clampedTerminalFontPoints(points)
-            guard abs(state.globalTerminalFontPoints - clampedPoints) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = clampedPoints
-            return true
+        case .setWindowTerminalFont(let windowID, let points):
+            return setWindowTerminalFont(windowID: windowID, points: points, state: &state)
 
-        case .increaseGlobalTerminalFont:
-            let nextPoints = AppState.clampedTerminalFontPoints(
-                state.globalTerminalFontPoints + AppState.terminalFontStepPoints
-            )
-            guard abs(nextPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = nextPoints
-            return true
+        case .increaseWindowTerminalFont(let windowID):
+            return adjustWindowTerminalFont(windowID: windowID, step: AppState.terminalFontStepPoints, state: &state)
 
-        case .decreaseGlobalTerminalFont:
-            let nextPoints = AppState.clampedTerminalFontPoints(
-                state.globalTerminalFontPoints - AppState.terminalFontStepPoints
-            )
-            guard abs(nextPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = nextPoints
-            return true
+        case .decreaseWindowTerminalFont(let windowID):
+            return adjustWindowTerminalFont(windowID: windowID, step: -AppState.terminalFontStepPoints, state: &state)
 
-        case .resetGlobalTerminalFont:
-            let configuredBaseline = state.configuredTerminalFontPoints ?? AppState.defaultTerminalFontPoints
-            guard abs(state.globalTerminalFontPoints - configuredBaseline) >= AppState.terminalFontComparisonEpsilon else {
-                return false
-            }
-            state.globalTerminalFontPoints = configuredBaseline
+        case .resetWindowTerminalFont(let windowID):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            guard state.windows[windowIndex].terminalFontSizePointsOverride != nil else { return false }
+            state.windows[windowIndex].terminalFontSizePointsOverride = nil
             return true
 
         case .splitFocusedSlot(let workspaceID, let orientation):
@@ -481,7 +554,8 @@ public struct AppReducer {
         case .updateTerminalPanelMetadata(let panelID, let title, let cwd):
             guard let location = locatePanel(panelID, in: state) else { return false }
             guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
-            guard case .terminal(var terminalState) = workspace.panels[panelID] else { return false }
+            guard let tabID = workspace.tabID(containingPanelID: panelID),
+                  case .terminal(var terminalState) = workspace.tab(id: tabID)?.panels[panelID] else { return false }
 
             var didMutate = false
 
@@ -498,15 +572,19 @@ public struct AppReducer {
             }
 
             guard didMutate else { return false }
-            workspace.panels[panelID] = .terminal(terminalState)
+            _ = workspace.updateTab(id: tabID) { tab in
+                tab.panels[panelID] = .terminal(terminalState)
+            }
             state.workspacesByID[location.workspaceID] = workspace
             return true
 
         case .recordDesktopNotification(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             if let panelID {
-                guard workspace.panels[panelID] != nil else { return false }
-                workspace.unreadPanelIDs.insert(panelID)
+                guard let tabID = workspace.tabID(containingPanelID: panelID) else { return false }
+                _ = workspace.updateTab(id: tabID) { tab in
+                    tab.unreadPanelIDs.insert(panelID)
+                }
             } else {
                 workspace.unreadWorkspaceNotificationCount += 1
             }
@@ -515,8 +593,11 @@ public struct AppReducer {
 
         case .markPanelNotificationsRead(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.panels[panelID] != nil else { return false }
-            if workspace.unreadPanelIDs.remove(panelID) != nil {
+            guard let tabID = workspace.tabID(containingPanelID: panelID) else { return false }
+            let didMutate = workspace.updateTab(id: tabID) { tab in
+                _ = tab.unreadPanelIDs.remove(panelID)
+            }
+            if didMutate {
                 state.workspacesByID[workspaceID] = workspace
             }
             return true
@@ -526,6 +607,32 @@ public struct AppReducer {
             state.windows[windowIndex].sidebarVisible.toggle()
             return true
         }
+    }
+
+    private static func setWindowTerminalFont(windowID: UUID, points: Double, state: inout AppState) -> Bool {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        let normalizedOverride = state.normalizedTerminalFontOverride(points)
+        guard state.windows[windowIndex].terminalFontSizePointsOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].terminalFontSizePointsOverride = normalizedOverride
+        return true
+    }
+
+    private static func adjustWindowTerminalFont(windowID: UUID, step: Double, state: inout AppState) -> Bool {
+        guard state.window(id: windowID) != nil else { return false }
+        let previousPoints = state.effectiveTerminalFontPoints(for: windowID)
+        let nextPoints = AppState.clampedTerminalFontPoints(previousPoints + step)
+        guard abs(nextPoints - previousPoints) >= AppState.terminalFontComparisonEpsilon else {
+            return false
+        }
+        let normalizedOverride = state.normalizedTerminalFontOverride(nextPoints)
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        guard state.windows[windowIndex].terminalFontSizePointsOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].terminalFontSizePointsOverride = normalizedOverride
+        return true
     }
 
     @discardableResult
@@ -716,16 +823,28 @@ public struct AppReducer {
     }
 
     private static func locatePanel(_ panelID: UUID, in state: AppState) -> PanelLocation? {
+        guard let selection = state.workspaceSelection(containingPanelID: panelID),
+              let tabID = selection.workspace.tabID(containingPanelID: panelID),
+              let slotID = selection.workspace.slotID(containingPanelID: panelID) else {
+            return nil
+        }
+
+        return PanelLocation(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            tabID: tabID,
+            slotID: slotID
+        )
+    }
+
+    private static func locateSlot(_ slotID: UUID, in state: AppState) -> SlotLocation? {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
-                guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                guard let sourceSlot = workspace.layoutTree.slotContaining(panelID: panelID) else { continue }
-
-                return PanelLocation(
-                    windowID: window.id,
-                    workspaceID: workspaceID,
-                    slotID: sourceSlot.slotID
-                )
+                guard let workspace = state.workspacesByID[workspaceID],
+                      let tabID = workspace.tabID(containingSlotID: slotID) else {
+                    continue
+                }
+                return SlotLocation(workspaceID: workspaceID, tabID: tabID)
             }
         }
 
@@ -736,7 +855,7 @@ public struct AppReducer {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                if workspace.layoutTree.allSlotInfos.contains(where: { $0.slotID == slotID }) {
+                if workspace.tabID(containingSlotID: slotID) != nil {
                     return workspaceID
                 }
             }
@@ -783,7 +902,12 @@ public struct AppReducer {
     }
 
     @discardableResult
-    private static func removeWorkspace(_ workspaceID: UUID, windowID: UUID, state: inout AppState) -> Bool {
+    private static func removeWorkspace(
+        _ workspaceID: UUID,
+        windowID: UUID,
+        emptyWindowDisposition: EmptyWindowDisposition = .removeWindow,
+        state: inout AppState
+    ) -> Bool {
         guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
         var window = state.windows[windowIndex]
         guard let workspaceIndex = window.workspaceIDs.firstIndex(of: workspaceID) else { return false }
@@ -792,10 +916,19 @@ public struct AppReducer {
         window.workspaceIDs.remove(at: workspaceIndex)
 
         if window.workspaceIDs.isEmpty {
-            let removedWindowID = window.id
-            state.windows.remove(at: windowIndex)
-            if state.selectedWindowID == removedWindowID {
-                state.selectedWindowID = state.windows.first?.id
+            switch emptyWindowDisposition {
+            case .keepWindow:
+                window.selectedWorkspaceID = nil
+                state.windows[windowIndex] = window
+                if state.selectedWindowID == nil {
+                    state.selectedWindowID = window.id
+                }
+            case .removeWindow:
+                let removedWindowID = window.id
+                state.windows.remove(at: windowIndex)
+                if state.selectedWindowID == removedWindowID || state.selectedWindowID == nil {
+                    state.selectedWindowID = state.windows.first?.id
+                }
             }
             return true
         }
@@ -809,6 +942,39 @@ public struct AppReducer {
         if state.selectedWindowID == nil {
             state.selectedWindowID = window.id
         }
+        return true
+    }
+
+    @discardableResult
+    private static func removeWorkspaceTab(
+        _ tabID: UUID,
+        workspaceID: UUID,
+        windowID: UUID,
+        emptyWorkspaceDisposition: EmptyWorkspaceTabDisposition = .bootstrapReplacementTab,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID] else { return false }
+        guard workspace.tabsByID[tabID] != nil else { return false }
+        _ = workspace.removeTab(id: tabID)
+
+        if workspace.tabIDs.isEmpty {
+            switch emptyWorkspaceDisposition {
+            case .bootstrapReplacementTab:
+                let replacementTab = WorkspaceTabState.bootstrap(
+                    initialTerminalProfileBinding: state.defaultTerminalProfileBinding
+                )
+                workspace.appendTab(replacementTab, select: true)
+            case .removeWorkspace(let emptyWindowDisposition):
+                return removeWorkspace(
+                    workspaceID,
+                    windowID: windowID,
+                    emptyWindowDisposition: emptyWindowDisposition,
+                    state: &state
+                )
+            }
+        }
+
+        state.workspacesByID[workspaceID] = workspace
         return true
     }
 
@@ -854,6 +1020,10 @@ public struct AppReducer {
         return "Workspace \(currentMax + 1)"
     }
 
+    private static func normalizedWorkspaceTitle(_ value: String?) -> String? {
+        normalizedMetadataValue(value)
+    }
+
     private static func normalizedMetadataValue(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -880,5 +1050,11 @@ public struct AppReducer {
 private struct PanelLocation {
     let windowID: UUID
     let workspaceID: UUID
+    let tabID: UUID
     let slotID: UUID
+}
+
+private struct SlotLocation {
+    let workspaceID: UUID
+    let tabID: UUID
 }

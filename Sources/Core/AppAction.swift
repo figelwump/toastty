@@ -27,11 +27,15 @@ public enum AppAction: Equatable, Sendable {
     case selectWindow(windowID: UUID)
     case updateWindowFrame(windowID: UUID, frame: CGRectCodable)
     case selectWorkspace(windowID: UUID, workspaceID: UUID)
+    case selectWorkspaceTab(workspaceID: UUID, tabID: UUID)
     case createWorkspace(windowID: UUID, title: String?)
-    case createWindow(initialWorkspaceTitle: String?, initialFrame: CGRectCodable?)
+    case createWorkspaceTab(workspaceID: UUID, seed: WindowLaunchSeed?)
+    case createWindow(seed: WindowLaunchSeed?, initialFrame: CGRectCodable?)
     case closeWindow(windowID: UUID)
     case renameWorkspace(workspaceID: UUID, title: String)
+    case setWorkspaceTabCustomTitle(workspaceID: UUID, tabID: UUID, title: String?)
     case closeWorkspace(workspaceID: UUID)
+    case closeWorkspaceTab(workspaceID: UUID, tabID: UUID)
     case focusPanel(workspaceID: UUID, panelID: UUID)
     case movePanelToSlot(panelID: UUID, targetSlotID: UUID)
     case movePanelToWorkspace(panelID: UUID, targetWorkspaceID: UUID, targetSlotID: UUID?)
@@ -42,10 +46,10 @@ public enum AppAction: Equatable, Sendable {
     case toggleFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
     case setDefaultTerminalProfile(profileID: String?)
-    case setGlobalTerminalFont(points: Double)
-    case increaseGlobalTerminalFont
-    case decreaseGlobalTerminalFont
-    case resetGlobalTerminalFont
+    case setWindowTerminalFont(windowID: UUID, points: Double)
+    case increaseWindowTerminalFont(windowID: UUID)
+    case decreaseWindowTerminalFont(windowID: UUID)
+    case resetWindowTerminalFont(windowID: UUID)
     case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
     case splitFocusedSlotInDirectionWithTerminalProfile(
@@ -72,16 +76,24 @@ public extension AppAction {
             return "updateWindowFrame"
         case .selectWorkspace:
             return "selectWorkspace"
+        case .selectWorkspaceTab:
+            return "selectWorkspaceTab"
         case .createWorkspace:
             return "createWorkspace"
+        case .createWorkspaceTab:
+            return "createWorkspaceTab"
         case .createWindow:
             return "createWindow"
         case .closeWindow:
             return "closeWindow"
         case .renameWorkspace:
             return "renameWorkspace"
+        case .setWorkspaceTabCustomTitle:
+            return "setWorkspaceTabCustomTitle"
         case .closeWorkspace:
             return "closeWorkspace"
+        case .closeWorkspaceTab:
+            return "closeWorkspaceTab"
         case .focusPanel:
             return "focusPanel"
         case .movePanelToSlot:
@@ -102,14 +114,14 @@ public extension AppAction {
             return "setConfiguredTerminalFont"
         case .setDefaultTerminalProfile:
             return "setDefaultTerminalProfile"
-        case .setGlobalTerminalFont:
-            return "setGlobalTerminalFont"
-        case .increaseGlobalTerminalFont:
-            return "increaseGlobalTerminalFont"
-        case .decreaseGlobalTerminalFont:
-            return "decreaseGlobalTerminalFont"
-        case .resetGlobalTerminalFont:
-            return "resetGlobalTerminalFont"
+        case .setWindowTerminalFont:
+            return "setWindowTerminalFont"
+        case .increaseWindowTerminalFont:
+            return "increaseWindowTerminalFont"
+        case .decreaseWindowTerminalFont:
+            return "decreaseWindowTerminalFont"
+        case .resetWindowTerminalFont:
+            return "resetWindowTerminalFont"
         case .splitFocusedSlot:
             return "splitFocusedSlot"
         case .splitFocusedSlotInDirection:

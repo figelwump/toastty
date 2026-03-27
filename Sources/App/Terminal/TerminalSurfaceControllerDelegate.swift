@@ -26,7 +26,8 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     func registerSurfaceChildPIDAfterCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String?
+        expectedWorkingDirectory: String?,
+        isRestoredLaunch: Bool
     )
     func requestImmediateProcessWorkingDirectoryRefresh(
         panelID: UUID,

@@ -3,13 +3,19 @@ import Foundation
 public struct SessionRegistry: Codable, Equatable, Sendable {
     public private(set) var sessionsByID: [String: SessionRecord]
     public private(set) var activeSessionIDByPanelID: [UUID: String]
+    public private(set) var sessionOrder: [String]
 
     public init(
         sessionsByID: [String: SessionRecord] = [:],
-        activeSessionIDByPanelID: [UUID: String] = [:]
+        activeSessionIDByPanelID: [UUID: String] = [:],
+        sessionOrder: [String] = []
     ) {
         self.sessionsByID = sessionsByID
         self.activeSessionIDByPanelID = activeSessionIDByPanelID
+        self.sessionOrder = Self.normalizedSessionOrder(
+            sessionOrder,
+            sessionsByID: sessionsByID
+        )
     }
 
     public mutating func startSession(
@@ -49,8 +55,12 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             updatedAt: now
         )
 
+        if let existingOrderIndex = sessionOrder.firstIndex(of: sessionID) {
+            sessionOrder.remove(at: existingOrderIndex)
+        }
         sessionsByID[sessionID] = record
         activeSessionIDByPanelID[panelID] = sessionID
+        sessionOrder.append(sessionID)
     }
 
     public mutating func updateFiles(
@@ -154,13 +164,26 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
     }
 
     public func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
-        sessionsByID.values
+        let orderBySessionID = Dictionary(
+            uniqueKeysWithValues: sessionOrder.enumerated().map { offset, sessionID in
+                (sessionID, offset)
+            }
+        )
+        return sessionsByID.values
             .filter { record in
                 record.workspaceID == workspaceID &&
                 record.status != nil &&
                 record.isActive
             }
-            .sorted(by: activeWorkspaceStatusSort)
+            // Keep sidebar session rows stable as tabs switch or session
+            // statuses change. New sessions append by creation time.
+            .sorted { lhs, rhs in
+                Self.stableWorkspaceStatusSort(
+                    lhs,
+                    rhs,
+                    orderBySessionID: orderBySessionID
+                )
+            }
             .compactMap(Self.workspaceSessionStatus(from:))
     }
 
@@ -168,6 +191,7 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         for (sessionID, record) in sessionsByID where record.stoppedAt.map({ $0 < cutoff }) == true {
             sessionsByID.removeValue(forKey: sessionID)
         }
+        sessionOrder = Self.normalizedSessionOrder(sessionOrder, sessionsByID: sessionsByID)
 
         activeSessionIDByPanelID = activeSessionIDByPanelID.filter { panelID, sessionID in
             guard let record = sessionsByID[sessionID], record.isActive else {
@@ -190,16 +214,20 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         )
     }
 
-    private func activeWorkspaceStatusSort(_ lhs: SessionRecord, _ rhs: SessionRecord) -> Bool {
-        let lhsStatus = Self.requiredWorkspaceStatus(from: lhs)
-        let rhsStatus = Self.requiredWorkspaceStatus(from: rhs)
-        if lhsStatus.kind.activeWorkspacePriority != rhsStatus.kind.activeWorkspacePriority {
-            return lhsStatus.kind.activeWorkspacePriority > rhsStatus.kind.activeWorkspacePriority
+    private static func stableWorkspaceStatusSort(
+        _ lhs: SessionRecord,
+        _ rhs: SessionRecord,
+        orderBySessionID: [String: Int]
+    ) -> Bool {
+        let lhsOrder = orderBySessionID[lhs.sessionID] ?? Int.max
+        let rhsOrder = orderBySessionID[rhs.sessionID] ?? Int.max
+        if lhsOrder != rhsOrder {
+            return lhsOrder < rhsOrder
         }
-        if lhs.updatedAt != rhs.updatedAt {
-            return lhs.updatedAt > rhs.updatedAt
+        if lhs.startedAt != rhs.startedAt {
+            return lhs.startedAt < rhs.startedAt
         }
-        return lhs.startedAt > rhs.startedAt
+        return lhs.sessionID < rhs.sessionID
     }
 
     private func stoppedWorkspaceStatusSort(_ lhs: SessionRecord, _ rhs: SessionRecord) -> Bool {
@@ -207,13 +235,6 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
             return lhs.updatedAt > rhs.updatedAt
         }
         return lhs.startedAt > rhs.startedAt
-    }
-
-    private static func requiredWorkspaceStatus(from record: SessionRecord) -> SessionStatus {
-        guard let status = record.status else {
-            preconditionFailure("workspace status sort requires a record with status")
-        }
-        return status
     }
 
     private static func shouldPresentStoppedPanelStatus(for record: SessionRecord) -> Bool {
@@ -224,5 +245,63 @@ public struct SessionRegistry: Codable, Equatable, Sendable {
         // Stopped sessions should not keep rendering a live working spinner in
         // the panel header after the active sidebar entry disappears.
         return status.kind != .idle && status.kind != .working
+    }
+}
+
+private extension SessionRegistry {
+    enum CodingKeys: String, CodingKey {
+        case sessionsByID
+        case activeSessionIDByPanelID
+        case sessionOrder
+    }
+
+    static func normalizedSessionOrder(
+        _ sessionOrder: [String],
+        sessionsByID: [String: SessionRecord]
+    ) -> [String] {
+        let knownSessionIDs = Set(sessionsByID.keys)
+        var seenSessionIDs = Set<String>()
+        var normalizedOrder = sessionOrder.filter { sessionID in
+            guard knownSessionIDs.contains(sessionID) else {
+                return false
+            }
+            return seenSessionIDs.insert(sessionID).inserted
+        }
+
+        let missingSessionIDs = sessionsByID.values
+            .sorted { lhs, rhs in
+                if lhs.startedAt != rhs.startedAt {
+                    return lhs.startedAt < rhs.startedAt
+                }
+                return lhs.sessionID < rhs.sessionID
+            }
+            .map(\.sessionID)
+            .filter { seenSessionIDs.contains($0) == false }
+        normalizedOrder.append(contentsOf: missingSessionIDs)
+        return normalizedOrder
+    }
+}
+
+extension SessionRegistry {
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let sessionsByID = try container.decodeIfPresent([String: SessionRecord].self, forKey: .sessionsByID) ?? [:]
+        let activeSessionIDByPanelID = try container.decodeIfPresent(
+            [UUID: String].self,
+            forKey: .activeSessionIDByPanelID
+        ) ?? [:]
+        let sessionOrder = try container.decodeIfPresent([String].self, forKey: .sessionOrder) ?? []
+        self.init(
+            sessionsByID: sessionsByID,
+            activeSessionIDByPanelID: activeSessionIDByPanelID,
+            sessionOrder: sessionOrder
+        )
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(sessionsByID, forKey: .sessionsByID)
+        try container.encode(activeSessionIDByPanelID, forKey: .activeSessionIDByPanelID)
+        try container.encode(sessionOrder, forKey: .sessionOrder)
     }
 }

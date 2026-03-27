@@ -3,6 +3,12 @@ import CoreState
 import SwiftUI
 
 struct WorkspaceView: View {
+    enum WorkspaceTabTrailingAccessory: Equatable {
+        case closeButton
+        case badge(String)
+        case empty
+    }
+
     let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
@@ -17,8 +23,27 @@ struct WorkspaceView: View {
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
+    @State private var hoveredTabID: UUID?
+    @State private var hoveredTabCloseButtonID: UUID?
+    @State private var renamingTabID: UUID?
+    @State private var renameDraftTitle = ""
+    @State private var pendingWorkspaceTabClose: PendingWorkspaceTabClose?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+
+    nonisolated static func workspaceTabTrailingAccessory(
+        index: Int,
+        isHovered: Bool
+    ) -> WorkspaceTabTrailingAccessory {
+        if isHovered {
+            return .closeButton
+        }
+
+        guard let shortcutLabel = DisplayShortcutConfig.workspaceTabSelectionShortcutLabel(for: index + 1) else {
+            return .empty
+        }
+        return .badge(shortcutLabel)
+    }
 
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
         WorkspaceAgentTopBarModel(
@@ -34,6 +59,14 @@ struct WorkspaceView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
 
+            if let workspace = selectedWorkspace,
+               workspace.tabIDs.count > 1 {
+                workspaceTabBar(for: workspace)
+                Rectangle()
+                    .fill(ToastyTheme.hairline)
+                    .frame(height: 1)
+            }
+
             if let window = store.window(id: windowID) {
                 workspaceStack(for: window)
             } else {
@@ -41,12 +74,37 @@ struct WorkspaceView: View {
             }
         }
         .background(ToastyTheme.surfaceBackground)
+        .alert(
+            "Close this tab?",
+            isPresented: pendingWorkspaceTabCloseBinding,
+            presenting: pendingWorkspaceTabClose
+        ) { closeTarget in
+            Button("Cancel", role: .cancel) {
+                pendingWorkspaceTabClose = nil
+            }
+            Button("Close Tab", role: .destructive) {
+                confirmWorkspaceTabClose(closeTarget)
+            }
+        } message: { closeTarget in
+            Text(closeTarget.assessment.confirmationMessage)
+        }
         .onAppear {
             appIsActive = NSApplication.shared.isActive
             scheduleFocusedUnreadPanelClearIfNeeded()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleFocusedUnreadPanelClearIfNeeded()
+        }
+        .onChange(of: store.state.workspacesByID) { _, _ in
+            pruneTransientTabRenameState()
+            prunePendingWorkspaceTabCloseState()
+        }
+        .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
+            consumePendingWorkspaceTabRenameRequestIfNeeded()
+        }
+        .onChange(of: selectedWorkspace?.id) { _, _ in
+            pruneTransientTabRenameState()
+            prunePendingWorkspaceTabCloseState()
         }
         .onDisappear {
             focusedUnreadClearTask?.cancel()
@@ -115,6 +173,50 @@ struct WorkspaceView: View {
         .accessibilityIdentifier("topbar.container")
     }
 
+    private func workspaceTabBar(for workspace: WorkspaceState) -> some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                        workspaceTabRow(
+                            workspaceID: workspace.id,
+                            tab: tab,
+                            index: index,
+                            isSelected: workspace.resolvedSelectedTabID == tab.id
+                        )
+                    }
+                }
+                .padding(
+                    .leading,
+                    sidebarVisible
+                        ? ToastyTheme.workspaceTabLeadingPaddingWithSidebar
+                        : ToastyTheme.topBarLeadingPaddingWithoutSidebar
+                )
+                .padding(.vertical, 4)
+            }
+
+            Button(action: createTabInSelectedWorkspace) {
+                Image(systemName: "plus")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(ToastyTheme.inactiveText)
+                    .frame(width: 20, height: 20)
+                    .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+                    )
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 12)
+            .disabled(selectedWorkspace == nil)
+            .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
+            .accessibilityIdentifier("workspace.tabs.new")
+        }
+        .frame(height: ToastyTheme.workspaceTabBarHeight)
+        .background(ToastyTheme.chromeBackground)
+        .accessibilityIdentifier("workspace.tabs.container")
+    }
+
     private func split(orientation: SplitOrientation) {
         guard let workspaceID = selectedWorkspace?.id else { return }
         terminalRuntimeContext?.splitFocusedSlot(workspaceID: workspaceID, orientation: orientation)
@@ -140,6 +242,11 @@ struct WorkspaceView: View {
         return {
             _ = store.createWorkspaceFromCommand(preferredWindowID: windowID)
         }
+    }
+
+    private func createTabInSelectedWorkspace() {
+        cancelTabRename()
+        _ = store.createWorkspaceTabFromCommand(preferredWindowID: windowID)
     }
 
     private func workspaceStack(for window: WindowState) -> some View {
@@ -168,18 +275,51 @@ struct WorkspaceView: View {
 
     @ViewBuilder
     private func workspaceContent(for workspace: WorkspaceState, isSelected: Bool) -> some View {
-        let terminalShortcutNumbersByPanelID = workspace.terminalShortcutNumbersByPanelID(
-            limit: DisplayShortcutConfig.maxPanelFocusShortcutCount
+        ZStack {
+            ForEach(workspace.orderedTabs) { tab in
+                let isSelectedTab = workspace.resolvedSelectedTabID == tab.id
+                workspaceTabContent(
+                    workspace: workspace,
+                    tab: tab,
+                    isWorkspaceSelected: isSelected,
+                    isTabSelected: isSelectedTab
+                )
+                .opacity(isSelectedTab ? 1 : 0)
+                .allowsHitTesting(isSelected && isSelectedTab)
+                .accessibilityHidden(!(isSelected && isSelectedTab))
+                .zIndex(isSelectedTab ? 1 : 0)
+            }
+        }
+        // Keep the workspace subtree mounted across focused-layout toggles so
+        // terminal hosts preserve their runtime state instead of remounting.
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private func workspaceTabContent(
+        workspace: WorkspaceState,
+        tab: WorkspaceTabState,
+        isWorkspaceSelected: Bool,
+        isTabSelected: Bool
+    ) -> some View {
+        let terminalShortcutNumbersByPanelID = terminalShortcutNumbersByPanelID(
+            for: tab,
+            isSelectedTab: isWorkspaceSelected && isTabSelected
         )
         let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus] = Dictionary(
-            uniqueKeysWithValues: workspace.panels.keys.compactMap { panelID in
+            uniqueKeysWithValues: tab.panels.keys.compactMap { panelID in
                 guard let status = sessionRuntimeStore.panelStatus(for: panelID) else {
                     return nil
                 }
                 return (panelID, status)
             }
         )
-        let renderedLayout = workspace.renderedLayout
+        let renderedLayout = WorkspaceSplitTree(root: tab.layoutTree).renderedLayout(
+            workspaceID: workspace.id,
+            focusedPanelModeActive: tab.focusedPanelModeActive,
+            focusedPanelID: tab.focusedPanelID
+        )
+
         GeometryReader { geometry in
             let projection = renderedLayout.projectLayout(
                 in: LayoutFrame(
@@ -194,13 +334,15 @@ struct WorkspaceView: View {
                 ForEach(projection.slots) { placement in
                     SlotPlacementView(
                         placement: placement,
-                        workspace: workspace,
-                        isWorkspaceSelected: isSelected,
+                        workspaceID: workspace.id,
+                        tab: tab,
+                        isWorkspaceSelected: isWorkspaceSelected,
+                        isTabSelected: isTabSelected,
                         store: store,
                         terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
-                        globalFontPoints: store.state.globalTerminalFontPoints,
+                        windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
                         appIsActive: appIsActive,
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
@@ -225,9 +367,6 @@ struct WorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
         }
-        // Keep the workspace subtree mounted across focused-layout toggles so
-        // terminal hosts preserve their runtime state instead of remounting.
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     @ViewBuilder
@@ -297,6 +436,450 @@ struct WorkspaceView: View {
 
     private var selectedWorkspace: WorkspaceState? {
         store.selectedWorkspace(in: windowID)
+    }
+
+    private func terminalShortcutNumbersByPanelID(
+        for tab: WorkspaceTabState,
+        isSelectedTab: Bool
+    ) -> [UUID: Int] {
+        guard isSelectedTab else { return [:] }
+        let terminalPanelIDs = tab.layoutTree.allSlotInfos.compactMap { slot -> UUID? in
+            guard case .terminal = tab.panels[slot.panelID] else {
+                return nil
+            }
+            return slot.panelID
+        }
+
+        return Dictionary(
+            uniqueKeysWithValues: terminalPanelIDs
+                .prefix(DisplayShortcutConfig.maxPanelFocusShortcutCount)
+                .enumerated()
+                .map { offset, panelID in
+                    (panelID, offset + 1)
+                }
+        )
+    }
+
+    private func workspaceTabRow(
+        workspaceID: UUID,
+        tab: WorkspaceTabState,
+        index: Int,
+        isSelected: Bool
+    ) -> some View {
+        let hasUnread = tab.unreadPanelIDs.isEmpty == false
+        let isRenaming = renamingTabID == tab.id
+        let isHovered = isRenaming == false && hoveredTabID == tab.id
+        let colors = resolveTabColors(
+            isSelected: isSelected,
+            isHovered: isHovered,
+            hasUnread: hasUnread,
+            appIsActive: appIsActive
+        )
+
+        return ZStack(alignment: .trailing) {
+            if isRenaming {
+                workspaceTabRenameRow(
+                    workspaceID: workspaceID,
+                    tab: tab,
+                    colors: colors,
+                    hasUnread: hasUnread
+                )
+            } else {
+                Button {
+                    if renamingTabID != nil {
+                        cancelTabRename()
+                    }
+                    _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
+                } label: {
+                    workspaceTabChrome(colors: colors) {
+                        HStack(spacing: 5) {
+                            workspaceTabTitleContent(
+                                tab: tab,
+                                textColor: colors.text,
+                                hasUnread: hasUnread
+                            )
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            workspaceTabTrailingContent(
+                                index: index,
+                                isSelected: isSelected,
+                                isHovered: isHovered
+                            )
+                            .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tab.displayTitle)
+                .help(tab.displayTitle)
+                .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
+                .animation(.easeInOut(duration: 0.15), value: isSelected)
+                .animation(.easeOut(duration: 0.1), value: isHovered)
+            }
+
+            if isHovered {
+                workspaceTabCloseButton(workspaceID: workspaceID, tab: tab)
+                    .padding(.trailing, 10)
+            }
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+        }
+        .onHover { hovering in
+            guard isRenaming == false else { return }
+            if hovering {
+                hoveredTabID = tab.id
+            } else if hoveredTabID == tab.id {
+                hoveredTabID = nil
+                if hoveredTabCloseButtonID == tab.id {
+                    hoveredTabCloseButtonID = nil
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceTabTitleContent(
+        tab: WorkspaceTabState,
+        textColor: Color,
+        hasUnread: Bool
+    ) -> some View {
+        HStack(spacing: 5) {
+            if hasUnread {
+                Circle()
+                    .fill(ToastyTheme.workspaceTabUnreadDot)
+                    .frame(
+                        width: ToastyTheme.workspaceTabUnreadDotDiameter,
+                        height: ToastyTheme.workspaceTabUnreadDotDiameter
+                    )
+            }
+
+            Text(tab.displayTitle)
+                .font(ToastyTheme.fontWorkspaceTab)
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+    }
+
+    private func workspaceTabRenameRow(
+        workspaceID: UUID,
+        tab: WorkspaceTabState,
+        colors: (background: Color, border: Color, text: Color),
+        hasUnread: Bool
+    ) -> some View {
+        workspaceTabChrome(colors: colors) {
+            HStack(spacing: 5) {
+                if hasUnread {
+                    Circle()
+                        .fill(ToastyTheme.workspaceTabUnreadDot)
+                        .frame(
+                            width: ToastyTheme.workspaceTabUnreadDotDiameter,
+                            height: ToastyTheme.workspaceTabUnreadDotDiameter
+                        )
+                }
+
+                WorkspaceRenameTextField(
+                    text: $renameDraftTitle,
+                    itemID: tab.id,
+                    placeholder: "Tab name",
+                    font: .monospacedSystemFont(ofSize: 11, weight: .medium),
+                    accessibilityID: renameTextFieldAccessibilityID(for: tab.id),
+                    onSubmit: {
+                        commitTabRename(workspaceID: workspaceID, tabID: tab.id)
+                    },
+                    onCancel: {
+                        cancelTabRenameAndRestoreFocus()
+                    }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Color.clear
+                    .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, height: 16)
+            }
+        }
+        .accessibilityIdentifier("workspace.tab.rename.container.\(tab.id.uuidString)")
+    }
+
+    private func workspaceTabChrome<Content: View>(
+        colors: (background: Color, border: Color, text: Color),
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .padding(.horizontal, 10)
+            .frame(width: ToastyTheme.workspaceTabWidth, height: ToastyTheme.workspaceTabHeight)
+            .background(
+                colors.background,
+                in: RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
+                    .stroke(colors.border, lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+    }
+
+    private func resolveTabColors(
+        isSelected: Bool,
+        isHovered: Bool,
+        hasUnread: Bool,
+        appIsActive: Bool
+    ) -> (background: Color, border: Color, text: Color) {
+        if isSelected {
+            return (
+                ToastyTheme.workspaceTabSelectedBackground,
+                ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: appIsActive),
+                ToastyTheme.primaryText
+            )
+        }
+
+        if isHovered {
+            return (
+                ToastyTheme.workspaceTabHoverBackground,
+                ToastyTheme.workspaceTabHoverBorder,
+                ToastyTheme.workspaceTabHoverText
+            )
+        }
+
+        if hasUnread {
+            return (
+                ToastyTheme.workspaceTabUnreadBackground,
+                ToastyTheme.workspaceTabUnreadBorder,
+                ToastyTheme.workspaceTabUnreadText
+            )
+        }
+
+        return (
+            ToastyTheme.workspaceTabUnselectedBackground,
+            ToastyTheme.workspaceTabUnselectedBorder,
+            ToastyTheme.workspaceTabUnselectedText
+        )
+    }
+
+    @ViewBuilder
+    private func workspaceTabTrailingContent(
+        index: Int,
+        isSelected: Bool,
+        isHovered: Bool
+    ) -> some View {
+        switch Self.workspaceTabTrailingAccessory(index: index, isHovered: isHovered) {
+        case .closeButton:
+            Color.clear.frame(height: 16)
+        case .badge(let shortcutLabel):
+            Text(shortcutLabel)
+                .font(ToastyTheme.fontWorkspaceTabBadge)
+                .foregroundStyle(
+                    isSelected
+                        ? ToastyTheme.workspaceTabBadgeSelectedText
+                        : ToastyTheme.workspaceTabBadgeUnselectedText
+                )
+                .transition(.opacity)
+        case .empty:
+            EmptyView()
+        }
+    }
+
+    private func workspaceTabCloseButton(
+        workspaceID: UUID,
+        tab: WorkspaceTabState
+    ) -> some View {
+        Button {
+            closeWorkspaceTab(workspaceID: workspaceID, tabID: tab.id)
+        } label: {
+            Text("×")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(
+                    hoveredTabCloseButtonID == tab.id
+                        ? ToastyTheme.workspaceTabCloseButtonHover
+                        : ToastyTheme.workspaceTabCloseButton
+                )
+                .frame(width: 16, height: 16)
+                .background(
+                    ToastyTheme.workspaceTabCloseBackground,
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close \(tab.displayTitle)")
+        .onHover { hovering in
+            if hovering {
+                hoveredTabCloseButtonID = tab.id
+            } else if hoveredTabCloseButtonID == tab.id {
+                hoveredTabCloseButtonID = nil
+            }
+        }
+        .help("Close \(tab.displayTitle)")
+        .accessibilityIdentifier("workspace.tab.close.\(tab.id.uuidString)")
+        .transition(.opacity)
+        .contextMenu {
+            workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceTabContextMenu(workspaceID: UUID, tab: WorkspaceTabState) -> some View {
+        Button(ToasttyKeyboardShortcuts.renameTab.menuTitle("Rename Tab")) {
+            beginTabRename(tab)
+        }
+
+        if tab.customTitle != nil {
+            Button("Reset Tab Title") {
+                resetWorkspaceTabTitle(workspaceID: workspaceID, tabID: tab.id)
+            }
+        }
+
+        Button("Close Tab", role: .destructive) {
+            closeWorkspaceTab(workspaceID: workspaceID, tabID: tab.id)
+        }
+    }
+
+    private func beginTabRename(_ tab: WorkspaceTabState) {
+        clearTabHoverState(for: tab.id)
+        renamingTabID = tab.id
+        renameDraftTitle = tab.displayTitle
+    }
+
+    private func commitTabRename(workspaceID: UUID, tabID: UUID) {
+        guard let workspace = store.state.workspacesByID[workspaceID],
+              let tab = workspace.tab(id: tabID) else {
+            cancelTabRenameAndRestoreFocus()
+            return
+        }
+
+        let trimmedTitle = renameDraftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedTitle.isEmpty == false else {
+            renameDraftTitle = tab.displayTitle
+            cancelTabRenameAndRestoreFocus()
+            return
+        }
+
+        _ = store.send(.setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: trimmedTitle))
+        cancelTabRenameAndRestoreFocus()
+    }
+
+    private func resetWorkspaceTabTitle(workspaceID: UUID, tabID: UUID) {
+        _ = store.send(.setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: nil))
+        if renamingTabID == tabID {
+            cancelTabRenameAndRestoreFocus()
+        }
+    }
+
+    private func closeWorkspaceTab(workspaceID: UUID, tabID: UUID) {
+        clearTabHoverState(for: tabID)
+        if renamingTabID == tabID {
+            cancelTabRename()
+        }
+        guard let workspace = store.state.workspacesByID[workspaceID],
+              let tab = workspace.tab(id: tabID) else {
+            pendingWorkspaceTabClose = nil
+            return
+        }
+
+        let closeAssessment = WorkspaceTabCloseConfirmation.assess(
+            tab: tab,
+            shouldBypassConfirmation: shouldBypassInteractiveConfirmation
+        ) { panelID in
+            terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+        }
+
+        guard closeAssessment.requiresConfirmation else {
+            pendingWorkspaceTabClose = nil
+            _ = store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+            return
+        }
+
+        pendingWorkspaceTabClose = PendingWorkspaceTabClose(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            assessment: closeAssessment
+        )
+    }
+
+    private func cancelTabRename() {
+        renamingTabID = nil
+        renameDraftTitle = ""
+    }
+
+    private func cancelTabRenameAndRestoreFocus() {
+        cancelTabRename()
+        scheduleWorkspaceSlotFocusRestore()
+    }
+
+    private func scheduleWorkspaceSlotFocusRestore() {
+        guard let workspaceID = selectedWorkspace?.id else { return }
+        terminalRuntimeContext?.scheduleWorkspaceFocusRestore(
+            workspaceID: workspaceID,
+            avoidStealingKeyboardFocus: false
+        )
+    }
+
+    private func pruneTransientTabRenameState() {
+        guard let renamingTabID else { return }
+        guard let workspace = selectedWorkspace,
+              workspace.tabIDs.count > 1,
+              workspace.tabsByID[renamingTabID] != nil else {
+            cancelTabRename()
+            return
+        }
+    }
+
+    private func prunePendingWorkspaceTabCloseState() {
+        guard let pendingWorkspaceTabClose else { return }
+        guard let workspace = store.state.workspacesByID[pendingWorkspaceTabClose.workspaceID],
+              workspace.tab(id: pendingWorkspaceTabClose.tabID) != nil else {
+            self.pendingWorkspaceTabClose = nil
+            return
+        }
+    }
+
+    private var pendingWorkspaceTabCloseBinding: Binding<Bool> {
+        Binding(
+            get: { pendingWorkspaceTabClose != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingWorkspaceTabClose = nil
+                }
+            }
+        )
+    }
+
+    private var shouldBypassInteractiveConfirmation: Bool {
+        let processInfo = ProcessInfo.processInfo
+        return AutomationConfig.shouldBypassInteractiveConfirmation(
+            arguments: processInfo.arguments,
+            environment: processInfo.environment
+        )
+    }
+
+    private func confirmWorkspaceTabClose(_ closeTarget: PendingWorkspaceTabClose) {
+        pendingWorkspaceTabClose = nil
+        _ = store.send(.closeWorkspaceTab(workspaceID: closeTarget.workspaceID, tabID: closeTarget.tabID))
+    }
+
+    private func clearTabHoverState(for tabID: UUID) {
+        if hoveredTabID == tabID {
+            hoveredTabID = nil
+        }
+        if hoveredTabCloseButtonID == tabID {
+            hoveredTabCloseButtonID = nil
+        }
+    }
+
+    private func consumePendingWorkspaceTabRenameRequestIfNeeded() {
+        guard let request = store.consumePendingWorkspaceTabRenameRequest(windowID: windowID),
+              let workspace = selectedWorkspace,
+              workspace.id == request.workspaceID,
+              workspace.orderedTabs.count > 1,
+              let tab = workspace.tab(id: request.tabID) else {
+            return
+        }
+
+        beginTabRename(tab)
+    }
+
+    private func renameTextFieldAccessibilityID(for tabID: UUID) -> String {
+        "workspace.tab.rename.\(tabID.uuidString)"
     }
 
     private func topBarButton(
@@ -380,6 +963,14 @@ struct WorkspaceView: View {
     }
 }
 
+private struct PendingWorkspaceTabClose: Identifiable {
+    let workspaceID: UUID
+    let tabID: UUID
+    let assessment: WorkspaceTabCloseConfirmationAssessment
+
+    var id: UUID { tabID }
+}
+
 struct WorkspaceAgentTopBarModel: Equatable {
     static let addAgentsTitle = "Add Agents…"
 
@@ -424,13 +1015,15 @@ private struct SelectedWorkspaceUnreadSignature: Equatable {
 
 private struct SlotPlacementView: View {
     let placement: LayoutSlotPlacement
-    let workspace: WorkspaceState
+    let workspaceID: UUID
+    let tab: WorkspaceTabState
     let isWorkspaceSelected: Bool
+    let isTabSelected: Bool
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
-    let globalFontPoints: Double
+    let windowFontPoints: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
@@ -438,18 +1031,19 @@ private struct SlotPlacementView: View {
 
     var body: some View {
         Group {
-            if let panelState = workspace.panels[placement.panelID] {
+            if let panelState = tab.panels[placement.panelID] {
                 PanelCardView(
-                    workspaceID: workspace.id,
+                    workspaceID: workspaceID,
                     panelID: placement.panelID,
                     panelState: panelState,
                     isWorkspaceSelected: isWorkspaceSelected,
-                    focusedPanelID: workspace.focusedPanelID,
-                    hasUnreadNotification: workspace.unreadPanelIDs.contains(placement.panelID),
+                    isTabSelected: isTabSelected,
+                    focusedPanelID: tab.focusedPanelID,
+                    hasUnreadNotification: tab.unreadPanelIDs.contains(placement.panelID),
                     panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
                     terminalDisplayTitleOverride: terminalRuntimeRegistry.panelDisplayTitleOverride(for: placement.panelID),
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
-                    globalFontPoints: globalFontPoints,
+                    windowFontPoints: windowFontPoints,
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     store: store,
@@ -480,12 +1074,13 @@ private struct PanelCardView: View {
     let panelID: UUID
     let panelState: PanelState
     let isWorkspaceSelected: Bool
+    let isTabSelected: Bool
     let focusedPanelID: UUID?
     let hasUnreadNotification: Bool
     let panelSessionStatus: WorkspaceSessionStatus?
     let terminalDisplayTitleOverride: String?
     let shortcutNumber: Int?
-    let globalFontPoints: Double
+    let windowFontPoints: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     @ObservedObject var store: AppStore
@@ -496,7 +1091,7 @@ private struct PanelCardView: View {
         // Only the selected workspace may present a focused terminal host.
         // Hidden-but-mounted workspaces still render for background runtime
         // updates, but they must not retain keyboard focus or route shortcuts.
-        isWorkspaceSelected && focusedPanelID == panelID
+        isWorkspaceSelected && isTabSelected && focusedPanelID == panelID
     }
 
     var body: some View {
@@ -541,7 +1136,7 @@ private struct PanelCardView: View {
                     panelID: panelID,
                     terminalState: terminalState,
                     focused: isFocused,
-                    globalFontPoints: globalFontPoints,
+                    windowFontPoints: windowFontPoints,
                     runtimeContext: terminalRuntimeContext
                 )
                 .overlay {

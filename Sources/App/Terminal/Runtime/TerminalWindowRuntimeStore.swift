@@ -101,10 +101,12 @@ final class TerminalWindowRuntimeStore {
         }
     }
 
-    func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
-        for runtime in windowRuntimesByID.values {
-            runtime.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+    func applyGhosttyFontChange(windowID: UUID, from previousPoints: Double, to nextPoints: Double) {
+        guard previousPoints != nextPoints,
+              let runtime = windowRuntimesByID[windowID] else {
+            return
         }
+        runtime.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT
@@ -253,8 +255,8 @@ final class TerminalWindowRuntimeStore {
     private func workspaceOwnsPanel(workspaceID: UUID, panelID: UUID, state: AppState?) -> Bool {
         guard let state,
               let workspace = state.workspacesByID[workspaceID],
-              workspace.panels[panelID] != nil,
-              workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
+              workspace.panelState(for: panelID) != nil,
+              workspace.slotID(containingPanelID: panelID) != nil else {
             return false
         }
         return true
@@ -270,13 +272,7 @@ final class TerminalWindowRuntimeStore {
     private func liveTerminalPanelIDsByWorkspaceID(in state: AppState) -> [UUID: Set<UUID>] {
         state.workspacesByID.reduce(into: [:]) { result, entry in
             let (workspaceID, workspace) = entry
-            let panelIDs = workspace.panels.reduce(into: Set<UUID>()) { ids, panelEntry in
-                let (panelID, panelState) = panelEntry
-                if case .terminal = panelState {
-                    ids.insert(panelID)
-                }
-            }
-            result[workspaceID] = panelIDs
+            result[workspaceID] = workspace.allTerminalPanelIDs
         }
     }
 

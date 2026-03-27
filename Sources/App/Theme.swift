@@ -47,6 +47,24 @@ enum ToastyTheme {
     static let panelHeaderReadyDivider = Color(hex: 0x5BA08A)
     static let panelHeaderErrorBackground = Color(hex: 0x5BA08A, alpha: 0.14)
     static let panelHeaderErrorDivider = Color(hex: 0x5BA08A)
+    static let workspaceTabSelectedBackground = Color(hex: 0x222222)
+    static let workspaceTabSelectedBorder = accent
+    static let workspaceTabUnselectedBackground = Color(hex: 0x161616)
+    static let workspaceTabUnselectedBorder = Color(hex: 0x1F1F1F)
+    static let workspaceTabUnselectedText = Color(hex: 0xA0A0A0)
+    static let workspaceTabHoverBackground = Color(hex: 0x1C1C1C)
+    static let workspaceTabHoverBorder = Color(hex: 0x2A2A2A)
+    static let workspaceTabHoverText = Color(hex: 0xB8B8B8)
+    static let workspaceTabUnreadBackground = Color(hex: 0x161618)
+    static let workspaceTabUnreadBorder = Color(hex: 0x1F2522)
+    static let workspaceTabUnreadText = Color(hex: 0xB8B8B8)
+    static let workspaceTabUnreadDot = Color(hex: 0x5BA08A)
+    static let workspaceTabUnreadDotDiameter: CGFloat = 7
+    static let workspaceTabBadgeSelectedText = Color(hex: 0x888888)
+    static let workspaceTabBadgeUnselectedText = Color(hex: 0x555555)
+    static let workspaceTabCloseBackground = Color(hex: 0x2A2A2A)
+    static let workspaceTabCloseButton = Color(hex: 0x888888)
+    static let workspaceTabCloseButtonHover = Color(hex: 0xCCCCCC)
 
     // Empty state
     static let emptyStateToastCrust = Color(hex: 0x4A3425)
@@ -63,6 +81,12 @@ enum ToastyTheme {
     // Slightly taller than the native compact titlebar so the custom
     // title/buttons don't sit flush against the window edge.
     static let topBarHeight: CGFloat = 32
+    static let workspaceTabBarHeight: CGFloat = 34
+    static let workspaceTabWidth: CGFloat = 190
+    static let workspaceTabHeight: CGFloat = 26
+    static let workspaceTabCornerRadius: CGFloat = 6
+    static let workspaceTabTrailingSlotWidth: CGFloat = 24
+    static let workspaceTabLeadingPaddingWithSidebar: CGFloat = 6
     static let topBarContentTopPadding: CGFloat = 2
     static let fontHUDTopPadding: CGFloat = topBarHeight + 12
     /// Standard macOS compact titlebar height on current supported macOS releases.
@@ -76,6 +100,8 @@ enum ToastyTheme {
     static let fontTitle = Font.system(size: 13, weight: .semibold, design: .rounded)
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)
     static let fontSubtext = Font.system(size: 11, weight: .medium)
+    static let fontWorkspaceTab = Font.system(size: 11, weight: .medium, design: .monospaced)
+    static let fontWorkspaceTabBadge = Font.system(size: 9, weight: .regular, design: .monospaced)
     static let fontMonoHeader = Font.system(size: 12, weight: .semibold, design: .monospaced)
     static let fontMonoTerminalSlotTitle = Font.system(size: 12, weight: .regular, design: .monospaced)
 
@@ -190,6 +216,10 @@ enum ToastyTheme {
             let base = panelHeaderUnreadBackgroundColor(for: reason)
             return appIsActive ? base : base.opacity(0.72)
         }
+    }
+
+    static func workspaceTabSelectedBorderColor(appIsActive: Bool) -> Color {
+        appIsActive ? workspaceTabSelectedBorder : workspaceTabSelectedBorder.opacity(0.5)
     }
 
     static func panelHeaderDividerColor(

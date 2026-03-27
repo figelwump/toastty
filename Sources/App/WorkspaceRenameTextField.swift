@@ -1,9 +1,12 @@
 import AppKit
 import SwiftUI
 
+// Shared AppKit-backed inline rename field used for workspace and tab titles.
 struct WorkspaceRenameTextField: NSViewRepresentable {
     @Binding var text: String
-    let workspaceID: UUID
+    let itemID: UUID
+    let placeholder: String
+    let font: NSFont
     let accessibilityID: String
     let onSubmit: () -> Void
     let onCancel: () -> Void
@@ -19,12 +22,12 @@ struct WorkspaceRenameTextField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSTextField {
         let textField = NSTextField(string: text)
         textField.delegate = context.coordinator
-        textField.placeholderString = "Workspace name"
+        textField.placeholderString = placeholder
         textField.isBordered = false
         textField.isBezeled = false
         textField.drawsBackground = false
         textField.focusRingType = .none
-        textField.font = .systemFont(ofSize: 12, weight: .semibold)
+        textField.font = font
         textField.textColor = NSColor(ToastyTheme.primaryText)
         textField.maximumNumberOfLines = 1
         textField.lineBreakMode = .byTruncatingTail
@@ -43,7 +46,7 @@ struct WorkspaceRenameTextField: NSViewRepresentable {
 
         context.coordinator.synchronizeDisplayedText(with: text, in: textField)
         context.coordinator.requestInitialSelection(
-            for: workspaceID,
+            for: itemID,
             in: textField
         )
     }
@@ -57,7 +60,7 @@ struct WorkspaceRenameTextField: NSViewRepresentable {
         private var text: Binding<String>
         private var onSubmit: () -> Void
         private var onCancel: () -> Void
-        private var selectionScheduledForWorkspaceID: UUID?
+        private var selectionScheduledForItemID: UUID?
         private var pendingSelectionRequestID: UUID?
 
         init(
@@ -80,17 +83,17 @@ struct WorkspaceRenameTextField: NSViewRepresentable {
             self.onCancel = onCancel
         }
 
-        func requestInitialSelection(for workspaceID: UUID, in textField: NSTextField) {
-            guard selectionScheduledForWorkspaceID != workspaceID else { return }
+        func requestInitialSelection(for itemID: UUID, in textField: NSTextField) {
+            guard selectionScheduledForItemID != itemID else { return }
 
-            selectionScheduledForWorkspaceID = workspaceID
+            selectionScheduledForItemID = itemID
             let requestID = UUID()
             pendingSelectionRequestID = requestID
             attemptFocusAndSelection(in: textField, requestID: requestID, remainingAttempts: 12)
         }
 
         func resetSelectionState() {
-            selectionScheduledForWorkspaceID = nil
+            selectionScheduledForItemID = nil
             pendingSelectionRequestID = nil
         }
 

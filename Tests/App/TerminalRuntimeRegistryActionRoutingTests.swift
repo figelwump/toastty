@@ -313,6 +313,54 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
             try StateValidator.validate(store.state)
         }
     }
+
+    func testClosePanelClosesExitedPanelInBackgroundTabWithoutChangingSelectedTab() async throws {
+        try await MainActor.run {
+            var state = AppState.bootstrap()
+            let reducer = AppReducer()
+            let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+
+            XCTAssertTrue(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+            let workspaceWithTwoTabs = try XCTUnwrap(state.workspacesByID[workspaceID])
+            let originalTabID = try XCTUnwrap(workspaceWithTwoTabs.tabIDs.first)
+            let backgroundTabID = try XCTUnwrap(workspaceWithTwoTabs.tabIDs.last)
+            let backgroundTab = try XCTUnwrap(workspaceWithTwoTabs.tab(id: backgroundTabID))
+            let backgroundPanelToClose = try XCTUnwrap(backgroundTab.focusedPanelID)
+
+            XCTAssertTrue(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+
+            let store = AppStore(state: state, persistTerminalFontPreference: false)
+            let registry = TerminalRuntimeRegistry()
+            registry.bind(store: store)
+            let focusedPanelCommandController = FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: registry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            )
+
+            XCTAssertTrue(
+                registry.handleRuntimeMetadataAction(
+                    .showChildExited(exitCode: 0),
+                    workspaceID: workspaceID,
+                    panelID: backgroundPanelToClose,
+                    state: store.state,
+                    store: store
+                )
+            )
+
+            withExtendedLifetime(focusedPanelCommandController) {
+                let closeResult = focusedPanelCommandController.closePanel(panelID: backgroundPanelToClose)
+
+                XCTAssertEqual(closeResult, .closed)
+                let updatedWorkspace = try? XCTUnwrap(store.state.workspacesByID[workspaceID])
+                XCTAssertEqual(updatedWorkspace?.selectedTabID, originalTabID)
+                XCTAssertNil(updatedWorkspace?.tab(id: backgroundTabID))
+                XCTAssertNil(updatedWorkspace?.panelState(for: backgroundPanelToClose))
+            }
+            try StateValidator.validate(store.state)
+        }
+    }
 }
 
 @MainActor

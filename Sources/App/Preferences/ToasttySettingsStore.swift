@@ -2,7 +2,6 @@ import CoreState
 import Foundation
 
 struct ToasttySettings: Equatable {
-    var terminalFontSizePoints: Double? = nil
     /// One-way app-wide latch for sidebar defaults after the first successful agent launch.
     var hasEverLaunchedAgent = false
 }
@@ -12,23 +11,19 @@ enum ToasttySettingsStore {
     private static let hasEverLaunchedAgentKey = "toastty.hasEverLaunchedAgent"
 
     static func load(userDefaults: UserDefaults = ToasttyAppDefaults.current) -> ToasttySettings {
-        let terminalFontSizePoints = loadTerminalFontSizePoints(userDefaults: userDefaults)
         return ToasttySettings(
-            terminalFontSizePoints: terminalFontSizePoints,
             hasEverLaunchedAgent: loadHasEverLaunchedAgent(userDefaults: userDefaults)
         )
     }
 
-    static func persistTerminalFontSizePoints(
-        _ points: Double?,
+    static func legacyTerminalFontSizePoints(
         userDefaults: UserDefaults = ToasttyAppDefaults.current
-    ) {
-        let clampedPoints = points.map(AppState.clampedTerminalFontPoints)
-        if let clampedPoints {
-            userDefaults.set(clampedPoints, forKey: terminalFontSizeKey)
-        } else {
-            userDefaults.removeObject(forKey: terminalFontSizeKey)
-        }
+    ) -> Double? {
+        loadTerminalFontSizePoints(userDefaults: userDefaults)
+    }
+
+    static func clearLegacyTerminalFontSizePoints(userDefaults: UserDefaults = ToasttyAppDefaults.current) {
+        userDefaults.removeObject(forKey: terminalFontSizeKey)
     }
 
     static func persistHasEverLaunchedAgent(

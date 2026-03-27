@@ -146,32 +146,25 @@ final class SessionRuntimeStore: ObservableObject {
     }
 
     func workspaceStatuses(for workspaceID: UUID) -> [WorkspaceSessionStatus] {
-        let statuses = sessionRegistry.workspaceStatuses(for: workspaceID)
-        guard let workspace = store?.state.workspacesByID[workspaceID] else {
-            return statuses
-        }
-
-        let displayOrder = Dictionary(
-            uniqueKeysWithValues: workspace.terminalPanelIDsInDisplayOrder.enumerated().map { offset, panelID in
-                (panelID, offset)
-            }
-        )
-
-        return statuses.sorted { lhs, rhs in
-            let lhsOrder = displayOrder[lhs.panelID] ?? Int.max
-            let rhsOrder = displayOrder[rhs.panelID] ?? Int.max
-            if lhsOrder != rhsOrder {
-                return lhsOrder < rhsOrder
-            }
-            if lhs.updatedAt != rhs.updatedAt {
-                return lhs.updatedAt > rhs.updatedAt
-            }
-            return lhs.sessionID < rhs.sessionID
-        }
+        sessionRegistry.workspaceStatuses(for: workspaceID)
     }
 
     func panelStatus(for panelID: UUID) -> WorkspaceSessionStatus? {
         sessionRegistry.panelStatus(for: panelID)
+    }
+
+    func activePanelIDs(matching kinds: Set<SessionStatusKind>) -> Set<UUID> {
+        Set(
+            sessionRegistry.activeSessionIDByPanelID.compactMap { panelID, sessionID in
+                guard let record = sessionRegistry.sessionsByID[sessionID],
+                      record.isActive,
+                      let status = record.status,
+                      kinds.contains(status.kind) else {
+                    return nil
+                }
+                return panelID
+            }
+        )
     }
 
     func preferredUnreadStatusPanelID(in workspace: WorkspaceState) -> UUID? {
@@ -198,7 +191,7 @@ final class SessionRuntimeStore: ObservableObject {
         var nextRegistry = sessionRegistry
 
         for record in Array(nextRegistry.sessionsByID.values) where record.isActive {
-            guard let location = Self.locatePanel(record.panelID, in: state) else {
+            guard let location = state.workspaceSelection(containingPanelID: record.panelID) else {
                 logSessionStop(record, reason: .panelRemovedFromAppState, at: now)
                 nextRegistry.stopSession(sessionID: record.sessionID, at: now)
                 continue
@@ -395,21 +388,6 @@ final class SessionRuntimeStore: ObservableObject {
         isApplicationActive() && isPanelCurrentlyFocused(record.panelID, state: state)
     }
 
-    private static func locatePanel(
-        _ panelID: UUID,
-        in state: AppState
-    ) -> (windowID: UUID, workspaceID: UUID)? {
-        for window in state.windows {
-            for workspaceID in window.workspaceIDs {
-                guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                if workspace.panels[panelID] != nil {
-                    return (window.id, workspaceID)
-                }
-            }
-        }
-        return nil
-    }
-
     private func isActionableStatusKind(_ kind: SessionStatusKind) -> Bool {
         kind == .needsApproval || kind == .ready || kind == .error
     }
@@ -446,7 +424,7 @@ final class SessionRuntimeStore: ObservableObject {
         }
         return DesktopNotificationContext(
             workspaceTitle: workspace.title,
-            panelLabel: workspace.panels[record.panelID]?.notificationLabel
+            panelLabel: workspace.panelState(for: record.panelID)?.notificationLabel
         )
     }
 

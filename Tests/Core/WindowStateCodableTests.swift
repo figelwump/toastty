@@ -11,7 +11,24 @@ struct WindowStateCodableTests {
             frame: CGRectCodable(x: 12, y: 24, width: 1280, height: 800),
             workspaceIDs: [workspaceID],
             selectedWorkspaceID: workspaceID,
-            sidebarVisible: false
+            sidebarVisible: false,
+            terminalFontSizePointsOverride: 17.5
+        )
+
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(WindowState.self, from: data)
+
+        #expect(decoded == original)
+    }
+
+    @Test
+    func emptyWindowStateRoundTripsThroughCodable() throws {
+        let original = WindowState(
+            id: UUID(),
+            frame: CGRectCodable(x: 32, y: 64, width: 1024, height: 768),
+            workspaceIDs: [],
+            selectedWorkspaceID: nil,
+            terminalFontSizePointsOverride: 16
         )
 
         let data = try JSONEncoder().encode(original)
@@ -41,6 +58,7 @@ struct WindowStateCodableTests {
         #expect(decoded.workspaceIDs == [workspaceID])
         #expect(decoded.selectedWorkspaceID == workspaceID)
         #expect(decoded.sidebarVisible)
+        #expect(decoded.terminalFontSizePointsOverride == nil)
     }
 }
 

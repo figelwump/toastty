@@ -29,6 +29,26 @@ struct DesktopNotificationRouteResolverTests {
     }
 
     @Test
+    func resolvesPanelRouteWhenPanelLivesInBackgroundTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let originalWorkspace = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(originalWorkspace.resolvedSelectedTabID)
+        let panelID = try #require(originalWorkspace.focusedPanelID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let backgroundedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(backgroundedWorkspace.resolvedSelectedTabID != originalTabID)
+
+        let hint = DesktopNotificationSelectionHint(workspaceID: workspaceID, panelID: panelID)
+        let route = DesktopNotificationRouteResolver.resolve(hint: hint, state: state)
+
+        #expect(route == DesktopNotificationActivationRoute(windowID: windowID, workspaceID: workspaceID, panelID: panelID))
+    }
+
+    @Test
     func fallsBackToWorkspaceRouteWhenPanelHintIsUnknown() throws {
         let state = AppState.bootstrap()
         let windowID = try #require(state.windows.first?.id)

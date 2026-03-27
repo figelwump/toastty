@@ -358,6 +358,38 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
         }
     }
 
+    func testRefreshVisibleTextInferenceHandlesBackgroundTabPanel() async throws {
+        try await MainActor.run {
+            let state = try makeTwoTabState()
+            let store = AppStore(state: state, persistTerminalFontPreference: false)
+            let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+            let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+            let backgroundTabID = try XCTUnwrap(workspace.tabIDs.first)
+            let backgroundTab = try XCTUnwrap(workspace.tab(id: backgroundTabID))
+            let backgroundPanelID = try XCTUnwrap(backgroundTab.focusedPanelID)
+            let selectedTabID = try XCTUnwrap(workspace.selectedTabID)
+            XCTAssertNotEqual(selectedTabID, backgroundTabID)
+
+            let visibleTextStore = VisibleTextStore()
+            visibleTextStore.textByPanelID[backgroundPanelID] = """
+            dev@host ~/repo % codex
+            OpenAI Codex (v0.1)
+            Applying diff...
+            """
+            let service = makeActivityInferenceService(visibleTextStore: visibleTextStore)
+
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [:],
+                backgroundPanelWorkspaceIDs: [backgroundPanelID: workspaceID]
+            )
+
+            XCTAssertEqual(service.panelDisplayTitleOverride(for: backgroundPanelID), "Codex")
+            XCTAssertEqual(service.workspaceActivitySubtext(for: workspaceID), "1 busy")
+            try StateValidator.validate(store.state)
+        }
+    }
+
     func testBusyPaneDoesNotAutoStopManagedSessionOnIdlePromptHeuristic() async throws {
         try await MainActor.run {
             let (store, _, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
@@ -417,8 +449,8 @@ private func makeActivityInferenceService(
 }
 
 private func terminalState(panelID: UUID, state: AppState) throws -> TerminalPanelState {
-    let workspace = try XCTUnwrap(state.workspacesByID.values.first { $0.panels[panelID] != nil })
-    guard case .terminal(let terminalState) = workspace.panels[panelID] else {
+    let workspace = try XCTUnwrap(state.workspacesByID.values.first { $0.panelState(for: panelID) != nil })
+    guard case .terminal(let terminalState) = workspace.panelState(for: panelID) else {
         XCTFail("expected terminal panel state")
         throw TestError.expectedTerminalPanel
     }
@@ -496,6 +528,18 @@ private func makeSplitFixtureState() throws -> AppState {
     XCTAssertTrue(
         reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state),
         "expected split fixture creation to succeed"
+    )
+    return state
+}
+
+@MainActor
+private func makeTwoTabState() throws -> AppState {
+    var state = AppState.bootstrap()
+    let reducer = AppReducer()
+    let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+    XCTAssertTrue(
+        reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state),
+        "expected second tab creation to succeed"
     )
     return state
 }

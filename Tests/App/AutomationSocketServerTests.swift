@@ -99,6 +99,70 @@ struct AutomationSocketServerTests {
     }
 
     @Test
+    func sessionStatusCanResolveActiveSessionForBackgroundTabPanel() async throws {
+        let socketPath = temporarySocketPath()
+        let server = try await MainActor.run {
+            try makeServer(socketPath: socketPath)
+        }
+        defer {
+            withExtendedLifetime(server.server) {}
+        }
+
+        try waitForSocket(at: socketPath)
+
+        let initialContext = try await MainActor.run {
+            let selection = try #require(server.store.state.selectedWorkspaceSelection())
+            return (
+                workspaceID: selection.workspaceID,
+                originalTabID: try #require(selection.workspace.resolvedSelectedTabID),
+                panelID: try #require(selection.workspace.focusedPanelID)
+            )
+        }
+
+        let sessionID = "sess-background-tab"
+        let startResponse = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.start",
+                sessionID: sessionID,
+                panelID: initialContext.panelID.uuidString,
+                requestID: UUID().uuidString,
+                payload: [
+                    "agent": .string(AgentKind.codex.rawValue),
+                ]
+            ),
+            socketPath: socketPath
+        )
+        #expect(startResponse.ok)
+
+        _ = try await MainActor.run {
+            #expect(server.store.send(.createWorkspaceTab(workspaceID: initialContext.workspaceID, seed: nil)))
+            let workspace = try #require(server.store.state.workspacesByID[initialContext.workspaceID])
+            let backgroundTabID = try #require(workspace.resolvedSelectedTabID)
+            #expect(backgroundTabID != initialContext.originalTabID)
+            return backgroundTabID
+        }
+
+        let response = try sendEvent(
+            AutomationEventEnvelope(
+                eventType: "session.status",
+                sessionID: sessionID,
+                requestID: UUID().uuidString,
+                payload: [
+                    "kind": .string(SessionStatusKind.working.rawValue),
+                    "summary": .string("editing in background tab"),
+                ]
+            ),
+            socketPath: socketPath
+        )
+
+        #expect(response.ok)
+        let activeSession = await MainActor.run {
+            server.sessionRuntimeStore.sessionRegistry.activeSession(sessionID: sessionID)
+        }
+        #expect(activeSession?.status?.kind == .working)
+    }
+
+    @Test
     func sessionStatusRejectsMismatchedPanelIDForActiveSession() async throws {
         let socketPath = temporarySocketPath()
         let server = try await MainActor.run {
@@ -345,6 +409,7 @@ struct AutomationSocketServerTests {
         let socketPath = temporarySocketPath()
         let firstServer: (
             server: AutomationSocketServer,
+            store: AppStore,
             panelID: UUID,
             workspaceID: UUID,
             sessionRuntimeStore: SessionRuntimeStore
@@ -587,6 +652,7 @@ struct AutomationSocketServerTests {
         testHooks: AutomationSocketServerTestHooks = .disabled
     ) throws -> (
         server: AutomationSocketServer,
+        store: AppStore,
         panelID: UUID,
         workspaceID: UUID,
         sessionRuntimeStore: SessionRuntimeStore
@@ -594,6 +660,7 @@ struct AutomationSocketServerTests {
         let store = AppStore(persistTerminalFontPreference: false)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
         let agentCatalogProvider = TestAgentCatalogProvider()
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
@@ -623,7 +690,7 @@ struct AutomationSocketServerTests {
             recoveryPolicy: recoveryPolicy,
             testHooks: testHooks
         )
-        return (server, panelID, workspaceID, sessionRuntimeStore)
+        return (server, store, panelID, workspaceID, sessionRuntimeStore)
     }
 
     private func sendEvent(type eventType: String, socketPath: String) throws -> AutomationResponseEnvelope {

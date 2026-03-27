@@ -47,6 +47,16 @@ private extension EventModifiers {
 }
 
 enum ToasttyKeyboardShortcuts {
+    static let newTab = ToasttyKeyboardShortcut(
+        "t",
+        modifiers: [.command]
+    )
+
+    static let newWindow = ToasttyKeyboardShortcut(
+        "n",
+        modifiers: [.command]
+    )
+
     static let toggleSidebar = ToasttyKeyboardShortcut(
         "b",
         modifiers: [.command]
@@ -62,6 +72,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let renameTab = ToasttyKeyboardShortcut(
+        "e",
+        modifiers: [.option, .shift]
+    )
+
     static let closeWorkspace = ToasttyKeyboardShortcut(
         "w",
         modifiers: [.command, .shift]
@@ -69,6 +84,11 @@ enum ToasttyKeyboardShortcuts {
 
     static let toggleFocusedPanel = ToasttyKeyboardShortcut(
         "f",
+        modifiers: [.command, .shift]
+    )
+
+    static let focusNextUnreadOrActivePanel = ToasttyKeyboardShortcut(
+        "a",
         modifiers: [.command, .shift]
     )
 

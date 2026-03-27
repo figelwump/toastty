@@ -1,5 +1,7 @@
 @testable import ToasttyApp
+import AppKit
 import CoreState
+import SwiftUI
 import XCTest
 
 final class WorkspaceViewTests: XCTestCase {
@@ -46,6 +48,52 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertTrue(model.actions.isEmpty)
         XCTAssertTrue(model.showsAddAgentsButton)
         XCTAssertEqual(WorkspaceAgentTopBarModel.addAgentsTitle, "Add Agents…")
+    }
+
+    func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: true),
+            .closeButton
+        )
+    }
+
+    func testWorkspaceTabTrailingAccessoryShowsCommandDigitBadgesThroughNine() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: false),
+            .badge("⌘1")
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 8, isHovered: false),
+            .badge("⌘9")
+        )
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabTrailingAccessory(index: 9, isHovered: false),
+            .empty
+        )
+    }
+
+    func testWorkspaceTabSelectedBorderFadesWhenAppIsInactive() throws {
+        let activeBorder = try XCTUnwrap(
+            NSColor(ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: true))
+                .usingColorSpace(.deviceRGB)
+        )
+        let inactiveBorder = try XCTUnwrap(
+            NSColor(ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: false))
+                .usingColorSpace(.deviceRGB)
+        )
+        let expectedInactiveBorder = try XCTUnwrap(
+            NSColor(ToastyTheme.accent.opacity(0.5)).usingColorSpace(.deviceRGB)
+        )
+
+        XCTAssertEqual(activeBorder.alphaComponent, 1, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.redComponent, expectedInactiveBorder.redComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.greenComponent, expectedInactiveBorder.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.blueComponent, expectedInactiveBorder.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveBorder.alphaComponent, expectedInactiveBorder.alphaComponent, accuracy: 0.001)
+    }
+
+    func testWorkspaceTabUnreadDotUsesLargerDiameter() {
+        XCTAssertEqual(ToastyTheme.workspaceTabUnreadDotDiameter, 7)
     }
 
     private func makeProfileShortcutRegistry(

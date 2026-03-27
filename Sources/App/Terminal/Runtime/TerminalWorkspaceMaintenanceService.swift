@@ -4,6 +4,13 @@ import Foundation
 
 @MainActor
 final class TerminalWorkspaceMaintenanceService {
+    typealias VisibilityPulseScheduler = (@escaping @MainActor () -> Void) -> Task<Void, Never>?
+
+    private struct VisibleWorkspaceSelection: Equatable {
+        let workspaceID: UUID
+        let tabID: UUID
+    }
+
     private weak var store: AppStore?
     private let metadataService: TerminalMetadataService
     private let activityInferenceService: TerminalActivityInferenceService
@@ -11,7 +18,8 @@ final class TerminalWorkspaceMaintenanceService {
     private let controllerForPanelID: (UUID) -> TerminalSurfaceController?
     private let updatePanelDisplayTitleOverrides: ([UUID: String]) -> Void
     private let updateWorkspaceActivitySubtext: ([UUID: String]) -> Void
-    private var previousSelectedWorkspaceID: UUID?
+    private let visibilityPulseScheduler: VisibilityPulseScheduler
+    private var previousVisibleWorkspaceSelection: VisibleWorkspaceSelection?
     private var visibilityPulseTask: Task<Void, Never>?
     private var processWorkingDirectoryRefreshTask: Task<Void, Never>?
 
@@ -22,7 +30,19 @@ final class TerminalWorkspaceMaintenanceService {
         containsController: @escaping (UUID) -> Bool,
         controllerForPanelID: @escaping (UUID) -> TerminalSurfaceController?,
         updatePanelDisplayTitleOverrides: @escaping ([UUID: String]) -> Void,
-        updateWorkspaceActivitySubtext: @escaping ([UUID: String]) -> Void
+        updateWorkspaceActivitySubtext: @escaping ([UUID: String]) -> Void,
+        visibilityPulseScheduler: @escaping VisibilityPulseScheduler = { pulse in
+            Task { @MainActor in
+                // Defer pulses so SwiftUI/NSViewRepresentable attachment and layout can settle.
+                await Task.yield()
+                guard Task.isCancelled == false else { return }
+                pulse()
+
+                await Task.yield()
+                guard Task.isCancelled == false else { return }
+                pulse()
+            }
+        }
     ) {
         self.store = store
         self.metadataService = metadataService
@@ -31,6 +51,7 @@ final class TerminalWorkspaceMaintenanceService {
         self.controllerForPanelID = controllerForPanelID
         self.updatePanelDisplayTitleOverrides = updatePanelDisplayTitleOverrides
         self.updateWorkspaceActivitySubtext = updateWorkspaceActivitySubtext
+        self.visibilityPulseScheduler = visibilityPulseScheduler
     }
 
     deinit {
@@ -60,7 +81,7 @@ final class TerminalWorkspaceMaintenanceService {
             livePanelIDs,
             liveWorkspaceIDs: Set(state.workspacesByID.keys)
         )
-        pulseVisibleSurfacesIfWorkspaceSwitched(state: state)
+        pulseVisibleSurfacesIfSelectionChanged(state: state)
     }
 
     func handleSurfaceUnregister(panelID: UUID) {
@@ -148,11 +169,20 @@ final class TerminalWorkspaceMaintenanceService {
     }
 
     private func trackedBackgroundTerminalPanelIDs(state: AppState) -> [UUID: UUID] {
-        let selectedWorkspaceID = state.selectedWorkspaceSelection()?.workspaceID
         var workspaceByPanelID: [UUID: UUID] = [:]
-        for workspace in state.workspacesByID.values where workspace.id != selectedWorkspaceID {
-            for (panelID, panelState) in workspace.panels {
-                guard case .terminal = panelState else { continue }
+        let selectedSelection = state.selectedWorkspaceSelection()
+        let selectedWorkspaceID = selectedSelection?.workspaceID
+        let selectedWorkspaceVisiblePanelIDs = selectedSelection.map { visibleTerminalPanelIDs(in: $0.workspace) } ?? []
+
+        for workspace in state.workspacesByID.values {
+            let backgroundPanelIDs: Set<UUID>
+            if workspace.id == selectedWorkspaceID {
+                backgroundPanelIDs = workspace.allTerminalPanelIDs.subtracting(selectedWorkspaceVisiblePanelIDs)
+            } else {
+                backgroundPanelIDs = workspace.allTerminalPanelIDs
+            }
+
+            for panelID in backgroundPanelIDs {
                 guard containsController(panelID) else { continue }
                 workspaceByPanelID[panelID] = workspace.id
             }
@@ -160,45 +190,31 @@ final class TerminalWorkspaceMaintenanceService {
         return workspaceByPanelID
     }
 
-    private func pulseVisibleSurfacesIfWorkspaceSwitched(state: AppState) {
-        let currentSelectedWorkspaceID = state.selectedWorkspaceSelection()?.workspaceID
-        guard currentSelectedWorkspaceID != previousSelectedWorkspaceID else { return }
+    private func pulseVisibleSurfacesIfSelectionChanged(state: AppState) {
+        let currentVisibleSelection = resolvedVisibleWorkspaceSelection(state: state)
+        guard currentVisibleSelection != previousVisibleWorkspaceSelection else { return }
 
         visibilityPulseTask?.cancel()
         visibilityPulseTask = nil
 
-        guard let currentSelectedWorkspaceID else {
-            previousSelectedWorkspaceID = nil
+        guard let currentVisibleSelection else {
+            previousVisibleWorkspaceSelection = nil
             return
         }
 
-        guard state.workspacesByID[currentSelectedWorkspaceID] != nil else {
-            // Do not consume the transition until workspace data is available.
-            return
-        }
-
-        previousSelectedWorkspaceID = currentSelectedWorkspaceID
-        scheduleVisibilityPulse(for: currentSelectedWorkspaceID)
+        previousVisibleWorkspaceSelection = currentVisibleSelection
+        scheduleVisibilityPulse(for: currentVisibleSelection.workspaceID)
     }
 
     private func scheduleVisibilityPulse(for workspaceID: UUID) {
         ToasttyLog.debug(
-            "Scheduling Ghostty visibility refresh pulse after workspace switch",
+            "Scheduling Ghostty visibility refresh pulse after workspace/tab selection change",
             category: .ghostty,
             metadata: ["workspace_id": workspaceID.uuidString]
         )
 
-        visibilityPulseTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-
-            // Defer pulses so SwiftUI/NSViewRepresentable attachment and layout can settle.
-            await Task.yield()
-            guard Task.isCancelled == false else { return }
-            self.pulseVisibleSurfaces(in: workspaceID)
-
-            await Task.yield()
-            guard Task.isCancelled == false else { return }
-            self.pulseVisibleSurfaces(in: workspaceID)
+        visibilityPulseTask = visibilityPulseScheduler { [weak self] in
+            self?.pulseVisibleSurfaces(in: workspaceID)
         }
     }
 
@@ -213,7 +229,7 @@ final class TerminalWorkspaceMaintenanceService {
         let panelIDs = visibleTerminalPanelIDs(in: workspace)
         guard panelIDs.isEmpty == false else { return }
         ToasttyLog.debug(
-            "Pulsing visible Ghostty surfaces after workspace switch",
+            "Pulsing visible Ghostty surfaces after workspace/tab selection change",
             category: .ghostty,
             metadata: [
                 "workspace_id": workspaceID.uuidString,
@@ -233,11 +249,26 @@ final class TerminalWorkspaceMaintenanceService {
         }
     }
 
+    private func resolvedVisibleWorkspaceSelection(state: AppState) -> VisibleWorkspaceSelection? {
+        guard let selection = state.selectedWorkspaceSelection(),
+              let tabID = selection.workspace.resolvedSelectedTabID else {
+            return nil
+        }
+        return VisibleWorkspaceSelection(
+            workspaceID: selection.workspaceID,
+            tabID: tabID
+        )
+    }
+
     private func visibleTerminalPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
+        guard let tab = workspace.selectedTab else {
+            return []
+        }
+
         var panelIDs: Set<UUID> = []
-        for leaf in workspace.layoutTree.allSlotInfos {
+        for leaf in tab.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
-            guard let panelState = workspace.panels[panelID],
+            guard let panelState = tab.panels[panelID],
                   case .terminal = panelState else {
                 continue
             }

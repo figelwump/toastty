@@ -458,6 +458,188 @@ struct AppReducerTests {
     }
 
     @Test
+    func createWorkspaceTabAppendsTabAndSelectsIt() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+
+        #expect(
+            reducer.send(
+                .createWorkspaceTab(
+                    workspaceID: workspaceID,
+                    seed: WindowLaunchSeed(
+                        terminalCWD: "/tmp/workspace-tab",
+                        terminalProfileBinding: TerminalProfileBinding(profileID: "ssh-prod")
+                    )
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.tabIDs.count == workspaceBefore.tabIDs.count + 1)
+        let selectedTabID = try #require(workspaceAfter.selectedTabID)
+        let selectedTab = try #require(workspaceAfter.tab(id: selectedTabID))
+        let panelID = try #require(selectedTab.focusedPanelID)
+        guard case .terminal(let terminalState) = selectedTab.panels[panelID] else {
+            Issue.record("Expected new tab bootstrap panel to be terminal")
+            return
+        }
+
+        #expect(terminalState.cwd == "/tmp/workspace-tab")
+        #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func selectWorkspaceTabChangesSelectedTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        let workspaceWithTwoTabs = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspaceWithTwoTabs.tabIDs.first)
+        let newTabID = try #require(workspaceWithTwoTabs.tabIDs.last)
+        #expect(newTabID != originalTabID)
+
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.selectedTabID == originalTabID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastPanelInSelectedTabRemovesOnlyThatTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        let workspaceWithTwoTabs = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspaceWithTwoTabs.tabIDs.first)
+        let selectedTabID = try #require(workspaceWithTwoTabs.selectedTabID)
+        let selectedTab = try #require(workspaceWithTwoTabs.tab(id: selectedTabID))
+        let panelID = try #require(selectedTab.focusedPanelID)
+
+        #expect(reducer.send(.closePanel(panelID: panelID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.tabIDs == [originalTabID])
+        #expect(updatedWorkspace.selectedTabID == originalTabID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastPanelInLastTabClosesWorkspaceAndKeepsEmptyWindow() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let originalPanelID = try #require(workspaceBefore.focusedPanelID)
+
+        #expect(reducer.send(.closePanel(panelID: originalPanelID), state: &state))
+
+        #expect(state.workspacesByID[workspaceID] == nil)
+        let window = try #require(state.window(id: windowID))
+        #expect(window.workspaceIDs.isEmpty)
+        #expect(window.selectedWorkspaceID == nil)
+        #expect(state.windows.count == 1)
+        #expect(state.selectedWindowID == windowID)
+        #expect(state.defaultTerminalProfileID == "zmx")
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastPanelInWorkspaceRemovesWorkspaceAndSelectsAdjacentWorkspace() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let firstWorkspaceID = try #require(state.windows.first?.workspaceIDs.first)
+        let secondWorkspaceID = try #require(state.windows.first?.workspaceIDs.last)
+        let panelID = try #require(state.workspacesByID[firstWorkspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.closePanel(panelID: panelID), state: &state))
+
+        #expect(state.workspacesByID[firstWorkspaceID] == nil)
+        let updatedWindow = try #require(state.window(id: windowID))
+        #expect(updatedWindow.workspaceIDs == [secondWorkspaceID])
+        #expect(updatedWindow.selectedWorkspaceID == secondWorkspaceID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func updateTerminalPanelMetadataMutatesBackgroundTabWithoutSelectingIt() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspace.tabIDs.first)
+        let backgroundTabID = try #require(workspace.tabIDs.last)
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        let backgroundTab = try #require(workspace.tab(id: backgroundTabID))
+        let panelID = try #require(backgroundTab.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .updateTerminalPanelMetadata(
+                    panelID: panelID,
+                    title: "Logs",
+                    cwd: "/tmp/background"
+                ),
+                state: &state
+            )
+        )
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        let updatedBackgroundTab = try #require(updatedWorkspace.tab(id: backgroundTabID))
+        guard case .terminal(let terminalState) = updatedBackgroundTab.panels[panelID] else {
+            Issue.record("Expected background tab panel to remain terminal")
+            return
+        }
+
+        #expect(updatedWorkspace.selectedTabID == originalTabID)
+        #expect(terminalState.title == "Logs")
+        #expect(terminalState.cwd == "/tmp/background")
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func focusPanelSelectsOwningBackgroundTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let originalTabID = try #require(workspace.tabIDs.first)
+        let backgroundTabID = try #require(workspace.tabIDs.last)
+        #expect(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+
+        workspace = try #require(state.workspacesByID[workspaceID])
+        let backgroundTab = try #require(workspace.tab(id: backgroundTabID))
+        let panelID = try #require(backgroundTab.focusedPanelID)
+
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: panelID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.selectedTabID == backgroundTabID)
+        #expect(updatedWorkspace.focusedPanelID == panelID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func createWorkspaceDoesNotStealSelectedWindow() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -495,13 +677,12 @@ struct AppReducerTests {
             windows: [],
             workspacesByID: [:],
             selectedWindowID: nil,
-            configuredTerminalFontPoints: 13,
-            globalTerminalFontPoints: 15
+            configuredTerminalFontPoints: 13
         )
         let reducer = AppReducer()
         let frame = CGRectCodable(x: 240, y: 180, width: 1440, height: 900)
 
-        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: frame), state: &state))
+        #expect(reducer.send(.createWindow(seed: nil, initialFrame: frame), state: &state))
 
         let window = try #require(state.windows.first)
         let workspaceID = try #require(window.selectedWorkspaceID)
@@ -511,7 +692,8 @@ struct AppReducerTests {
         #expect(window.frame == frame)
         #expect(workspace.title == "Workspace 1")
         #expect(state.configuredTerminalFontPoints == 13)
-        #expect(state.globalTerminalFontPoints == 15)
+        #expect(window.terminalFontSizePointsOverride == nil)
+        #expect(state.effectiveTerminalFontPoints(for: window.id) == 13)
 
         try StateValidator.validate(state)
     }
@@ -523,12 +705,11 @@ struct AppReducerTests {
             workspacesByID: [:],
             selectedWindowID: nil,
             configuredTerminalFontPoints: 13,
-            defaultTerminalProfileID: "zmx",
-            globalTerminalFontPoints: 15
+            defaultTerminalProfileID: "zmx"
         )
         let reducer = AppReducer()
 
-        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: nil), state: &state))
+        #expect(reducer.send(.createWindow(seed: nil, initialFrame: nil), state: &state))
 
         let window = try #require(state.windows.first)
         let workspaceID = try #require(window.selectedWorkspaceID)
@@ -544,17 +725,52 @@ struct AppReducerTests {
     }
 
     @Test
-    func createWindowFallsBackToDefaultFrameWhenNoInitialFrameIsProvided() throws {
+    func createWindowUsesLaunchSeedForInitialWorkspaceAndPane() throws {
         var state = AppState(
             windows: [],
             workspacesByID: [:],
             selectedWindowID: nil,
             configuredTerminalFontPoints: 13,
-            globalTerminalFontPoints: 15
+            defaultTerminalProfileID: "ssh-prod"
+        )
+        let reducer = AppReducer()
+        let seed = WindowLaunchSeed(
+            workspaceTitle: "Client Logs",
+            terminalCWD: "~/src/../tmp/toastty",
+            terminalProfileBinding: TerminalProfileBinding(profileID: "zmx"),
+            windowTerminalFontSizePointsOverride: 15
+        )
+
+        #expect(reducer.send(.createWindow(seed: seed, initialFrame: nil), state: &state))
+
+        let window = try #require(state.windows.first)
+        let workspaceID = try #require(window.selectedWorkspaceID)
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        let panelID = try #require(workspace.focusedPanelID)
+        guard case .terminal(let terminalState) = workspace.panels[panelID] else {
+            Issue.record("Expected initial window panel to be terminal")
+            return
+        }
+
+        #expect(workspace.title == "Client Logs")
+        #expect(terminalState.cwd == ((NSHomeDirectory() + "/src/../tmp/toastty") as NSString).standardizingPath)
+        #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+        #expect(window.terminalFontSizePointsOverride == 15)
+        #expect(state.effectiveTerminalFontPoints(for: window.id) == 15)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func createWindowFallsBackToDefaultFrameWhenNoInitialFrameIsProvided() throws {
+        var state = AppState(
+            windows: [],
+            workspacesByID: [:],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: 13
         )
         let reducer = AppReducer()
 
-        #expect(reducer.send(.createWindow(initialWorkspaceTitle: nil, initialFrame: nil), state: &state))
+        #expect(reducer.send(.createWindow(seed: nil, initialFrame: nil), state: &state))
 
         let window = try #require(state.windows.first)
         #expect(window.frame == CGRectCodable(x: 120, y: 120, width: 1280, height: 760))
@@ -699,6 +915,144 @@ struct AppReducerTests {
     }
 
     @Test
+    func setWorkspaceTabCustomTitleUpdatesTheTargetTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            )
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == "Deploy")
+        #expect(updatedTab.displayTitle == "Deploy")
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleRejectsEmptyTitle() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+        let originalTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "   "),
+                state: &state
+            ) == false
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == originalTab.customTitle)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleWithUnchangedTitleIsNoOp() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            )
+        )
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            ) == false
+        )
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleClearsExistingOverride() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            )
+        )
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: nil),
+                state: &state
+            )
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == nil)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleRejectsSingleTabWorkspace() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.first)
+        let originalTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
+                state: &state
+            ) == false
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab == originalTab)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func setWorkspaceTabCustomTitleTrimsWhitespaceBeforePersisting() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.last)
+
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "  Deploy  "),
+                state: &state
+            )
+        )
+
+        let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
+        #expect(updatedTab.customTitle == "Deploy")
+        #expect(updatedTab.displayTitle == "Deploy")
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func closeWorkspaceRemovesWorkspaceAndSelectsAdjacentWorkspace() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "two-workspaces"))
         let reducer = AppReducer()
@@ -712,6 +1066,24 @@ struct AppReducerTests {
         let updatedWindow = try #require(state.windows.first(where: { $0.id == windowID }))
         #expect(updatedWindow.workspaceIDs == [secondWorkspaceID])
         #expect(updatedWindow.selectedWorkspaceID == secondWorkspaceID)
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeLastWorkspaceKeepsEmptyWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(reducer.send(.closeWorkspace(workspaceID: workspaceID), state: &state))
+
+        #expect(state.workspacesByID[workspaceID] == nil)
+        let updatedWindow = try #require(state.window(id: windowID))
+        #expect(updatedWindow.workspaceIDs.isEmpty)
+        #expect(updatedWindow.selectedWorkspaceID == nil)
+        #expect(state.windows.count == 1)
+        #expect(state.selectedWindowID == windowID)
         try StateValidator.validate(state)
     }
 
@@ -774,6 +1146,49 @@ struct AppReducerTests {
     }
 
     @Test
+    func moveOnlyPanelToWorkspaceInDifferentWindowRemovesSourceWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let sourceWindowID = try #require(state.windows.first?.id)
+        let sourceWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let panelID = try #require(state.workspacesByID[sourceWorkspaceID]?.focusedPanelID)
+
+        let targetWorkspace = WorkspaceState.bootstrap(title: "Workspace 2")
+        let targetWindowID = UUID()
+        let targetWindow = WindowState(
+            id: targetWindowID,
+            frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+            workspaceIDs: [targetWorkspace.id],
+            selectedWorkspaceID: targetWorkspace.id
+        )
+        state.workspacesByID[targetWorkspace.id] = targetWorkspace
+        state.windows.append(targetWindow)
+
+        #expect(
+            reducer.send(
+                .movePanelToWorkspace(panelID: panelID, targetWorkspaceID: targetWorkspace.id, targetSlotID: nil),
+                state: &state
+            )
+        )
+
+        #expect(state.workspacesByID[sourceWorkspaceID] == nil)
+        #expect(state.windows.count == 1)
+        #expect(state.windows.contains(where: { $0.id == sourceWindowID }) == false)
+        #expect(state.selectedWindowID == targetWindowID)
+
+        let survivingWindow = try #require(state.window(id: targetWindowID))
+        #expect(survivingWindow.workspaceIDs == [targetWorkspace.id])
+        #expect(survivingWindow.selectedWorkspaceID == targetWorkspace.id)
+
+        let updatedTargetWorkspace = try #require(state.workspacesByID[targetWorkspace.id])
+        #expect(updatedTargetWorkspace.panels[panelID] != nil)
+        #expect(updatedTargetWorkspace.focusedPanelID == panelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func detachPanelToNewWindowCreatesDetachedWorkspace() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -796,6 +1211,31 @@ struct AppReducerTests {
 
         let sourceWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(sourceWorkspace.panels[panelToDetach] == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func detachOnlyPanelToNewWindowRemovesEmptySourceWorkspaceAndWindow() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let sourceWindowID = try #require(state.windows.first?.id)
+        let sourceWorkspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let panelToDetach = try #require(state.workspacesByID[sourceWorkspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.detachPanelToNewWindow(panelID: panelToDetach), state: &state))
+
+        #expect(state.windows.count == 1)
+        #expect(state.windows.contains(where: { $0.id == sourceWindowID }) == false)
+        #expect(state.workspacesByID[sourceWorkspaceID] == nil)
+
+        let detachedWindowID = try #require(state.selectedWindowID)
+        let detachedWindow = try #require(state.windows.first(where: { $0.id == detachedWindowID }))
+        let detachedWorkspaceID = try #require(detachedWindow.selectedWorkspaceID)
+        let detachedWorkspace = try #require(state.workspacesByID[detachedWorkspaceID])
+        #expect(detachedWorkspace.panels[panelToDetach] != nil)
+        #expect(detachedWorkspace.focusedPanelID == panelToDetach)
 
         try StateValidator.validate(state)
     }
@@ -1626,90 +2066,105 @@ struct AppReducerTests {
     }
 
     @Test
-    func globalFontActionsAdjustAndResetFontSize() {
+    func windowFontActionsAdjustAndResetFontSize() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
         let defaultPoints = AppState.defaultTerminalFontPoints
         let step = AppState.terminalFontStepPoints
 
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints + step)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + step)
+        #expect(state.window(id: windowID)?.terminalFontSizePointsOverride == defaultPoints + step)
 
-        #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints)
+        #expect(reducer.send(.decreaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+        #expect(state.window(id: windowID)?.terminalFontSizePointsOverride == nil)
 
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints + (step * 2))
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + (step * 2))
 
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+        #expect(state.window(id: windowID)?.terminalFontSizePointsOverride == nil)
     }
 
     @Test
-    func configuredFontBaselineUpdatesConfiguredValueAndResetUsesIt() {
+    func configuredFontBaselineUpdatesConfiguredValueAndResetUsesIt() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: 14), state: &state))
         #expect(state.configuredTerminalFontPoints == 14)
-        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 14)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 14)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 15)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 14)
     }
 
     @Test
-    func configuredFontBaselineDoesNotOverrideUserAdjustedFont() {
+    func configuredFontBaselineDoesNotOverrideUserAdjustedFont() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
         let defaultPoints = AppState.defaultTerminalFontPoints
 
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == defaultPoints + AppState.terminalFontStepPoints)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + AppState.terminalFontStepPoints)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: 9), state: &state))
         #expect(state.configuredTerminalFontPoints == 9)
-        #expect(state.globalTerminalFontPoints == defaultPoints + AppState.terminalFontStepPoints)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints + AppState.terminalFontStepPoints)
 
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 9)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 9)
     }
 
     @Test
-    func clearingConfiguredFontBaselineReturnsResetToDefault() {
+    func clearingConfiguredFontBaselineReturnsResetToDefault() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: 15), state: &state))
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == 15)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 15)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: 18), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 18)
 
         #expect(reducer.send(.setConfiguredTerminalFont(points: nil), state: &state))
         #expect(state.configuredTerminalFontPoints == nil)
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state))
-        #expect(state.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == 18)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.defaultTerminalFontPoints)
     }
 
     @Test
-    func globalFontActionsClampAtBounds() {
+    func windowFontActionsClampAtBounds() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
         let defaultPoints = AppState.defaultTerminalFontPoints
 
-        state.globalTerminalFontPoints = AppState.maxTerminalFontPoints
-        #expect(reducer.send(.increaseGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == AppState.maxTerminalFontPoints)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: AppState.maxTerminalFontPoints + 10), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.maxTerminalFontPoints)
+        #expect(reducer.send(.increaseWindowTerminalFont(windowID: windowID), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.maxTerminalFontPoints)
 
-        state.globalTerminalFontPoints = AppState.minTerminalFontPoints
-        #expect(reducer.send(.decreaseGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == AppState.minTerminalFontPoints)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: AppState.minTerminalFontPoints), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.minTerminalFontPoints)
+        #expect(reducer.send(.decreaseWindowTerminalFont(windowID: windowID), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == AppState.minTerminalFontPoints)
 
-        state.globalTerminalFontPoints = defaultPoints
-        #expect(reducer.send(.resetGlobalTerminalFont, state: &state) == false)
-        #expect(state.globalTerminalFontPoints == defaultPoints)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state))
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+        #expect(reducer.send(.resetWindowTerminalFont(windowID: windowID), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
 
-        #expect(reducer.send(.setGlobalTerminalFont(points: AppState.maxTerminalFontPoints + 10), state: &state))
-        #expect(state.globalTerminalFontPoints == AppState.maxTerminalFontPoints)
+        #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: defaultPoints), state: &state) == false)
+        #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
     }
 
     @Test

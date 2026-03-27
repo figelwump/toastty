@@ -23,25 +23,27 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            if let window = store.window(id: windowID) {
-                ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
-                    if let workspace = store.state.workspacesByID[workspaceID] {
-                        workspaceRow(
-                            workspaceID: workspaceID,
-                            workspace: workspace,
-                            shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
-                            isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
-                            index: index + 1
-                        )
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let window = store.window(id: windowID) {
+                        ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
+                            if let workspace = store.state.workspacesByID[workspaceID] {
+                                workspaceRow(
+                                    workspaceID: workspaceID,
+                                    workspace: workspace,
+                                    shortcutLabel: DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: index + 1),
+                                    isSelected: store.selectedWorkspaceID(in: windowID) == workspaceID,
+                                    index: index + 1
+                                )
+                            }
+                        }
+                    } else {
+                        Text("No windows")
+                            .font(ToastyTheme.fontBody)
+                            .foregroundStyle(ToastyTheme.mutedText)
                     }
                 }
-            } else {
-                Text("No windows")
-                    .font(ToastyTheme.fontBody)
-                    .foregroundStyle(ToastyTheme.mutedText)
             }
-
-            Spacer(minLength: 0)
 
             Button {
                 cancelWorkspaceRename()
@@ -85,12 +87,11 @@ struct SidebarView: View {
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientSidebarState()
         }
-        .onChange(of: store.pendingRenameWorkspaceID) { _, newValue in
-            guard let workspaceID = newValue,
+        .onChange(of: store.pendingRenameWorkspaceRequest) { _, _ in
+            guard let request = store.consumePendingWorkspaceRenameRequest(windowID: windowID),
                   let window = store.window(id: windowID),
-                  window.workspaceIDs.contains(workspaceID),
-                  let workspace = store.state.workspacesByID[workspaceID] else { return }
-            store.pendingRenameWorkspaceID = nil
+                  window.workspaceIDs.contains(request.workspaceID),
+                  let workspace = store.state.workspacesByID[request.workspaceID] else { return }
             beginWorkspaceRename(workspace)
         }
     }
@@ -185,7 +186,9 @@ struct SidebarView: View {
                 ) {
                     WorkspaceRenameTextField(
                         text: $renameDraftTitle,
-                        workspaceID: workspaceID,
+                        itemID: workspaceID,
+                        placeholder: "Workspace name",
+                        font: .systemFont(ofSize: 12, weight: .semibold),
                         accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
                         onSubmit: {
                             commitWorkspaceRename(workspaceID: workspaceID)
@@ -295,7 +298,7 @@ struct SidebarView: View {
             for: workspaceSessionStatus.panelID,
             in: workspace
         )
-        let canFocusPanel = workspace.panels[workspaceSessionStatus.panelID] != nil
+        let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
 
         Group {
             if canFocusPanel {
@@ -497,12 +500,27 @@ struct SidebarView: View {
         for panelID: UUID,
         in workspace: WorkspaceState
     ) -> Bool {
-        guard workspace.unreadPanelIDs.contains(panelID) else {
+        Self.showsUnreadSessionAccent(
+            for: panelID,
+            in: workspace,
+            selectedWorkspaceID: store.selectedWorkspaceID(in: windowID),
+            selectedPanelID: store.selectedWorkspace(in: windowID)?.focusedPanelID
+        )
+    }
+
+    static func showsUnreadSessionAccent(
+        for panelID: UUID,
+        in workspace: WorkspaceState,
+        selectedWorkspaceID: UUID?,
+        selectedPanelID: UUID?
+    ) -> Bool {
+        guard let tabID = workspace.tabID(containingPanelID: panelID),
+              workspace.tab(id: tabID)?.unreadPanelIDs.contains(panelID) == true else {
             return false
         }
 
-        if store.selectedWorkspaceID(in: windowID) == workspace.id,
-           workspace.focusedPanelID == panelID {
+        if selectedWorkspaceID == workspace.id,
+           selectedPanelID == panelID {
             return false
         }
 
@@ -523,6 +541,10 @@ struct SidebarView: View {
         case .idle, .working:
             return nil
         }
+    }
+
+    static func canFocusSessionPanel(_ panelID: UUID, in workspace: WorkspaceState) -> Bool {
+        workspace.panelState(for: panelID) != nil && workspace.slotID(containingPanelID: panelID) != nil
     }
 
     static func sessionIndicatorState(for kind: SessionStatusKind) -> SessionStatusIndicatorState {

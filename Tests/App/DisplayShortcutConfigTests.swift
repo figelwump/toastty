@@ -12,6 +12,12 @@ final class DisplayShortcutConfigTests: XCTestCase {
         XCTAssertNil(DisplayShortcutConfig.workspaceSwitchShortcutLabel(for: 10))
     }
 
+    func testWorkspaceTabSelectionShortcutLabelsUseCommandDigitGlyphsUpToNine() {
+        XCTAssertEqual(DisplayShortcutConfig.workspaceTabSelectionShortcutLabel(for: 1), "⌘1")
+        XCTAssertEqual(DisplayShortcutConfig.workspaceTabSelectionShortcutLabel(for: 9), "⌘9")
+        XCTAssertNil(DisplayShortcutConfig.workspaceTabSelectionShortcutLabel(for: 10))
+    }
+
     func testPanelFocusShortcutLabelsUseOptionShiftDigitGlyphs() {
         XCTAssertEqual(DisplayShortcutConfig.panelFocusShortcutLabel(for: 1), "⌥⇧1")
         XCTAssertEqual(DisplayShortcutConfig.panelFocusShortcutLabel(for: 10), "⌥⇧0")

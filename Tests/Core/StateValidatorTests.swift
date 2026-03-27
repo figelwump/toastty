@@ -37,8 +37,7 @@ struct StateValidatorTests {
         let state = AppState(
             windows: [window],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: window.id,
-            globalTerminalFontPoints: 13
+            selectedWindowID: window.id
         )
 
         #expect(throws: StateInvariantViolation.panelReferencedMultipleTimes(workspaceID: workspace.id, panelID: panelID)) {
@@ -70,8 +69,7 @@ struct StateValidatorTests {
         let state = AppState(
             windows: [window],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: window.id,
-            globalTerminalFontPoints: 13
+            selectedWindowID: window.id
         )
 
         #expect(throws: StateInvariantViolation.focusedPanelMissing(workspaceID: workspace.id, panelID: staleFocusedPanelID)) {
@@ -114,8 +112,7 @@ struct StateValidatorTests {
         let state = AppState(
             windows: [window],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: window.id,
-            globalTerminalFontPoints: 13
+            selectedWindowID: window.id
         )
 
         #expect(throws: StateInvariantViolation.splitRatioOutOfBounds(workspaceID: workspace.id, nodeID: splitID, ratio: 1.3)) {
@@ -129,8 +126,7 @@ struct StateValidatorTests {
         let state = AppState(
             windows: [],
             workspacesByID: [workspace.id: workspace],
-            selectedWindowID: nil,
-            globalTerminalFontPoints: 13
+            selectedWindowID: nil
         )
 
         #expect(throws: StateInvariantViolation.workspaceWithoutWindow(workspaceID: workspace.id)) {

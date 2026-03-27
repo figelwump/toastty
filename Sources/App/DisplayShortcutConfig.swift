@@ -34,6 +34,7 @@ enum DisplayShortcutScope {
 
 enum DisplayShortcutConfig {
     static let maxWorkspaceShortcutCount = 9
+    static let maxWorkspaceTabSelectionShortcutCount = 9
     static let maxPanelFocusShortcutCount = 10
 
     private static let supportedModifiers: NSEvent.ModifierFlags = [
@@ -50,11 +51,23 @@ enum DisplayShortcutConfig {
     }
 
     static func workspaceSwitchShortcutLabel(for number: Int) -> String? {
-        shortcutLabel(for: number, scope: .workspaceSwitch, limit: maxWorkspaceShortcutCount)
+        shortcutLabel(
+            for: number,
+            modifierSymbol: DisplayShortcutScope.workspaceSwitch.symbolLabel,
+            limit: maxWorkspaceShortcutCount
+        )
+    }
+
+    static func workspaceTabSelectionShortcutLabel(for number: Int) -> String? {
+        shortcutLabel(for: number, modifierSymbol: "⌘", limit: maxWorkspaceTabSelectionShortcutCount)
     }
 
     static func panelFocusShortcutLabel(for number: Int) -> String? {
-        shortcutLabel(for: number, scope: .panelFocus, limit: maxPanelFocusShortcutCount)
+        shortcutLabel(
+            for: number,
+            modifierSymbol: DisplayShortcutScope.panelFocus.symbolLabel,
+            limit: maxPanelFocusShortcutCount
+        )
     }
 
     static func action(for event: NSEvent) -> DisplayShortcutAction? {
@@ -113,12 +126,12 @@ enum DisplayShortcutConfig {
 
     private static func shortcutLabel(
         for number: Int,
-        scope: DisplayShortcutScope,
+        modifierSymbol: String,
         limit: Int
     ) -> String? {
         guard number > 0, number <= limit else { return nil }
         guard let keyLabel = keyLabel(for: number) else { return nil }
-        return "\(scope.symbolLabel)\(keyLabel)"
+        return "\(modifierSymbol)\(keyLabel)"
     }
 
     private static func keyLabel(for number: Int) -> String? {

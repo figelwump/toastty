@@ -78,6 +78,150 @@ final class CloseWorkspaceCommandController {
 }
 
 @MainActor
+final class CreateWorkspaceCommandController {
+    private let store: AppStore
+    private let preferredWindowIDProvider: () -> UUID?
+
+    init(
+        store: AppStore,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
+    ) {
+        self.store = store
+        self.preferredWindowIDProvider = preferredWindowIDProvider
+    }
+
+    @discardableResult
+    func createWorkspace() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.createWorkspaceFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    func canCreateWorkspace() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.canCreateWorkspaceFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
+    }
+}
+
+@MainActor
+final class RenameWorkspaceCommandController {
+    private let store: AppStore
+    private let preferredWindowIDProvider: () -> UUID?
+
+    init(
+        store: AppStore,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
+    ) {
+        self.store = store
+        self.preferredWindowIDProvider = preferredWindowIDProvider
+    }
+
+    @discardableResult
+    func renameWorkspace() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.renameSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    func canRenameWorkspace() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.commandSelection(preferredWindowID: preferredWindowID) != nil
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
+    }
+}
+
+@MainActor
+final class WorkspaceTabCommandController {
+    private let store: AppStore
+    private let sessionRuntimeStore: SessionRuntimeStore
+    private let preferredWindowIDProvider: () -> UUID?
+
+    init(
+        store: AppStore,
+        sessionRuntimeStore: SessionRuntimeStore,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
+    ) {
+        self.store = store
+        self.sessionRuntimeStore = sessionRuntimeStore
+        self.preferredWindowIDProvider = preferredWindowIDProvider
+    }
+
+    func canRenameSelectedTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    @discardableResult
+    func renameSelectedTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    func canSelectAdjacentTab() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        guard let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
+        return workspace.orderedTabs.count > 1
+    }
+
+    @discardableResult
+    func selectAdjacentTab(_ direction: TabNavigationDirection) -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.selectAdjacentWorkspaceTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
+    }
+
+    func canFocusNextUnreadOrActivePanel() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.canFocusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+    }
+
+    @discardableResult
+    func focusNextUnreadOrActivePanel() -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+        return store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
+    }
+}
+
+@MainActor
 final class SplitLayoutCommandController {
     private static let appOwnedResizeAmount = 5
 
@@ -145,6 +289,153 @@ final class SplitLayoutCommandController {
 
     private func commandSelection(preferredWindowID: UUID?) -> WindowCommandSelection? {
         store.commandSelection(preferredWindowID: preferredWindowID)
+    }
+}
+
+@MainActor
+final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
+    private enum ItemTitle {
+        static let newWorkspace = "New Workspace"
+        static let renameWorkspace = "Rename Workspace"
+        static let closeWorkspace = "Close Workspace"
+        static let renameTab = "Rename Tab"
+        static let selectPreviousTab = "Select Previous Tab"
+        static let selectNextTab = "Select Next Tab"
+        static let jumpToNextUnreadOrActive = "Jump to Next Unread or Active"
+    }
+
+    private let createWorkspaceCommandController: CreateWorkspaceCommandController
+    private let renameWorkspaceCommandController: RenameWorkspaceCommandController
+    private let closeWorkspaceCommandController: CloseWorkspaceCommandController
+    private let workspaceTabCommandController: WorkspaceTabCommandController
+
+    init(
+        createWorkspaceCommandController: CreateWorkspaceCommandController,
+        renameWorkspaceCommandController: RenameWorkspaceCommandController,
+        closeWorkspaceCommandController: CloseWorkspaceCommandController,
+        workspaceTabCommandController: WorkspaceTabCommandController
+    ) {
+        self.createWorkspaceCommandController = createWorkspaceCommandController
+        self.renameWorkspaceCommandController = renameWorkspaceCommandController
+        self.closeWorkspaceCommandController = closeWorkspaceCommandController
+        self.workspaceTabCommandController = workspaceTabCommandController
+    }
+
+    func installIfNeeded() {
+        guard let mainMenu = NSApp.mainMenu,
+              let workspaceMenu = Self.findWorkspaceMenu(in: mainMenu.items) else {
+            return
+        }
+
+        configureItem(
+            titled: ItemTitle.newWorkspace,
+            action: #selector(createWorkspace(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.renameWorkspace,
+            action: #selector(renameWorkspace(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.closeWorkspace,
+            action: #selector(closeWorkspace(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.renameTab,
+            action: #selector(renameSelectedTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.selectPreviousTab,
+            action: #selector(selectPreviousTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.selectNextTab,
+            action: #selector(selectNextTab(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.jumpToNextUnreadOrActive,
+            action: #selector(focusNextUnreadOrActivePanel(_:)),
+            in: workspaceMenu
+        )
+    }
+
+    @objc
+    func createWorkspace(_: Any?) {
+        _ = createWorkspaceCommandController.createWorkspace()
+    }
+
+    @objc
+    func renameWorkspace(_: Any?) {
+        _ = renameWorkspaceCommandController.renameWorkspace()
+    }
+
+    @objc
+    func closeWorkspace(_: Any?) {
+        _ = closeWorkspaceCommandController.closeWorkspace()
+    }
+
+    @objc
+    func renameSelectedTab(_: Any?) {
+        _ = workspaceTabCommandController.renameSelectedTab()
+    }
+
+    @objc
+    func selectPreviousTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentTab(.previous)
+    }
+
+    @objc
+    func selectNextTab(_: Any?) {
+        _ = workspaceTabCommandController.selectAdjacentTab(.next)
+    }
+
+    @objc
+    func focusNextUnreadOrActivePanel(_: Any?) {
+        _ = workspaceTabCommandController.focusNextUnreadOrActivePanel()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(createWorkspace(_:)):
+            return createWorkspaceCommandController.canCreateWorkspace()
+
+        case #selector(renameWorkspace(_:)):
+            return renameWorkspaceCommandController.canRenameWorkspace()
+
+        case #selector(closeWorkspace(_:)):
+            return closeWorkspaceCommandController.canCloseWorkspace()
+
+        case #selector(renameSelectedTab(_:)):
+            return workspaceTabCommandController.canRenameSelectedTab()
+
+        case #selector(selectPreviousTab(_:)),
+            #selector(selectNextTab(_:)):
+            return workspaceTabCommandController.canSelectAdjacentTab()
+
+        case #selector(focusNextUnreadOrActivePanel(_:)):
+            return workspaceTabCommandController.canFocusNextUnreadOrActivePanel()
+
+        default:
+            return true
+        }
+    }
+
+    private func configureItem(titled title: String, action: Selector, in menu: NSMenu) {
+        guard let item = menu.items.first(where: { $0.title == title }) else {
+            return
+        }
+        item.target = self
+        item.action = action
+        item.isEnabled = true
+    }
+
+    private static func findWorkspaceMenu(in items: [NSMenuItem]) -> NSMenu? {
+        items.first(where: { $0.title == "Workspace" })?.submenu
     }
 }
 
@@ -955,7 +1246,6 @@ final class HiddenSystemMenuItemsBridge: NSObject, NSMenuDelegate {
     ]
 
     private static let hiddenMenuTitles: Set<String> = [
-        "New Window",
         "Show Tab Bar",
         "Show All Tabs"
     ]
@@ -1127,12 +1417,37 @@ private enum ManagedMenuSectionMarker: String {
 
 @MainActor
 func currentToasttyKeyWindowID(in store: AppStore) -> UUID? {
-    guard let rawWindowID = NSApp.keyWindow?.identifier?.rawValue,
+    currentToasttyKeyWindowID(keyWindow: NSApp.keyWindow, in: store)
+}
+
+@MainActor
+func currentToasttyKeyWindowID(keyWindow: NSWindow?, in store: AppStore) -> UUID? {
+    guard let rawWindowID = keyWindow?.identifier?.rawValue,
           let windowID = UUID(uuidString: rawWindowID),
           store.window(id: windowID) != nil else {
         return nil
     }
     return windowID
+}
+
+@MainActor
+func currentToasttyWorkspaceCommandWindowID(in store: AppStore) -> UUID? {
+    currentToasttyWorkspaceCommandWindowID(in: store, keyWindow: NSApp.keyWindow)
+}
+
+@MainActor
+func currentToasttyWorkspaceCommandWindowID(in store: AppStore, keyWindow: NSWindow?) -> UUID? {
+    if let keyWindowID = currentToasttyKeyWindowID(keyWindow: keyWindow, in: store) {
+        return keyWindowID
+    }
+
+    // Workspace menu commands should survive brief AppKit key-window gaps by
+    // falling back to the last selected Toastty window.
+    guard let selectedWindowID = store.state.selectedWindowID,
+          store.window(id: selectedWindowID) != nil else {
+        return nil
+    }
+    return selectedWindowID
 }
 
 private func findToasttyFileMenu(in items: [NSMenuItem]) -> NSMenu? {

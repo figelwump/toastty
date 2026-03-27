@@ -159,6 +159,10 @@ if ! verify_child_process_tcc_metadata "ToasttyApp-Release" "Release"; then
   exit 10
 fi
 
+if ! "$ROOT_DIR/scripts/automation/workspace-tabs-smoke.sh"; then
+  exit 10
+fi
+
 if ! xcodebuild test \
   -workspace toastty.xcworkspace \
   -scheme ToasttyApp \

@@ -51,8 +51,7 @@ struct WorkspaceLayoutSnapshotTests {
             ],
             workspacesByID: [workspaceID: workspace],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: 15,
-            globalTerminalFontPoints: 16
+            configuredTerminalFontPoints: 15
         )
 
         let snapshot = WorkspaceLayoutSnapshot(state: state)
@@ -86,7 +85,8 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(restoredWorkspace.recentlyClosedPanels.isEmpty)
 
         #expect(restoredState.configuredTerminalFontPoints == nil)
-        #expect(restoredState.globalTerminalFontPoints == AppState.defaultTerminalFontPoints)
+        #expect(restoredState.windows.first?.terminalFontSizePointsOverride == nil)
+        #expect(restoredState.effectiveTerminalFontPoints(for: windowID) == AppState.defaultTerminalFontPoints)
 
         try StateValidator.validate(restoredState)
     }
@@ -141,8 +141,7 @@ struct WorkspaceLayoutSnapshotTests {
                 workspaceTwoID: workspaceTwo,
             ],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
@@ -196,8 +195,7 @@ struct WorkspaceLayoutSnapshotTests {
             ],
             workspacesByID: [workspaceID: workspace],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
@@ -210,6 +208,118 @@ struct WorkspaceLayoutSnapshotTests {
         }
         #expect(restoredTerminalState.profileBinding == binding)
         #expect(restoredWorkspace.focusedPanelID == panelID)
+    }
+
+    @Test
+    func workspaceLayoutSnapshotRoundTripsMultipleTabsAndSelection() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let firstTabID = UUID()
+        let secondTabID = UUID()
+        let firstSlotID = UUID()
+        let secondSlotID = UUID()
+        let firstPanelID = UUID()
+        let secondPanelID = UUID()
+
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Infra",
+            selectedTabID: secondTabID,
+            tabIDs: [firstTabID, secondTabID],
+            tabsByID: [
+                firstTabID: WorkspaceTabState(
+                    id: firstTabID,
+                    layoutTree: .slot(slotID: firstSlotID, panelID: firstPanelID),
+                    panels: [
+                        firstPanelID: .terminal(
+                            TerminalPanelState(
+                                title: "First",
+                                shell: "zsh",
+                                cwd: "/tmp/first-tab",
+                                profileBinding: TerminalProfileBinding(profileID: "zmx")
+                            )
+                        ),
+                    ],
+                    focusedPanelID: firstPanelID
+                ),
+                secondTabID: WorkspaceTabState(
+                    id: secondTabID,
+                    customTitle: "Deploy",
+                    layoutTree: .slot(slotID: secondSlotID, panelID: secondPanelID),
+                    panels: [
+                        secondPanelID: .terminal(
+                            TerminalPanelState(
+                                title: "Second",
+                                shell: "zsh",
+                                cwd: "/tmp/second-tab",
+                                profileBinding: TerminalProfileBinding(profileID: "ssh-prod")
+                            )
+                        ),
+                    ],
+                    focusedPanelID: secondPanelID,
+                    auxPanelVisibility: [.diff]
+                ),
+            ]
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+        let encoded = try JSONEncoder().encode(snapshot)
+        let decodedSnapshot = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: encoded)
+        let restoredState = decodedSnapshot.makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+
+        #expect(restoredWorkspace.tabIDs == [firstTabID, secondTabID])
+        #expect(restoredWorkspace.selectedTabID == secondTabID)
+
+        guard case .terminal(let firstTerminalState) = try #require(restoredWorkspace.tab(id: firstTabID)?.panels[firstPanelID]) else {
+            Issue.record("Expected first restored tab panel to remain terminal")
+            return
+        }
+        guard case .terminal(let secondTerminalState) = try #require(restoredWorkspace.tab(id: secondTabID)?.panels[secondPanelID]) else {
+            Issue.record("Expected second restored tab panel to remain terminal")
+            return
+        }
+
+        #expect(firstTerminalState.launchWorkingDirectory == "/tmp/first-tab")
+        #expect(secondTerminalState.launchWorkingDirectory == "/tmp/second-tab")
+        #expect(firstTerminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
+        #expect(secondTerminalState.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
+        #expect(restoredWorkspace.tab(id: secondTabID)?.customTitle == "Deploy")
+        #expect(restoredWorkspace.tab(id: secondTabID)?.displayTitle == "Deploy")
+        #expect(restoredWorkspace.tab(id: secondTabID)?.auxPanelVisibility == [.diff])
+        try StateValidator.validate(restoredState)
+    }
+
+    @Test
+    func workspaceLayoutTabSnapshotDecodesMissingCustomTitleAsNil() throws {
+        let snapshot = WorkspaceLayoutTabSnapshot(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil,
+            auxPanelVisibility: []
+        )
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        let json = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(json["customTitle"] == nil)
+
+        let decoded = try JSONDecoder().decode(WorkspaceLayoutTabSnapshot.self, from: encoded)
+        #expect(decoded.customTitle == nil)
     }
 
     @Test
@@ -239,8 +349,7 @@ struct WorkspaceLayoutSnapshotTests {
             ],
             workspacesByID: [workspace.id: restoredWorkspace],
             selectedWindowID: nil,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let snapshot = WorkspaceLayoutSnapshot(state: state)
@@ -320,8 +429,7 @@ struct WorkspaceLayoutSnapshotTests {
                 secondWorkspace.id: secondWorkspace,
             ],
             selectedWindowID: secondWindowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
 
         let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()

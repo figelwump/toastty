@@ -82,8 +82,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
                 ),
             ],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -151,8 +150,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
                 ),
             ],
             selectedWindowID: windowID,
-            configuredTerminalFontPoints: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            configuredTerminalFontPoints: nil
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
@@ -281,6 +279,30 @@ final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
                 preferNewestWhenAmbiguous: true
             ),
             1
+        )
+    }
+
+    func testPreferredRegistrationCandidateIndexReturnsNilWhenFallbackDisabledAndNoCandidateMatchesExpectedWorkingDirectory() {
+        XCTAssertNil(
+            TerminalProcessWorkingDirectoryResolver.preferredRegistrationCandidateIndex(
+                expectedWorkingDirectory: "/tmp/restored-one",
+                candidateWorkingDirectories: ["/tmp/restored-two"],
+                candidateLoginPIDs: [101],
+                preferNewestWhenAmbiguous: true,
+                allowUnmatchedFallback: false
+            )
+        )
+    }
+
+    func testPreferredRegistrationCandidateIndexReturnsNilWhenFallbackDisabledAndCandidatesHaveNoReadableCWD() {
+        XCTAssertNil(
+            TerminalProcessWorkingDirectoryResolver.preferredRegistrationCandidateIndex(
+                expectedWorkingDirectory: "/tmp/restored-one",
+                candidateWorkingDirectories: [nil, nil],
+                candidateLoginPIDs: [101, 202],
+                preferNewestWhenAmbiguous: true,
+                allowUnmatchedFallback: false
+            )
         )
     }
 }

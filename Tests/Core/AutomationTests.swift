@@ -405,6 +405,20 @@ struct AutomationTests {
     }
 
     @Test
+    func workspaceTabsWideFixtureLoadsExpectedShape() throws {
+        let fixture = try #require(AutomationFixtureLoader.load(named: "workspace-tabs-wide"))
+
+        #expect(fixture.windows.count == 1)
+        let window = try #require(fixture.windows.first)
+        #expect(window.frame.width == 2300)
+        #expect(window.sidebarVisible == true)
+        #expect(window.workspaceIDs.count == 1)
+        #expect(window.selectedWorkspaceID == window.workspaceIDs.first)
+
+        try StateValidator.validate(fixture)
+    }
+
+    @Test
     func loadRequiredFixtureThrowsForUnknownFixture() {
         #expect(throws: AutomationFixtureError.unknownFixture("not-real")) {
             _ = try AutomationFixtureLoader.loadRequired(named: "not-real")

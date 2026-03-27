@@ -27,8 +27,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let state = AppState(
             windows: [],
             workspacesByID: [:],
-            selectedWindowID: nil,
-            globalTerminalFontPoints: AppState.defaultTerminalFontPoints
+            selectedWindowID: nil
         )
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let controller = WindowCommandController(
@@ -41,7 +40,7 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertFalse(controller.closeWindow())
     }
 
-    func testCloseWindowRemovesWindowWhenClosingLastPanel() throws {
+    func testCloseWindowLeavesWindowEmptyWhenClosingLastPanel() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         XCTAssertTrue(store.send(.selectWindow(windowID: windowID)))
@@ -54,9 +53,10 @@ final class WindowCommandControllerTests: XCTestCase {
 
         XCTAssertTrue(controller.canCloseWindow())
         XCTAssertTrue(controller.closeWindow())
-        XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertNil(store.window(id: windowID))
-        XCTAssertNil(store.state.selectedWindowID)
+        let window = try XCTUnwrap(store.window(id: windowID))
+        XCTAssertTrue(window.workspaceIDs.isEmpty)
+        XCTAssertNil(window.selectedWorkspaceID)
+        XCTAssertEqual(store.state.selectedWindowID, windowID)
     }
 
     func testCloseWindowDoesNotFallbackWithoutKeyToasttyWindow() throws {
@@ -450,6 +450,269 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(ownedCloseWorkspaceItem.action, #selector(FileCloseMenuBridge.performCloseWorkspace(_:)))
     }
 
+    func testWorkspaceMenuBridgeRetargetsAndValidatesTabAndUnreadOrActiveItems() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(store.send(.selectWindow(windowID: windowID)))
+        XCTAssertTrue(store.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil)))
+
+        let workspaceAfterCreate = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let secondTabID = try XCTUnwrap(workspaceAfterCreate.resolvedSelectedTabID)
+        let secondPanelID = try XCTUnwrap(workspaceAfterCreate.focusedPanelID)
+        let firstTabID = try XCTUnwrap(workspaceAfterCreate.tabIDs.first(where: { $0 != secondTabID }))
+
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: firstTabID)))
+        XCTAssertTrue(store.send(.recordDesktopNotification(workspaceID: workspaceID, panelID: secondPanelID)))
+
+        let bridge = makeWorkspaceMenuBridge(store: store)
+        let mainMenu = NSMenu(title: "Main")
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        renameTabItem.keyEquivalentModifierMask = [.option, .shift]
+        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
+        previousItem.keyEquivalentModifierMask = [.command, .shift]
+        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
+        nextItem.keyEquivalentModifierMask = [.command, .shift]
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
+        unreadItem.keyEquivalentModifierMask = [.command, .shift]
+        workspaceMenu.addItem(renameTabItem)
+        workspaceMenu.addItem(previousItem)
+        workspaceMenu.addItem(nextItem)
+        workspaceMenu.addItem(unreadItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(renameTabItem.target === bridge)
+        XCTAssertEqual(renameTabItem.action, #selector(WorkspaceMenuBridge.renameSelectedTab(_:)))
+        XCTAssertTrue(previousItem.target === bridge)
+        XCTAssertEqual(previousItem.action, #selector(WorkspaceMenuBridge.selectPreviousTab(_:)))
+        XCTAssertTrue(nextItem.target === bridge)
+        XCTAssertEqual(nextItem.action, #selector(WorkspaceMenuBridge.selectNextTab(_:)))
+        XCTAssertTrue(unreadItem.target === bridge)
+        XCTAssertEqual(unreadItem.action, #selector(WorkspaceMenuBridge.focusNextUnreadOrActivePanel(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(renameTabItem))
+        XCTAssertTrue(bridge.validateMenuItem(previousItem))
+        XCTAssertTrue(bridge.validateMenuItem(nextItem))
+        XCTAssertTrue(bridge.validateMenuItem(unreadItem))
+
+        bridge.renameSelectedTab(nil)
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceTabRequest,
+            PendingWorkspaceTabRenameRequest(windowID: windowID, workspaceID: workspaceID, tabID: firstTabID)
+        )
+        store.pendingRenameWorkspaceTabRequest = nil
+
+        bridge.selectNextTab(nil)
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID, secondTabID)
+
+        bridge.selectPreviousTab(nil)
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID, firstTabID)
+
+        bridge.focusNextUnreadOrActivePanel(nil)
+
+        let workspaceAfterUnreadJump = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterUnreadJump.resolvedSelectedTabID, secondTabID)
+        XCTAssertEqual(workspaceAfterUnreadJump.focusedPanelID, secondPanelID)
+        XCTAssertFalse(try XCTUnwrap(workspaceAfterUnreadJump.tabsByID[secondTabID]).unreadPanelIDs.contains(secondPanelID))
+        XCTAssertFalse(bridge.validateMenuItem(unreadItem))
+    }
+
+    func testWorkspaceMenuBridgeRoutesLifecycleItemsToPreferredWindow() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let bridge = makeWorkspaceMenuBridge(
+            store: store,
+            preferredWindowIDProvider: { secondWindowID }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let newWorkspaceItem = NSMenuItem(title: "New Workspace", action: nil, keyEquivalent: "n")
+        newWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
+        renameWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        renameTabItem.keyEquivalentModifierMask = [.option, .shift]
+        let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
+        closeWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        workspaceMenu.addItem(renameTabItem)
+        workspaceMenu.addItem(newWorkspaceItem)
+        workspaceMenu.addItem(renameWorkspaceItem)
+        workspaceMenu.addItem(closeWorkspaceItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(newWorkspaceItem.target === bridge)
+        XCTAssertEqual(newWorkspaceItem.action, #selector(WorkspaceMenuBridge.createWorkspace(_:)))
+        XCTAssertTrue(renameWorkspaceItem.target === bridge)
+        XCTAssertEqual(renameWorkspaceItem.action, #selector(WorkspaceMenuBridge.renameWorkspace(_:)))
+        XCTAssertTrue(renameTabItem.target === bridge)
+        XCTAssertEqual(renameTabItem.action, #selector(WorkspaceMenuBridge.renameSelectedTab(_:)))
+        XCTAssertTrue(closeWorkspaceItem.target === bridge)
+        XCTAssertEqual(closeWorkspaceItem.action, #selector(WorkspaceMenuBridge.closeWorkspace(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(newWorkspaceItem))
+        XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
+        XCTAssertTrue(bridge.validateMenuItem(closeWorkspaceItem))
+
+        bridge.renameWorkspace(nil)
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceRequest,
+            PendingWorkspaceRenameRequest(windowID: secondWindowID, workspaceID: secondWorkspace.id)
+        )
+
+        store.pendingRenameWorkspaceRequest = nil
+        bridge.closeWorkspace(nil)
+        XCTAssertEqual(
+            store.pendingCloseWorkspaceRequest,
+            PendingWorkspaceCloseRequest(windowID: secondWindowID, workspaceID: secondWorkspace.id)
+        )
+
+        store.pendingCloseWorkspaceRequest = nil
+        bridge.createWorkspace(nil)
+
+        let updatedFirstWindow = try XCTUnwrap(store.state.window(id: firstWindowID))
+        let updatedSecondWindow = try XCTUnwrap(store.state.window(id: secondWindowID))
+        XCTAssertEqual(updatedFirstWindow.workspaceIDs, [firstWorkspace.id])
+        XCTAssertEqual(updatedSecondWindow.workspaceIDs.count, 2)
+        XCTAssertEqual(updatedSecondWindow.workspaceIDs.first, secondWorkspace.id)
+        XCTAssertEqual(updatedSecondWindow.selectedWorkspaceID, updatedSecondWindow.workspaceIDs.last)
+    }
+
+    func testWorkspaceMenuBridgeFallsBackToSelectedWindowWhenAppKitKeyWindowIsUnavailable() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertEqual(store.state.selectedWindowID, windowID)
+        let bridge = makeWorkspaceMenuBridge(
+            store: store,
+            preferredWindowIDProvider: {
+                currentToasttyWorkspaceCommandWindowID(in: store, keyWindow: nil)
+            }
+        )
+
+        let mainMenu = NSMenu(title: "Main")
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
+        renameWorkspaceItem.keyEquivalentModifierMask = [.command, .shift]
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        renameTabItem.keyEquivalentModifierMask = [.option, .shift]
+        workspaceMenu.addItem(renameTabItem)
+        workspaceMenu.addItem(renameWorkspaceItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertTrue(renameWorkspaceItem.target === bridge)
+        XCTAssertEqual(renameWorkspaceItem.action, #selector(WorkspaceMenuBridge.renameWorkspace(_:)))
+        XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
+
+        bridge.renameWorkspace(nil)
+
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceRequest,
+            PendingWorkspaceRenameRequest(windowID: windowID, workspaceID: workspaceID)
+        )
+    }
+
+    func testCurrentToasttyWorkspaceCommandWindowIDRejectsMissingSelectedWindowFallback() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        var state = store.state
+        state.selectedWindowID = UUID()
+        store.replaceState(state)
+
+        XCTAssertNil(currentToasttyWorkspaceCommandWindowID(in: store, keyWindow: nil))
+    }
+
+    func testWorkspaceMenuBridgeDisablesItemsWithoutKeyToasttyWindow() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let bridge = makeWorkspaceMenuBridge(store: store, preferredWindowIDProvider: { nil })
+
+        let mainMenu = NSMenu(title: "Main")
+        let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
+        let workspaceMenu = NSMenu(title: "Workspace")
+        let newWorkspaceItem = NSMenuItem(title: "New Workspace", action: nil, keyEquivalent: "n")
+        let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
+        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
+        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
+        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
+        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
+        workspaceMenu.addItem(newWorkspaceItem)
+        workspaceMenu.addItem(renameWorkspaceItem)
+        workspaceMenu.addItem(renameTabItem)
+        workspaceMenu.addItem(closeWorkspaceItem)
+        workspaceMenu.addItem(previousItem)
+        workspaceMenu.addItem(nextItem)
+        workspaceMenu.addItem(unreadItem)
+        workspaceItem.submenu = workspaceMenu
+        mainMenu.addItem(workspaceItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        XCTAssertFalse(bridge.validateMenuItem(newWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(renameWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
+        XCTAssertFalse(bridge.validateMenuItem(closeWorkspaceItem))
+        XCTAssertFalse(bridge.validateMenuItem(previousItem))
+        XCTAssertFalse(bridge.validateMenuItem(nextItem))
+        XCTAssertFalse(bridge.validateMenuItem(unreadItem))
+    }
+
     func testHelpMenuBridgeRetargetsToasttyHelpItemAndOpensGitHub() {
         var openedURL: URL?
         let bridge = HelpMenuBridge { url in
@@ -642,7 +905,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
         bridge.installIfNeeded()
 
-        XCTAssertTrue(fileMenu.items[0].isHidden)
+        XCTAssertFalse(fileMenu.items[0].isHidden)
         XCTAssertFalse(fileMenu.items[1].isHidden)
         XCTAssertTrue(windowMenu.items[0].isHidden)
         XCTAssertTrue(windowMenu.items[1].isHidden)
@@ -667,7 +930,11 @@ final class WindowCommandControllerTests: XCTestCase {
         bridge.installIfNeeded()
 
         let rebuiltFileMenu = NSMenu(title: "Datei")
-        let rebuiltNewWindowItem = NSMenuItem(title: "New Window", action: nil, keyEquivalent: "n")
+        let rebuiltNewWindowItem = NSMenuItem(
+            title: "New Window",
+            action: #selector(NSResponder.newWindowForTab(_:)),
+            keyEquivalent: "n"
+        )
         let rebuiltOpenRecentItem = NSMenuItem(title: "Open Recent", action: nil, keyEquivalent: "")
         rebuiltFileMenu.addItem(rebuiltNewWindowItem)
         rebuiltFileMenu.addItem(rebuiltOpenRecentItem)
@@ -1270,6 +1537,32 @@ final class WindowCommandControllerTests: XCTestCase {
         )
     }
 
+    private func makeWorkspaceMenuBridge(
+        store: AppStore,
+        preferredWindowIDProvider: (() -> UUID?)? = nil
+    ) -> WorkspaceMenuBridge {
+        let resolvedWindowIDProvider = preferredWindowIDProvider ?? { store.state.selectedWindowID }
+        return WorkspaceMenuBridge(
+            createWorkspaceCommandController: CreateWorkspaceCommandController(
+                store: store,
+                preferredWindowIDProvider: resolvedWindowIDProvider
+            ),
+            renameWorkspaceCommandController: RenameWorkspaceCommandController(
+                store: store,
+                preferredWindowIDProvider: resolvedWindowIDProvider
+            ),
+            closeWorkspaceCommandController: CloseWorkspaceCommandController(
+                store: store,
+                preferredWindowIDProvider: resolvedWindowIDProvider
+            ),
+            workspaceTabCommandController: WorkspaceTabCommandController(
+                store: store,
+                sessionRuntimeStore: makeSessionRuntimeStore(store: store),
+                preferredWindowIDProvider: resolvedWindowIDProvider
+            )
+        )
+    }
+
     private func makeFocusedPanelCommandController(store: AppStore) -> FocusedPanelCommandController {
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
@@ -1278,6 +1571,12 @@ final class WindowCommandControllerTests: XCTestCase {
             runtimeRegistry: runtimeRegistry,
             slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
         )
+    }
+
+    private func makeSessionRuntimeStore(store: AppStore) -> SessionRuntimeStore {
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        return sessionRuntimeStore
     }
 
     private func flushMainActorTasks() async {

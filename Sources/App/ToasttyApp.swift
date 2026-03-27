@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import CoreState
 import SwiftUI
 
@@ -165,6 +166,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
+    private var workspaceMenuBridge: WorkspaceMenuBridge?
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
     private var sparkleMenuBridge: SparkleMenuBridge?
@@ -199,12 +201,14 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         fileSplitMenuBridge: FileSplitMenuBridge,
         fileCloseMenuBridge: FileCloseMenuBridge,
         windowSplitMenuBridge: WindowSplitMenuBridge,
+        workspaceMenuBridge: WorkspaceMenuBridge,
         helpMenuBridge: HelpMenuBridge,
         hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     ) {
         self.fileSplitMenuBridge = fileSplitMenuBridge
         self.fileCloseMenuBridge = fileCloseMenuBridge
         self.windowSplitMenuBridge = windowSplitMenuBridge
+        self.workspaceMenuBridge = workspaceMenuBridge
         self.helpMenuBridge = helpMenuBridge
         self.hiddenSystemMenuItemsBridge = hiddenSystemMenuItemsBridge
         hiddenSystemMenuItemsBridge.setOnOwnedMenuSectionRefreshRequested { [weak self] in
@@ -277,7 +281,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         guard flag == false else { return true }
         guard let store else { return true }
 
-        // If Toastty has nothing ordered out to restore, let AppKit continue
+        // If Toastty has no hidden windows to restore, let AppKit continue
         // with its default reopen handling (for example, miniaturized windows).
         _ = restoreHiddenToasttyWindows(
             windows: sender.windows,
@@ -305,6 +309,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func installDynamicMenuBridges() {
+        workspaceMenuBridge?.installIfNeeded()
         helpMenuBridge?.installIfNeeded()
         sparkleMenuBridge?.installIfNeeded()
     }
@@ -333,19 +338,30 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
+    private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
 
     private enum ShortcutAction {
         case closePanel
+        case createWorkspaceTab
+        case focusNextUnreadOrActivePanel
+        case renameSelectedTab
+        case selectWorkspaceTab(Int)
+        case selectAdjacentTab(TabNavigationDirection)
         case switchWorkspace(Int)
         case focusPanel(Int)
         case cycleWorkspaceNext
         case cycleWorkspacePrevious
     }
 
-    init(store: AppStore, focusedPanelCommandController: FocusedPanelCommandController) {
+    init(
+        store: AppStore,
+        sessionRuntimeStore: SessionRuntimeStore,
+        focusedPanelCommandController: FocusedPanelCommandController
+    ) {
         self.store = store
+        self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self else { return event }
@@ -366,9 +382,34 @@ final class DisplayShortcutInterceptor {
     }
 
     private func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+        if let shortcutNumber = Self.tabSelectionShortcutNumber(for: event),
+           appOwnedShortcutWindowID() != nil {
+            return .selectWorkspaceTab(shortcutNumber)
+        }
+
+        if let direction = Self.tabNavigationDirection(for: event),
+           appOwnedShortcutWindowID() != nil {
+            return .selectAdjacentTab(direction)
+        }
+
+        if Self.isNewTabShortcut(event),
+           appOwnedShortcutWindowID() != nil {
+            return .createWorkspaceTab
+        }
+
         if Self.isClosePanelShortcut(event),
-           closePanelShortcutWindowID() != nil {
+           appOwnedShortcutWindowID() != nil {
             return .closePanel
+        }
+
+        if Self.isFocusNextUnreadOrActiveShortcut(event),
+           appOwnedShortcutWindowID() != nil {
+            return .focusNextUnreadOrActivePanel
+        }
+
+        if Self.isRenameTabShortcut(event),
+           appOwnedShortcutWindowID() != nil {
+            return .renameSelectedTab
         }
 
         switch DisplayShortcutConfig.action(for: event) {
@@ -389,6 +430,16 @@ final class DisplayShortcutInterceptor {
         switch action {
         case .closePanel:
             closeFocusedPanel()
+        case .createWorkspaceTab:
+            createWorkspaceTab()
+        case .focusNextUnreadOrActivePanel:
+            focusNextUnreadOrActivePanel()
+        case .renameSelectedTab:
+            renameSelectedTab()
+        case .selectWorkspaceTab(let shortcutNumber):
+            selectWorkspaceTab(shortcutNumber: shortcutNumber)
+        case .selectAdjacentTab(let direction):
+            selectAdjacentTab(direction: direction)
         case .switchWorkspace(let shortcutNumber):
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
@@ -400,6 +451,68 @@ final class DisplayShortcutInterceptor {
         }
     }
 
+    static func isNewTabShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "t" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func tabSelectionShortcutNumber(for event: NSEvent) -> Int? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command] else { return nil }
+
+        let shortcutNumber: Int?
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_1), Int(kVK_ANSI_Keypad1):
+            shortcutNumber = 1
+        case Int(kVK_ANSI_2), Int(kVK_ANSI_Keypad2):
+            shortcutNumber = 2
+        case Int(kVK_ANSI_3), Int(kVK_ANSI_Keypad3):
+            shortcutNumber = 3
+        case Int(kVK_ANSI_4), Int(kVK_ANSI_Keypad4):
+            shortcutNumber = 4
+        case Int(kVK_ANSI_5), Int(kVK_ANSI_Keypad5):
+            shortcutNumber = 5
+        case Int(kVK_ANSI_6), Int(kVK_ANSI_Keypad6):
+            shortcutNumber = 6
+        case Int(kVK_ANSI_7), Int(kVK_ANSI_Keypad7):
+            shortcutNumber = 7
+        case Int(kVK_ANSI_8), Int(kVK_ANSI_Keypad8):
+            shortcutNumber = 8
+        case Int(kVK_ANSI_9), Int(kVK_ANSI_Keypad9):
+            shortcutNumber = 9
+        default:
+            shortcutNumber = nil
+        }
+
+        guard let shortcutNumber,
+              shortcutNumber <= DisplayShortcutConfig.maxWorkspaceTabSelectionShortcutCount else {
+            return nil
+        }
+        return shortcutNumber
+    }
+
+    /// Detects Cmd+Shift+[ (previous tab) and Cmd+Shift+] (next tab).
+    static func tabNavigationDirection(for event: NSEvent) -> TabNavigationDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command, .shift] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_LeftBracket):
+            return .previous
+        case Int(kVK_ANSI_RightBracket):
+            return .next
+        default:
+            return nil
+        }
+    }
+
     static func isClosePanelShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown,
               event.isARepeat == false,
@@ -408,6 +521,23 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command]
+    }
+
+    static func isFocusNextUnreadOrActiveShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "a" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
+    static func isRenameTabShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.isARepeat == false else { return false }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.option, .shift] else { return false }
+        return Int(event.keyCode) == Int(kVK_ANSI_E)
     }
 
     static func closePanelShortcutWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
@@ -423,7 +553,7 @@ final class DisplayShortcutInterceptor {
         return UUID(uuidString: rawWindowID)
     }
 
-    private func closePanelShortcutWindowID() -> UUID? {
+    private func appOwnedShortcutWindowID() -> UUID? {
         guard let store else { return nil }
         guard let windowID = Self.closePanelShortcutWindowID(
             keyWindow: NSApp.keyWindow,
@@ -437,7 +567,7 @@ final class DisplayShortcutInterceptor {
 
     private func closeFocusedPanel() -> Bool {
         guard let store else { return false }
-        guard let preferredWindowID = closePanelShortcutWindowID() else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         let preferredWorkspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id
         guard focusedPanelCommandController.closeFocusedPanel(in: preferredWorkspaceID).consumesShortcut else {
             // Cmd+W is app-owned for normal workspace windows. If there is no
@@ -448,17 +578,67 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
+    private func createWorkspaceTab() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func focusNextUnreadOrActivePanel() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard store.commandSelection(preferredWindowID: preferredWindowID) != nil else {
+            return false
+        }
+
+        _ = store.focusNextUnreadOrActivePanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+        // Cmd+Shift+A is app-owned for normal workspace windows. If there is no
+        // next unread or active target, swallow the shortcut rather than
+        // passing it to the embedded terminal or default responder.
+        return true
+    }
+
+    private func renameSelectedTab() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
     private func switchWorkspace(shortcutNumber: Int) -> Bool {
         guard let store else { return false }
         guard shortcutNumber > 0, shortcutNumber <= DisplayShortcutConfig.maxWorkspaceShortcutCount else {
             return false
         }
-        guard let window = store.selectedWindow else { return false }
+        let preferredWindowID = currentToasttyKeyWindowID(in: store)
+        guard let window = store.commandSelection(preferredWindowID: preferredWindowID)?.window else {
+            return false
+        }
         let index = shortcutNumber - 1
         guard window.workspaceIDs.indices.contains(index) else { return false }
         let workspaceID = window.workspaceIDs[index]
         guard store.state.workspacesByID[workspaceID] != nil else { return false }
         return store.send(.selectWorkspace(windowID: window.id, workspaceID: workspaceID))
+    }
+
+    private func selectWorkspaceTab(shortcutNumber: Int) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.selectWorkspaceTabFromCommand(
+            preferredWindowID: preferredWindowID,
+            shortcutNumber: shortcutNumber
+        )
+    }
+
+    private func selectAdjacentTab(direction: TabNavigationDirection) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        return store.selectAdjacentWorkspaceTab(
+            preferredWindowID: preferredWindowID,
+            direction: direction
+        )
     }
 
     private func cycleWorkspace(direction: Int) -> Bool {
@@ -476,7 +656,10 @@ final class DisplayShortcutInterceptor {
 
     private func focusTerminalPanel(shortcutNumber: Int) -> Bool {
         guard let store else { return false }
-        guard let workspace = store.selectedWorkspace else { return false }
+        let preferredWindowID = currentToasttyKeyWindowID(in: store)
+        guard let workspace = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
+            return false
+        }
         guard let panelID = workspace.terminalPanelID(forDisplayShortcutNumber: shortcutNumber) else {
             return false
         }
@@ -561,6 +744,7 @@ struct ToasttyApp: App {
     private let fileSplitMenuBridge: FileSplitMenuBridge
     private let fileCloseMenuBridge: FileCloseMenuBridge
     private let windowSplitMenuBridge: WindowSplitMenuBridge
+    private let workspaceMenuBridge: WorkspaceMenuBridge
     private let helpMenuBridge: HelpMenuBridge
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
@@ -590,6 +774,9 @@ struct ToasttyApp: App {
         let terminalProfileStore = TerminalProfileStore()
         let initialToasttyConfig = usesPersistentPreferences ? ToasttyConfigStore.load() : ToasttyConfig()
         let initialToasttySettings = usesPersistentPreferences ? ToasttySettingsStore.load() : ToasttySettings()
+        let legacyTerminalFontSizePoints = usesPersistentPreferences
+            ? ToasttySettingsStore.legacyTerminalFontSizePoints()
+            : nil
         let initialDefaultTerminalProfileID = usesPersistentPreferences
             ? Self.resolvedDefaultTerminalProfileID(
                 configuredDefaultTerminalProfileID: initialToasttyConfig.defaultTerminalProfileID,
@@ -673,7 +860,7 @@ struct ToasttyApp: App {
                 to: store,
                 terminalProfileCatalog: terminalProfileStore.catalog,
                 toasttyConfig: initialToasttyConfig,
-                toasttySettings: initialToasttySettings
+                legacyTerminalFontSizePoints: legacyTerminalFontSizePoints
             )
             Self.ensureToasttyConfigTemplateExists()
         }
@@ -685,9 +872,25 @@ struct ToasttyApp: App {
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let preferredWorkspaceCommandWindowID: () -> UUID? = {
+            currentToasttyWorkspaceCommandWindowID(in: store)
+        }
+        let createWorkspaceCommandController = CreateWorkspaceCommandController(
+            store: store,
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
+        )
         let closeWorkspaceCommandController = CloseWorkspaceCommandController(
             store: store,
             preferredWindowIDProvider: { currentToasttyKeyWindowID(in: store) }
+        )
+        let renameWorkspaceCommandController = RenameWorkspaceCommandController(
+            store: store,
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
+        )
+        let workspaceTabCommandController = WorkspaceTabCommandController(
+            store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         fileSplitMenuBridge = FileSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
@@ -703,6 +906,12 @@ struct ToasttyApp: App {
         windowSplitMenuBridge = WindowSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
         )
+        workspaceMenuBridge = WorkspaceMenuBridge(
+            createWorkspaceCommandController: createWorkspaceCommandController,
+            renameWorkspaceCommandController: renameWorkspaceCommandController,
+            closeWorkspaceCommandController: closeWorkspaceCommandController,
+            workspaceTabCommandController: workspaceTabCommandController
+        )
         helpMenuBridge = HelpMenuBridge()
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         terminalProfilesMenuController = TerminalProfilesMenuController(
@@ -713,6 +922,7 @@ struct ToasttyApp: App {
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
+            sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController
         )
         _store = StateObject(wrappedValue: store)
@@ -792,6 +1002,7 @@ struct ToasttyApp: App {
             fileSplitMenuBridge: fileSplitMenuBridge,
             fileCloseMenuBridge: fileCloseMenuBridge,
             windowSplitMenuBridge: windowSplitMenuBridge,
+            workspaceMenuBridge: workspaceMenuBridge,
             helpMenuBridge: helpMenuBridge,
             hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
         )
@@ -915,7 +1126,6 @@ struct ToasttyApp: App {
         }
 
         let toasttyConfig = ToasttyConfigStore.load()
-        let toasttySettings = ToasttySettingsStore.load()
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
@@ -951,7 +1161,7 @@ struct ToasttyApp: App {
             Self.applyToasttyTerminalFontState(
                 to: store,
                 toasttyConfig: toasttyConfig,
-                toasttySettings: toasttySettings,
+                legacyTerminalFontSizePoints: nil,
                 ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
             )
         } else {
@@ -959,7 +1169,7 @@ struct ToasttyApp: App {
             Self.applyToasttyTerminalFontState(
                 to: store,
                 toasttyConfig: toasttyConfig,
-                toasttySettings: toasttySettings,
+                legacyTerminalFontSizePoints: nil,
                 ghosttyConfiguredTerminalFontPoints: runtimeManager.configuredTerminalFontPoints
             )
         }
@@ -967,7 +1177,7 @@ struct ToasttyApp: App {
         Self.applyToasttyTerminalFontState(
             to: store,
             toasttyConfig: toasttyConfig,
-            toasttySettings: toasttySettings,
+            legacyTerminalFontSizePoints: nil,
             ghosttyConfiguredTerminalFontPoints: nil
         )
         #endif
@@ -1008,7 +1218,7 @@ struct ToasttyApp: App {
         to store: AppStore,
         terminalProfileCatalog: TerminalProfileCatalog,
         toasttyConfig: ToasttyConfig,
-        toasttySettings: ToasttySettings
+        legacyTerminalFontSizePoints: Double?
     ) {
         applyConfiguredDefaultTerminalProfile(
             to: store,
@@ -1026,7 +1236,7 @@ struct ToasttyApp: App {
         applyToasttyTerminalFontState(
             to: store,
             toasttyConfig: toasttyConfig,
-            toasttySettings: toasttySettings,
+            legacyTerminalFontSizePoints: legacyTerminalFontSizePoints,
             ghosttyConfiguredTerminalFontPoints: ghosttyConfiguredTerminalFontPoints
         )
     }
@@ -1071,19 +1281,31 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private static func applyToasttyTerminalFontState(
+    static func applyToasttyTerminalFontState(
         to store: AppStore,
         toasttyConfig: ToasttyConfig,
-        toasttySettings: ToasttySettings,
-        ghosttyConfiguredTerminalFontPoints: Double?
+        legacyTerminalFontSizePoints: Double?,
+        ghosttyConfiguredTerminalFontPoints: Double?,
+        clearLegacyTerminalFontSizePoints: @escaping () -> Void = {
+            ToasttySettingsStore.clearLegacyTerminalFontSizePoints()
+        }
     ) {
         let configuredBaseline = toasttyConfig.terminalFontSizePoints ?? ghosttyConfiguredTerminalFontPoints
         _ = store.send(.setConfiguredTerminalFont(points: configuredBaseline))
 
-        if let persistedFontSizePoints = toasttySettings.terminalFontSizePoints {
-            _ = store.send(.setGlobalTerminalFont(points: persistedFontSizePoints))
-        } else {
-            _ = store.send(.resetGlobalTerminalFont)
+        guard let legacyTerminalFontSizePoints else { return }
+        defer { clearLegacyTerminalFontSizePoints() }
+        guard store.state.windows.allSatisfy({ $0.terminalFontSizePointsOverride == nil }) else {
+            return
+        }
+
+        for windowID in store.state.windows.map(\.id) {
+            _ = store.send(
+                .setWindowTerminalFont(
+                    windowID: windowID,
+                    points: legacyTerminalFontSizePoints
+                )
+            )
         }
     }
 

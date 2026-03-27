@@ -61,7 +61,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private var stateObservation: AnyCancellable?
-    private var observedGlobalFontPoints: Double?
+    private var observedWindowFontPointsByID: [UUID: Double] = [:]
     private var restoredTerminalPanelIDsAwaitingLaunch: Set<UUID> = []
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
@@ -466,7 +466,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
 private extension TerminalRuntimeRegistry {
     func bindStateObservation(to store: AppStore) {
         stateObservation?.cancel()
-        observedGlobalFontPoints = store.state.globalTerminalFontPoints
+        observedWindowFontPointsByID = effectiveWindowFontPointsByID(in: store.state)
         stateObservation = store.$state.sink { [weak self] state in
             self?.handleObservedStoreState(state)
         }
@@ -474,16 +474,12 @@ private extension TerminalRuntimeRegistry {
 
     func handleObservedStoreState(_ state: AppState) {
         synchronize(with: state)
-
-        if let previousPoints = observedGlobalFontPoints,
-           abs(previousPoints - state.globalTerminalFontPoints) >= AppState.terminalFontComparisonEpsilon {
-            applyGhosttyGlobalFontChangeIfNeeded(
-                from: previousPoints,
-                to: state.globalTerminalFontPoints
-            )
-        }
-
-        observedGlobalFontPoints = state.globalTerminalFontPoints
+        let nextWindowFontPointsByID = effectiveWindowFontPointsByID(in: state)
+        applyGhosttyFontChangesIfNeeded(
+            from: observedWindowFontPointsByID,
+            to: nextWindowFontPointsByID
+        )
+        observedWindowFontPointsByID = nextWindowFontPointsByID
     }
 
     func scheduleFocusRestore(
@@ -513,12 +509,14 @@ private extension TerminalRuntimeRegistry {
 
     func liveTerminalPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for (panelID, panelState) in workspace.panels {
-                if case .terminal = panelState {
-                    result.insert(panelID)
-                }
-            }
+            result.formUnion(workspace.allTerminalPanelIDs)
         }
+    }
+
+    func effectiveWindowFontPointsByID(in state: AppState) -> [UUID: Double] {
+        Dictionary(uniqueKeysWithValues: state.windows.map { window in
+            (window.id, state.effectiveTerminalFontPoints(for: window.id))
+        })
     }
 
 }
@@ -535,8 +533,15 @@ private extension TerminalRuntimeRegistry {
         GhosttyRuntimeManager.shared.actionHandler = self
     }
 
-    func applyGhosttyGlobalFontChangeIfNeeded(from previousPoints: Double, to nextPoints: Double) {
-        runtimeStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
+    func applyGhosttyFontChangesIfNeeded(from previousPointsByWindowID: [UUID: Double], to nextPointsByWindowID: [UUID: Double]) {
+        for windowID in Set(previousPointsByWindowID.keys).union(nextPointsByWindowID.keys) {
+            guard let previousPoints = previousPointsByWindowID[windowID],
+                  let nextPoints = nextPointsByWindowID[windowID],
+                  abs(previousPoints - nextPoints) >= AppState.terminalFontComparisonEpsilon else {
+                continue
+            }
+            runtimeStore.applyGhosttyFontChange(windowID: windowID, from: previousPoints, to: nextPoints)
+        }
     }
 
     func splitSourceSurfaceState(for newPanelID: UUID) -> TerminalSplitSourceSurfaceState {
@@ -551,7 +556,7 @@ private extension TerminalRuntimeRegistry {
 private extension TerminalRuntimeRegistry {
     func configureGhosttyActionHandler() {}
 
-    func applyGhosttyGlobalFontChangeIfNeeded(from _: Double, to _: Double) {}
+    func applyGhosttyFontChangesIfNeeded(from _: [UUID: Double], to _: [UUID: Double]) {}
 }
 #endif
 
@@ -583,8 +588,8 @@ extension TerminalRuntimeRegistry {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                guard workspace.panels[panelID] != nil else { continue }
-                if workspace.layoutTree.slotContaining(panelID: panelID) != nil {
+                guard workspace.panelState(for: panelID) != nil else { continue }
+                if workspace.slotID(containingPanelID: panelID) != nil {
                     return workspaceID
                 }
             }
@@ -610,8 +615,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         for window in state.windows {
             for workspaceID in window.workspaceIDs {
                 guard let workspace = state.workspacesByID[workspaceID] else { continue }
-                guard workspace.panels[panelID] != nil else { continue }
-                guard workspace.layoutTree.slotContaining(panelID: panelID) != nil else { continue }
+                guard workspace.panelState(for: panelID) != nil else { continue }
+                guard workspace.slotID(containingPanelID: panelID) != nil else { continue }
                 return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
             }
         }
@@ -636,7 +641,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],
-              case .terminal(let terminalState)? = workspace.panels[panelID] else {
+              case .terminal(let terminalState)? = workspace.panelState(for: panelID) else {
             return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)
         }
 
@@ -694,7 +699,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         guard let store,
               let workspaceID = workspaceID(containing: panelID, state: store.state),
               let workspace = store.state.workspacesByID[workspaceID],
-              case .terminal(let terminalState)? = workspace.panels[panelID],
+              case .terminal(let terminalState)? = workspace.panelState(for: panelID),
               terminalState.profileBinding != nil else {
             return
         }
@@ -716,12 +721,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     func registerSurfaceChildPIDAfterCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String?
+        expectedWorkingDirectory: String?,
+        isRestoredLaunch: Bool
     ) {
         registerChildPIDAfterSurfaceCreation(
             panelID: panelID,
             previousChildren: previousChildren,
-            expectedWorkingDirectory: expectedWorkingDirectory
+            expectedWorkingDirectory: expectedWorkingDirectory,
+            isRestoredLaunch: isRestoredLaunch
         )
     }
 
@@ -783,15 +790,17 @@ extension TerminalRuntimeRegistry {
 private extension TerminalRuntimeRegistry {
     func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
         if let focusedPanelID = workspace.focusedPanelID,
-           workspace.panels[focusedPanelID] != nil,
-           workspace.layoutTree.slotContaining(panelID: focusedPanelID) != nil {
+           workspace.panelState(for: focusedPanelID) != nil,
+           workspace.slotID(containingPanelID: focusedPanelID) != nil {
             return focusedPanelID
         }
 
-        for leaf in workspace.layoutTree.allSlotInfos {
-            let panelID = leaf.panelID
-            if workspace.panels[panelID] != nil {
-                return panelID
+        for tab in workspace.orderedTabs {
+            for leaf in tab.layoutTree.allSlotInfos {
+                let panelID = leaf.panelID
+                if tab.panels[panelID] != nil {
+                    return panelID
+                }
             }
         }
 
@@ -801,9 +810,9 @@ private extension TerminalRuntimeRegistry {
     func isValidDropTargetPanel(_ panelID: UUID, state: AppState) -> Bool {
         guard let workspaceID = workspaceID(containing: panelID, state: state),
               let workspace = state.workspacesByID[workspaceID],
-              let panelState = workspace.panels[panelID],
+              let panelState = workspace.panelState(for: panelID),
               case .terminal = panelState,
-              workspace.layoutTree.slotContaining(panelID: panelID) != nil else {
+              workspace.slotID(containingPanelID: panelID) != nil else {
             return false
         }
         return true
@@ -847,12 +856,14 @@ private extension TerminalRuntimeRegistry {
     func registerChildPIDAfterSurfaceCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String?
+        expectedWorkingDirectory: String?,
+        isRestoredLaunch: Bool
     ) {
         metadataService?.registerChildPIDAfterSurfaceCreation(
             panelID: panelID,
             previousChildren: previousChildren,
-            expectedWorkingDirectory: expectedWorkingDirectory
+            expectedWorkingDirectory: expectedWorkingDirectory,
+            isRestoredLaunch: isRestoredLaunch
         )
     }
 
