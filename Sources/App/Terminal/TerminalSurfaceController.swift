@@ -78,7 +78,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let pixelWidth: Int
         let pixelHeight: Int
         let scaleThousandths: Int
-        let focused: Bool
         let pixelSizingEnabled: Bool
     }
 
@@ -547,7 +546,6 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             pixelWidth: pixelWidth,
             pixelHeight: pixelHeight,
             scaleThousandths: Int((xScale * 1000).rounded()),
-            focused: effectiveFocused,
             pixelSizingEnabled: usesBackingPixelSurfaceSizing
         )
         let presentationChanged = presentationSignature != previousPresentationSignature
@@ -1637,9 +1635,6 @@ extension TerminalSurfaceController {
             previousPresentationSignature.pixelHeight != presentationSignature.pixelHeight {
             reasons.append("pixel_size_change")
         }
-        if previousPresentationSignature.focused != presentationSignature.focused {
-            reasons.append("focus_change")
-        }
         if previousPresentationSignature.pixelSizingEnabled != presentationSignature.pixelSizingEnabled {
             reasons.append("pixel_sizing_mode_change")
         }
@@ -1686,7 +1681,6 @@ extension TerminalSurfaceController {
                 pixelWidth: max(Int((lastPresentationViewportSize.width * presentationScale).rounded()), 1),
                 pixelHeight: max(Int((lastPresentationViewportSize.height * presentationScale).rounded()), 1),
                 scaleThousandths: Int((presentationScale * 1000).rounded()),
-                focused: focused,
                 pixelSizingEnabled: usesBackingPixelSurfaceSizing
             )
         } else {
