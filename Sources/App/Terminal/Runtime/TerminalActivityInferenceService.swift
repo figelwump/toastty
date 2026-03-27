@@ -207,6 +207,14 @@ final class TerminalActivityInferenceService {
             return
         }
 
+        // Session tracking is optional here because some tests and runtime
+        // embeddings only need generic busy-state inference.
+        _ = sessionLifecycleTracker?.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: visibleText,
+            at: now
+        )
+
         let appearsBusy = TerminalVisibleTextInspector.appearsBusy(visibleText)
         if appearsBusy {
             busyPanelStateByPanelID[panelID] = PanelBusyState(

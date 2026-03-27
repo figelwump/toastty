@@ -455,6 +455,26 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         sessionRegistry.activeSession(for: panelID)?.usesSessionStatusNotifications == true
     }
 
+    @discardableResult
+    func refreshManagedSessionStatusFromVisibleTextIfNeeded(
+        panelID: UUID,
+        visibleText: String,
+        at now: Date
+    ) -> Bool {
+        guard let record = sessionRegistry.activeSession(for: panelID),
+              record.agent == .codex,
+              record.usesSessionStatusNotifications,
+              let currentStatus = record.status,
+              currentStatus.kind == .working,
+              let nextStatus = CodexVisibleTextStatusParser.workingStatus(from: visibleText),
+              nextStatus != currentStatus else {
+            return false
+        }
+
+        updateStatus(sessionID: record.sessionID, status: nextStatus, at: now)
+        return true
+    }
+
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,

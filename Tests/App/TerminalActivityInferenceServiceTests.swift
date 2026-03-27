@@ -415,6 +415,38 @@ final class TerminalActivityInferenceServiceTests: XCTestCase {
             try StateValidator.validate(store.state)
         }
     }
+
+    func testRefreshVisibleTextInferenceForwardsRenderedProgressToSessionTracker() async throws {
+        try await MainActor.run {
+            let (store, _, workspaceID, panelID, visibleTextStore) = try makeActivityInferenceFixture()
+            let tracker = SessionLifecycleTrackerSpy()
+            let service = makeActivityInferenceService(
+                visibleTextStore: visibleTextStore,
+                sessionLifecycleTracker: tracker
+            )
+
+            visibleTextStore.textByPanelID[panelID] = """
+            dev@host ~/repo % codex
+            Executing shell commands (7s • esc to interrupt)
+            """
+            service.refreshVisibleTextInference(
+                state: store.state,
+                selectedPanelWorkspaceIDs: [panelID: workspaceID],
+                backgroundPanelWorkspaceIDs: [:]
+            )
+
+            XCTAssertEqual(tracker.visibleTextRefreshCalls.count, 1)
+            XCTAssertEqual(tracker.visibleTextRefreshCalls.first?.panelID, panelID)
+            XCTAssertEqual(
+                tracker.visibleTextRefreshCalls.first?.visibleText,
+                """
+                dev@host ~/repo % codex
+                Executing shell commands (7s • esc to interrupt)
+                """
+            )
+            try StateValidator.validate(store.state)
+        }
+    }
 }
 
 @MainActor
@@ -468,16 +500,34 @@ private final class VisibleTextStore {
 
 @MainActor
 private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking {
+    struct VisibleTextRefreshCall: Equatable {
+        let panelID: UUID
+        let visibleText: String
+    }
+
     struct StopOlderThanCall: Equatable {
         let panelID: UUID
         let minimumRuntime: TimeInterval
         let reason: ManagedSessionStopReason
     }
 
+    private(set) var visibleTextRefreshCalls: [VisibleTextRefreshCall] = []
     private(set) var stopOlderThanCalls: [StopOlderThanCall] = []
 
     func activeSessionUsesStatusNotifications(panelID: UUID) -> Bool {
         _ = panelID
+        return false
+    }
+
+    func refreshManagedSessionStatusFromVisibleTextIfNeeded(
+        panelID: UUID,
+        visibleText: String,
+        at now: Date
+    ) -> Bool {
+        _ = now
+        visibleTextRefreshCalls.append(
+            VisibleTextRefreshCall(panelID: panelID, visibleText: visibleText)
+        )
         return false
     }
 

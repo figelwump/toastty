@@ -321,6 +321,17 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
         return false
     }
 
+    func refreshManagedSessionStatusFromVisibleTextIfNeeded(
+        panelID: UUID,
+        visibleText: String,
+        at now: Date
+    ) -> Bool {
+        _ = panelID
+        _ = visibleText
+        _ = now
+        return false
+    }
+
     func handleLocalInterruptForPanelIfActive(
         panelID: UUID,
         kind: TerminalLocalInterruptKind,

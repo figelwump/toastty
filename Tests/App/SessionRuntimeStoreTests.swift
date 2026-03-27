@@ -824,6 +824,185 @@ struct SessionRuntimeStoreTests {
         )
     }
 
+    @Test
+    func refreshManagedSessionStatusFromVisibleTextUpdatesWorkingCodexDetail() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-visible-text",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-visible-text",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Responding to your prompt"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: """
+            dev@host ~/repo % codex
+            • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
+            """,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didRefresh)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(
+                    kind: .working,
+                    summary: "Working",
+                    detail: "Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count."
+                )
+        )
+    }
+
+    @Test
+    func refreshManagedSessionStatusFromVisibleTextIgnoresGenericWorkingSpinner() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-generic-visible-text",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-generic-visible-text",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Responding to your prompt"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "Working (7s • esc to interrupt)",
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didRefresh == false)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Responding to your prompt")
+        )
+    }
+
+    @Test
+    func refreshManagedSessionStatusFromVisibleTextIgnoresNonCodexAgent() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-visible-text-claude",
+            agent: .claude,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-visible-text-claude",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Responding"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "• Running pwd",
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didRefresh == false)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Responding")
+        )
+    }
+
+    @Test
+    func refreshManagedSessionStatusFromVisibleTextIgnoresSessionWithoutCurrentStatus() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-visible-text-no-status",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "• Running pwd",
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(didRefresh == false)
+        #expect(sessionStore.sessionRegistry.activeSession(for: panelID)?.status == nil)
+    }
+
+    @Test
+    func refreshManagedSessionStatusFromVisibleTextSkipsDuplicateWorkingDetail() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-visible-text-duplicate",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-visible-text-duplicate",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Running pwd"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "• Running pwd",
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didRefresh == false)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Running pwd")
+        )
+    }
+
     private func makeTwoPanelAppState() -> AppState {
         let leftPanelID = UUID()
         let rightPanelID = UUID()

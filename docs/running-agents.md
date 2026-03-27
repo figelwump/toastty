@@ -71,11 +71,12 @@ When the profile ID is `codex`, Toastty:
 1. **Creates a notification script** that pipes Codex notification payloads into `toastty session ingest-agent-event --source codex-notify`
 2. **Injects Codex config** with `-c notify=["/bin/sh", "<script-path>"]` to route lifecycle events through that script
 3. **Enables session recording** by setting `CODEX_TUI_RECORD_SESSION=1` and `CODEX_TUI_SESSION_LOG_PATH=<path>`
-4. **Starts a compatibility log watcher** that polls the session log file (every 250 ms) and maps supported Codex recording events to sidebar status updates. Current Codex CLI recordings drive **Working**, while legacy `codex_event` recordings continue to cover **Needs approval** and **Idle**
-5. **Uses the Codex notify hook** to map supported completion notifications to **Ready**
-6. **Logs helper-script delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active, so socket or CLI errors are inspectable without breaking the Codex process
+4. **Starts a compatibility log watcher** that polls the session log file (every 250 ms) and maps supported Codex recording events to sidebar status updates. Current Codex CLI recordings drive start-of-turn **Working**, while legacy `codex_event` recordings continue to cover **Needs approval** and **Idle**
+5. **Samples rendered terminal text** on Toastty's existing workspace-maintenance pulse and upgrades active Codex `Working` rows with best-effort tool progress such as `Running ...`, `Ran ...`, or `Executing shell commands`
+6. **Uses the Codex notify hook** to map supported completion notifications to **Ready**. Current Codex documents `notify` as a turn-finished hook, not a tool-progress stream
+7. **Logs helper-script delivery failures** to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active, so socket or CLI errors are inspectable without breaking the Codex process
 
-The log watcher is a temporary bridge; it will be replaced once Codex exposes stable start/approval hooks.
+The log watcher and rendered-text fallback are temporary bridges; they can go away once Codex exposes stable start, progress, and approval hooks.
 
 ### What `claude` enables
 
