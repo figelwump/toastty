@@ -27,6 +27,7 @@ struct WorkspaceView: View {
     @State private var hoveredTabCloseButtonID: UUID?
     @State private var renamingTabID: UUID?
     @State private var renameDraftTitle = ""
+    @State private var pendingWorkspaceTabClose: PendingWorkspaceTabClose?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
 
@@ -73,6 +74,20 @@ struct WorkspaceView: View {
             }
         }
         .background(ToastyTheme.surfaceBackground)
+        .alert(
+            "Close this tab?",
+            isPresented: pendingWorkspaceTabCloseBinding,
+            presenting: pendingWorkspaceTabClose
+        ) { closeTarget in
+            Button("Cancel", role: .cancel) {
+                pendingWorkspaceTabClose = nil
+            }
+            Button("Close Tab", role: .destructive) {
+                confirmWorkspaceTabClose(closeTarget)
+            }
+        } message: { closeTarget in
+            Text(closeTarget.assessment.confirmationMessage)
+        }
         .onAppear {
             appIsActive = NSApplication.shared.isActive
             scheduleFocusedUnreadPanelClearIfNeeded()
@@ -82,12 +97,14 @@ struct WorkspaceView: View {
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientTabRenameState()
+            prunePendingWorkspaceTabCloseState()
         }
         .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
             consumePendingWorkspaceTabRenameRequestIfNeeded()
         }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             pruneTransientTabRenameState()
+            prunePendingWorkspaceTabCloseState()
         }
         .onDisappear {
             focusedUnreadClearTask?.cancel()
@@ -753,7 +770,30 @@ struct WorkspaceView: View {
         if renamingTabID == tabID {
             cancelTabRename()
         }
-        _ = store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+        guard let workspace = store.state.workspacesByID[workspaceID],
+              let tab = workspace.tab(id: tabID) else {
+            pendingWorkspaceTabClose = nil
+            return
+        }
+
+        let closeAssessment = WorkspaceTabCloseConfirmation.assess(
+            tab: tab,
+            shouldBypassConfirmation: shouldBypassInteractiveConfirmation
+        ) { panelID in
+            terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+        }
+
+        guard closeAssessment.requiresConfirmation else {
+            pendingWorkspaceTabClose = nil
+            _ = store.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID))
+            return
+        }
+
+        pendingWorkspaceTabClose = PendingWorkspaceTabClose(
+            workspaceID: workspaceID,
+            tabID: tabID,
+            assessment: closeAssessment
+        )
     }
 
     private func cancelTabRename() {
@@ -782,6 +822,39 @@ struct WorkspaceView: View {
             cancelTabRename()
             return
         }
+    }
+
+    private func prunePendingWorkspaceTabCloseState() {
+        guard let pendingWorkspaceTabClose else { return }
+        guard let workspace = store.state.workspacesByID[pendingWorkspaceTabClose.workspaceID],
+              workspace.tab(id: pendingWorkspaceTabClose.tabID) != nil else {
+            self.pendingWorkspaceTabClose = nil
+            return
+        }
+    }
+
+    private var pendingWorkspaceTabCloseBinding: Binding<Bool> {
+        Binding(
+            get: { pendingWorkspaceTabClose != nil },
+            set: { isPresented in
+                if !isPresented {
+                    pendingWorkspaceTabClose = nil
+                }
+            }
+        )
+    }
+
+    private var shouldBypassInteractiveConfirmation: Bool {
+        let processInfo = ProcessInfo.processInfo
+        return AutomationConfig.shouldBypassInteractiveConfirmation(
+            arguments: processInfo.arguments,
+            environment: processInfo.environment
+        )
+    }
+
+    private func confirmWorkspaceTabClose(_ closeTarget: PendingWorkspaceTabClose) {
+        pendingWorkspaceTabClose = nil
+        _ = store.send(.closeWorkspaceTab(workspaceID: closeTarget.workspaceID, tabID: closeTarget.tabID))
     }
 
     private func clearTabHoverState(for tabID: UUID) {
@@ -888,6 +961,14 @@ struct WorkspaceView: View {
         }
         .buttonStyle(TopBarFlashTextButtonStyle())
     }
+}
+
+private struct PendingWorkspaceTabClose: Identifiable {
+    let workspaceID: UUID
+    let tabID: UUID
+    let assessment: WorkspaceTabCloseConfirmationAssessment
+
+    var id: UUID { tabID }
 }
 
 struct WorkspaceAgentTopBarModel: Equatable {
