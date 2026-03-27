@@ -1283,6 +1283,21 @@ extension TerminalSurfaceController {
             return false
         }
         closeTransitionViewportUpdatePending = true
+        ToasttyLog.info(
+            "Deferring close-transition Ghostty viewport resize",
+            category: .ghostty,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "presented_logical_width": String(lastPresentationSignature.logicalWidth),
+                "presented_logical_height": String(lastPresentationSignature.logicalHeight),
+                "presented_pixel_width": String(lastPresentationSignature.pixelWidth),
+                "presented_pixel_height": String(lastPresentationSignature.pixelHeight),
+                "deferred_logical_width": String(logicalWidth),
+                "deferred_logical_height": String(logicalHeight),
+                "deferred_pixel_width": String(pixelWidth),
+                "deferred_pixel_height": String(pixelHeight),
+            ]
+        )
         logSurfaceDiagnostics(
             message: "Deferring Ghostty viewport resize during close-transition layout churn",
             extra: [
@@ -1304,6 +1319,23 @@ extension TerminalSurfaceController {
               let sourceContainer = latestViewportSourceContainer else {
             return
         }
+        let currentBounds = sourceContainer.bounds.size
+        let currentBackingScaleFactor = sourceContainer.window?.screen?.backingScaleFactor ??
+            sourceContainer.window?.backingScaleFactor ??
+            pendingViewportUpdate.backingScaleFactor
+        ToasttyLog.info(
+            "Replaying close-transition viewport update from cached terminal state",
+            category: .ghostty,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "cached_viewport_width": String(format: "%.1f", pendingViewportUpdate.viewportSize.width),
+                "cached_viewport_height": String(format: "%.1f", pendingViewportUpdate.viewportSize.height),
+                "cached_backing_scale": String(format: "%.3f", pendingViewportUpdate.backingScaleFactor),
+                "current_container_width": String(format: "%.1f", currentBounds.width),
+                "current_container_height": String(format: "%.1f", currentBounds.height),
+                "current_container_backing_scale": String(format: "%.3f", currentBackingScaleFactor),
+            ]
+        )
         update(
             terminalState: pendingViewportUpdate.terminalState,
             focused: pendingViewportUpdate.focused,
