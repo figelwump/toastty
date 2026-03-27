@@ -118,6 +118,57 @@ final class ToasttyConfigStoreTests: XCTestCase {
 
         XCTAssertEqual(configURL.path, "/tmp/toastty-runtime-home-tests/config-runtime/config")
     }
+
+    // MARK: - Config Reference
+
+    func testWriteConfigReferenceCreatesReferenceFile() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+
+        try ToasttyConfigStore.writeConfigReference(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+
+        let referenceURL = ToasttyConfigStore.configReferenceFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        let contents = try String(contentsOf: referenceURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("# Toastty config"))
+        XCTAssertTrue(contents.contains("# terminal-font-size"))
+        XCTAssertTrue(contents.contains("# default-terminal-profile"))
+    }
+
+    func testWriteConfigReferenceOverwritesExistingFile() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let referenceURL = ToasttyConfigStore.configReferenceFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        try FileManager.default.createDirectory(
+            at: referenceURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "stale content".write(to: referenceURL, atomically: true, encoding: .utf8)
+
+        try ToasttyConfigStore.writeConfigReference(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+
+        let contents = try String(contentsOf: referenceURL, encoding: .utf8)
+        XCTAssertTrue(contents.contains("# Toastty config"))
+        XCTAssertFalse(contents.contains("stale content"))
+    }
+
+    func testConfigReferenceFileURLUsesRuntimeHomeWhenSet() {
+        let referenceURL = ToasttyConfigStore.configReferenceFileURL(
+            homeDirectoryPath: "/tmp/ignored-home",
+            environment: ["TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/ref-runtime"]
+        )
+
+        XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config.reference")
+    }
 }
 
 private func makeTemporaryHomeDirectory() throws -> URL {
