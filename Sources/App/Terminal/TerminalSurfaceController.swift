@@ -984,6 +984,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         // Restored panes intentionally start with blank live cwd and wait for
         // runtime metadata to repopulate it authoritatively.
         let requestedWorkingDirectory = terminalState.workingDirectorySeed
+        let isRestoredLaunch = terminalState.expectedProcessWorkingDirectory == nil &&
+            TerminalRuntimeRegistry.normalizedCWDValue(terminalState.launchWorkingDirectory) != nil
 
         // Snapshot child PIDs before surface creation so we can diff after
         // to find the newly spawned login/shell process for CWD tracking.
@@ -1036,7 +1038,8 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         delegate.registerSurfaceChildPIDAfterCreation(
             panelID: panelID,
             previousChildren: previousChildPIDs,
-            expectedWorkingDirectory: createdSurface.workingDirectory
+            expectedWorkingDirectory: createdSurface.workingDirectory,
+            isRestoredLaunch: isRestoredLaunch
         )
 
         // The requested cwd is just launch config, not authoritative live shell

@@ -352,6 +352,30 @@ final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
             1
         )
     }
+
+    func testPreferredRegistrationCandidateIndexReturnsNilWhenFallbackDisabledAndNoCandidateMatchesExpectedWorkingDirectory() {
+        XCTAssertNil(
+            TerminalProcessWorkingDirectoryResolver.preferredRegistrationCandidateIndex(
+                expectedWorkingDirectory: "/tmp/restored-one",
+                candidateWorkingDirectories: ["/tmp/restored-two"],
+                candidateLoginPIDs: [101],
+                preferNewestWhenAmbiguous: true,
+                allowUnmatchedFallback: false
+            )
+        )
+    }
+
+    func testPreferredRegistrationCandidateIndexReturnsNilWhenFallbackDisabledAndCandidatesHaveNoReadableCWD() {
+        XCTAssertNil(
+            TerminalProcessWorkingDirectoryResolver.preferredRegistrationCandidateIndex(
+                expectedWorkingDirectory: "/tmp/restored-one",
+                candidateWorkingDirectories: [nil, nil],
+                candidateLoginPIDs: [101, 202],
+                preferNewestWhenAmbiguous: true,
+                allowUnmatchedFallback: false
+            )
+        )
+    }
 }
 
 @MainActor

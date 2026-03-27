@@ -343,11 +343,13 @@ private final class TestTerminalSurfaceControllerDelegate: TerminalSurfaceContro
     func registerSurfaceChildPIDAfterCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String?
+        expectedWorkingDirectory: String?,
+        isRestoredLaunch: Bool
     ) {
         _ = panelID
         _ = previousChildren
         _ = expectedWorkingDirectory
+        _ = isRestoredLaunch
     }
 
     func requestImmediateProcessWorkingDirectoryRefresh(

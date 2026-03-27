@@ -768,12 +768,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     func registerSurfaceChildPIDAfterCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String?
+        expectedWorkingDirectory: String?,
+        isRestoredLaunch: Bool
     ) {
         registerChildPIDAfterSurfaceCreation(
             panelID: panelID,
             previousChildren: previousChildren,
-            expectedWorkingDirectory: expectedWorkingDirectory
+            expectedWorkingDirectory: expectedWorkingDirectory,
+            isRestoredLaunch: isRestoredLaunch
         )
     }
 
@@ -960,12 +962,14 @@ private extension TerminalRuntimeRegistry {
     func registerChildPIDAfterSurfaceCreation(
         panelID: UUID,
         previousChildren: Set<pid_t>,
-        expectedWorkingDirectory: String?
+        expectedWorkingDirectory: String?,
+        isRestoredLaunch: Bool
     ) {
         metadataService?.registerChildPIDAfterSurfaceCreation(
             panelID: panelID,
             previousChildren: previousChildren,
-            expectedWorkingDirectory: expectedWorkingDirectory
+            expectedWorkingDirectory: expectedWorkingDirectory,
+            isRestoredLaunch: isRestoredLaunch
         )
     }
 

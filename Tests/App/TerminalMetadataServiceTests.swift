@@ -965,6 +965,77 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testImmediateProcessRefreshDoesNotClobberRestoredTitleInferredCWD() throws {
+        let state = makeRestoredUnprofiledPanelState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/other" },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalTitle("/tmp/restored"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/restored")
+        XCTAssertFalse(service.prefersNativeCWDSignal(panelID: panelID))
+
+        XCTAssertNil(
+            service.refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: panelID,
+                source: "surface_create_process_retry_1"
+            )
+        )
+
+        let restoredTerminalState = try terminalState(panelID: panelID, state: store.state)
+        XCTAssertEqual(restoredTerminalState.cwd, "/tmp/restored")
+
+        let snapshot = WorkspaceLayoutSnapshot(state: store.state)
+        guard case .terminal(let terminalSnapshot) = snapshot.workspacesByID[workspaceID]?.panels[panelID] else {
+            XCTFail("expected terminal snapshot")
+            return
+        }
+        XCTAssertEqual(terminalSnapshot.launchWorkingDirectory, "/tmp/restored")
+        try StateValidator.validate(store.state)
+    }
+
+    func testImmediateProcessRefreshAcceptsRestoredLaunchSeedWhenProcessCWDMatches() throws {
+        let state = makeRestoredUnprofiledPanelState()
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in "/tmp/restored" },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "")
+        XCTAssertEqual(
+            service.refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: panelID,
+                source: "surface_create_process_retry_1"
+            ),
+            "/tmp/restored"
+        )
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/restored")
+        try StateValidator.validate(store.state)
+    }
+
     func testRequestImmediateWorkingDirectoryRefreshSuppressesRepeatedBootstrapCWDForRestoredProfiledPane() async throws {
         let state = makeRestoredProfiledPanelState(profileID: "zmx")
         let store = AppStore(state: state, persistTerminalFontPreference: false)
