@@ -106,6 +106,30 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testResolvedWorkspaceTitleWidthUsesIntrinsicWidthWhenItFits() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTitleWidth(
+                preferredWidth: 120,
+                availableWidth: 900,
+                trailingWidth: 240,
+                tabCount: 3
+            ),
+            120
+        )
+    }
+
+    func testResolvedWorkspaceTitleWidthShrinksOnlyAfterTabsReachMinimumWidth() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTitleWidth(
+                preferredWidth: 320,
+                availableWidth: 580,
+                trailingWidth: 200,
+                tabCount: 3
+            ),
+            208
+        )
+    }
+
     func testWorkspaceTabSelectedAccentFadesWhenAppIsInactive() throws {
         let activeAccent = try XCTUnwrap(
             NSColor(ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: true))

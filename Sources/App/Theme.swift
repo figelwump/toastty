@@ -75,9 +75,10 @@ enum ToastyTheme {
     static let sidebarWidthBeforeAgentLaunch = CGFloat(WindowState.defaultSidebarWidthBeforeAgentLaunch)
     static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidthAfterAgentLaunch)
     static let workspaceTabBarHeight: CGFloat = 34
-    // Match the custom header to the folder-tab container height now that the
-    // title and tabs share one row.
-    static let topBarHeight: CGFloat = workspaceTabBarHeight
+    // Keep a small inset above the folder-style tabs so the accent line does
+    // not sit flush against the window edge when the tab strip lives in the
+    // header.
+    static let topBarHeight: CGFloat = workspaceTabBarHeight + 3
     static let workspaceTabWidth: CGFloat = 190
     static let workspaceTabMinimumWidth: CGFloat = 48
     static let workspaceTabHeight: CGFloat = workspaceTabBarHeight

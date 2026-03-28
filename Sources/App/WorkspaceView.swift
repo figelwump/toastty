@@ -62,6 +62,30 @@ struct WorkspaceView: View {
     private static let workspaceHeaderSpacing: CGFloat = 8
     private static let workspaceTabStripSpacing: CGFloat = 6
 
+    nonisolated static func resolvedWorkspaceTitleWidth(
+        preferredWidth: CGFloat,
+        availableWidth: CGFloat,
+        trailingWidth: CGFloat,
+        tabCount: Int,
+        spacing: CGFloat = 8,
+        tabSpacing: CGFloat = 6,
+        titleMaxWidth: CGFloat = 260
+    ) -> CGFloat {
+        let cappedPreferredWidth = min(preferredWidth, titleMaxWidth)
+        guard availableWidth.isFinite else { return cappedPreferredWidth }
+
+        guard tabCount > 0 else {
+            return max(0, min(cappedPreferredWidth, availableWidth - trailingWidth - spacing))
+        }
+
+        let minimumTabsWidth = workspaceTabMinimumTotalWidth(
+            tabCount: tabCount,
+            spacing: tabSpacing
+        )
+        let availableTitleWidth = availableWidth - trailingWidth - (spacing * 2) - minimumTabsWidth
+        return max(0, min(cappedPreferredWidth, availableTitleWidth))
+    }
+
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
         isHovered: Bool,
@@ -228,34 +252,44 @@ struct WorkspaceView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
 
-            HStack(alignment: .bottom, spacing: Self.workspaceHeaderSpacing) {
-                Text(selectedWorkspace?.title ?? "")
-                    .font(ToastyTheme.fontTitle)
-                    .foregroundStyle(ToastyTheme.primaryText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: ToastyTheme.workspaceTitleMaxWidth, alignment: .leading)
-                    .layoutPriority(1)
-                    .accessibilityIdentifier("topbar.workspace.title")
-
+            Group {
                 if let workspace = selectedWorkspace {
-                    workspaceHeaderTabStrip(for: workspace)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .layoutPriority(0)
+                    WorkspaceHeaderLayout(
+                        tabCount: workspace.tabIDs.count,
+                        spacing: Self.workspaceHeaderSpacing,
+                        tabSpacing: Self.workspaceTabStripSpacing
+                    ) {
+                        workspaceTitleLabel
+                        workspaceHeaderTabStrip(for: workspace)
+                        topBarTrailingControls
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                } else {
+                    HStack(alignment: .center, spacing: Self.workspaceHeaderSpacing) {
+                        workspaceTitleLabel
+                        Spacer(minLength: 0)
+                        topBarTrailingControls
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
-
-                topBarTrailingControls
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(2)
             }
             .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
             .padding(.trailing, 12)
             .padding(.top, ToastyTheme.topBarContentTopPadding)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
         .frame(height: ToastyTheme.topBarHeight)
         .background(ToastyTheme.chromeBackground)
         .accessibilityIdentifier("topbar.container")
+    }
+
+    private var workspaceTitleLabel: some View {
+        Text(selectedWorkspace?.title ?? "")
+            .font(ToastyTheme.fontTitle)
+            .foregroundStyle(ToastyTheme.primaryText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .accessibilityIdentifier("topbar.workspace.title")
     }
 
     private var topBarTrailingControls: some View {
@@ -1069,6 +1103,86 @@ private struct PendingWorkspaceTabClose: Identifiable {
     let assessment: WorkspaceTabCloseConfirmationAssessment
 
     var id: UUID { tabID }
+}
+
+private struct WorkspaceHeaderLayout: Layout {
+    let tabCount: Int
+    let spacing: CGFloat
+    let tabSpacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        guard subviews.count == 3 else { return .zero }
+
+        let titleSize = subviews[0].sizeThatFits(.unspecified)
+        let tabsSize = subviews[1].sizeThatFits(
+            ProposedViewSize(width: nil, height: ToastyTheme.workspaceTabHeight)
+        )
+        let trailingSize = subviews[2].sizeThatFits(.unspecified)
+        let width = if let proposedWidth = proposal.width, proposedWidth.isFinite {
+            proposedWidth
+        } else {
+            min(titleSize.width, ToastyTheme.workspaceTitleMaxWidth) +
+                spacing + tabsSize.width + spacing + trailingSize.width
+        }
+
+        return CGSize(
+            width: width,
+            height: max(ToastyTheme.topBarHeight, titleSize.height, trailingSize.height, ToastyTheme.workspaceTabHeight)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        guard subviews.count == 3 else { return }
+
+        let titleSize = subviews[0].sizeThatFits(.unspecified)
+        let trailingSize = subviews[2].sizeThatFits(.unspecified)
+        let trailingX = max(bounds.minX, bounds.maxX - trailingSize.width)
+        let titleWidth = WorkspaceView.resolvedWorkspaceTitleWidth(
+            preferredWidth: titleSize.width,
+            availableWidth: bounds.width,
+            trailingWidth: trailingSize.width,
+            tabCount: tabCount,
+            spacing: spacing,
+            tabSpacing: tabSpacing,
+            titleMaxWidth: ToastyTheme.workspaceTitleMaxWidth
+        )
+        let titleHeight = min(bounds.height, titleSize.height)
+        let titleY = bounds.minY + ((bounds.height - titleHeight) / 2)
+
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: titleY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: titleWidth, height: titleHeight)
+        )
+
+        let tabsX = bounds.minX + titleWidth + spacing
+        let tabsMaxX = max(tabsX, trailingX - spacing)
+        let tabsWidth = max(0, tabsMaxX - tabsX)
+
+        subviews[1].place(
+            at: CGPoint(x: tabsX, y: bounds.maxY),
+            anchor: .bottomLeading,
+            proposal: ProposedViewSize(width: tabsWidth, height: ToastyTheme.workspaceTabHeight)
+        )
+
+        let trailingHeight = min(bounds.height, trailingSize.height)
+        let trailingY = bounds.minY + ((bounds.height - trailingHeight) / 2)
+
+        subviews[2].place(
+            at: CGPoint(x: trailingX, y: trailingY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: trailingSize.width, height: trailingHeight)
+        )
+    }
 }
 
 private struct WorkspaceTabStripLayout: Layout {

@@ -86,7 +86,7 @@ private let selectedBackground = RGB(hex: 0x1A1A1A)
 private let hairline = RGB(hex: 0x1F1F1F)
 
 private let windowWidthPoints = 2300.0
-private let topBarHeightPoints = 34.0
+private let topBarHeightPoints = 37.0
 private let tabHeightPoints = 34.0
 private let tabSpacingPoints = 6.0
 private let tabTrailingPaddingPoints = 10.0
