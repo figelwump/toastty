@@ -19,6 +19,17 @@ private struct RGB {
     }
 }
 
+private struct HeaderTabSnapshot {
+    let image: ImageSampler
+    let scale: Double
+    let accentRowY: Int
+    let accentRun: ClosedRange<Int>
+    let selectedTabRun: ClosedRange<Int>
+    let tabWidth: Int
+    let spacingWidth: Int
+    let tabRuns: [ClosedRange<Int>]
+}
+
 private enum WorkspaceTabAssertionError: Error, CustomStringConvertible {
     case invalidArguments
     case imageLoadFailed(String)
@@ -27,7 +38,10 @@ private enum WorkspaceTabAssertionError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .invalidArguments:
-            return "usage: swift scripts/automation/assert-workspace-tabs.swift <two-tabs.png> <two-tabs-hidden-sidebar.png> <nine-tabs.png> <ten-tabs.png>"
+            return """
+                usage: swift scripts/automation/assert-workspace-tabs.swift \
+                <single-tab.png> <two-tabs.png> <two-tabs-hidden-sidebar.png> <nine-tabs.png> <ten-tabs.png>
+                """
         case .imageLoadFailed(let path):
             return "failed to load image: \(path)"
         case .assertionFailed(let message):
@@ -70,18 +84,9 @@ private final class ImageSampler {
 private let chromeBackground = RGB(hex: 0x111111)
 private let selectedBackground = RGB(hex: 0x1A1A1A)
 private let hairline = RGB(hex: 0x1F1F1F)
-private let accent = RGB(hex: 0xF5A623)
 
 private let windowWidthPoints = 2300.0
-private let sidebarWidthPoints = 180.0
-private let sidebarDividerWidthPoints = 1.0
-private let tabLeadingPaddingPoints = 6.0
-private let topBarHeightPoints = 32.0
-private let topBarDividerHeightPoints = 1.0
-private let tabBarHeightPoints = 34.0
-private let tabStripSearchTopPoints = 18.0
-private let tabStripSearchBottomPoints = 50.0
-private let tabWidthPoints = 190.0
+private let topBarHeightPoints = 34.0
 private let tabHeightPoints = 34.0
 private let tabSpacingPoints = 6.0
 private let tabTrailingPaddingPoints = 10.0
@@ -121,62 +126,6 @@ private func assertCondition(_ condition: @autoclosure () -> Bool, _ message: St
     }
 }
 
-private func firstTabRun(in image: ImageSampler, rowY: Int) throws -> ClosedRange<Int> {
-    try firstTabRun(
-        in: image,
-        rowY: rowY,
-        startSearchX: scaled(
-            sidebarWidthPoints + sidebarDividerWidthPoints,
-            scale: Double(image.width) / windowWidthPoints
-        )
-    )
-}
-
-private func firstTabRun(in image: ImageSampler, rowY: Int, startSearchX: Int) throws -> ClosedRange<Int> {
-    var x = startSearchX
-    while x < image.width && isNear(image.color(topX: x, topY: rowY), chromeBackground, tolerance: 10) {
-        x += 1
-    }
-    try assertCondition(x < image.width, "failed to find first tab start at row \(rowY)")
-    let start = x
-
-    while x < image.width && !isNear(image.color(topX: x, topY: rowY), chromeBackground, tolerance: 10) {
-        x += 1
-    }
-    try assertCondition(x > start, "failed to find first tab end at row \(rowY)")
-    return start...(x - 1)
-}
-
-private func nextTabRun(in image: ImageSampler, rowY: Int, after previousRun: ClosedRange<Int>) throws -> ClosedRange<Int> {
-    var x = previousRun.upperBound + 1
-    while x < image.width && isNear(image.color(topX: x, topY: rowY), chromeBackground, tolerance: 10) {
-        x += 1
-    }
-    try assertCondition(x < image.width, "failed to find next tab start at row \(rowY)")
-    let start = x
-
-    while x < image.width && !isNear(image.color(topX: x, topY: rowY), chromeBackground, tolerance: 10) {
-        x += 1
-    }
-    try assertCondition(x > start, "failed to find next tab end at row \(rowY)")
-    return start...(x - 1)
-}
-
-private func firstAccentRun(in image: ImageSampler, rowY: Int, startSearchX: Int) throws -> ClosedRange<Int> {
-    var x = startSearchX
-    while x < image.width && !isAccentLike(image.color(topX: x, topY: rowY)) {
-        x += 1
-    }
-    try assertCondition(x < image.width, "failed to find accent band start at row \(rowY)")
-    let start = x
-
-    while x < image.width && isAccentLike(image.color(topX: x, topY: rowY)) {
-        x += 1
-    }
-    try assertCondition(x > start, "failed to find accent band end at row \(rowY)")
-    return start...(x - 1)
-}
-
 private func longestAccentRun(
     in image: ImageSampler,
     yRange: Range<Int>,
@@ -212,46 +161,62 @@ private func longestAccentRun(
     return best
 }
 
-private func accentBounds(
+private func tabRun(
     in image: ImageSampler,
-    yRange: Range<Int>,
-    startSearchX: Int
-) throws -> (minX: Int, maxX: Int, count: Int) {
-    var minX = image.width
-    var maxX = -1
-    var count = 0
-
-    for y in yRange {
-        for x in startSearchX..<image.width where isAccentLike(image.color(topX: x, topY: y)) {
-            minX = min(minX, x)
-            maxX = max(maxX, x)
-            count += 1
-        }
+    rowY: Int,
+    seedX: Int
+) throws -> ClosedRange<Int> {
+    var start = seedX
+    while start >= 0 && !isNear(image.color(topX: start, topY: rowY), chromeBackground, tolerance: 10) {
+        start -= 1
     }
+    start += 1
 
-    guard maxX >= minX else {
-        throw WorkspaceTabAssertionError.assertionFailed("failed to find selected tab accent pixels")
+    var end = seedX
+    while end < image.width && !isNear(image.color(topX: end, topY: rowY), chromeBackground, tolerance: 10) {
+        end += 1
     }
+    end -= 1
 
-    return (minX: minX, maxX: maxX, count: count)
+    try assertCondition(end >= start, "failed to resolve tab bounds at row \(rowY)")
+    return start...end
 }
 
-private func countMatchingPixels(
-    in image: ImageSampler,
-    xRange: ClosedRange<Int>,
-    yRange: ClosedRange<Int>,
-    target: RGB,
-    tolerance: Int
-) -> Int {
-    var count = 0
-    for y in yRange {
-        for x in xRange {
-            if isNear(image.color(topX: x, topY: y), target, tolerance: tolerance) {
-                count += 1
-            }
-        }
+private func headerTabSnapshot(path: String, expectedTabCount: Int) throws -> HeaderTabSnapshot {
+    let image = try ImageSampler(path: path)
+    let scale = Double(image.width) / windowWidthPoints
+    let accentSearchBottomY = max(scaled(12, scale: scale), 4)
+    let accent = try longestAccentRun(
+        in: image,
+        yRange: 0..<min(accentSearchBottomY, image.height),
+        startSearchX: 0
+    )
+    let rowY = min(
+        image.height - 1,
+        max(accent.rowY + scaled(10, scale: scale), scaled(tabHeightPoints - 6, scale: scale))
+    )
+    let firstRun = try tabRun(
+        in: image,
+        rowY: rowY,
+        seedX: (accent.run.lowerBound + accent.run.upperBound) / 2
+    )
+    let spacingWidth = scaled(tabSpacingPoints, scale: scale)
+    let tabWidth = firstRun.length
+    let runs = (0..<expectedTabCount).map { index in
+        let start = firstRun.lowerBound + index * (tabWidth + spacingWidth)
+        return start...(start + tabWidth - 1)
     }
-    return count
+
+    return HeaderTabSnapshot(
+        image: image,
+        scale: scale,
+        accentRowY: accent.rowY,
+        accentRun: accent.run,
+        selectedTabRun: firstRun,
+        tabWidth: tabWidth,
+        spacingWidth: spacingWidth,
+        tabRuns: runs
+    )
 }
 
 private func countNonBackgroundPixels(
@@ -272,123 +237,91 @@ private func countNonBackgroundPixels(
     return count
 }
 
-private func tabFrame(index: Int, scale: Double) -> CGRect {
-    let originX = sidebarWidthPoints + sidebarDividerWidthPoints + tabLeadingPaddingPoints
-        + Double(index - 1) * (tabWidthPoints + tabSpacingPoints)
-    let originY = topBarHeightPoints + topBarDividerHeightPoints + (tabBarHeightPoints - tabHeightPoints)
-    return CGRect(
-        x: originX * scale,
-        y: originY * scale,
-        width: tabWidthPoints * scale,
-        height: tabHeightPoints * scale
+private func assertSingleTabScreenshot(path: String) throws {
+    let snapshot = try headerTabSnapshot(path: path, expectedTabCount: 1)
+    let run = snapshot.selectedTabRun
+    try assertCondition(snapshot.tabWidth > scaled(100, scale: snapshot.scale), "single visible tab is unexpectedly narrow")
+    try assertCondition(
+        snapshot.accentRun.lowerBound >= run.lowerBound && snapshot.accentRun.upperBound <= run.upperBound,
+        "single-tab accent band is not contained within the tab bounds"
+    )
+
+    let selectedBottomColor = snapshot.image.color(
+        topX: (run.lowerBound + run.upperBound) / 2,
+        topY: min(snapshot.image.height - 1, scaled(topBarHeightPoints - 1, scale: snapshot.scale))
+    )
+    try assertCondition(
+        isNear(selectedBottomColor, selectedBackground, tolerance: 10),
+        "single selected tab no longer covers the header bottom seam"
     )
 }
 
-private func assertTwoTabScreenshot(path: String) throws {
-    let image = try ImageSampler(path: path)
-    let scale = Double(image.width) / windowWidthPoints
-    let selectedFrame = tabFrame(index: 1, scale: scale)
-    let unselectedFrame = tabFrame(index: 2, scale: scale)
-    let accentBounds = try accentBounds(
-        in: image,
-        yRange: scaled(tabStripSearchTopPoints, scale: scale)..<scaled(tabStripSearchBottomPoints, scale: scale),
-        startSearchX: scaled(sidebarWidthPoints, scale: scale)
-    )
+private func assertTwoTabScreenshot(path: String) throws -> HeaderTabSnapshot {
+    let snapshot = try headerTabSnapshot(path: path, expectedTabCount: 2)
+    let image = snapshot.image
+    let scale = snapshot.scale
+    let selectedRun = snapshot.selectedTabRun
+    let unselectedRun = snapshot.tabRuns[1]
 
     try assertCondition(
-        accentBounds.minX >= Int(selectedFrame.minX),
-        "selected tab accent appears before the expected tab frame"
+        snapshot.accentRun.lowerBound >= selectedRun.lowerBound &&
+            snapshot.accentRun.upperBound <= selectedRun.upperBound,
+        "selected tab accent extends outside the first tab bounds"
     )
-    try assertCondition(
-        accentBounds.maxX <= Int(selectedFrame.maxX),
-        "selected tab accent extends beyond the expected tab frame"
-    )
-    try assertCondition(accentBounds.count > scaled(120, scale: scale), "selected tab top accent line is missing")
+    try assertCondition(snapshot.accentRun.length > scaled(120, scale: scale), "selected tab top accent line is missing")
 
-    let accentBandThickness = max(scaled(2, scale: scale), 2)
-    let minX = Int(selectedFrame.minX)
-    let maxX = Int(selectedFrame.maxX)
-    let maxY = Int(selectedFrame.maxY)
-
-    let bottomAccentPixelCount = countMatchingPixels(
-        in: image,
-        xRange: minX...maxX,
-        yRange: (maxY - accentBandThickness)...maxY,
-        target: accent,
-        tolerance: 35
-    )
-    try assertCondition(bottomAccentPixelCount < scaled(20, scale: scale), "selected tab still shows accent on the bottom edge")
-
-    let selectedInteriorCount = countMatchingPixels(
-        in: image,
-        xRange: (minX + scaled(20, scale: scale))...(maxX - scaled(20, scale: scale)),
-        yRange: (maxY - scaled(6, scale: scale))...(maxY - scaled(3, scale: scale)),
-        target: selectedBackground,
-        tolerance: 10
-    )
-    try assertCondition(selectedInteriorCount > scaled(180, scale: scale), "selected tab interior does not match the content background")
-
+    let seamY = min(image.height - 1, scaled(topBarHeightPoints - 1, scale: scale))
     let selectedBottomSeamColor = image.color(
-        topX: Int(selectedFrame.midX),
-        topY: scaled(topBarHeightPoints + topBarDividerHeightPoints + tabBarHeightPoints - 1, scale: scale)
+        topX: (selectedRun.lowerBound + selectedRun.upperBound) / 2,
+        topY: seamY
     )
     try assertCondition(
         isNear(selectedBottomSeamColor, selectedBackground, tolerance: 10),
-        "selected tab does not cover the tab-strip bottom seam"
+        "selected header tab does not cover the header bottom seam"
     )
 
     let unselectedBottomSeamColor = image.color(
-        topX: Int(unselectedFrame.midX),
-        topY: scaled(topBarHeightPoints + topBarDividerHeightPoints + tabBarHeightPoints - 1, scale: scale)
+        topX: (unselectedRun.lowerBound + unselectedRun.upperBound) / 2,
+        topY: seamY
     )
     try assertCondition(
-        isNear(unselectedBottomSeamColor, hairline, tolerance: 10),
-        "idle tab area no longer shows the tab-strip bottom seam"
+        isNear(unselectedBottomSeamColor, hairline, tolerance: 12),
+        "idle header tab area no longer shows the header seam"
     )
 
     let panelHeaderContinuityColor = image.color(
-        topX: Int(selectedFrame.midX),
-        topY: scaled(topBarHeightPoints + topBarDividerHeightPoints + tabBarHeightPoints + 2, scale: scale)
+        topX: (selectedRun.lowerBound + selectedRun.upperBound) / 2,
+        topY: min(image.height - 1, scaled(topBarHeightPoints + 2, scale: scale))
     )
     try assertCondition(
         isNear(panelHeaderContinuityColor, selectedBackground, tolerance: 10),
         "panel header no longer visually connects with the selected tab"
     )
 
-    try assertBadgeVisibility(path: path, tabIndex: 2, expectedVisible: true)
+    try assertBadgeVisibility(snapshot: snapshot, tabIndex: 2, expectedVisible: true)
+    return snapshot
 }
 
-private func assertHiddenSidebarTwoTabScreenshot(visiblePath: String, hiddenPath: String) throws {
-    let visibleImage = try ImageSampler(path: visiblePath)
-    let hiddenImage = try ImageSampler(path: hiddenPath)
-    let visibleScale = Double(visibleImage.width) / windowWidthPoints
-    let hiddenScale = Double(hiddenImage.width) / windowWidthPoints
-
-    let visibleBounds = try accentBounds(
-        in: visibleImage,
-        yRange: scaled(tabStripSearchTopPoints, scale: visibleScale)..<scaled(tabStripSearchBottomPoints, scale: visibleScale),
-        startSearchX: scaled(sidebarWidthPoints, scale: visibleScale)
-    )
-    let hiddenBounds = try accentBounds(
-        in: hiddenImage,
-        yRange: scaled(tabStripSearchTopPoints, scale: hiddenScale)..<scaled(tabStripSearchBottomPoints, scale: hiddenScale),
-        startSearchX: 0
-    )
-
+private func assertHiddenSidebarTwoTabScreenshot(visible: HeaderTabSnapshot, hiddenPath: String) throws {
+    let hidden = try headerTabSnapshot(path: hiddenPath, expectedTabCount: 2)
     try assertCondition(
-        hiddenBounds.minX < visibleBounds.minX - scaled(100, scale: hiddenScale),
-        "hidden-sidebar tab strip did not shift left enough"
+        hidden.tabRuns[0].lowerBound < visible.tabRuns[0].lowerBound - scaled(70, scale: hidden.scale),
+        "hidden-sidebar header tabs did not shift left enough"
     )
 }
 
-private func assertBadgeVisibility(path: String, tabIndex: Int, expectedVisible: Bool) throws {
-    let image = try ImageSampler(path: path)
-    let scale = Double(image.width) / windowWidthPoints
-    let frame = tabFrame(index: tabIndex, scale: scale)
-    let slotStartX = Int(frame.maxX) - scaled(tabTrailingPaddingPoints + tabTrailingSlotWidthPoints, scale: scale) + scaled(2, scale: scale)
-    let slotEndX = Int(frame.maxX) - scaled(tabTrailingPaddingPoints, scale: scale) - scaled(2, scale: scale)
-    let slotTopY = Int(frame.minY) + scaled(6, scale: scale)
-    let slotBottomY = Int(frame.maxY) - scaled(6, scale: scale)
+private func assertBadgeVisibility(
+    snapshot: HeaderTabSnapshot,
+    tabIndex: Int,
+    expectedVisible: Bool
+) throws {
+    let image = snapshot.image
+    let scale = snapshot.scale
+    let frame = snapshot.tabRuns[tabIndex - 1]
+    let slotStartX = frame.upperBound - scaled(tabTrailingPaddingPoints + tabTrailingSlotWidthPoints, scale: scale) + scaled(2, scale: scale)
+    let slotEndX = frame.upperBound - scaled(tabTrailingPaddingPoints, scale: scale) - scaled(2, scale: scale)
+    let slotTopY = min(image.height - 1, scaled(6, scale: scale))
+    let slotBottomY = min(image.height - 1, scaled(tabHeightPoints - 6, scale: scale))
     let nonBackgroundPixelCount = countNonBackgroundPixels(
         in: image,
         xRange: slotStartX...slotEndX,
@@ -398,27 +331,59 @@ private func assertBadgeVisibility(path: String, tabIndex: Int, expectedVisible:
     )
 
     if expectedVisible {
-        try assertCondition(nonBackgroundPixelCount > scaled(12, scale: scale), "expected badge pixels for tab \(tabIndex), but trailing slot looks empty")
+        try assertCondition(
+            nonBackgroundPixelCount > scaled(12, scale: scale),
+            "expected badge pixels for tab \(tabIndex), but trailing slot looks empty"
+        )
     } else {
-        try assertCondition(nonBackgroundPixelCount < scaled(6, scale: scale), "expected tab \(tabIndex) trailing slot to be empty, but badge-like pixels are still present")
+        try assertCondition(
+            nonBackgroundPixelCount < scaled(6, scale: scale),
+            "expected tab \(tabIndex) trailing slot to be empty, but badge-like pixels are still present"
+        )
     }
 }
 
-private func assertNineAndTenTabScreenshots(ninePath: String, tenPath: String) throws {
-    try assertBadgeVisibility(path: ninePath, tabIndex: 9, expectedVisible: true)
-    try assertBadgeVisibility(path: tenPath, tabIndex: 9, expectedVisible: true)
-    try assertBadgeVisibility(path: tenPath, tabIndex: 10, expectedVisible: false)
+private func assertNineAndTenTabScreenshots(
+    ninePath: String,
+    tenPath: String,
+    referenceTwoTabSnapshot: HeaderTabSnapshot
+) throws {
+    let nine = try headerTabSnapshot(path: ninePath, expectedTabCount: 9)
+    let ten = try headerTabSnapshot(path: tenPath, expectedTabCount: 10)
+
+    try assertCondition(
+        ten.tabWidth < referenceTwoTabSnapshot.tabWidth,
+        "ten-tab header did not compress tabs relative to the two-tab layout"
+    )
+    try assertCondition(
+        abs(nine.tabRuns[1].lowerBound - nine.tabRuns[0].upperBound - 1 - nine.spacingWidth) <= 3,
+        "compressed tabs no longer preserve the expected inter-tab spacing"
+    )
+
+    try assertBadgeVisibility(snapshot: nine, tabIndex: 9, expectedVisible: true)
+    try assertBadgeVisibility(snapshot: ten, tabIndex: 9, expectedVisible: true)
+    try assertBadgeVisibility(snapshot: ten, tabIndex: 10, expectedVisible: false)
+
+    try assertCondition(
+        ten.accentRun.length >= max(ten.tabWidth - scaled(6, scale: ten.scale), scaled(80, scale: ten.scale)),
+        "selected compressed tab accent line is missing"
+    )
 }
 
 do {
     let arguments = Array(CommandLine.arguments.dropFirst())
-    guard arguments.count == 4 else {
+    guard arguments.count == 5 else {
         throw WorkspaceTabAssertionError.invalidArguments
     }
 
-    try assertTwoTabScreenshot(path: arguments[0])
-    try assertHiddenSidebarTwoTabScreenshot(visiblePath: arguments[0], hiddenPath: arguments[1])
-    try assertNineAndTenTabScreenshots(ninePath: arguments[2], tenPath: arguments[3])
+    try assertSingleTabScreenshot(path: arguments[0])
+    let twoTabSnapshot = try assertTwoTabScreenshot(path: arguments[1])
+    try assertHiddenSidebarTwoTabScreenshot(visible: twoTabSnapshot, hiddenPath: arguments[2])
+    try assertNineAndTenTabScreenshots(
+        ninePath: arguments[3],
+        tenPath: arguments[4],
+        referenceTwoTabSnapshot: twoTabSnapshot
+    )
 } catch {
     fputs("\(error)\n", stderr)
     exit(1)

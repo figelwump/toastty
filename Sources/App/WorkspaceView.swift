@@ -59,12 +59,15 @@ struct WorkspaceView: View {
     @State private var pendingWorkspaceTabClose: PendingWorkspaceTabClose?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+    private static let workspaceHeaderSpacing: CGFloat = 8
+    private static let workspaceTabStripSpacing: CGFloat = 6
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
-        isHovered: Bool
+        isHovered: Bool,
+        showsCloseAffordance: Bool
     ) -> WorkspaceTabTrailingAccessory {
-        if isHovered {
+        if isHovered && showsCloseAffordance {
             return .closeButton
         }
 
@@ -74,10 +77,42 @@ struct WorkspaceView: View {
         return .badge(shortcutLabel)
     }
 
-    /// The tab strip lives below the titlebar, so it should not reserve
-    /// traffic-light/sidebar-toggle clearance when the sidebar is hidden.
-    nonisolated static func workspaceTabLeadingPadding(sidebarVisible _: Bool) -> CGFloat {
-        ToastyTheme.workspaceTabLeadingPadding
+    nonisolated static func workspaceTabManagementAffordancesEnabled(tabCount: Int) -> Bool {
+        tabCount > 1
+    }
+
+    nonisolated static func workspaceTabMinimumTotalWidth(
+        tabCount: Int,
+        spacing: CGFloat = 6
+    ) -> CGFloat {
+        guard tabCount > 0 else { return 0 }
+        return CGFloat(tabCount) * ToastyTheme.workspaceTabMinimumWidth +
+            CGFloat(max(tabCount - 1, 0)) * spacing
+    }
+
+    nonisolated static func workspaceTabIdealTotalWidth(
+        tabCount: Int,
+        spacing: CGFloat = 6
+    ) -> CGFloat {
+        guard tabCount > 0 else { return 0 }
+        return CGFloat(tabCount) * ToastyTheme.workspaceTabWidth +
+            CGFloat(max(tabCount - 1, 0)) * spacing
+    }
+
+    nonisolated static func resolvedWorkspaceTabWidth(
+        availableWidth: CGFloat,
+        tabCount: Int,
+        spacing: CGFloat = 6
+    ) -> CGFloat {
+        guard tabCount > 0 else { return ToastyTheme.workspaceTabWidth }
+
+        let spacingWidth = CGFloat(max(tabCount - 1, 0)) * spacing
+        let availableTabWidth = max(0, availableWidth - spacingWidth)
+        let fittedWidth = floor(availableTabWidth / CGFloat(tabCount))
+        return min(
+            ToastyTheme.workspaceTabWidth,
+            max(ToastyTheme.workspaceTabMinimumWidth, fittedWidth)
+        )
     }
 
     nonisolated static func workspaceTabChromeSpec(
@@ -135,14 +170,6 @@ struct WorkspaceView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             topBar
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(height: 1)
-
-            if let workspace = selectedWorkspace,
-               workspace.tabIDs.count > 1 {
-                workspaceTabBar(for: workspace)
-            }
 
             if let window = store.window(id: windowID) {
                 workspaceStack(for: window)
@@ -196,16 +223,43 @@ struct WorkspaceView: View {
     }
 
     private var topBar: some View {
+        ZStack(alignment: .bottomLeading) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(height: 1)
+
+            HStack(alignment: .bottom, spacing: Self.workspaceHeaderSpacing) {
+                Text(selectedWorkspace?.title ?? "")
+                    .font(ToastyTheme.fontTitle)
+                    .foregroundStyle(ToastyTheme.primaryText)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: ToastyTheme.workspaceTitleMaxWidth, alignment: .leading)
+                    .layoutPriority(1)
+                    .accessibilityIdentifier("topbar.workspace.title")
+
+                if let workspace = selectedWorkspace {
+                    workspaceHeaderTabStrip(for: workspace)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .layoutPriority(0)
+                }
+
+                topBarTrailingControls
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(2)
+            }
+            .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+            .padding(.trailing, 12)
+            .padding(.top, ToastyTheme.topBarContentTopPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+        }
+        .frame(height: ToastyTheme.topBarHeight)
+        .background(ToastyTheme.chromeBackground)
+        .accessibilityIdentifier("topbar.container")
+    }
+
+    private var topBarTrailingControls: some View {
         HStack(spacing: 6) {
-            Text(selectedWorkspace?.title ?? "")
-                .font(ToastyTheme.fontTitle)
-                .foregroundStyle(ToastyTheme.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityIdentifier("topbar.workspace.title")
-
-            Spacer(minLength: 12)
-
             if agentTopBarModel.showsAddAgentsButton {
                 topBarFlashTextButton(title: WorkspaceAgentTopBarModel.addAgentsTitle) {
                     openAgentProfilesConfiguration()
@@ -241,62 +295,46 @@ struct WorkspaceView: View {
             .disabled(isFocusedPanelModeActive)
             .help(ToasttyKeyboardShortcuts.splitVertical.helpText("Split Vertically"))
             .accessibilityIdentifier("workspace.split.vertical")
+
+            newTabButton
         }
-        .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
-        .padding(.trailing, 12)
-        .padding(.top, ToastyTheme.topBarContentTopPadding)
-        .frame(height: ToastyTheme.topBarHeight)
-        .background(ToastyTheme.chromeBackground)
-        .accessibilityIdentifier("topbar.container")
     }
 
-    private func workspaceTabBar(for workspace: WorkspaceState) -> some View {
-        ZStack(alignment: .bottom) {
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(height: 1)
+    private func workspaceHeaderTabStrip(for workspace: WorkspaceState) -> some View {
+        let allowsManagementAffordances = Self.workspaceTabManagementAffordancesEnabled(tabCount: workspace.tabIDs.count)
 
-            HStack(alignment: .bottom, spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
-                            workspaceTabRow(
-                                workspaceID: workspace.id,
-                                tab: tab,
-                                index: index,
-                                isSelected: workspace.resolvedSelectedTabID == tab.id
-                            )
-                        }
-                    }
-                    .padding(
-                        .leading,
-                        Self.workspaceTabLeadingPadding(sidebarVisible: sidebarVisible)
-                    )
-                    .frame(height: ToastyTheme.workspaceTabBarHeight, alignment: .bottom)
-                }
-
-                Button(action: createTabInSelectedWorkspace) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(ToastyTheme.inactiveText)
-                        .frame(width: 20, height: 20)
-                        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 5)
-                                .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
-                        )
-                }
-                .buttonStyle(.plain)
-                .padding(.trailing, 12)
-                .disabled(selectedWorkspace == nil)
-                .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
-                .accessibilityIdentifier("workspace.tabs.new")
+        return WorkspaceTabStripLayout(spacing: Self.workspaceTabStripSpacing) {
+            ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                workspaceTabRow(
+                    workspaceID: workspace.id,
+                    tab: tab,
+                    index: index,
+                    isSelected: workspace.resolvedSelectedTabID == tab.id,
+                    allowsManagementAffordances: allowsManagementAffordances
+                )
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
-        .frame(height: ToastyTheme.workspaceTabBarHeight)
-        .background(ToastyTheme.chromeBackground)
+        .frame(height: ToastyTheme.workspaceTabHeight, alignment: .bottom)
+        .clipped()
         .accessibilityIdentifier("workspace.tabs.container")
+    }
+
+    private var newTabButton: some View {
+        Button(action: createTabInSelectedWorkspace) {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .frame(width: 20, height: 20)
+                .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(selectedWorkspace == nil)
+        .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
+        .accessibilityIdentifier("workspace.tabs.new")
     }
 
     private func split(orientation: SplitOrientation) {
@@ -546,7 +584,8 @@ struct WorkspaceView: View {
         workspaceID: UUID,
         tab: WorkspaceTabState,
         index: Int,
-        isSelected: Bool
+        isSelected: Bool,
+        allowsManagementAffordances: Bool
     ) -> some View {
         let hasUnread = tab.unreadPanelIDs.isEmpty == false
         let isRenaming = renamingTabID == tab.id
@@ -558,7 +597,7 @@ struct WorkspaceView: View {
             appIsActive: appIsActive
         )
 
-        return ZStack(alignment: .trailing) {
+        let row = ZStack(alignment: .trailing) {
             if isRenaming {
                 workspaceTabRenameRow(
                     workspaceID: workspaceID,
@@ -585,7 +624,8 @@ struct WorkspaceView: View {
                             workspaceTabTrailingContent(
                                 index: index,
                                 isSelected: isSelected,
-                                isHovered: isHovered
+                                isHovered: isHovered,
+                                showsCloseAffordance: allowsManagementAffordances
                             )
                             .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
                         }
@@ -598,15 +638,12 @@ struct WorkspaceView: View {
                 .animation(.easeOut(duration: 0.1), value: isHovered)
             }
 
-            if isHovered {
+            if isHovered && allowsManagementAffordances {
                 workspaceTabCloseButton(workspaceID: workspaceID, tab: tab)
                     .padding(.trailing, 10)
             }
         }
         .contentShape(Rectangle())
-        .contextMenu {
-            workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
-        }
         .onHover { hovering in
             guard isRenaming == false else { return }
             if hovering {
@@ -616,6 +653,16 @@ struct WorkspaceView: View {
                 if hoveredTabCloseButtonID == tab.id {
                     hoveredTabCloseButtonID = nil
                 }
+            }
+        }
+
+        return Group {
+            if allowsManagementAffordances {
+                row.contextMenu {
+                    workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+                }
+            } else {
+                row
             }
         }
     }
@@ -689,7 +736,7 @@ struct WorkspaceView: View {
     ) -> some View {
         content()
             .padding(.horizontal, 10)
-            .frame(width: ToastyTheme.workspaceTabWidth, height: ToastyTheme.workspaceTabHeight)
+            .frame(maxWidth: .infinity, minHeight: ToastyTheme.workspaceTabHeight, maxHeight: ToastyTheme.workspaceTabHeight)
             .background(
                 chromeSpec.background,
                 in: WorkspaceTabShape()
@@ -709,9 +756,14 @@ struct WorkspaceView: View {
     private func workspaceTabTrailingContent(
         index: Int,
         isSelected: Bool,
-        isHovered: Bool
+        isHovered: Bool,
+        showsCloseAffordance: Bool
     ) -> some View {
-        switch Self.workspaceTabTrailingAccessory(index: index, isHovered: isHovered) {
+        switch Self.workspaceTabTrailingAccessory(
+            index: index,
+            isHovered: isHovered,
+            showsCloseAffordance: showsCloseAffordance
+        ) {
         case .closeButton:
             Color.clear.frame(height: 16)
         case .badge(let shortcutLabel):
@@ -1017,6 +1069,59 @@ private struct PendingWorkspaceTabClose: Identifiable {
     let assessment: WorkspaceTabCloseConfirmationAssessment
 
     var id: UUID { tabID }
+}
+
+private struct WorkspaceTabStripLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+
+        let height = ToastyTheme.workspaceTabHeight
+        let idealWidth = WorkspaceView.workspaceTabIdealTotalWidth(
+            tabCount: subviews.count,
+            spacing: spacing
+        )
+        let minimumWidth = WorkspaceView.workspaceTabMinimumTotalWidth(
+            tabCount: subviews.count,
+            spacing: spacing
+        )
+
+        guard let proposedWidth = proposal.width, proposedWidth.isFinite else {
+            return CGSize(width: idealWidth, height: height)
+        }
+
+        return CGSize(width: max(proposedWidth, minimumWidth), height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        guard !subviews.isEmpty else { return }
+
+        let tabWidth = WorkspaceView.resolvedWorkspaceTabWidth(
+            availableWidth: bounds.width,
+            tabCount: subviews.count,
+            spacing: spacing
+        )
+        var nextX = bounds.minX
+
+        for subview in subviews {
+            subview.place(
+                at: CGPoint(x: nextX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: tabWidth, height: bounds.height)
+            )
+            nextX += tabWidth + spacing
+        }
+    }
 }
 
 struct WorkspaceAgentTopBarModel: Equatable {

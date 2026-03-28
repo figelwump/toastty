@@ -74,17 +74,18 @@ enum ToastyTheme {
 
     static let sidebarWidthBeforeAgentLaunch = CGFloat(WindowState.defaultSidebarWidthBeforeAgentLaunch)
     static let sidebarWidth = CGFloat(WindowState.defaultSidebarWidthAfterAgentLaunch)
-    // Slightly taller than the native compact titlebar so the custom
-    // title/buttons don't sit flush against the window edge.
-    static let topBarHeight: CGFloat = 32
     static let workspaceTabBarHeight: CGFloat = 34
+    // Match the custom header to the folder-tab container height now that the
+    // title and tabs share one row.
+    static let topBarHeight: CGFloat = workspaceTabBarHeight
     static let workspaceTabWidth: CGFloat = 190
+    static let workspaceTabMinimumWidth: CGFloat = 48
     static let workspaceTabHeight: CGFloat = workspaceTabBarHeight
     static let workspaceTabCornerRadius: CGFloat = 6
     static let workspaceTabAccentLineHeight: CGFloat = 2
     static let workspaceTabTrailingSlotWidth: CGFloat = 24
-    static let workspaceTabLeadingPadding: CGFloat = 6
-    static let topBarContentTopPadding: CGFloat = 2
+    static let workspaceTitleMaxWidth: CGFloat = 260
+    static let topBarContentTopPadding: CGFloat = 0
     static let fontHUDTopPadding: CGFloat = topBarHeight + 12
     /// Standard macOS compact titlebar height on current supported macOS releases.
     /// Used only to keep sidebar content clear of the traffic lights.

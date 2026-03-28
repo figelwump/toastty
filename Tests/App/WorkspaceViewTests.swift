@@ -52,38 +52,57 @@ final class WorkspaceViewTests: XCTestCase {
 
     func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
         XCTAssertEqual(
-            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: true),
+            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: true, showsCloseAffordance: true),
             .closeButton
         )
     }
 
     func testWorkspaceTabTrailingAccessoryShowsCommandDigitBadgesThroughNine() {
         XCTAssertEqual(
-            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: false),
+            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: false, showsCloseAffordance: true),
             .badge("⌘1")
         )
         XCTAssertEqual(
-            WorkspaceView.workspaceTabTrailingAccessory(index: 8, isHovered: false),
+            WorkspaceView.workspaceTabTrailingAccessory(index: 8, isHovered: false, showsCloseAffordance: true),
             .badge("⌘9")
         )
         XCTAssertEqual(
-            WorkspaceView.workspaceTabTrailingAccessory(index: 9, isHovered: false),
+            WorkspaceView.workspaceTabTrailingAccessory(index: 9, isHovered: false, showsCloseAffordance: true),
             .empty
         )
     }
 
-    func testWorkspaceTabLeadingPaddingDoesNotReserveHiddenSidebarTitlebarSpace() {
+    func testWorkspaceTabTrailingAccessoryKeepsShortcutBadgeWhenCloseAffordanceIsSuppressed() {
         XCTAssertEqual(
-            WorkspaceView.workspaceTabLeadingPadding(sidebarVisible: true),
-            ToastyTheme.workspaceTabLeadingPadding
+            WorkspaceView.workspaceTabTrailingAccessory(index: 0, isHovered: true, showsCloseAffordance: false),
+            .badge("⌘1")
         )
+    }
+
+    func testWorkspaceTabManagementAffordancesStayDisabledForSingleTabWorkspaces() {
+        XCTAssertFalse(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 1))
+        XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 2))
+    }
+
+    func testResolvedWorkspaceTabWidthStaysAtIdealWidthWhenThereIsRoom() {
+        let availableWidth = WorkspaceView.workspaceTabIdealTotalWidth(tabCount: 3) + 120
         XCTAssertEqual(
-            WorkspaceView.workspaceTabLeadingPadding(sidebarVisible: false),
-            ToastyTheme.workspaceTabLeadingPadding
+            WorkspaceView.resolvedWorkspaceTabWidth(availableWidth: availableWidth, tabCount: 3),
+            ToastyTheme.workspaceTabWidth
         )
-        XCTAssertNotEqual(
-            WorkspaceView.workspaceTabLeadingPadding(sidebarVisible: false),
-            ToastyTheme.topBarLeadingPaddingWithoutSidebar
+    }
+
+    func testResolvedWorkspaceTabWidthCompressesTabsEquallyWhenHeaderGetsTight() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabWidth(availableWidth: 524, tabCount: 5),
+            100
+        )
+    }
+
+    func testResolvedWorkspaceTabWidthStopsAtConfiguredMinimumWidth() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabWidth(availableWidth: 140, tabCount: 5),
+            ToastyTheme.workspaceTabMinimumWidth
         )
     }
 
