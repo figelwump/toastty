@@ -6,6 +6,15 @@ import XCTest
 
 @MainActor
 final class SidebarViewTests: XCTestCase {
+    private struct SidebarHarness {
+        let windowID: UUID
+        let workspaceID: UUID
+        let panelID: UUID
+        let store: AppStore
+        let hostingView: NSView
+        let window: NSWindow
+    }
+
     func testAbbreviatedPathLabelKeepsOnlyLastPathComponent() {
         XCTAssertEqual(SidebarView.abbreviatedPathLabel("/Users/vishal/GiantThings/repos/toastty-session-status"), ".../toastty-session-status")
         XCTAssertEqual(SidebarView.abbreviatedPathLabel("/"), "/")
@@ -289,6 +298,46 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testPendingSidebarFlashRequestPulsesAndClearsSelectedSessionRow() throws {
+        let harness = try makeSidebarHarness(
+            sessionID: "sess-flash",
+            sessionStatus: SessionStatus(
+                kind: .error,
+                summary: "Blocked",
+                detail: "No more active panels"
+            )
+        )
+        let baselineBitmap = try renderedBitmap(for: harness.hostingView)
+
+        harness.store.pendingSidebarSessionFlashRequest = PendingSidebarSessionFlashRequest(
+            requestID: UUID(),
+            windowID: harness.windowID,
+            workspaceID: harness.workspaceID,
+            panelID: harness.panelID
+        )
+        pumpMainRunLoop(duration: 0.12)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let peakBitmap = try renderedBitmap(for: harness.hostingView)
+
+        pumpMainRunLoop(duration: 0.5)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+
+        XCTAssertNil(harness.store.pendingSidebarSessionFlashRequest)
+        XCTAssertGreaterThan(
+            try differingPixelCount(between: baselineBitmap, and: peakBitmap),
+            0,
+            "Expected the selected session row to visibly pulse when no further active panels exist"
+        )
+        XCTAssertEqual(
+            try differingPixelCount(between: baselineBitmap, and: settledBitmap),
+            0,
+            "Expected the sidebar pulse to settle back to its baseline appearance"
+        )
+
+        harness.window.orderOut(nil)
+    }
+
     private func pumpMainRunLoop(duration: TimeInterval = 0) {
         let expectation = expectation(description: "Flush SwiftUI update")
         DispatchQueue.main.async {
@@ -304,6 +353,16 @@ final class SidebarViewTests: XCTestCase {
         sessionID: String,
         sessionStatus: SessionStatus
     ) throws -> NSView {
+        try makeSidebarHarness(
+            sessionID: sessionID,
+            sessionStatus: sessionStatus
+        ).hostingView
+    }
+
+    private func makeSidebarHarness(
+        sessionID: String,
+        sessionStatus: SessionStatus
+    ) throws -> SidebarHarness {
         let state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.windows.first?.workspaceIDs.first)
@@ -347,7 +406,46 @@ final class SidebarViewTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         pumpMainRunLoop()
         hostingView.layoutSubtreeIfNeeded()
-        return hostingView
+        return SidebarHarness(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            store: store,
+            hostingView: hostingView,
+            window: window
+        )
+    }
+
+    private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {
+        view.layoutSubtreeIfNeeded()
+        let bounds = view.bounds
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: bounds))
+        view.cacheDisplay(in: bounds, to: bitmap)
+        return bitmap
+    }
+
+    private func differingPixelCount(
+        between lhs: NSBitmapImageRep,
+        and rhs: NSBitmapImageRep
+    ) throws -> Int {
+        XCTAssertEqual(lhs.pixelsWide, rhs.pixelsWide)
+        XCTAssertEqual(lhs.pixelsHigh, rhs.pixelsHigh)
+
+        let lhsData = try XCTUnwrap(lhs.bitmapData)
+        let rhsData = try XCTUnwrap(rhs.bitmapData)
+        let bytesPerPixel = max(1, lhs.bitsPerPixel / 8)
+        let byteCount = lhs.bytesPerRow * lhs.pixelsHigh
+        XCTAssertEqual(byteCount, rhs.bytesPerRow * rhs.pixelsHigh)
+
+        var differenceCount = 0
+        for pixelOffset in stride(from: 0, to: byteCount, by: bytesPerPixel) {
+            for byteOffset in 0..<bytesPerPixel where lhsData[pixelOffset + byteOffset] != rhsData[pixelOffset + byteOffset] {
+                differenceCount += 1
+                break
+            }
+        }
+
+        return differenceCount
     }
 
     private func renderedTextValues(in rootView: NSView) -> [String] {

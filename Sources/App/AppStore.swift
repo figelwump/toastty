@@ -29,6 +29,13 @@ struct PendingWorkspaceTabRenameRequest: Equatable {
     let tabID: UUID
 }
 
+struct PendingSidebarSessionFlashRequest: Equatable {
+    let requestID: UUID
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -56,6 +63,9 @@ final class AppStore: ObservableObject {
     /// window observes this to enter inline-rename mode for the target tab.
     @Published var pendingRenameWorkspaceTabRequest: PendingWorkspaceTabRenameRequest?
     @Published var pendingCloseWorkspaceRequest: PendingWorkspaceCloseRequest?
+    /// Set by exhausted navigation commands so the target sidebar can briefly
+    /// pulse the currently selected managed-session row for feedback.
+    @Published var pendingSidebarSessionFlashRequest: PendingSidebarSessionFlashRequest?
 
     private let reducer = AppReducer()
     private let persistUserSettings: Bool
@@ -217,10 +227,17 @@ final class AppStore: ObservableObject {
         preferredWindowID: UUID?,
         sessionRuntimeStore: SessionRuntimeStore?
     ) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
         guard let target = nextUnreadOrActivePanelTarget(
             preferredWindowID: preferredWindowID,
             sessionRuntimeStore: sessionRuntimeStore
         ) else {
+            requestSidebarFlashForExhaustedUnreadOrActiveJump(
+                selection: selection,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
             return false
         }
         return focusPanelTarget(target)
@@ -374,6 +391,17 @@ final class AppStore: ObservableObject {
         return request
     }
 
+    func consumePendingSidebarSessionFlashRequest(
+        windowID: UUID,
+        requestID: UUID
+    ) -> PendingSidebarSessionFlashRequest? {
+        guard let request = pendingSidebarSessionFlashRequest,
+              request.windowID == windowID,
+              request.requestID == requestID else { return nil }
+        pendingSidebarSessionFlashRequest = nil
+        return request
+    }
+
     @discardableResult
     func confirmWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
         let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
@@ -404,6 +432,11 @@ final class AppStore: ObservableObject {
            pendingWorkspaceCloseRequestIsValid(request) == false {
             pendingCloseWorkspaceRequest = nil
         }
+
+        if let request = pendingSidebarSessionFlashRequest,
+           pendingSidebarSessionFlashRequestIsValid(request) == false {
+            pendingSidebarSessionFlashRequest = nil
+        }
     }
 
     private func pendingRenameWorkspaceRequestIsValid(_ request: PendingWorkspaceRenameRequest) -> Bool {
@@ -420,6 +453,16 @@ final class AppStore: ObservableObject {
 
     private func pendingWorkspaceCloseRequestIsValid(_ request: PendingWorkspaceCloseRequest) -> Bool {
         pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID)
+    }
+
+    private func pendingSidebarSessionFlashRequestIsValid(
+        _ request: PendingSidebarSessionFlashRequest
+    ) -> Bool {
+        guard pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID),
+              let workspace = state.workspacesByID[request.workspaceID] else {
+            return false
+        }
+        return workspace.panelState(for: request.panelID) != nil
     }
 
     private func pendingWorkspaceRequestExists(windowID: UUID, workspaceID: UUID) -> Bool {
@@ -515,6 +558,25 @@ final class AppStore: ObservableObject {
         ) { _, panelID in
             activePanelIDs.contains(panelID)
         }
+    }
+
+    private func requestSidebarFlashForExhaustedUnreadOrActiveJump(
+        selection: WindowCommandSelection,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) {
+        guard let sessionRuntimeStore,
+              let focusedPanelID = selection.workspace.focusedPanelID,
+              let sessionStatus = sessionRuntimeStore.panelStatus(for: focusedPanelID),
+              Self.nextUnreadOrActiveFallbackStatusKinds.contains(sessionStatus.status.kind) else {
+            return
+        }
+
+        pendingSidebarSessionFlashRequest = PendingSidebarSessionFlashRequest(
+            requestID: UUID(),
+            windowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            panelID: focusedPanelID
+        )
     }
 
     @discardableResult

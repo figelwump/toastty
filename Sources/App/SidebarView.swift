@@ -10,6 +10,12 @@ struct SidebarView: View {
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
+    @State private var flashingSessionPanelID: UUID?
+    @State private var flashingSessionOverlayOpacity = 0.0
+    @State private var activeSidebarFlashRequestID: UUID?
+    @State private var lastHandledSidebarFlashRequestID: UUID?
+    @State private var sidebarFlashClearWorkItem: DispatchWorkItem?
+    @State private var sidebarFlashResetWorkItem: DispatchWorkItem?
 
     /// Fixed height for the session detail text area (1 line at the detail
     /// font size). Reserving a constant height prevents the sidebar from
@@ -20,6 +26,8 @@ struct SidebarView: View {
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
         return lineHeight
     }()
+    private static let sessionFlashPeakDuration: Double = 0.16
+    private static let sessionFlashSettleDuration: Double = 0.24
 
     private var selectedWorkspaceID: UUID? {
         store.selectedWorkspaceID(in: windowID)
@@ -111,6 +119,16 @@ struct SidebarView: View {
                   window.workspaceIDs.contains(request.workspaceID),
                   let workspace = store.state.workspacesByID[request.workspaceID] else { return }
             beginWorkspaceRename(workspace)
+        }
+        .onAppear {
+            handlePendingSidebarSessionFlashRequest()
+        }
+        .onChange(of: store.pendingSidebarSessionFlashRequest) { _, _ in
+            handlePendingSidebarSessionFlashRequest()
+        }
+        .onDisappear {
+            sidebarFlashClearWorkItem?.cancel()
+            sidebarFlashResetWorkItem?.cancel()
         }
     }
 
@@ -327,6 +345,7 @@ struct SidebarView: View {
         let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
         let isActivePanel = store.selectedWorkspaceID(in: windowID) == workspace.id
             && store.selectedWorkspace(in: windowID)?.focusedPanelID == workspaceSessionStatus.panelID
+        let isFlashing = flashingSessionPanelID == workspaceSessionStatus.panelID
 
         Group {
             if canFocusPanel {
@@ -341,7 +360,8 @@ struct SidebarView: View {
                         status: status,
                         showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isActivePanel: isActivePanel,
-                        isHovered: isHovered
+                        isHovered: isHovered,
+                        isFlashing: isFlashing
                     )
                 }
                 .buttonStyle(.plain)
@@ -359,7 +379,8 @@ struct SidebarView: View {
                     status: status,
                     showsUnreadSessionAccent: showsUnreadSessionAccent,
                     isActivePanel: isActivePanel,
-                    isHovered: false
+                    isHovered: false,
+                    isFlashing: isFlashing
                 )
             }
         }
@@ -370,7 +391,8 @@ struct SidebarView: View {
         status: SessionStatus,
         showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
-        isHovered: Bool
+        isHovered: Bool,
+        isFlashing: Bool
     ) -> some View {
         let indicatorState = Self.sessionIndicatorState(for: status.kind)
         let unreadOutlineKind = Self.unreadSessionOutlineKind(
@@ -379,9 +401,11 @@ struct SidebarView: View {
         )
         // Preserve the status outline until the session is read; hover still
         // gets feedback from the row background fill.
-        let borderColor = unreadOutlineKind
-            .map { ToastyTheme.sessionStatusOutlineColor(for: $0) }
-            ?? (isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear)
+        let borderColor = sessionStatusBorderColor(
+            unreadOutlineKind: unreadOutlineKind,
+            isHovered: isHovered
+        )
+        let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
 
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -427,18 +451,106 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(isActivePanel
-                      ? (isHovered ? ToastyTheme.sidebarSessionActiveHoverBackground
-                         : ToastyTheme.sidebarSessionActiveBackground)
-                      : isHovered ? ToastyTheme.sidebarSessionHoverBackground
-                      : Color.clear)
+                .fill(
+                    sessionStatusBackgroundColor(
+                        isActivePanel: isActivePanel,
+                        isHovered: isHovered
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(ToastyTheme.accent.opacity(0.18 * flashOpacity))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
                 .stroke(borderColor, lineWidth: 1)
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .stroke(ToastyTheme.accent.opacity(0.9 * flashOpacity), lineWidth: 1.5)
+        )
         .contentShape(RoundedRectangle(cornerRadius: 5))
     }
+
+    @MainActor
+    private func handlePendingSidebarSessionFlashRequest() {
+        guard let request = store.pendingSidebarSessionFlashRequest,
+              request.windowID == windowID,
+              lastHandledSidebarFlashRequestID != request.requestID else {
+            return
+        }
+
+        lastHandledSidebarFlashRequestID = request.requestID
+        flashSidebarSession(panelID: request.panelID, requestID: request.requestID)
+        _ = store.consumePendingSidebarSessionFlashRequest(
+            windowID: windowID,
+            requestID: request.requestID
+        )
+    }
+
+    @MainActor
+    private func flashSidebarSession(panelID: UUID, requestID: UUID) {
+        activeSidebarFlashRequestID = requestID
+        sidebarFlashClearWorkItem?.cancel()
+        sidebarFlashResetWorkItem?.cancel()
+        sidebarFlashClearWorkItem = nil
+        sidebarFlashResetWorkItem = nil
+        flashingSessionPanelID = panelID
+        flashingSessionOverlayOpacity = 0
+
+        withAnimation(.easeOut(duration: 0.08)) {
+            flashingSessionOverlayOpacity = 1
+        }
+
+        let clearWorkItem = DispatchWorkItem { [requestID] in
+            guard activeSidebarFlashRequestID == requestID else { return }
+            sidebarFlashClearWorkItem = nil
+            withAnimation(.easeOut(duration: Self.sessionFlashSettleDuration)) {
+                flashingSessionOverlayOpacity = 0
+            }
+        }
+        sidebarFlashClearWorkItem = clearWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.sessionFlashPeakDuration,
+            execute: clearWorkItem
+        )
+
+        let resetWorkItem = DispatchWorkItem { [requestID] in
+            guard activeSidebarFlashRequestID == requestID else { return }
+            activeSidebarFlashRequestID = nil
+            flashingSessionPanelID = nil
+            flashingSessionOverlayOpacity = 0
+            sidebarFlashResetWorkItem = nil
+        }
+        sidebarFlashResetWorkItem = resetWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.sessionFlashPeakDuration + Self.sessionFlashSettleDuration,
+            execute: resetWorkItem
+        )
+    }
+
+    private func sessionStatusBackgroundColor(
+        isActivePanel: Bool,
+        isHovered: Bool
+    ) -> Color {
+        if isActivePanel {
+            return isHovered ? ToastyTheme.sidebarSessionActiveHoverBackground
+                : ToastyTheme.sidebarSessionActiveBackground
+        }
+        return isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear
+    }
+
+    private func sessionStatusBorderColor(
+        unreadOutlineKind: SessionStatusKind?,
+        isHovered: Bool
+    ) -> Color {
+        if let unreadOutlineKind {
+            return ToastyTheme.sessionStatusOutlineColor(for: unreadOutlineKind)
+        }
+        return isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear
+    }
+
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
         if let currentEvent = NSApp.currentEvent,
            currentEvent.type == .leftMouseUp,
