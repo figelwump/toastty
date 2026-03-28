@@ -68,7 +68,7 @@ private final class ImageSampler {
 }
 
 private let chromeBackground = RGB(hex: 0x111111)
-private let selectedBackground = RGB(hex: 0x0D0D0D)
+private let selectedBackground = RGB(hex: 0x1A1A1A)
 private let hairline = RGB(hex: 0x1F1F1F)
 private let accent = RGB(hex: 0xF5A623)
 
@@ -82,7 +82,7 @@ private let tabBarHeightPoints = 34.0
 private let tabStripSearchTopPoints = 18.0
 private let tabStripSearchBottomPoints = 50.0
 private let tabWidthPoints = 190.0
-private let tabHeightPoints = 26.0
+private let tabHeightPoints = 34.0
 private let tabSpacingPoints = 6.0
 private let tabTrailingPaddingPoints = 10.0
 private let tabTrailingSlotWidthPoints = 24.0
@@ -344,6 +344,15 @@ private func assertTwoTabScreenshot(path: String) throws {
     try assertCondition(
         isNear(unselectedBottomSeamColor, hairline, tolerance: 10),
         "idle tab area no longer shows the tab-strip bottom seam"
+    )
+
+    let panelHeaderContinuityColor = image.color(
+        topX: Int(selectedFrame.midX),
+        topY: scaled(topBarHeightPoints + topBarDividerHeightPoints + tabBarHeightPoints + 2, scale: scale)
+    )
+    try assertCondition(
+        isNear(panelHeaderContinuityColor, selectedBackground, tolerance: 10),
+        "panel header no longer visually connects with the selected tab"
     )
 
     try assertBadgeVisibility(path: path, tabIndex: 2, expectedVisible: true)

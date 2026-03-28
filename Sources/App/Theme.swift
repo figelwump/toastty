@@ -49,15 +49,15 @@ enum ToastyTheme {
     static let panelHeaderReadyDivider = Color(hex: 0x5BA08A)
     static let panelHeaderErrorBackground = Color(hex: 0x5BA08A, alpha: 0.14)
     static let panelHeaderErrorDivider = Color(hex: 0x5BA08A)
-    static let workspaceTabSelectedBackground = surfaceBackground
+    static let workspaceTabSelectedBackground = elevatedBackground
     static let workspaceTabSelectedAccent = accent
-    static let workspaceTabUnselectedText = mutedText
+    static let workspaceTabUnselectedText = Color(hex: 0x909090)
     static let workspaceTabHoverBackground = Color(hex: 0x1C1C1C)
     static let workspaceTabHoverText = Color(hex: 0xB8B8B8)
     static let workspaceTabUnreadDot = Color(hex: 0x5BA08A)
     static let workspaceTabUnreadDotDiameter: CGFloat = 7
     static let workspaceTabBadgeSelectedText = Color(hex: 0x888888)
-    static let workspaceTabBadgeUnselectedText = Color(hex: 0x444444)
+    static let workspaceTabBadgeUnselectedText = Color(hex: 0x646464)
     static let workspaceTabCloseBackground = Color(hex: 0x2A2A2A)
     static let workspaceTabCloseButton = Color(hex: 0x888888)
     static let workspaceTabCloseButtonHover = Color(hex: 0xCCCCCC)
@@ -79,7 +79,7 @@ enum ToastyTheme {
     static let topBarHeight: CGFloat = 32
     static let workspaceTabBarHeight: CGFloat = 34
     static let workspaceTabWidth: CGFloat = 190
-    static let workspaceTabHeight: CGFloat = 26
+    static let workspaceTabHeight: CGFloat = workspaceTabBarHeight
     static let workspaceTabCornerRadius: CGFloat = 6
     static let workspaceTabAccentLineHeight: CGFloat = 2
     static let workspaceTabTrailingSlotWidth: CGFloat = 24

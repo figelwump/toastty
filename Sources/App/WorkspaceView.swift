@@ -1216,10 +1216,21 @@ private struct PanelCardView: View {
             }
         }
         .background(ToastyTheme.surfaceBackground)
-        .overlay(
+        .overlay(alignment: .leading) {
             Rectangle()
-                .strokeBorder(ToastyTheme.hairline, lineWidth: 1)
-        )
+                .fill(ToastyTheme.hairline)
+                .frame(width: 1)
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(width: 1)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(height: 1)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {

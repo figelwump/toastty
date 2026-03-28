@@ -121,7 +121,7 @@ final class WorkspaceViewTests: XCTestCase {
         try assertColor(accentColor, equals: ToastyTheme.workspaceTabSelectedAccent)
     }
 
-    func testWorkspaceTabChromeSpecSelectedBackgroundMatchesSurfaceBackground() throws {
+    func testWorkspaceTabChromeSpecSelectedBackgroundMatchesPanelHeaderBackground() throws {
         let spec = WorkspaceView.workspaceTabChromeSpec(
             isSelected: true,
             isHovered: false,
@@ -129,7 +129,7 @@ final class WorkspaceViewTests: XCTestCase {
             appIsActive: true
         )
 
-        try assertColor(spec.background, equals: ToastyTheme.surfaceBackground)
+        try assertColor(spec.background, equals: ToastyTheme.elevatedBackground)
     }
 
     func testWorkspaceTabChromeSpecRenamingUnselectedUsesVisibleFillWithoutAccent() throws {
