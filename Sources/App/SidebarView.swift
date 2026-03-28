@@ -427,7 +427,9 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(isActivePanel ? ToastyTheme.sidebarSessionActiveBackground
+                .fill(isActivePanel
+                      ? (isHovered ? ToastyTheme.sidebarSessionActiveHoverBackground
+                         : ToastyTheme.sidebarSessionActiveBackground)
                       : isHovered ? ToastyTheme.sidebarSessionHoverBackground
                       : Color.clear)
         )
