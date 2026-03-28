@@ -59,7 +59,7 @@ struct WorkspaceView: View {
     @State private var pendingWorkspaceTabClose: PendingWorkspaceTabClose?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
-    private static let workspaceHeaderSpacing: CGFloat = 8
+    private static let workspaceHeaderSpacing: CGFloat = 12
     private static let workspaceTabStripSpacing: CGFloat = 6
 
     nonisolated static func resolvedWorkspaceTitleWidth(
@@ -67,7 +67,7 @@ struct WorkspaceView: View {
         availableWidth: CGFloat,
         trailingWidth: CGFloat,
         tabCount: Int,
-        spacing: CGFloat = 8,
+        spacing: CGFloat = 12,
         tabSpacing: CGFloat = 6,
         titleMaxWidth: CGFloat = 260
     ) -> CGFloat {
