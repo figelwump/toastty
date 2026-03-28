@@ -1672,6 +1672,192 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(updatedWorkspace.focusedPanelID, secondReadyTab.panelIDs[2])
     }
 
+    func testFocusNextUnreadOrActivePanelFromCommandFallsBackToNeedsApprovalPanels() throws {
+        let firstTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let firstWorkspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [firstTab],
+            selectedTabIndex: 0
+        )
+
+        let secondSelectedTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondApprovalTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondWorkspace = makeUnreadCommandWorkspace(
+            title: "Two",
+            tabs: [secondSelectedTab, secondApprovalTab],
+            selectedTabIndex: 0
+        )
+
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID
+        )
+        var activatedWindowIDs: [UUID] = []
+        let store = AppStore(
+            state: state,
+            persistTerminalFontPreference: false,
+            windowActivationHandler: { activatedWindowIDs.append($0) }
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_102)
+        sessionStore.startSession(
+            sessionID: "sess-needs-approval",
+            agent: .codex,
+            panelID: secondApprovalTab.panelIDs[2],
+            windowID: secondWindowID,
+            workspaceID: secondWorkspace.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-needs-approval",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Review command"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(
+            store.canFocusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: firstWindowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+        XCTAssertTrue(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: firstWindowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        XCTAssertEqual(store.state.selectedWindowID, secondWindowID)
+        XCTAssertEqual(activatedWindowIDs, [secondWindowID])
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
+        XCTAssertEqual(updatedWorkspace.selectedTabID, secondApprovalTab.tab.id)
+        XCTAssertEqual(updatedWorkspace.focusedPanelID, secondApprovalTab.panelIDs[2])
+    }
+
+    func testFocusNextUnreadOrActivePanelFromCommandFallsBackToErrorPanels() throws {
+        let firstTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let firstWorkspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [firstTab],
+            selectedTabIndex: 0
+        )
+
+        let secondSelectedTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondErrorTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondWorkspace = makeUnreadCommandWorkspace(
+            title: "Two",
+            tabs: [secondSelectedTab, secondErrorTab],
+            selectedTabIndex: 0
+        )
+
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID
+        )
+        var activatedWindowIDs: [UUID] = []
+        let store = AppStore(
+            state: state,
+            persistTerminalFontPreference: false,
+            windowActivationHandler: { activatedWindowIDs.append($0) }
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_103)
+        sessionStore.startSession(
+            sessionID: "sess-error",
+            agent: .codex,
+            panelID: secondErrorTab.panelIDs[2],
+            windowID: secondWindowID,
+            workspaceID: secondWorkspace.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-error",
+            status: SessionStatus(kind: .error, summary: "Error", detail: "Command failed"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(
+            store.canFocusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: firstWindowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+        XCTAssertTrue(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: firstWindowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        XCTAssertEqual(store.state.selectedWindowID, secondWindowID)
+        XCTAssertEqual(activatedWindowIDs, [secondWindowID])
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
+        XCTAssertEqual(updatedWorkspace.selectedTabID, secondErrorTab.tab.id)
+        XCTAssertEqual(updatedWorkspace.focusedPanelID, secondErrorTab.panelIDs[2])
+    }
+
     func testFocusNextUnreadOrActivePanelCyclesBeyondCurrentWorkspace() throws {
         let currentTab = makeUnreadCommandTab(
             focusedPanelIndex: 0,

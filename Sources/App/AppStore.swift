@@ -50,6 +50,8 @@ final class AppStore: ObservableObject {
     static let nextUnreadOrActiveFallbackStatusKinds: Set<SessionStatusKind> = [
         .working,
         .ready,
+        .needsApproval,
+        .error,
     ]
 
     @Published private(set) var state: AppState
