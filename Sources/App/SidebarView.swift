@@ -325,6 +325,8 @@ struct SidebarView: View {
             in: workspace
         )
         let canFocusPanel = Self.canFocusSessionPanel(workspaceSessionStatus.panelID, in: workspace)
+        let isActivePanel = store.selectedWorkspaceID(in: windowID) == workspace.id
+            && store.selectedWorkspace(in: windowID)?.focusedPanelID == workspaceSessionStatus.panelID
 
         Group {
             if canFocusPanel {
@@ -338,6 +340,7 @@ struct SidebarView: View {
                         workspaceSessionStatus,
                         status: status,
                         showsUnreadSessionAccent: showsUnreadSessionAccent,
+                        isActivePanel: isActivePanel,
                         isHovered: isHovered
                     )
                 }
@@ -355,6 +358,7 @@ struct SidebarView: View {
                     workspaceSessionStatus,
                     status: status,
                     showsUnreadSessionAccent: showsUnreadSessionAccent,
+                    isActivePanel: isActivePanel,
                     isHovered: false
                 )
             }
@@ -365,6 +369,7 @@ struct SidebarView: View {
         _ workspaceSessionStatus: WorkspaceSessionStatus,
         status: SessionStatus,
         showsUnreadSessionAccent: Bool,
+        isActivePanel: Bool,
         isHovered: Bool
     ) -> some View {
         let indicatorState = Self.sessionIndicatorState(for: status.kind)
@@ -422,7 +427,9 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 5)
-                .fill(isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear)
+                .fill(isActivePanel ? ToastyTheme.sidebarSessionActiveBackground
+                      : isHovered ? ToastyTheme.sidebarSessionHoverBackground
+                      : Color.clear)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
