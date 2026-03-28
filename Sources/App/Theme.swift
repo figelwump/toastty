@@ -49,21 +49,15 @@ enum ToastyTheme {
     static let panelHeaderReadyDivider = Color(hex: 0x5BA08A)
     static let panelHeaderErrorBackground = Color(hex: 0x5BA08A, alpha: 0.14)
     static let panelHeaderErrorDivider = Color(hex: 0x5BA08A)
-    static let workspaceTabSelectedBackground = Color(hex: 0x222222)
-    static let workspaceTabSelectedBorder = accent
-    static let workspaceTabUnselectedBackground = Color(hex: 0x161616)
-    static let workspaceTabUnselectedBorder = Color(hex: 0x1F1F1F)
-    static let workspaceTabUnselectedText = Color(hex: 0xA0A0A0)
+    static let workspaceTabSelectedBackground = surfaceBackground
+    static let workspaceTabSelectedAccent = accent
+    static let workspaceTabUnselectedText = mutedText
     static let workspaceTabHoverBackground = Color(hex: 0x1C1C1C)
-    static let workspaceTabHoverBorder = Color(hex: 0x2A2A2A)
     static let workspaceTabHoverText = Color(hex: 0xB8B8B8)
-    static let workspaceTabUnreadBackground = Color(hex: 0x161618)
-    static let workspaceTabUnreadBorder = Color(hex: 0x1F2522)
-    static let workspaceTabUnreadText = Color(hex: 0xB8B8B8)
     static let workspaceTabUnreadDot = Color(hex: 0x5BA08A)
     static let workspaceTabUnreadDotDiameter: CGFloat = 7
     static let workspaceTabBadgeSelectedText = Color(hex: 0x888888)
-    static let workspaceTabBadgeUnselectedText = Color(hex: 0x555555)
+    static let workspaceTabBadgeUnselectedText = Color(hex: 0x444444)
     static let workspaceTabCloseBackground = Color(hex: 0x2A2A2A)
     static let workspaceTabCloseButton = Color(hex: 0x888888)
     static let workspaceTabCloseButtonHover = Color(hex: 0xCCCCCC)
@@ -87,6 +81,7 @@ enum ToastyTheme {
     static let workspaceTabWidth: CGFloat = 190
     static let workspaceTabHeight: CGFloat = 26
     static let workspaceTabCornerRadius: CGFloat = 6
+    static let workspaceTabAccentLineHeight: CGFloat = 2
     static let workspaceTabTrailingSlotWidth: CGFloat = 24
     static let workspaceTabLeadingPadding: CGFloat = 6
     static let topBarContentTopPadding: CGFloat = 2
@@ -220,8 +215,8 @@ enum ToastyTheme {
         }
     }
 
-    static func workspaceTabSelectedBorderColor(appIsActive: Bool) -> Color {
-        appIsActive ? workspaceTabSelectedBorder : workspaceTabSelectedBorder.opacity(0.5)
+    static func workspaceTabSelectedAccentColor(appIsActive: Bool) -> Color {
+        appIsActive ? workspaceTabSelectedAccent : workspaceTabSelectedAccent.opacity(0.5)
     }
 
     static func panelHeaderDividerColor(

@@ -9,6 +9,35 @@ struct WorkspaceView: View {
         case empty
     }
 
+    struct WorkspaceTabChromeSpec {
+        let background: Color
+        let text: Color
+        let accentColor: Color?
+    }
+
+    private struct WorkspaceTabShape: Shape {
+        func path(in rect: CGRect) -> Path {
+            let radius = min(ToastyTheme.workspaceTabCornerRadius, rect.width / 2, rect.height)
+            var path = Path()
+
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                control: CGPoint(x: rect.minX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+                control: CGPoint(x: rect.maxX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.closeSubpath()
+
+            return path
+        }
+    }
+
     let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
@@ -51,6 +80,51 @@ struct WorkspaceView: View {
         ToastyTheme.workspaceTabLeadingPadding
     }
 
+    nonisolated static func workspaceTabChromeSpec(
+        isSelected: Bool,
+        isHovered: Bool,
+        isRenaming: Bool,
+        appIsActive: Bool
+    ) -> WorkspaceTabChromeSpec {
+        if isRenaming {
+            if isSelected {
+                return WorkspaceTabChromeSpec(
+                    background: ToastyTheme.workspaceTabSelectedBackground,
+                    text: ToastyTheme.primaryText,
+                    accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive)
+                )
+            }
+
+            return WorkspaceTabChromeSpec(
+                background: ToastyTheme.workspaceTabHoverBackground,
+                text: ToastyTheme.primaryText,
+                accentColor: nil
+            )
+        }
+
+        if isSelected {
+            return WorkspaceTabChromeSpec(
+                background: ToastyTheme.workspaceTabSelectedBackground,
+                text: ToastyTheme.primaryText,
+                accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive)
+            )
+        }
+
+        if isHovered {
+            return WorkspaceTabChromeSpec(
+                background: ToastyTheme.workspaceTabHoverBackground,
+                text: ToastyTheme.workspaceTabHoverText,
+                accentColor: nil
+            )
+        }
+
+        return WorkspaceTabChromeSpec(
+            background: .clear,
+            text: ToastyTheme.workspaceTabUnselectedText,
+            accentColor: nil
+        )
+    }
+
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
         WorkspaceAgentTopBarModel(
             catalog: agentCatalogStore.catalog,
@@ -68,9 +142,6 @@ struct WorkspaceView: View {
             if let workspace = selectedWorkspace,
                workspace.tabIDs.count > 1 {
                 workspaceTabBar(for: workspace)
-                Rectangle()
-                    .fill(ToastyTheme.hairline)
-                    .frame(height: 1)
             }
 
             if let window = store.window(id: windowID) {
@@ -180,41 +251,48 @@ struct WorkspaceView: View {
     }
 
     private func workspaceTabBar(for workspace: WorkspaceState) -> some View {
-        HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
-                        workspaceTabRow(
-                            workspaceID: workspace.id,
-                            tab: tab,
-                            index: index,
-                            isSelected: workspace.resolvedSelectedTabID == tab.id
-                        )
-                    }
-                }
-                .padding(
-                    .leading,
-                    Self.workspaceTabLeadingPadding(sidebarVisible: sidebarVisible)
-                )
-                .padding(.vertical, 4)
-            }
+        ZStack(alignment: .bottom) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(height: 1)
 
-            Button(action: createTabInSelectedWorkspace) {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .frame(width: 20, height: 20)
-                    .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+            HStack(alignment: .bottom, spacing: 8) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                            workspaceTabRow(
+                                workspaceID: workspace.id,
+                                tab: tab,
+                                index: index,
+                                isSelected: workspace.resolvedSelectedTabID == tab.id
+                            )
+                        }
+                    }
+                    .padding(
+                        .leading,
+                        Self.workspaceTabLeadingPadding(sidebarVisible: sidebarVisible)
                     )
+                    .frame(height: ToastyTheme.workspaceTabBarHeight, alignment: .bottom)
+                }
+
+                Button(action: createTabInSelectedWorkspace) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ToastyTheme.inactiveText)
+                        .frame(width: 20, height: 20)
+                        .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 5)
+                                .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+                        )
+                }
+                .buttonStyle(.plain)
+                .padding(.trailing, 12)
+                .disabled(selectedWorkspace == nil)
+                .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
+                .accessibilityIdentifier("workspace.tabs.new")
             }
-            .buttonStyle(.plain)
-            .padding(.trailing, 12)
-            .disabled(selectedWorkspace == nil)
-            .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
-            .accessibilityIdentifier("workspace.tabs.new")
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
         .frame(height: ToastyTheme.workspaceTabBarHeight)
         .background(ToastyTheme.chromeBackground)
@@ -473,10 +551,10 @@ struct WorkspaceView: View {
         let hasUnread = tab.unreadPanelIDs.isEmpty == false
         let isRenaming = renamingTabID == tab.id
         let isHovered = isRenaming == false && hoveredTabID == tab.id
-        let colors = resolveTabColors(
+        let chromeSpec = Self.workspaceTabChromeSpec(
             isSelected: isSelected,
             isHovered: isHovered,
-            hasUnread: hasUnread,
+            isRenaming: isRenaming,
             appIsActive: appIsActive
         )
 
@@ -485,7 +563,7 @@ struct WorkspaceView: View {
                 workspaceTabRenameRow(
                     workspaceID: workspaceID,
                     tab: tab,
-                    colors: colors,
+                    chromeSpec: chromeSpec,
                     hasUnread: hasUnread
                 )
             } else {
@@ -495,11 +573,11 @@ struct WorkspaceView: View {
                     }
                     _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
                 } label: {
-                    workspaceTabChrome(colors: colors) {
+                    workspaceTabChrome(chromeSpec: chromeSpec) {
                         HStack(spacing: 5) {
                             workspaceTabTitleContent(
                                 tab: tab,
-                                textColor: colors.text,
+                                textColor: chromeSpec.text,
                                 hasUnread: hasUnread
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -517,7 +595,6 @@ struct WorkspaceView: View {
                 .accessibilityLabel(tab.displayTitle)
                 .help(tab.displayTitle)
                 .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
-                .animation(.easeInOut(duration: 0.15), value: isSelected)
                 .animation(.easeOut(duration: 0.1), value: isHovered)
             }
 
@@ -570,10 +647,10 @@ struct WorkspaceView: View {
     private func workspaceTabRenameRow(
         workspaceID: UUID,
         tab: WorkspaceTabState,
-        colors: (background: Color, border: Color, text: Color),
+        chromeSpec: WorkspaceTabChromeSpec,
         hasUnread: Bool
     ) -> some View {
-        workspaceTabChrome(colors: colors) {
+        workspaceTabChrome(chromeSpec: chromeSpec) {
             HStack(spacing: 5) {
                 if hasUnread {
                     Circle()
@@ -607,58 +684,25 @@ struct WorkspaceView: View {
     }
 
     private func workspaceTabChrome<Content: View>(
-        colors: (background: Color, border: Color, text: Color),
+        chromeSpec: WorkspaceTabChromeSpec,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
             .padding(.horizontal, 10)
             .frame(width: ToastyTheme.workspaceTabWidth, height: ToastyTheme.workspaceTabHeight)
             .background(
-                colors.background,
-                in: RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
+                chromeSpec.background,
+                in: WorkspaceTabShape()
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
-                    .stroke(colors.border, lineWidth: 1)
-            )
+            .overlay(alignment: .top) {
+                if let accentColor = chromeSpec.accentColor {
+                    Rectangle()
+                        .fill(accentColor)
+                        .frame(height: ToastyTheme.workspaceTabAccentLineHeight)
+                        .clipShape(WorkspaceTabShape())
+                }
+            }
             .contentShape(Rectangle())
-    }
-
-    private func resolveTabColors(
-        isSelected: Bool,
-        isHovered: Bool,
-        hasUnread: Bool,
-        appIsActive: Bool
-    ) -> (background: Color, border: Color, text: Color) {
-        if isSelected {
-            return (
-                ToastyTheme.workspaceTabSelectedBackground,
-                ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: appIsActive),
-                ToastyTheme.primaryText
-            )
-        }
-
-        if isHovered {
-            return (
-                ToastyTheme.workspaceTabHoverBackground,
-                ToastyTheme.workspaceTabHoverBorder,
-                ToastyTheme.workspaceTabHoverText
-            )
-        }
-
-        if hasUnread {
-            return (
-                ToastyTheme.workspaceTabUnreadBackground,
-                ToastyTheme.workspaceTabUnreadBorder,
-                ToastyTheme.workspaceTabUnreadText
-            )
-        }
-
-        return (
-            ToastyTheme.workspaceTabUnselectedBackground,
-            ToastyTheme.workspaceTabUnselectedBorder,
-            ToastyTheme.workspaceTabUnselectedText
-        )
     }
 
     @ViewBuilder

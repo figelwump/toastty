@@ -87,28 +87,94 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceTabSelectedBorderFadesWhenAppIsInactive() throws {
-        let activeBorder = try XCTUnwrap(
-            NSColor(ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: true))
+    func testWorkspaceTabSelectedAccentFadesWhenAppIsInactive() throws {
+        let activeAccent = try XCTUnwrap(
+            NSColor(ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: true))
                 .usingColorSpace(.deviceRGB)
         )
-        let inactiveBorder = try XCTUnwrap(
-            NSColor(ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: false))
+        let inactiveAccent = try XCTUnwrap(
+            NSColor(ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: false))
                 .usingColorSpace(.deviceRGB)
         )
-        let expectedInactiveBorder = try XCTUnwrap(
+        let expectedInactiveAccent = try XCTUnwrap(
             NSColor(ToastyTheme.accent.opacity(0.5)).usingColorSpace(.deviceRGB)
         )
 
-        XCTAssertEqual(activeBorder.alphaComponent, 1, accuracy: 0.001)
-        XCTAssertEqual(inactiveBorder.redComponent, expectedInactiveBorder.redComponent, accuracy: 0.001)
-        XCTAssertEqual(inactiveBorder.greenComponent, expectedInactiveBorder.greenComponent, accuracy: 0.001)
-        XCTAssertEqual(inactiveBorder.blueComponent, expectedInactiveBorder.blueComponent, accuracy: 0.001)
-        XCTAssertEqual(inactiveBorder.alphaComponent, expectedInactiveBorder.alphaComponent, accuracy: 0.001)
+        XCTAssertEqual(activeAccent.alphaComponent, 1, accuracy: 0.001)
+        XCTAssertEqual(inactiveAccent.redComponent, expectedInactiveAccent.redComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveAccent.greenComponent, expectedInactiveAccent.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveAccent.blueComponent, expectedInactiveAccent.blueComponent, accuracy: 0.001)
+        XCTAssertEqual(inactiveAccent.alphaComponent, expectedInactiveAccent.alphaComponent, accuracy: 0.001)
+    }
+
+    func testWorkspaceTabChromeSpecSelectedStateWinsOverHover() throws {
+        let spec = WorkspaceView.workspaceTabChromeSpec(
+            isSelected: true,
+            isHovered: true,
+            isRenaming: false,
+            appIsActive: true
+        )
+
+        try assertColor(spec.background, equals: ToastyTheme.workspaceTabSelectedBackground)
+        try assertColor(spec.text, equals: ToastyTheme.primaryText)
+        let accentColor = try XCTUnwrap(spec.accentColor)
+        try assertColor(accentColor, equals: ToastyTheme.workspaceTabSelectedAccent)
+    }
+
+    func testWorkspaceTabChromeSpecSelectedBackgroundMatchesSurfaceBackground() throws {
+        let spec = WorkspaceView.workspaceTabChromeSpec(
+            isSelected: true,
+            isHovered: false,
+            isRenaming: false,
+            appIsActive: true
+        )
+
+        try assertColor(spec.background, equals: ToastyTheme.surfaceBackground)
+    }
+
+    func testWorkspaceTabChromeSpecRenamingUnselectedUsesVisibleFillWithoutAccent() throws {
+        let spec = WorkspaceView.workspaceTabChromeSpec(
+            isSelected: false,
+            isHovered: false,
+            isRenaming: true,
+            appIsActive: true
+        )
+
+        try assertColor(spec.background, equals: ToastyTheme.workspaceTabHoverBackground)
+        try assertColor(spec.text, equals: ToastyTheme.primaryText)
+        XCTAssertNil(spec.accentColor)
+    }
+
+    func testWorkspaceTabChromeSpecRenamingSelectedPreservesAccent() throws {
+        let spec = WorkspaceView.workspaceTabChromeSpec(
+            isSelected: true,
+            isHovered: false,
+            isRenaming: true,
+            appIsActive: false
+        )
+
+        try assertColor(spec.background, equals: ToastyTheme.workspaceTabSelectedBackground)
+        let accentColor = try XCTUnwrap(spec.accentColor)
+        try assertColor(accentColor, equals: ToastyTheme.workspaceTabSelectedAccent.opacity(0.5))
     }
 
     func testWorkspaceTabUnreadDotUsesLargerDiameter() {
         XCTAssertEqual(ToastyTheme.workspaceTabUnreadDotDiameter, 7)
+    }
+
+    private func assertColor(
+        _ actual: Color,
+        equals expected: Color,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let actualColor = try XCTUnwrap(NSColor(actual).usingColorSpace(.deviceRGB), file: file, line: line)
+        let expectedColor = try XCTUnwrap(NSColor(expected).usingColorSpace(.deviceRGB), file: file, line: line)
+
+        XCTAssertEqual(actualColor.redComponent, expectedColor.redComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(actualColor.greenComponent, expectedColor.greenComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(actualColor.blueComponent, expectedColor.blueComponent, accuracy: 0.001, file: file, line: line)
+        XCTAssertEqual(actualColor.alphaComponent, expectedColor.alphaComponent, accuracy: 0.001, file: file, line: line)
     }
 
     private func makeProfileShortcutRegistry(
