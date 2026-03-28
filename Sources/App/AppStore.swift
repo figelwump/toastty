@@ -537,10 +537,24 @@ final class AppStore: ObservableObject {
             tabID: selectedTabID,
             focusedPanelID: selection.workspace.focusedPanelID
         ) {
+            logNextUnreadOrActivePanelResolution(
+                selection: selection,
+                selectedTabID: selectedTabID,
+                resolution: "unread",
+                target: unreadTarget,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
             return unreadTarget
         }
 
         guard let sessionRuntimeStore else {
+            logNextUnreadOrActivePanelResolution(
+                selection: selection,
+                selectedTabID: selectedTabID,
+                resolution: "none",
+                target: nil,
+                sessionRuntimeStore: nil
+            )
             return nil
         }
 
@@ -548,10 +562,17 @@ final class AppStore: ObservableObject {
             matching: Self.nextUnreadOrActiveFallbackStatusKinds
         )
         guard activePanelIDs.isEmpty == false else {
+            logNextUnreadOrActivePanelResolution(
+                selection: selection,
+                selectedTabID: selectedTabID,
+                resolution: "none",
+                target: nil,
+                sessionRuntimeStore: sessionRuntimeStore
+            )
             return nil
         }
 
-        return state.nextMatchingPanel(
+        let target = state.nextMatchingPanel(
             fromWindowID: selection.windowID,
             workspaceID: selection.workspace.id,
             tabID: selectedTabID,
@@ -559,6 +580,14 @@ final class AppStore: ObservableObject {
         ) { _, panelID in
             activePanelIDs.contains(panelID)
         }
+        logNextUnreadOrActivePanelResolution(
+            selection: selection,
+            selectedTabID: selectedTabID,
+            resolution: target == nil ? "none" : "fallback_active",
+            target: target,
+            sessionRuntimeStore: sessionRuntimeStore
+        )
+        return target
     }
 
     private func requestSidebarFlashForExhaustedUnreadOrActiveJump(
@@ -577,6 +606,62 @@ final class AppStore: ObservableObject {
             workspaceID: selection.workspace.id,
             panelID: focusedPanelID
         )
+    }
+
+    private func logNextUnreadOrActivePanelResolution(
+        selection: WindowCommandSelection,
+        selectedTabID: UUID,
+        resolution: String,
+        target: PanelNavigationTarget?,
+        sessionRuntimeStore: SessionRuntimeStore?
+    ) {
+        let selectedTabUnreadPanelIDs = selection.workspace.tab(id: selectedTabID)?.unreadPanelIDs ?? []
+        let workspaceUnreadPanelIDs = selection.workspace.unreadPanelIDs
+        let activePanelStatuses = sessionRuntimeStore.map { runtimeStore in
+            runtimeStore
+                .activePanelIDs(matching: Self.nextUnreadOrActiveFallbackStatusKinds)
+                .sorted { $0.uuidString < $1.uuidString }
+                .compactMap { panelID in
+                    guard let status = runtimeStore.panelStatus(for: panelID)?.status.kind.rawValue else {
+                        return nil
+                    }
+                    return "\(panelID.uuidString):\(status)"
+                }
+                .joined(separator: ",")
+        } ?? ""
+
+        var metadata: [String: String] = [
+            "resolution": resolution,
+            "window_id": selection.windowID.uuidString,
+            "workspace_id": selection.workspace.id.uuidString,
+            "selected_tab_id": selectedTabID.uuidString,
+            "focused_panel_id": selection.workspace.focusedPanelID?.uuidString ?? "none",
+            "selected_tab_unread_panel_ids": Self.commaSeparatedUUIDs(selectedTabUnreadPanelIDs),
+            "workspace_unread_panel_ids": Self.commaSeparatedUUIDs(workspaceUnreadPanelIDs),
+            "active_panel_statuses": activePanelStatuses.isEmpty ? "none" : activePanelStatuses,
+        ]
+
+        if let target {
+            metadata["target_window_id"] = target.windowID.uuidString
+            metadata["target_workspace_id"] = target.workspaceID.uuidString
+            metadata["target_tab_id"] = target.tabID.uuidString
+            metadata["target_panel_id"] = target.panelID.uuidString
+            if let sessionRuntimeStore,
+               let targetStatus = sessionRuntimeStore.panelStatus(for: target.panelID)?.status.kind.rawValue {
+                metadata["target_status_kind"] = targetStatus
+            }
+        }
+
+        ToasttyLog.debug(
+            "Resolved next unread or active panel target",
+            category: .store,
+            metadata: metadata
+        )
+    }
+
+    private static func commaSeparatedUUIDs<S: Sequence>(_ ids: S) -> String where S.Element == UUID {
+        let values = ids.map(\.uuidString).sorted()
+        return values.isEmpty ? "none" : values.joined(separator: ",")
     }
 
     @discardableResult

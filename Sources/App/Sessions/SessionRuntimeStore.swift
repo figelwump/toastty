@@ -106,6 +106,18 @@ final class SessionRuntimeStore: ObservableObject {
         let previousRecord = sessionRegistry.sessionsByID[sessionID]
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: status, at: now)
+        if let currentRecord = nextRegistry.sessionsByID[sessionID] {
+            ToasttyLog.debug(
+                "Updated managed session status",
+                category: .terminal,
+                metadata: sessionStatusTransitionMetadata(
+                    previousRecord: previousRecord,
+                    currentRecord: currentRecord,
+                    status: status,
+                    now: now
+                )
+            )
+        }
         publish(nextRegistry)
         clearUnreadForManagedSessionIfNeeded(
             previousRecord: previousRecord,
@@ -268,6 +280,34 @@ final class SessionRuntimeStore: ObservableObject {
         case .idleShellPrompt(let recentPromptCommandToken, let appearsBusy):
             metadata["recent_prompt_command_token"] = recentPromptCommandToken ?? "none"
             metadata["appears_busy"] = appearsBusy ? "true" : "false"
+        }
+
+        return metadata
+    }
+
+    private func sessionStatusTransitionMetadata(
+        previousRecord: SessionRecord?,
+        currentRecord: SessionRecord,
+        status: SessionStatus,
+        now: Date
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "session_id": currentRecord.sessionID,
+            "agent": currentRecord.agent.rawValue,
+            "panel_id": currentRecord.panelID.uuidString,
+            "window_id": currentRecord.windowID.uuidString,
+            "workspace_id": currentRecord.workspaceID.uuidString,
+            "previous_status_kind": previousRecord?.status?.kind.rawValue ?? "none",
+            "next_status_kind": status.kind.rawValue,
+            "uses_status_notifications": currentRecord.usesSessionStatusNotifications ? "true" : "false",
+            "updated_at_epoch_ms": String(Int(now.timeIntervalSince1970 * 1000)),
+        ]
+
+        if let summary = truncatedLogMetadataValue(status.summary, limit: 80) {
+            metadata["next_status_summary"] = summary
+        }
+        if let detail = truncatedLogMetadataValue(status.detail, limit: 160) {
+            metadata["next_status_detail"] = detail
         }
 
         return metadata
