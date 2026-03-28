@@ -49,8 +49,7 @@ final class AppStore: ObservableObject {
     private static let newWindowCascadeOffset: Double = 30
     static let nextUnreadOrActiveFallbackStatusKinds: Set<SessionStatusKind> = [
         .working,
-        .needsApproval,
-        .error,
+        .ready,
     ]
 
     @Published private(set) var state: AppState
@@ -566,8 +565,7 @@ final class AppStore: ObservableObject {
     ) {
         guard let sessionRuntimeStore,
               let focusedPanelID = selection.workspace.focusedPanelID,
-              let sessionStatus = sessionRuntimeStore.panelStatus(for: focusedPanelID),
-              Self.nextUnreadOrActiveFallbackStatusKinds.contains(sessionStatus.status.kind) else {
+              sessionRuntimeStore.panelStatus(for: focusedPanelID) != nil else {
             return
         }
 

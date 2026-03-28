@@ -26,8 +26,8 @@ struct SidebarView: View {
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
         return lineHeight
     }()
-    private static let sessionFlashPeakDuration: Double = 0.16
-    private static let sessionFlashSettleDuration: Double = 0.24
+    private static let sessionFlashPeakDuration: Double = 0.18
+    private static let sessionFlashSettleDuration: Double = 0.28
 
     private var selectedWorkspaceID: UUID? {
         store.selectedWorkspaceID(in: windowID)
@@ -460,7 +460,7 @@ struct SidebarView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .fill(ToastyTheme.accent.opacity(0.18 * flashOpacity))
+                .fill(ToastyTheme.accent.opacity(0.42 * flashOpacity))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
@@ -468,7 +468,7 @@ struct SidebarView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 5)
-                .stroke(ToastyTheme.accent.opacity(0.9 * flashOpacity), lineWidth: 1.5)
+                .stroke(ToastyTheme.accent.opacity(flashOpacity), lineWidth: 1.75)
         )
         .contentShape(RoundedRectangle(cornerRadius: 5))
     }

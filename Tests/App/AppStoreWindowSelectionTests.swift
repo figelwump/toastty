@@ -868,6 +868,63 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
     }
 
+    func testCanFocusNextUnreadOrActivePanelFromCommandFallsBackToReadyPanels() {
+        let currentTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let readyTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let workspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [currentTab, readyTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [workspace.id],
+                        selectedWorkspaceID: workspace.id
+                    )
+                ],
+                workspacesByID: [workspace.id: workspace],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_057)
+        sessionStore.startSession(
+            sessionID: "sess-ready-target",
+            agent: .codex,
+            panelID: readyTab.panelIDs[1],
+            windowID: windowID,
+            workspaceID: workspace.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-ready-target",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Next target"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(
+            store.canFocusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+    }
+
     func testFocusNextUnreadOrActivePanelFromCommandSkipsFocusedWorkingOnlyTarget() throws {
         let tab = makeUnreadCommandTab(
             focusedPanelIndex: 0,
@@ -990,6 +1047,70 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(store.pendingSidebarSessionFlashRequest)
     }
 
+    func testFocusNextUnreadOrActivePanelFromCommandRequestsSidebarFlashForFocusedReadyOnlyTarget() throws {
+        let tab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let workspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [tab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [workspace.id],
+                        selectedWorkspaceID: workspace.id
+                    )
+                ],
+                workspacesByID: [workspace.id: workspace],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_057)
+        sessionStore.startSession(
+            sessionID: "sess-ready-flash",
+            agent: .codex,
+            panelID: tab.panelIDs[0],
+            windowID: windowID,
+            workspaceID: workspace.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-ready-flash",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Only target"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertFalse(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        let flashRequest = try XCTUnwrap(
+            store.consumePendingSidebarSessionFlashRequest(
+                windowID: windowID,
+                requestID: try XCTUnwrap(store.pendingSidebarSessionFlashRequest?.requestID)
+            )
+        )
+        XCTAssertEqual(flashRequest.windowID, windowID)
+        XCTAssertEqual(flashRequest.workspaceID, workspace.id)
+        XCTAssertEqual(flashRequest.panelID, tab.panelIDs[0])
+        XCTAssertNil(store.pendingSidebarSessionFlashRequest)
+    }
+
     func testConsumePendingSidebarSessionFlashRequestIgnoresStaleRequestID() throws {
         let tab = makeUnreadCommandTab(
             focusedPanelIndex: 0,
@@ -1052,7 +1173,71 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.pendingSidebarSessionFlashRequest?.requestID, currentRequestID)
     }
 
-    func testFocusNextUnreadOrActivePanelFromCommandDoesNotRequestSidebarFlashWithoutActiveFocusedSession() {
+    func testFocusNextUnreadOrActivePanelFromCommandRequestsSidebarFlashForFocusedIdleSessionWithoutOtherActiveTargets() throws {
+        let tab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let workspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [tab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [workspace.id],
+                        selectedWorkspaceID: workspace.id
+                    )
+                ],
+                workspacesByID: [workspace.id: workspace],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_058)
+        sessionStore.startSession(
+            sessionID: "sess-idle-flash",
+            agent: .codex,
+            panelID: tab.panelIDs[0],
+            windowID: windowID,
+            workspaceID: workspace.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-idle-flash",
+            status: SessionStatus(kind: .idle, summary: "Idle", detail: nil),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertFalse(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: windowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        let flashRequest = try XCTUnwrap(
+            store.consumePendingSidebarSessionFlashRequest(
+                windowID: windowID,
+                requestID: try XCTUnwrap(store.pendingSidebarSessionFlashRequest?.requestID)
+            )
+        )
+        XCTAssertEqual(flashRequest.windowID, windowID)
+        XCTAssertEqual(flashRequest.workspaceID, workspace.id)
+        XCTAssertEqual(flashRequest.panelID, tab.panelIDs[0])
+        XCTAssertNil(store.pendingSidebarSessionFlashRequest)
+    }
+
+    func testFocusNextUnreadOrActivePanelFromCommandDoesNotRequestSidebarFlashWithoutFocusedSessionRow() {
         let tab = makeUnreadCommandTab(
             focusedPanelIndex: 0,
             unreadPanelIndices: []
@@ -1392,6 +1577,99 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
         XCTAssertEqual(updatedWorkspace.selectedTabID, secondWorkingTab.tab.id)
         XCTAssertEqual(updatedWorkspace.focusedPanelID, secondWorkingTab.panelIDs[2])
+    }
+
+    func testFocusNextUnreadOrActivePanelFromCommandFallsBackToReadyPanels() throws {
+        let firstTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let firstWorkspace = makeUnreadCommandWorkspace(
+            title: "One",
+            tabs: [firstTab],
+            selectedTabIndex: 0
+        )
+
+        let secondSelectedTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondReadyTab = makeUnreadCommandTab(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: []
+        )
+        let secondWorkspace = makeUnreadCommandWorkspace(
+            title: "Two",
+            tabs: [secondSelectedTab, secondReadyTab],
+            selectedTabIndex: 0
+        )
+
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID
+        )
+        var activatedWindowIDs: [UUID] = []
+        let store = AppStore(
+            state: state,
+            persistTerminalFontPreference: false,
+            windowActivationHandler: { activatedWindowIDs.append($0) }
+        )
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: store)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_101)
+        sessionStore.startSession(
+            sessionID: "sess-ready",
+            agent: .codex,
+            panelID: secondReadyTab.panelIDs[2],
+            windowID: secondWindowID,
+            workspaceID: secondWorkspace.id,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-ready",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Waiting for next prompt"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        XCTAssertTrue(
+            store.canFocusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: firstWindowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+        XCTAssertTrue(
+            store.focusNextUnreadOrActivePanelFromCommand(
+                preferredWindowID: firstWindowID,
+                sessionRuntimeStore: sessionStore
+            )
+        )
+
+        XCTAssertEqual(store.state.selectedWindowID, secondWindowID)
+        XCTAssertEqual(activatedWindowIDs, [secondWindowID])
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
+        XCTAssertEqual(updatedWorkspace.selectedTabID, secondReadyTab.tab.id)
+        XCTAssertEqual(updatedWorkspace.focusedPanelID, secondReadyTab.panelIDs[2])
     }
 
     func testFocusNextUnreadOrActivePanelCyclesBeyondCurrentWorkspace() throws {
