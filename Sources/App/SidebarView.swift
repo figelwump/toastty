@@ -10,6 +10,7 @@ struct SidebarView: View {
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
+    @State private var flashingWorkspaceID: UUID?
     @State private var flashingSessionPanelID: UUID?
     @State private var flashingSessionOverlayOpacity = 0.0
     @State private var activeSidebarFlashRequestID: UUID?
@@ -121,10 +122,10 @@ struct SidebarView: View {
             beginWorkspaceRename(workspace)
         }
         .onAppear {
-            handlePendingSidebarSessionFlashRequest()
+            schedulePendingSidebarSessionFlashRequestHandling()
         }
         .onChange(of: store.pendingSidebarSessionFlashRequest) { _, _ in
-            handlePendingSidebarSessionFlashRequest()
+            schedulePendingSidebarSessionFlashRequestHandling()
         }
         .onDisappear {
             sidebarFlashClearWorkItem?.cancel()
@@ -185,7 +186,10 @@ struct SidebarView: View {
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
-        return workspaceRowChrome(isSelected: isSelected) {
+        return workspaceRowChrome(
+            isSelected: isSelected,
+            isFlashing: flashingWorkspaceID == workspaceID
+        ) {
             VStack(alignment: .leading, spacing: 2) {
                 Button {
                     handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
@@ -220,7 +224,10 @@ struct SidebarView: View {
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
-        return workspaceRowChrome(isSelected: isSelected) {
+        return workspaceRowChrome(
+            isSelected: isSelected,
+            isFlashing: flashingWorkspaceID == workspaceID
+        ) {
             VStack(alignment: .leading, spacing: 2) {
                 workspacePrimaryContent(
                     workspace: workspace,
@@ -254,6 +261,7 @@ struct SidebarView: View {
 
     private func workspaceRowChrome<Content: View>(
         isSelected: Bool,
+        isFlashing: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
@@ -261,6 +269,10 @@ struct SidebarView: View {
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+            .overlay {
+                Rectangle()
+                    .fill(ToastyTheme.accent.opacity(0.28 * (isFlashing ? flashingSessionOverlayOpacity : 0)))
+            }
             .overlay(alignment: .leading) {
                 Rectangle()
                     .fill(isSelected ? ToastyTheme.accent : Color.clear)
@@ -395,16 +407,11 @@ struct SidebarView: View {
         isFlashing: Bool
     ) -> some View {
         let indicatorState = Self.sessionIndicatorState(for: status.kind)
-        let unreadOutlineKind = Self.unreadSessionOutlineKind(
+        let chipKind = Self.sessionStatusChipKind(
             for: status,
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
-        // Preserve the status outline until the session is read; hover still
-        // gets feedback from the row background fill.
-        let borderColor = sessionStatusBorderColor(
-            unreadOutlineKind: unreadOutlineKind,
-            isHovered: isHovered
-        )
+        let borderColor = sessionStatusBorderColor(isHovered: isHovered)
         let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
 
         return VStack(alignment: .leading, spacing: 2) {
@@ -417,6 +424,10 @@ struct SidebarView: View {
                     .font(ToastyTheme.fontWorkspaceSessionAgent)
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     .lineLimit(1)
+
+                if let chipKind {
+                    sessionStatusChip(kind: chipKind)
+                }
 
                 Spacer(minLength: 0)
             }
@@ -453,6 +464,7 @@ struct SidebarView: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(
                     sessionStatusBackgroundColor(
+                        showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isActivePanel: isActivePanel,
                         isHovered: isHovered
                     )
@@ -474,6 +486,13 @@ struct SidebarView: View {
     }
 
     @MainActor
+    private func schedulePendingSidebarSessionFlashRequestHandling() {
+        DispatchQueue.main.async {
+            handlePendingSidebarSessionFlashRequest()
+        }
+    }
+
+    @MainActor
     private func handlePendingSidebarSessionFlashRequest() {
         guard let request = store.pendingSidebarSessionFlashRequest,
               request.windowID == windowID,
@@ -481,21 +500,44 @@ struct SidebarView: View {
             return
         }
 
-        lastHandledSidebarFlashRequestID = request.requestID
-        flashSidebarSession(panelID: request.panelID, requestID: request.requestID)
-        _ = store.consumePendingSidebarSessionFlashRequest(
+        guard let consumedRequest = store.consumePendingSidebarSessionFlashRequest(
             windowID: windowID,
             requestID: request.requestID
-        )
+        ) else {
+            return
+        }
+
+        lastHandledSidebarFlashRequestID = consumedRequest.requestID
+        if let panelID = consumedRequest.panelID,
+           sessionRuntimeStore
+            .workspaceStatuses(for: consumedRequest.workspaceID)
+            .contains(where: { $0.panelID == panelID }) {
+            flashSidebarSelection(
+                workspaceID: nil,
+                panelID: panelID,
+                requestID: consumedRequest.requestID
+            )
+        } else {
+            flashSidebarSelection(
+                workspaceID: consumedRequest.workspaceID,
+                panelID: nil,
+                requestID: consumedRequest.requestID
+            )
+        }
     }
 
     @MainActor
-    private func flashSidebarSession(panelID: UUID, requestID: UUID) {
+    private func flashSidebarSelection(
+        workspaceID: UUID?,
+        panelID: UUID?,
+        requestID: UUID
+    ) {
         activeSidebarFlashRequestID = requestID
         sidebarFlashClearWorkItem?.cancel()
         sidebarFlashResetWorkItem?.cancel()
         sidebarFlashClearWorkItem = nil
         sidebarFlashResetWorkItem = nil
+        flashingWorkspaceID = workspaceID
         flashingSessionPanelID = panelID
         flashingSessionOverlayOpacity = 0
 
@@ -519,6 +561,7 @@ struct SidebarView: View {
         let resetWorkItem = DispatchWorkItem { [requestID] in
             guard activeSidebarFlashRequestID == requestID else { return }
             activeSidebarFlashRequestID = nil
+            flashingWorkspaceID = nil
             flashingSessionPanelID = nil
             flashingSessionOverlayOpacity = 0
             sidebarFlashResetWorkItem = nil
@@ -531,6 +574,7 @@ struct SidebarView: View {
     }
 
     private func sessionStatusBackgroundColor(
+        showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
         isHovered: Bool
     ) -> Color {
@@ -538,17 +582,26 @@ struct SidebarView: View {
             return isHovered ? ToastyTheme.sidebarSessionActiveHoverBackground
                 : ToastyTheme.sidebarSessionActiveBackground
         }
+        if showsUnreadSessionAccent {
+            return ToastyTheme.sidebarSessionUnreadBackground
+        }
         return isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear
     }
 
-    private func sessionStatusBorderColor(
-        unreadOutlineKind: SessionStatusKind?,
-        isHovered: Bool
-    ) -> Color {
-        if let unreadOutlineKind {
-            return ToastyTheme.sessionStatusOutlineColor(for: unreadOutlineKind)
-        }
+    private func sessionStatusBorderColor(isHovered: Bool) -> Color {
         return isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear
+    }
+
+    private func sessionStatusChip(kind: SessionStatusKind) -> some View {
+        Text(Self.sessionStatusChipLabel(for: kind))
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.sessionStatusBackgroundColor(for: kind),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
     }
 
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
@@ -691,19 +744,30 @@ struct SidebarView: View {
         return true
     }
 
-    static func unreadSessionOutlineKind(
+    static func sessionStatusChipKind(
         for status: SessionStatus,
         showsUnreadSessionAccent: Bool
     ) -> SessionStatusKind? {
-        guard showsUnreadSessionAccent else {
-            return nil
-        }
-
         switch status.kind {
-        case .needsApproval, .ready, .error:
+        case .needsApproval, .error:
             return status.kind
+        case .ready:
+            return showsUnreadSessionAccent ? .ready : nil
         case .idle, .working:
             return nil
+        }
+    }
+
+    static func sessionStatusChipLabel(for kind: SessionStatusKind) -> String {
+        switch kind {
+        case .needsApproval:
+            return "needs approval"
+        case .ready:
+            return "ready"
+        case .error:
+            return "error"
+        case .idle, .working:
+            return ""
         }
     }
 

@@ -271,6 +271,189 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func updateStatusCollapsesReadyToIdleForFocusedPanelInActiveApp() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let focusedPanelID = try #require(selection.workspace.focusedPanelID)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-focused-ready",
+            agent: .codex,
+            panelID: focusedPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-focused-ready",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(sessionStore.panelStatus(for: focusedPanelID)?.status.kind == .idle)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func focusPanelCollapsesUnreadReadySessionToIdle() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-background-ready",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-background-ready",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .idle)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func focusPanelKeepsNeedsApprovalStatusAfterRead() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-background-approval",
+            agent: .claude,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-background-approval",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Confirm"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .needsApproval)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func updateStatusCollapsesReadyToIdleWhenFocusedApprovalIsResolved() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-approval-resolved",
+            agent: .claude,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-approval-resolved",
+            status: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Confirm"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .needsApproval)
+
+        sessionStore.updateStatus(
+            sessionID: "sess-approval-resolved",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Continuing"),
+            at: startedAt.addingTimeInterval(2)
+        )
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .working)
+
+        sessionStore.updateStatus(
+            sessionID: "sess-approval-resolved",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished"),
+            at: startedAt.addingTimeInterval(3)
+        )
+
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .idle)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
+    func focusPanelKeepsErrorStatusAfterRead() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore()
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-background-error",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-background-error",
+            status: SessionStatus(kind: .error, summary: "Error", detail: "Failed"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .error)
+        let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfter.unreadPanelIDs.isEmpty)
+    }
+
+    @Test
     func updateStatusDoesNotSendNotificationForFocusedManagedPanel() async throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)

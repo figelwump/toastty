@@ -33,7 +33,7 @@ struct PendingSidebarSessionFlashRequest: Equatable {
     let requestID: UUID
     let windowID: UUID
     let workspaceID: UUID
-    let panelID: UUID
+    let panelID: UUID?
 }
 
 private enum WorkspaceCommandTarget {
@@ -47,12 +47,11 @@ final class AppStore: ObservableObject {
     typealias CommandCreateWindowFrameProvider = @MainActor () -> CGRectCodable?
     typealias WindowActivationHandler = @MainActor (UUID) -> Void
     private static let newWindowCascadeOffset: Double = 30
-    static let nextUnreadOrActiveFallbackStatusKinds: Set<SessionStatusKind> = [
-        .working,
-        .ready,
+    static let nextUnreadOrActionRequiredFallbackStatusKinds: Set<SessionStatusKind> = [
         .needsApproval,
         .error,
     ]
+    static let nextUnreadOrWorkingFallbackStatusKinds: Set<SessionStatusKind> = [.working]
 
     @Published private(set) var state: AppState
     @Published private(set) var hasEverLaunchedAgent: Bool
@@ -65,7 +64,8 @@ final class AppStore: ObservableObject {
     @Published var pendingRenameWorkspaceTabRequest: PendingWorkspaceTabRenameRequest?
     @Published var pendingCloseWorkspaceRequest: PendingWorkspaceCloseRequest?
     /// Set by exhausted navigation commands so the target sidebar can briefly
-    /// pulse the currently selected managed-session row for feedback.
+    /// pulse the currently selected session row, or the workspace row when no
+    /// session row is visible.
     @Published var pendingSidebarSessionFlashRequest: PendingSidebarSessionFlashRequest?
 
     private let reducer = AppReducer()
@@ -236,8 +236,7 @@ final class AppStore: ObservableObject {
             sessionRuntimeStore: sessionRuntimeStore
         ) else {
             requestSidebarFlashForExhaustedUnreadOrActiveJump(
-                selection: selection,
-                sessionRuntimeStore: sessionRuntimeStore
+                selection: selection
             )
             return false
         }
@@ -463,7 +462,10 @@ final class AppStore: ObservableObject {
               let workspace = state.workspacesByID[request.workspaceID] else {
             return false
         }
-        return workspace.panelState(for: request.panelID) != nil
+        guard let panelID = request.panelID else {
+            return true
+        }
+        return workspace.panelState(for: panelID) != nil
     }
 
     private func pendingWorkspaceRequestExists(windowID: UUID, workspaceID: UUID) -> Bool {
@@ -558,53 +560,69 @@ final class AppStore: ObservableObject {
             return nil
         }
 
-        let activePanelIDs = sessionRuntimeStore.activePanelIDs(
-            matching: Self.nextUnreadOrActiveFallbackStatusKinds
+        let attentionPanelIDs = sessionRuntimeStore.activePanelIDs(
+            matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds
         )
-        guard activePanelIDs.isEmpty == false else {
+        if let target = nextUnreadOrActiveFallbackTarget(
+            selection: selection,
+            selectedTabID: selectedTabID,
+            matchingPanelIDs: attentionPanelIDs
+        ) {
             logNextUnreadOrActivePanelResolution(
                 selection: selection,
                 selectedTabID: selectedTabID,
-                resolution: "none",
-                target: nil,
+                resolution: "fallback_attention",
+                target: target,
                 sessionRuntimeStore: sessionRuntimeStore
             )
-            return nil
+            return target
         }
 
-        let target = state.nextMatchingPanel(
-            fromWindowID: selection.windowID,
-            workspaceID: selection.workspace.id,
-            tabID: selectedTabID,
-            focusedPanelID: selection.workspace.focusedPanelID
-        ) { _, panelID in
-            activePanelIDs.contains(panelID)
-        }
+        let workingPanelIDs = sessionRuntimeStore.activePanelIDs(
+            matching: Self.nextUnreadOrWorkingFallbackStatusKinds
+        )
+        let target = nextUnreadOrActiveFallbackTarget(
+            selection: selection,
+            selectedTabID: selectedTabID,
+            matchingPanelIDs: workingPanelIDs
+        )
         logNextUnreadOrActivePanelResolution(
             selection: selection,
             selectedTabID: selectedTabID,
-            resolution: target == nil ? "none" : "fallback_active",
+            resolution: target == nil ? "none" : "fallback_working",
             target: target,
             sessionRuntimeStore: sessionRuntimeStore
         )
         return target
     }
 
-    private func requestSidebarFlashForExhaustedUnreadOrActiveJump(
+    private func nextUnreadOrActiveFallbackTarget(
         selection: WindowCommandSelection,
-        sessionRuntimeStore: SessionRuntimeStore?
-    ) {
-        guard let sessionRuntimeStore,
-              let focusedPanelID = selection.workspace.focusedPanelID,
-              sessionRuntimeStore.panelStatus(for: focusedPanelID) != nil else {
-            return
+        selectedTabID: UUID,
+        matchingPanelIDs: Set<UUID>
+    ) -> PanelNavigationTarget? {
+        guard matchingPanelIDs.isEmpty == false else {
+            return nil
         }
 
+        return state.nextMatchingPanel(
+            fromWindowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            tabID: selectedTabID,
+            focusedPanelID: selection.workspace.focusedPanelID
+        ) { _, panelID in
+            matchingPanelIDs.contains(panelID)
+        }
+    }
+
+    private func requestSidebarFlashForExhaustedUnreadOrActiveJump(
+        selection: WindowCommandSelection
+    ) {
         pendingSidebarSessionFlashRequest = PendingSidebarSessionFlashRequest(
             requestID: UUID(),
             windowID: selection.windowID,
             workspaceID: selection.workspace.id,
-            panelID: focusedPanelID
+            panelID: selection.workspace.focusedPanelID
         )
     }
 
@@ -617,9 +635,21 @@ final class AppStore: ObservableObject {
     ) {
         let selectedTabUnreadPanelIDs = selection.workspace.tab(id: selectedTabID)?.unreadPanelIDs ?? []
         let workspaceUnreadPanelIDs = selection.workspace.unreadPanelIDs
-        let activePanelStatuses = sessionRuntimeStore.map { runtimeStore in
+        let attentionPanelStatuses = sessionRuntimeStore.map { runtimeStore in
             runtimeStore
-                .activePanelIDs(matching: Self.nextUnreadOrActiveFallbackStatusKinds)
+                .activePanelIDs(matching: Self.nextUnreadOrActionRequiredFallbackStatusKinds)
+                .sorted { $0.uuidString < $1.uuidString }
+                .compactMap { panelID in
+                    guard let status = runtimeStore.panelStatus(for: panelID)?.status.kind.rawValue else {
+                        return nil
+                    }
+                    return "\(panelID.uuidString):\(status)"
+                }
+                .joined(separator: ",")
+        } ?? ""
+        let workingPanelStatuses = sessionRuntimeStore.map { runtimeStore in
+            runtimeStore
+                .activePanelIDs(matching: Self.nextUnreadOrWorkingFallbackStatusKinds)
                 .sorted { $0.uuidString < $1.uuidString }
                 .compactMap { panelID in
                     guard let status = runtimeStore.panelStatus(for: panelID)?.status.kind.rawValue else {
@@ -638,7 +668,8 @@ final class AppStore: ObservableObject {
             "focused_panel_id": selection.workspace.focusedPanelID?.uuidString ?? "none",
             "selected_tab_unread_panel_ids": Self.commaSeparatedUUIDs(selectedTabUnreadPanelIDs),
             "workspace_unread_panel_ids": Self.commaSeparatedUUIDs(workspaceUnreadPanelIDs),
-            "active_panel_statuses": activePanelStatuses.isEmpty ? "none" : activePanelStatuses,
+            "attention_panel_statuses": attentionPanelStatuses.isEmpty ? "none" : attentionPanelStatuses,
+            "working_panel_statuses": workingPanelStatuses.isEmpty ? "none" : workingPanelStatuses,
         ]
 
         if let target {

@@ -22,6 +22,7 @@ enum ToastyTheme {
     static let sidebarSessionActiveHoverBackground = Color(hex: 0x484848)
     static let sidebarSessionHoverBackground = Color(hex: 0x222222)
     static let sidebarSessionHoverBorder = Color(hex: 0x555555)
+    static let sidebarSessionUnreadBackground = Color(hex: 0x5BA08A, alpha: 0.14)
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
@@ -31,12 +32,12 @@ enum ToastyTheme {
     static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)
     static let sessionWorkingText = Color(hex: 0x8B5E34)
     static let sessionWorkingBackground = Color(hex: 0x8B5E34, alpha: 0.12)
-    static let sessionNeedsApprovalText = Color(hex: 0x5BA08A)
-    static let sessionNeedsApprovalBackground = Color(hex: 0x5BA08A, alpha: 0.12)
+    static let sessionNeedsApprovalText = Color(hex: 0xE8A635)
+    static let sessionNeedsApprovalBackground = Color(hex: 0xE8A635, alpha: 0.16)
     static let sessionReadyText = Color(hex: 0x5BA08A)
-    static let sessionReadyBackground = Color(hex: 0x5BA08A, alpha: 0.12)
-    static let sessionErrorText = Color(hex: 0x5BA08A)
-    static let sessionErrorBackground = Color(hex: 0x5BA08A, alpha: 0.12)
+    static let sessionReadyBackground = Color(hex: 0x5BA08A, alpha: 0.14)
+    static let sessionErrorText = Color(hex: 0xE55C5C)
+    static let sessionErrorBackground = Color(hex: 0xE55C5C, alpha: 0.14)
     static let terminalProfileBadgeText = Color(hex: 0xF5D6A0)
     static let terminalProfileBadgeBackground = Color(hex: 0x5A3B14, alpha: 0.65)
     static let terminalProfileBadgeMissingText = Color(hex: 0xF4B183)
@@ -168,11 +169,11 @@ enum ToastyTheme {
         case .working:
             colors = [Color(hex: 0x7D4927), Color(hex: 0xF5A623)]
         case .needsApproval:
-            colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
+            colors = [Color(hex: 0x8A5D20), Color(hex: 0xE8A635)]
         case .ready:
             colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
         case .error:
-            colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
+            colors = [Color(hex: 0x8A3434), Color(hex: 0xE55C5C)]
         }
         return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
     }
@@ -184,11 +185,11 @@ enum ToastyTheme {
         case .working:
             return Color(hex: 0xF5A623, alpha: 0.28)
         case .needsApproval:
-            return Color(hex: 0x5BA08A, alpha: 0.24)
+            return Color(hex: 0xE8A635, alpha: 0.24)
         case .ready:
             return Color(hex: 0x5BA08A, alpha: 0.24)
         case .error:
-            return Color(hex: 0x5BA08A, alpha: 0.24)
+            return Color(hex: 0xE55C5C, alpha: 0.24)
         }
     }
 
@@ -199,11 +200,11 @@ enum ToastyTheme {
         case .working:
             return Color(hex: 0xFFF4D6, alpha: 0.78)
         case .needsApproval:
-            return Color(hex: 0xD7E9E2, alpha: 0.58)
+            return Color(hex: 0xFFF1D6, alpha: 0.62)
         case .ready:
             return Color(hex: 0xD7E9E2, alpha: 0.58)
         case .error:
-            return Color(hex: 0xD7E9E2, alpha: 0.58)
+            return Color(hex: 0xFFD9D9, alpha: 0.58)
         }
     }
 

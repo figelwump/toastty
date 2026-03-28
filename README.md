@@ -55,7 +55,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
 | `Cmd+[` | Focus previous pane |
-| `Cmd+Shift+A` | Jump to next unread panel, or next active managed-session panel (`working`, `needs approval`, `error`) |
+| `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then working panels; flash the current sidebar selection if nothing remains |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Ctrl+Arrow` | Resize split |
 | `Cmd+W` | Close focused panel |

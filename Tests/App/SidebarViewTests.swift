@@ -6,6 +6,11 @@ import XCTest
 
 @MainActor
 final class SidebarViewTests: XCTestCase {
+    private enum SessionPanelPlacement {
+        case focused
+        case backgroundUnread
+    }
+
     private struct SidebarHarness {
         let windowID: UUID
         let workspaceID: UUID
@@ -21,43 +26,43 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(SidebarView.abbreviatedPathLabel("relative"), "relative")
     }
 
-    func testUnreadSessionOutlineOnlyShowsForUnreadAttentionStates() {
+    func testSessionStatusChipKindShowsPersistentUnresolvedAndUnreadReady() {
         XCTAssertNil(
-            SidebarView.unreadSessionOutlineKind(
+            SidebarView.sessionStatusChipKind(
                 for: SessionStatus(kind: .idle, summary: "Idle"),
                 showsUnreadSessionAccent: true
             )
         )
         XCTAssertNil(
-            SidebarView.unreadSessionOutlineKind(
+            SidebarView.sessionStatusChipKind(
                 for: SessionStatus(kind: .working, summary: "Working"),
                 showsUnreadSessionAccent: true
             )
         )
         XCTAssertNil(
-            SidebarView.unreadSessionOutlineKind(
+            SidebarView.sessionStatusChipKind(
                 for: SessionStatus(kind: .ready, summary: "Ready"),
                 showsUnreadSessionAccent: false
             )
         )
         XCTAssertEqual(
-            SidebarView.unreadSessionOutlineKind(
+            SidebarView.sessionStatusChipKind(
                 for: SessionStatus(kind: .needsApproval, summary: "Needs approval"),
-                showsUnreadSessionAccent: true
+                showsUnreadSessionAccent: false
             ),
             .needsApproval
         )
         XCTAssertEqual(
-            SidebarView.unreadSessionOutlineKind(
+            SidebarView.sessionStatusChipKind(
                 for: SessionStatus(kind: .ready, summary: "Ready"),
                 showsUnreadSessionAccent: true
             ),
             .ready
         )
         XCTAssertEqual(
-            SidebarView.unreadSessionOutlineKind(
+            SidebarView.sessionStatusChipKind(
                 for: SessionStatus(kind: .error, summary: "Error"),
-                showsUnreadSessionAccent: true
+                showsUnreadSessionAccent: false
             ),
             .error
         )
@@ -140,7 +145,7 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testReadySessionDoesNotRenderStatusChipLabel() throws {
+    func testReadySessionDoesNotRenderStatusChipLabelAfterItIsRead() throws {
         let hostingView = try makeSidebarHostingView(
             sessionID: "sess-ready",
             sessionStatus: SessionStatus(kind: .ready, summary: "Ready", detail: "Completed response")
@@ -151,6 +156,38 @@ final class SidebarViewTests: XCTestCase {
             textValues.contains("ready"),
             "Sidebar text values should not include a ready chip label: \(textValues)"
         )
+    }
+
+    func testUnreadReadySessionRendersStatusChipLabel() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "sess-ready-unread",
+            sessionStatus: SessionStatus(kind: .ready, summary: "Ready", detail: "Completed response"),
+            sessionPanelPlacement: .backgroundUnread
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains(where: { $0.localizedCaseInsensitiveContains("ready") }),
+            "Sidebar text values should include a ready chip label for unread ready rows: \(textValues)"
+        )
+    }
+
+    func testNeedsApprovalAndErrorSessionsRenderStatusChipLabels() throws {
+        let approvalTextValues = renderedTextValues(
+            in: try makeSidebarHostingView(
+                sessionID: "sess-approval",
+                sessionStatus: SessionStatus(kind: .needsApproval, summary: "Needs approval", detail: "Review command")
+            )
+        )
+        XCTAssertTrue(approvalTextValues.contains(where: { $0.localizedCaseInsensitiveContains("needs approval") }))
+
+        let errorTextValues = renderedTextValues(
+            in: try makeSidebarHostingView(
+                sessionID: "sess-error",
+                sessionStatus: SessionStatus(kind: .error, summary: "Error", detail: "Command failed")
+            )
+        )
+        XCTAssertTrue(errorTextValues.contains(where: { $0.localizedCaseInsensitiveContains("error") }))
     }
 
     func testWorkingSessionDoesNotRenderStatusChipLabel() throws {
@@ -169,40 +206,36 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertFalse(textValues.contains("error"))
     }
 
-    func testReadySessionOutlineColorUsesWarmTeal() throws {
-        let outlineColor = try XCTUnwrap(
-            NSColor(ToastyTheme.sessionStatusOutlineColor(for: .ready)).usingColorSpace(.deviceRGB)
+    func testSidebarUnreadBackgroundUsesReadyGreenTint() throws {
+        let unreadColor = try XCTUnwrap(
+            NSColor(ToastyTheme.sidebarSessionUnreadBackground).usingColorSpace(.deviceRGB)
         )
-        let expectedColor = try XCTUnwrap(
+        let readyColor = try XCTUnwrap(
             NSColor(ToastyTheme.sessionReadyText).usingColorSpace(.deviceRGB)
         )
 
-        XCTAssertEqual(outlineColor.redComponent, expectedColor.redComponent, accuracy: 0.001)
-        XCTAssertEqual(outlineColor.greenComponent, expectedColor.greenComponent, accuracy: 0.001)
-        XCTAssertEqual(outlineColor.blueComponent, expectedColor.blueComponent, accuracy: 0.001)
-        XCTAssertEqual(outlineColor.alphaComponent, expectedColor.alphaComponent, accuracy: 0.001)
+        XCTAssertEqual(unreadColor.redComponent, readyColor.redComponent, accuracy: 0.001)
+        XCTAssertEqual(unreadColor.greenComponent, readyColor.greenComponent, accuracy: 0.001)
+        XCTAssertEqual(unreadColor.blueComponent, readyColor.blueComponent, accuracy: 0.001)
+        XCTAssertGreaterThan(unreadColor.alphaComponent, 0)
     }
 
-    func testUnreadAndAttentionStatusAccentsShareWarmTeal() throws {
-        let expectedColor = try XCTUnwrap(
-            NSColor(Color(hex: 0x5BA08A)).usingColorSpace(.deviceRGB)
+    func testAttentionStatusChipColorsAreDistinct() throws {
+        let readyColor = try XCTUnwrap(
+            NSColor(ToastyTheme.sessionReadyText).usingColorSpace(.deviceRGB)
+        )
+        let approvalColor = try XCTUnwrap(
+            NSColor(ToastyTheme.sessionNeedsApprovalText).usingColorSpace(.deviceRGB)
+        )
+        let errorColor = try XCTUnwrap(
+            NSColor(ToastyTheme.sessionErrorText).usingColorSpace(.deviceRGB)
         )
 
-        for color in [
-            ToastyTheme.badgeBlue,
-            ToastyTheme.sessionNeedsApprovalText,
-            ToastyTheme.sessionReadyText,
-            ToastyTheme.sessionErrorText,
-        ] {
-            let resolvedColor = try XCTUnwrap(NSColor(color).usingColorSpace(.deviceRGB))
-            XCTAssertEqual(resolvedColor.redComponent, expectedColor.redComponent, accuracy: 0.001)
-            XCTAssertEqual(resolvedColor.greenComponent, expectedColor.greenComponent, accuracy: 0.001)
-            XCTAssertEqual(resolvedColor.blueComponent, expectedColor.blueComponent, accuracy: 0.001)
-            XCTAssertEqual(resolvedColor.alphaComponent, expectedColor.alphaComponent, accuracy: 0.001)
-        }
+        XCTAssertNotEqual(approvalColor.redComponent, readyColor.redComponent, accuracy: 0.001)
+        XCTAssertNotEqual(errorColor.redComponent, readyColor.redComponent, accuracy: 0.001)
     }
 
-    func testBusySubtitleUpdatesWhenRuntimeRegistryPublishesChange() throws {
+    func testWorkspaceSubtitleIsHidden() throws {
         let state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
         let workspaceID = try XCTUnwrap(state.windows.first?.workspaceIDs.first)
@@ -340,6 +373,72 @@ final class SidebarViewTests: XCTestCase {
         harness.window.orderOut(nil)
     }
 
+    func testPendingSidebarFlashRequestPulsesSelectedWorkspaceRowWhenNoSessionRowIsVisible() throws {
+        let harness = try makeSidebarHarnessWithoutSessionRow()
+        let baselineBitmap = try renderedBitmap(for: harness.hostingView)
+
+        harness.store.pendingSidebarSessionFlashRequest = PendingSidebarSessionFlashRequest(
+            requestID: UUID(),
+            windowID: harness.windowID,
+            workspaceID: harness.workspaceID,
+            panelID: harness.panelID
+        )
+        pumpMainRunLoop(duration: 0.12)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let peakBitmap = try renderedBitmap(for: harness.hostingView)
+
+        pumpMainRunLoop(duration: 0.5)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+
+        XCTAssertNil(harness.store.pendingSidebarSessionFlashRequest)
+        XCTAssertGreaterThan(
+            try differingPixelCount(between: baselineBitmap, and: peakBitmap),
+            0,
+            "Expected the selected workspace row to visibly pulse when no session row is visible"
+        )
+        XCTAssertEqual(
+            try differingPixelCount(between: baselineBitmap, and: settledBitmap),
+            0,
+            "Expected the workspace-row pulse to settle back to its baseline appearance"
+        )
+
+        harness.window.orderOut(nil)
+    }
+
+    func testPendingSidebarFlashRequestPulsesSelectedWorkspaceRowWithoutFocusedPanelID() throws {
+        let harness = try makeSidebarHarnessWithoutSessionRow()
+        let baselineBitmap = try renderedBitmap(for: harness.hostingView)
+
+        harness.store.pendingSidebarSessionFlashRequest = PendingSidebarSessionFlashRequest(
+            requestID: UUID(),
+            windowID: harness.windowID,
+            workspaceID: harness.workspaceID,
+            panelID: nil
+        )
+        pumpMainRunLoop(duration: 0.12)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let peakBitmap = try renderedBitmap(for: harness.hostingView)
+
+        pumpMainRunLoop(duration: 0.5)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+
+        XCTAssertNil(harness.store.pendingSidebarSessionFlashRequest)
+        XCTAssertGreaterThan(
+            try differingPixelCount(between: baselineBitmap, and: peakBitmap),
+            0,
+            "Expected the selected workspace row to visibly pulse when the flash request has no panel target"
+        )
+        XCTAssertEqual(
+            try differingPixelCount(between: baselineBitmap, and: settledBitmap),
+            0,
+            "Expected the workspace-row pulse to settle back to its baseline appearance"
+        )
+
+        harness.window.orderOut(nil)
+    }
+
     private func pumpMainRunLoop(duration: TimeInterval = 0) {
         let expectation = expectation(description: "Flush SwiftUI update")
         DispatchQueue.main.async {
@@ -353,27 +452,33 @@ final class SidebarViewTests: XCTestCase {
 
     private func makeSidebarHostingView(
         sessionID: String,
-        sessionStatus: SessionStatus
+        sessionStatus: SessionStatus,
+        sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> NSView {
         try makeSidebarHarness(
             sessionID: sessionID,
-            sessionStatus: sessionStatus
+            sessionStatus: sessionStatus,
+            sessionPanelPlacement: sessionPanelPlacement
         ).hostingView
     }
 
     private func makeSidebarHarness(
         sessionID: String,
-        sessionStatus: SessionStatus
+        sessionStatus: SessionStatus,
+        sessionPanelPlacement: SessionPanelPlacement = .focused
     ) throws -> SidebarHarness {
-        let state = AppState.bootstrap()
-        let windowID = try XCTUnwrap(state.windows.first?.id)
-        let workspaceID = try XCTUnwrap(state.windows.first?.workspaceIDs.first)
-        let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
-        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        let harnessState = makeSidebarAppState(for: sessionPanelPlacement)
+        let state = harnessState.state
+        let windowID = harnessState.windowID
+        let workspaceID = harnessState.workspaceID
+        let panelID = harnessState.sessionPanelID
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        if sessionPanelPlacement == .backgroundUnread {
+            sessionRuntimeStore.bind(store: store)
+        }
         sessionRuntimeStore.startSession(
             sessionID: sessionID,
             agent: .codex,
@@ -416,6 +521,93 @@ final class SidebarViewTests: XCTestCase {
             hostingView: hostingView,
             window: window
         )
+    }
+
+    private func makeSidebarHarnessWithoutSessionRow() throws -> SidebarHarness {
+        let harnessState = makeSidebarAppState(for: .focused)
+        let state = harnessState.state
+        let windowID = harnessState.windowID
+        let workspaceID = harnessState.workspaceID
+        let panelID = harnessState.sessionPanelID
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+        return SidebarHarness(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            store: store,
+            hostingView: hostingView,
+            window: window
+        )
+    }
+
+    private func makeSidebarAppState(
+        for sessionPanelPlacement: SessionPanelPlacement
+    ) -> (state: AppState, windowID: UUID, workspaceID: UUID, sessionPanelID: UUID) {
+        switch sessionPanelPlacement {
+        case .focused:
+            let state = AppState.bootstrap()
+            let windowID = state.windows[0].id
+            let workspaceID = state.windows[0].workspaceIDs[0]
+            let workspace = state.workspacesByID[workspaceID]!
+            return (state, windowID, workspaceID, workspace.focusedPanelID!)
+
+        case .backgroundUnread:
+            let leftPanelID = UUID()
+            let rightPanelID = UUID()
+            let workspaceID = UUID()
+            let windowID = UUID()
+            let workspace = WorkspaceState(
+                id: workspaceID,
+                title: "Workspace 1",
+                layoutTree: .split(
+                    nodeID: UUID(),
+                    orientation: .horizontal,
+                    ratio: 0.5,
+                    first: .slot(slotID: UUID(), panelID: leftPanelID),
+                    second: .slot(slotID: UUID(), panelID: rightPanelID)
+                ),
+                panels: [
+                    leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo")),
+                    rightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo")),
+                ],
+                focusedPanelID: leftPanelID
+            )
+            let state = AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 600),
+                        workspaceIDs: [workspaceID],
+                        selectedWorkspaceID: workspaceID
+                    )
+                ],
+                workspacesByID: [workspaceID: workspace],
+                selectedWindowID: windowID
+            )
+            return (state, windowID, workspaceID, rightPanelID)
+        }
     }
 
     private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {

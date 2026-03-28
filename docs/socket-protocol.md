@@ -237,10 +237,13 @@ Supported action IDs:
   - `args.windowID` is required when multiple windows exist
   - first targets unread panels using the normal unread traversal order
   - unread traversal still wraps within the current workspace before moving on
-  - if no unread panel exists, falls back to managed-session panels whose live status is `working`, `needsApproval`, or `error`
+  - a `ready` session only participates while unread; once visited it collapses back to `idle`
+  - if no unread panel exists, it next falls back to managed-session panels whose live status is `needsApproval` or `error`
+  - if no attention-required panel exists, it then falls back to managed-session panels whose live status is `working`
   - active fallback scans the rest of the current workspace first, then sibling workspaces later in the current window's workspace order
   - after that it scans later windows in window order, trying each window's selected workspace first and then the remaining workspaces in that window order
   - only after those passes does it wrap back to earlier panels in the current workspace
+  - if no target exists, the selected sidebar row flashes instead of changing focus
   - `workspace.focus-next-unread` was removed and is no longer accepted
 - `workspace.focus-panel`
   - requires `args.panelID`
