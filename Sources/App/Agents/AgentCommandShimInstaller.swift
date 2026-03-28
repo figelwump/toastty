@@ -26,6 +26,7 @@ enum AgentCommandShimInstallerError: LocalizedError, Equatable {
 
 final class AgentCommandShimInstaller {
     private static let defaultManagedCommandNames: Set<String> = ["codex", "claude"]
+    private static let managedCommandsManifestFileName = ".toastty-managed-agent-commands.json"
 
     private let runtimePaths: ToasttyRuntimePaths
     private let fileManager: FileManager
@@ -54,6 +55,11 @@ final class AgentCommandShimInstaller {
 
         let directoryURL = runtimePaths.agentShimDirectoryURL
         try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try removeManagedLinks(
+            named: previouslyInstalledManagedCommandNames(in: directoryURL)
+                .subtracting(managedCommandNames),
+            from: directoryURL
+        )
 
         for commandName in managedCommandNames.sorted() {
             let linkURL = directoryURL.appendingPathComponent(commandName, isDirectory: false)
@@ -66,6 +72,7 @@ final class AgentCommandShimInstaller {
             }
             try fileManager.createSymbolicLink(atPath: linkURL.path, withDestinationPath: helperPath)
         }
+        try writeManagedCommandsManifest(in: directoryURL, commandNames: managedCommandNames)
 
         return AgentCommandShimInstallation(
             directoryURL: directoryURL,
@@ -84,13 +91,10 @@ final class AgentCommandShimInstaller {
 
     func removeInstallationIfPresent() throws {
         let directoryURL = runtimePaths.agentShimDirectoryURL
-
-        for commandName in managedCommandNames.sorted() {
-            let linkURL = directoryURL.appendingPathComponent(commandName, isDirectory: false)
-            if Self.pathStatus(at: linkURL.path).isSymlink {
-                try fileManager.removeItem(at: linkURL)
-            }
-        }
+        let commandNamesToRemove = managedCommandNames
+            .union(previouslyInstalledManagedCommandNames(in: directoryURL))
+        try removeManagedLinks(named: commandNamesToRemove, from: directoryURL)
+        try? fileManager.removeItem(at: managedCommandsManifestURL(in: directoryURL))
 
         guard let remainingEntries = try? fileManager.contentsOfDirectory(
             at: directoryURL,
@@ -120,6 +124,35 @@ final class AgentCommandShimInstaller {
             return (false, false)
         }
         return (true, (statBuffer.st_mode & S_IFMT) == S_IFLNK)
+    }
+
+    private func managedCommandsManifestURL(in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent(Self.managedCommandsManifestFileName, isDirectory: false)
+    }
+
+    private func previouslyInstalledManagedCommandNames(in directoryURL: URL) -> Set<String> {
+        let manifestURL = managedCommandsManifestURL(in: directoryURL)
+        guard let data = try? Data(contentsOf: manifestURL),
+              let commandNames = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        return Set(commandNames.compactMap(normalizedNonEmpty))
+    }
+
+    private func writeManagedCommandsManifest(in directoryURL: URL, commandNames: Set<String>) throws {
+        let manifestURL = managedCommandsManifestURL(in: directoryURL)
+        let encodedCommandNames = Array(commandNames).sorted()
+        let data = try JSONEncoder().encode(encodedCommandNames)
+        try data.write(to: manifestURL, options: .atomic)
+    }
+
+    private func removeManagedLinks(named commandNames: Set<String>, from directoryURL: URL) throws {
+        for commandName in commandNames.sorted() {
+            let linkURL = directoryURL.appendingPathComponent(commandName, isDirectory: false)
+            if Self.pathStatus(at: linkURL.path).isSymlink {
+                try fileManager.removeItem(at: linkURL)
+            }
+        }
     }
 }
 

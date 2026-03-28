@@ -66,6 +66,10 @@ public enum AgentProfilesFile {
         # Fields:
         #   displayName  — shown in menus and toolbar buttons.
         #   argv         — the exact command Toastty runs for that profile.
+        #   manualCommandNames — (optional) extra executable basenames Toastty
+        #                        should shim for typed launches of built-in
+        #                        Codex/Claude wrappers. Use basenames only,
+        #                        with no paths or spaces.
         #   shortcutKey  — (optional) single letter or digit; registers ⌘⌃<key>.
         #
         # Edit these examples to match your local setup.
@@ -73,11 +77,13 @@ public enum AgentProfilesFile {
         # [codex]
         # displayName = "Codex"
         # argv = ["codex"]
+        # manualCommandNames = ["agent-safehouse"]
         # shortcutKey = "c"
         #
         # [claude]
         # displayName = "Claude Code"
         # argv = ["claude"]
+        # manualCommandNames = ["run-sandboxed.sh"]
         """
             + "\n"
     }
@@ -88,6 +94,7 @@ private enum AgentProfilesParser {
         var line: Int
         var displayName: String?
         var argv: [String]?
+        var manualCommandNames: [String]?
         var shortcutKey: String?
     }
 
@@ -113,6 +120,11 @@ private enum AgentProfilesParser {
                     message: "[\(currentID)] is missing argv"
                 )
             }
+            let manualCommandNames = try validateManualCommandNames(
+                currentProfile.manualCommandNames ?? [],
+                line: currentProfile.line,
+                profileID: currentID
+            )
             let shortcutKey: Character? = if let raw = normalizedNonEmpty(currentProfile.shortcutKey) {
                 try validateShortcutKey(raw, line: currentProfile.line, profileID: currentID, seen: &seenShortcutKeys)
             } else {
@@ -123,6 +135,7 @@ private enum AgentProfilesParser {
                     id: currentID,
                     displayName: displayName,
                     argv: argv,
+                    manualCommandNames: manualCommandNames,
                     shortcutKey: shortcutKey
                 )
             )
@@ -181,11 +194,14 @@ private enum AgentProfilesParser {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             )
 
-            if key == "argv" {
+            if key == "argv" || key == "manualCommandNames" {
                 while collectionBalance(in: rawValue) > 0 {
                     lineIndex += 1
                     guard lineIndex < lines.count else {
-                        throw AgentProfilesParseError(line: lineIndex, message: "unterminated argv array")
+                        throw AgentProfilesParseError(
+                            line: lineIndex,
+                            message: "unterminated \(key) array"
+                        )
                     }
                     let continuation = stripComment(from: lines[lineIndex])
                     rawValue.append("\n")
@@ -232,6 +248,22 @@ private enum AgentProfilesParser {
                     throw AgentProfilesParseError(
                         line: lineIndex + 1,
                         message: "[\(currentID)] has invalid argv"
+                    )
+                }
+
+            case "manualCommandNames":
+                guard currentProfile?.manualCommandNames == nil else {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "[\(currentID)] has duplicate manualCommandNames"
+                    )
+                }
+                do {
+                    currentProfile?.manualCommandNames = try decodeJSONArray(rawValue)
+                } catch {
+                    throw AgentProfilesParseError(
+                        line: lineIndex + 1,
+                        message: "[\(currentID)] has invalid manualCommandNames"
                     )
                 }
 
@@ -361,6 +393,66 @@ private enum AgentProfilesParser {
         }
         seen[char] = profileID
         return char
+    }
+
+    private static func validateManualCommandNames(
+        _ rawNames: [String],
+        line: Int,
+        profileID: String
+    ) throws -> [String] {
+        guard profileID == AgentKind.codex.rawValue || profileID == AgentKind.claude.rawValue else {
+            guard rawNames.isEmpty else {
+                throw AgentProfilesParseError(
+                    line: line,
+                    message: "[\(profileID)] manualCommandNames is supported only for [codex] and [claude]"
+                )
+            }
+            return []
+        }
+
+        var validatedNames: [String] = []
+        var seenNames = Set<String>()
+
+        for rawName in rawNames {
+            guard let trimmedName = normalizedNonEmpty(rawName) else {
+                throw AgentProfilesParseError(
+                    line: line,
+                    message: "[\(profileID)] manualCommandNames entries must be non-empty"
+                )
+            }
+            guard trimmedName.contains("/") == false, trimmedName.contains("\\") == false else {
+                throw AgentProfilesParseError(
+                    line: line,
+                    message: "[\(profileID)] manualCommandNames entries must be executable basenames, not paths"
+                )
+            }
+            guard trimmedName.rangeOfCharacter(from: .whitespacesAndNewlines) == nil else {
+                throw AgentProfilesParseError(
+                    line: line,
+                    message: "[\(profileID)] manualCommandNames entries must not contain whitespace"
+                )
+            }
+            let normalizedName = trimmedName.lowercased()
+            guard normalizedName != AgentKind.codex.rawValue,
+                  normalizedName != AgentKind.claude.rawValue else {
+                throw AgentProfilesParseError(
+                    line: line,
+                    message: "[\(profileID)] manualCommandNames must not include built-in agent commands"
+                )
+            }
+
+            let duplicateKey = normalizedName
+            guard seenNames.insert(duplicateKey).inserted else {
+                throw AgentProfilesParseError(
+                    line: line,
+                    message: "[\(profileID)] manualCommandNames contains duplicate entry '\(trimmedName)'"
+                )
+            }
+
+            validatedNames.append(trimmedName)
+        }
+
+        return validatedNames
     }
 }
 

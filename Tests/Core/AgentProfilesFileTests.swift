@@ -69,6 +69,24 @@ struct AgentProfilesFileTests {
     }
 
     @Test
+    func loadParsesManualCommandNamesForBuiltInProfiles() throws {
+        let contents = """
+        [claude]
+        displayName = "Claude Code"
+        argv = ["run-sandboxed.sh", "claude", "--dangerously-skip-permissions"]
+        manualCommandNames = ["run-sandboxed.sh", "agent-safehouse"]
+        """
+
+        let fileManager = InMemoryFileManager(templateContents: contents)
+        let catalog = try AgentProfilesFile.load(
+            fileManager: fileManager.fileManager,
+            homeDirectoryPath: fileManager.rootURL.path
+        )
+
+        #expect(catalog.profiles.first?.manualCommandNames == ["run-sandboxed.sh", "agent-safehouse"])
+    }
+
+    @Test
     func loadParsesShortcutKeyAndNormalizesUppercase() throws {
         let contents = """
         [codex]
@@ -158,6 +176,121 @@ struct AgentProfilesFileTests {
             throws: AgentProfilesParseError(
                 line: 6,
                 message: "[claude] shortcutKey 'c' is already used by [codex]"
+            )
+        ) {
+            _ = try AgentProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsManualCommandNamesForNonBuiltInProfiles() throws {
+        let contents = """
+        [gemini]
+        displayName = "Gemini"
+        argv = ["gemini"]
+        manualCommandNames = ["gemini-safehouse"]
+        """
+        let fileManager = InMemoryFileManager(templateContents: contents)
+
+        #expect(
+            throws: AgentProfilesParseError(
+                line: 1,
+                message: "[gemini] manualCommandNames is supported only for [codex] and [claude]"
+            )
+        ) {
+            _ = try AgentProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsPathLikeManualCommandNames() throws {
+        let contents = """
+        [claude]
+        displayName = "Claude Code"
+        argv = ["claude"]
+        manualCommandNames = ["~/.config/sandbox-exec/run-sandboxed.sh"]
+        """
+        let fileManager = InMemoryFileManager(templateContents: contents)
+
+        #expect(
+            throws: AgentProfilesParseError(
+                line: 1,
+                message: "[claude] manualCommandNames entries must be executable basenames, not paths"
+            )
+        ) {
+            _ = try AgentProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsWhitespaceInManualCommandNames() throws {
+        let contents = """
+        [claude]
+        displayName = "Claude Code"
+        argv = ["claude"]
+        manualCommandNames = ["run sandboxed"]
+        """
+        let fileManager = InMemoryFileManager(templateContents: contents)
+
+        #expect(
+            throws: AgentProfilesParseError(
+                line: 1,
+                message: "[claude] manualCommandNames entries must not contain whitespace"
+            )
+        ) {
+            _ = try AgentProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsBuiltInAgentNamesInManualCommandNames() throws {
+        let contents = """
+        [codex]
+        displayName = "Codex"
+        argv = ["codex"]
+        manualCommandNames = ["codex"]
+        """
+        let fileManager = InMemoryFileManager(templateContents: contents)
+
+        #expect(
+            throws: AgentProfilesParseError(
+                line: 1,
+                message: "[codex] manualCommandNames must not include built-in agent commands"
+            )
+        ) {
+            _ = try AgentProfilesFile.load(
+                fileManager: fileManager.fileManager,
+                homeDirectoryPath: fileManager.rootURL.path
+            )
+        }
+    }
+
+    @Test
+    func loadRejectsDuplicateManualCommandNamesIgnoringCase() throws {
+        let contents = """
+        [codex]
+        displayName = "Codex"
+        argv = ["codex"]
+        manualCommandNames = ["run-sandboxed.sh", "RUN-SANDBOXED.SH"]
+        """
+        let fileManager = InMemoryFileManager(templateContents: contents)
+
+        #expect(
+            throws: AgentProfilesParseError(
+                line: 1,
+                message: "[codex] manualCommandNames contains duplicate entry 'RUN-SANDBOXED.SH'"
             )
         ) {
             _ = try AgentProfilesFile.load(

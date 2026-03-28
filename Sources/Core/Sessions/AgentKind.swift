@@ -86,8 +86,16 @@ public enum ManagedAgentCommandResolver {
 
         for profile in catalog.profiles {
             guard let agent = AgentKind(rawValue: profile.id),
-                  isBuiltIn(agent),
-                  let executable = profile.argv.first else {
+                  isBuiltIn(agent) else {
+                continue
+            }
+
+            commandNames.formUnion(profile.manualCommandNames)
+
+            guard let executable = profile.argv.first else {
+                continue
+            }
+            guard profile.manualCommandNames.isEmpty else {
                 continue
             }
 

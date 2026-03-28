@@ -4,7 +4,9 @@ Toastty's shell integration emits `OSC 2` title sequences so that panel headers 
 
 The easiest way to install is `Toastty > Install Shell Integration…` in Toastty — it writes the snippet and sources it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
 
-The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex` and `claude` invocations inside Toastty keep using Toastty's wrappers after shell startup files run.
+The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `claude`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
+
+Source the Toastty snippet after all other shell startup code that mutates `PATH` such as `nvm`, Homebrew shellenv, `asdf`, `bun`, `pyenv`, or custom path edits. It does not need to be the literal last line, but anything that rewrites `PATH` after it can undo Toastty's shim ordering.
 
 Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
 
@@ -58,7 +60,7 @@ if [[ -o interactive ]]; then
 fi
 ```
 
-Then add this to `~/.zshrc`:
+Then add this near the end of `~/.zshrc`, after other PATH-changing setup:
 
 ```zsh
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
@@ -117,7 +119,7 @@ if [[ $- == *i* ]]; then
 fi
 ```
 
-Then add this to `~/.bash_profile` on macOS, or `~/.bashrc` if that is the
+Then add this near the end of `~/.bash_profile` on macOS, or `~/.bashrc` if that is the
 interactive file your Bash sessions already load:
 
 ```bash

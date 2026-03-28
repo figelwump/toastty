@@ -92,22 +92,26 @@ struct AgentKindTests {
                         "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
                         "codex",
                         "--dangerously-bypass-approvals-and-sandbox",
-                    ]
+                    ],
+                    manualCommandNames: ["cdx"]
                 ),
                 AgentProfile(
                     id: "claude",
                     displayName: "Claude Code",
-                    argv: ["sclaude"]
+                    argv: ["agent-safehouse", "claude", "--dangerously-skip-permissions"],
+                    manualCommandNames: []
                 ),
                 AgentProfile(
-                    id: "claude",
-                    displayName: "Claude Prefix Wrapper",
-                    argv: ["agent-safehouse", "claude", "--dangerously-skip-permissions"]
+                    id: "claude-helper",
+                    displayName: "Claude Helper",
+                    argv: ["sandbox-wrapper", "claude"],
+                    manualCommandNames: ["sandbox-wrapper"]
                 ),
                 AgentProfile(
                     id: "gemini",
                     displayName: "Gemini",
-                    argv: ["sandbox-wrapper", "gemini"]
+                    argv: ["sandbox-wrapper", "gemini"],
+                    manualCommandNames: ["sandbox-wrapper"]
                 ),
             ]
         )
@@ -116,9 +120,69 @@ struct AgentKindTests {
 
         #expect(shimCommandNames.contains("codex"))
         #expect(shimCommandNames.contains("claude"))
-        #expect(shimCommandNames.contains("run-sandboxed.sh"))
+        #expect(shimCommandNames.contains("cdx"))
         #expect(shimCommandNames.contains("agent-safehouse"))
-        #expect(shimCommandNames.contains("sclaude") == false)
+        #expect(shimCommandNames.contains("sandbox-wrapper") == false)
+    }
+
+    @Test
+    func managedCommandResolverSuppressesImplicitWrapperDiscoveryWhenManualCommandNamesAreConfigured() {
+        let catalog = AgentCatalog(
+            profiles: [
+                AgentProfile(
+                    id: "codex",
+                    displayName: "Codex",
+                    argv: [
+                        "/Users/vishal/.config/sandbox-exec/run-sandboxed.sh",
+                        "codex",
+                        "--dangerously-bypass-approvals-and-sandbox",
+                    ],
+                    manualCommandNames: ["cdx"]
+                )
+            ]
+        )
+
+        let shimCommandNames = ManagedAgentCommandResolver.shimCommandNames(for: catalog)
+
+        #expect(shimCommandNames.contains("codex"))
+        #expect(shimCommandNames.contains("cdx"))
+        #expect(shimCommandNames.contains("run-sandboxed.sh") == false)
+    }
+
+    @Test
+    func managedCommandResolverKeepsImplicitWrapperDiscoveryAsCompatibilityFallback() {
+        let catalog = AgentCatalog(
+            profiles: [
+                AgentProfile(
+                    id: "claude",
+                    displayName: "Claude Code",
+                    argv: ["agent-safehouse", "claude", "--dangerously-skip-permissions"],
+                    manualCommandNames: []
+                )
+            ]
+        )
+
+        let shimCommandNames = ManagedAgentCommandResolver.shimCommandNames(for: catalog)
+
+        #expect(shimCommandNames.contains("claude"))
+        #expect(shimCommandNames.contains("agent-safehouse"))
+    }
+
+    @Test
+    func managedCommandResolverIgnoresManualCommandNamesForNonBuiltIns() {
+        let catalog = AgentCatalog(
+            profiles: [
+                AgentProfile(
+                    id: "gemini",
+                    displayName: "Gemini",
+                    argv: ["sandbox-wrapper", "gemini"],
+                    manualCommandNames: ["sandbox-wrapper"]
+                )
+            ]
+        )
+
+        let shimCommandNames = ManagedAgentCommandResolver.shimCommandNames(for: catalog)
+
         #expect(shimCommandNames.contains("sandbox-wrapper") == false)
     }
 }

@@ -69,6 +69,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
         XCTAssertTrue(zshrcContents.contains("source \"$HOME/.toastty/shell/toastty-profile-shell-integration.zsh\""))
         XCTAssertTrue(zshrcContents.contains("# Added by Toastty terminal profile shell integration"))
+        XCTAssertTrue(zshrcContents.contains("Keep this near the end of this file, after all other PATH changes"))
 
         let snippetContents = try String(
             contentsOf: homeDirectoryURL.appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.zsh"),

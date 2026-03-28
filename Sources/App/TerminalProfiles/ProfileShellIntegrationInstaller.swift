@@ -219,7 +219,11 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable {
 }
 
 final class ProfileShellIntegrationInstaller {
-    private static let managedSourceComment = "# Added by Toastty terminal profile shell integration"
+    private static let managedSourceCommentLines = [
+        "# Added by Toastty terminal profile shell integration",
+        "# Keep this near the end of this file, after all other PATH changes, so Toastty can",
+        "# restore its managed shim directory to the front of PATH.",
+    ]
 
     private let fileManager: FileManager
     private let homeDirectoryURL: URL
@@ -435,7 +439,7 @@ final class ProfileShellIntegrationInstaller {
 
         let updatedContents = existingContents
             + separator
-            + Self.managedSourceComment
+            + Self.managedSourceCommentLines.joined(separator: "\n")
             + "\n"
             + plan.sourceLine
             + "\n"

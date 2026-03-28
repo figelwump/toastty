@@ -4,6 +4,7 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
     public let id: String
     public let displayName: String
     public let argv: [String]
+    public let manualCommandNames: [String]
     /// Single lowercase alphanumeric character used as a keyboard shortcut.
     /// Launch: ⌘⌃<key>.
     public let shortcutKey: Character?
@@ -12,11 +13,13 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         id: String,
         displayName: String,
         argv: [String],
+        manualCommandNames: [String] = [],
         shortcutKey: Character? = nil
     ) {
         self.id = id
         self.displayName = displayName
         self.argv = argv
+        self.manualCommandNames = manualCommandNames
         self.shortcutKey = shortcutKey
     }
 
@@ -24,6 +27,7 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         case id
         case displayName
         case argv
+        case manualCommandNames
         case shortcutKey
     }
 
@@ -32,6 +36,7 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         id = try container.decode(String.self, forKey: .id)
         displayName = try container.decode(String.self, forKey: .displayName)
         argv = try container.decode([String].self, forKey: .argv)
+        manualCommandNames = try container.decodeIfPresent([String].self, forKey: .manualCommandNames) ?? []
 
         if let rawShortcutKey = try container.decodeIfPresent(String.self, forKey: .shortcutKey) {
             guard rawShortcutKey.count == 1 else {
@@ -52,6 +57,9 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
         try container.encode(id, forKey: .id)
         try container.encode(displayName, forKey: .displayName)
         try container.encode(argv, forKey: .argv)
+        if manualCommandNames.isEmpty == false {
+            try container.encode(manualCommandNames, forKey: .manualCommandNames)
+        }
         try container.encodeIfPresent(shortcutKey.map(String.init), forKey: .shortcutKey)
     }
 }

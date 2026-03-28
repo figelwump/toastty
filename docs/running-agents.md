@@ -31,6 +31,7 @@ argv = ["claude"]
 |---|---|---|
 | `displayName` | yes | Label shown in the Agent menu and toolbar buttons |
 | `argv` | yes | The exact command Toastty executes, as a JSON-style string array |
+| `manualCommandNames` | no | For built-in `[codex]` / `[claude]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
 | `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Ctrl+<key>` |
 
 ### Profile ID rules
@@ -68,7 +69,12 @@ The profile ID is stored as an `AgentKind` internally. When a launch resolves to
 
 Built-in Codex and Claude instrumentation also works when the configured
 command uses a wrapper or prefix command, as long as the actual agent command
-still appears as its own `argv` element somewhere in the list.
+still appears as its own `argv` element somewhere in the list. For predictable
+manual tracking of those wrapper executables when you type them into a Toastty
+terminal, declare the wrapper basename in `manualCommandNames`. When that field
+is present on a built-in profile, Toastty uses that explicit list for the
+profile's extra manual wrapper shims instead of inferring additional wrapper
+names from `argv[0]`.
 
 Examples:
 
@@ -76,19 +82,21 @@ Examples:
 [codex]
 displayName = "Codex"
 argv = [
-  "/Users/name/.config/sandbox-exec/run-sandboxed.sh",
+  "agent-safehouse",
   "--workdir=/Users/name/src/project",
   "codex",
   "--dangerously-bypass-approvals-and-sandbox",
 ]
+manualCommandNames = ["agent-safehouse"]
 
 [claude]
 displayName = "Claude Code"
 argv = [
-  "/Users/name/.config/sandbox-exec/run-sandboxed.sh",
+  "run-sandboxed.sh",
   "claude",
   "--dangerously-skip-permissions",
 ]
+manualCommandNames = ["run-sandboxed.sh"]
 ```
 
 Toastty inserts its Codex / Claude-specific flags after the actual `codex` /
@@ -160,11 +168,21 @@ invocations typed directly into Toastty terminals. By default, Toastty prepends
 managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
 
-Toastty also installs managed wrappers for built-in Codex / Claude profiles that
-use prefix wrapper commands where the real built-in agent command still appears
-later in `argv`, such as `run-sandboxed.sh codex ...` or
-`agent-safehouse claude ...`. Typed invocations of those wrapper executables
-inside Toastty terminals are therefore tracked too.
+If a built-in `[codex]` or `[claude]` profile uses extra wrapper executables for
+typed launches, list those wrapper basenames in `manualCommandNames`. Entries
+must be basenames only, with no paths or spaces, and must not be `codex` or
+`claude`. Toastty installs managed wrappers for those names too, so commands such as
+`run-sandboxed.sh claude ...` or `agent-safehouse codex ...` can start managed
+sessions when typed directly in a Toastty terminal.
+
+If you leave `manualCommandNames` empty, Toastty still keeps recognizing simple
+built-in wrapper-prefix profiles for compatibility, such as
+`run-sandboxed.sh claude ...` or `agent-safehouse codex ...`.
+
+`manualCommandNames` is limited to built-in `[codex]` and `[claude]` profiles,
+and the wrapper command still needs to leave the real `codex` or `claude`
+command visible later in `argv`. Toastty uses that later `argv` element to pick
+the correct built-in instrumentation path.
 
 Shell functions and aliases are different: they are resolved by the shell before
 `PATH` lookup, so Toastty's managed command shims cannot intercept them.
@@ -173,11 +191,15 @@ This means:
 - Agent menu launches can use shell functions such as `scodex` or `sclaude`
   because Toastty sends text to the shell.
 - Typing `scodex` or `sclaude` manually into a terminal pane will not start a
-  managed Toastty session unless those names are real executables on `PATH`.
+  managed Toastty session unless those names are real executables on `PATH` and
+  are listed in `manualCommandNames`.
+- A shell helper can still lead to a managed session if its body calls a
+  shimmed executable by bare name on `PATH`, such as
+  `run-sandboxed.sh claude ...`.
 - Standalone wrapper executables that hide `codex` or `claude` inside the
-  wrapper implementation are not auto-detected for manual typed launches.
-  For manual tracking, keep the real agent command as its own `argv` element in
-  the configured wrapper chain.
+  wrapper implementation are not supported for manual typed launches. For
+  manual tracking, keep the real agent command as its own `argv` element in the
+  configured wrapper chain.
 
 If you do not want Toastty intercepting those commands, set this in
 `~/.toastty/config`:
@@ -190,9 +212,9 @@ For the full Toastty config reference, including the other supported keys in
 `~/.toastty/config`, see [Configuration](configuration.md).
 
 That opt-out affects only manual built-in agent invocations inside Toastty
-terminals, including supported wrapper executables described above. Agent menu
-launches still use the built-in profile-ID-based instrumentation described
-above.
+terminals, including wrapper executables declared through
+`manualCommandNames`. Agent menu launches still use the built-in
+profile-ID-based instrumentation described above.
 
 If you change this flag while Toastty is already running, new terminals and new
 shell processes pick it up immediately. Existing shells may need a new shell or

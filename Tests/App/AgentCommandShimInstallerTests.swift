@@ -56,6 +56,51 @@ final class AgentCommandShimInstallerTests: XCTestCase {
         }
     }
 
+    func testSyncInstallationRemovesStaleManagedWrapperLinksWhenConfiguredSetShrinks() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+
+        let initialInstaller = AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            managedCommandNames: ["codex", "claude", "run-sandboxed.sh"],
+            helperExecutablePathProvider: { helperURL.path }
+        )
+        _ = try initialInstaller.syncInstallation(enabled: true)
+
+        let updatedInstaller = AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            managedCommandNames: ["codex", "claude"],
+            helperExecutablePathProvider: { helperURL.path }
+        )
+        _ = try updatedInstaller.syncInstallation(enabled: true)
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: runtimePaths.agentShimDirectoryURL
+                    .appendingPathComponent("run-sandboxed.sh", isDirectory: false)
+                    .path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: runtimePaths.agentShimDirectoryURL
+                    .appendingPathComponent("codex", isDirectory: false)
+                    .path
+            )
+        )
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: runtimePaths.agentShimDirectoryURL
+                    .appendingPathComponent("claude", isDirectory: false)
+                    .path
+            )
+        )
+    }
+
     func testSyncInstallationRemovesEmptyManagedShimDirectoryWhenDisabled() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
@@ -107,6 +152,41 @@ final class AgentCommandShimInstallerTests: XCTestCase {
             )
         )
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedFileURL.path))
+    }
+
+    func testSyncInstallationKeepsUnrelatedSymlinksWhenConfiguredSetShrinks() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let helperURL = try makeExecutableHelper(in: homeDirectoryURL)
+        let runtimePaths = ToasttyRuntimePaths.resolve(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        let initialInstaller = AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            managedCommandNames: ["codex", "claude", "run-sandboxed.sh"],
+            helperExecutablePathProvider: { helperURL.path }
+        )
+        let installation = try XCTUnwrap(initialInstaller.syncInstallation(enabled: true))
+        let unrelatedTargetURL = homeDirectoryURL.appendingPathComponent("custom-target", isDirectory: false)
+        try "custom".write(to: unrelatedTargetURL, atomically: true, encoding: .utf8)
+        let unrelatedLinkURL = installation.directoryURL.appendingPathComponent("custom-wrapper", isDirectory: false)
+        try FileManager.default.createSymbolicLink(
+            atPath: unrelatedLinkURL.path,
+            withDestinationPath: unrelatedTargetURL.path
+        )
+
+        let updatedInstaller = AgentCommandShimInstaller(
+            runtimePaths: runtimePaths,
+            managedCommandNames: ["codex", "claude"],
+            helperExecutablePathProvider: { helperURL.path }
+        )
+        _ = try updatedInstaller.syncInstallation(enabled: true)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedLinkURL.path))
+        XCTAssertEqual(
+            try FileManager.default.destinationOfSymbolicLink(atPath: unrelatedLinkURL.path),
+            unrelatedTargetURL.path
+        )
     }
 
     func testInstallDoesNotOverwriteExistingNonSymlinkCommandFile() throws {
