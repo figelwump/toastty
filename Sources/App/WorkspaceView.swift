@@ -59,7 +59,8 @@ struct WorkspaceView: View {
     @State private var pendingWorkspaceTabClose: PendingWorkspaceTabClose?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
-    private static let workspaceHeaderSpacing: CGFloat = 12
+    private static let workspaceTitleToTabsSpacing: CGFloat = 18
+    private static let workspaceTabsToControlsSpacing: CGFloat = 12
     private static let workspaceTabStripSpacing: CGFloat = 6
 
     nonisolated static func resolvedWorkspaceTitleWidth(
@@ -67,7 +68,8 @@ struct WorkspaceView: View {
         availableWidth: CGFloat,
         trailingWidth: CGFloat,
         tabCount: Int,
-        spacing: CGFloat = 12,
+        titleSpacing: CGFloat = 18,
+        trailingSpacing: CGFloat = 12,
         tabSpacing: CGFloat = 6,
         titleMaxWidth: CGFloat = 260
     ) -> CGFloat {
@@ -75,14 +77,14 @@ struct WorkspaceView: View {
         guard availableWidth.isFinite else { return cappedPreferredWidth }
 
         guard tabCount > 0 else {
-            return max(0, min(cappedPreferredWidth, availableWidth - trailingWidth - spacing))
+            return max(0, min(cappedPreferredWidth, availableWidth - trailingWidth - trailingSpacing))
         }
 
         let minimumTabsWidth = workspaceTabMinimumTotalWidth(
             tabCount: tabCount,
             spacing: tabSpacing
         )
-        let availableTitleWidth = availableWidth - trailingWidth - (spacing * 2) - minimumTabsWidth
+        let availableTitleWidth = availableWidth - trailingWidth - titleSpacing - trailingSpacing - minimumTabsWidth
         return max(0, min(cappedPreferredWidth, availableTitleWidth))
     }
 
@@ -256,7 +258,8 @@ struct WorkspaceView: View {
                 if let workspace = selectedWorkspace {
                     WorkspaceHeaderLayout(
                         tabCount: workspace.tabIDs.count,
-                        spacing: Self.workspaceHeaderSpacing,
+                        titleSpacing: Self.workspaceTitleToTabsSpacing,
+                        trailingSpacing: Self.workspaceTabsToControlsSpacing,
                         tabSpacing: Self.workspaceTabStripSpacing
                     ) {
                         workspaceTitleLabel
@@ -265,7 +268,7 @@ struct WorkspaceView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                 } else {
-                    HStack(alignment: .center, spacing: Self.workspaceHeaderSpacing) {
+                    HStack(alignment: .center, spacing: Self.workspaceTabsToControlsSpacing) {
                         workspaceTitleLabel
                         Spacer(minLength: 0)
                         topBarTrailingControls
@@ -1107,7 +1110,8 @@ private struct PendingWorkspaceTabClose: Identifiable {
 
 private struct WorkspaceHeaderLayout: Layout {
     let tabCount: Int
-    let spacing: CGFloat
+    let titleSpacing: CGFloat
+    let trailingSpacing: CGFloat
     let tabSpacing: CGFloat
 
     func sizeThatFits(
@@ -1126,7 +1130,7 @@ private struct WorkspaceHeaderLayout: Layout {
             proposedWidth
         } else {
             min(titleSize.width, ToastyTheme.workspaceTitleMaxWidth) +
-                spacing + tabsSize.width + spacing + trailingSize.width
+                titleSpacing + tabsSize.width + trailingSpacing + trailingSize.width
         }
 
         return CGSize(
@@ -1151,12 +1155,14 @@ private struct WorkspaceHeaderLayout: Layout {
             availableWidth: bounds.width,
             trailingWidth: trailingSize.width,
             tabCount: tabCount,
-            spacing: spacing,
+            titleSpacing: titleSpacing,
+            trailingSpacing: trailingSpacing,
             tabSpacing: tabSpacing,
             titleMaxWidth: ToastyTheme.workspaceTitleMaxWidth
         )
         let titleHeight = min(bounds.height, titleSize.height)
-        let titleY = bounds.minY + ((bounds.height - titleHeight) / 2)
+        let tabBandMinY = max(bounds.minY, bounds.maxY - ToastyTheme.workspaceTabHeight)
+        let titleY = tabBandMinY + ((ToastyTheme.workspaceTabHeight - titleHeight) / 2)
 
         subviews[0].place(
             at: CGPoint(x: bounds.minX, y: titleY),
@@ -1164,8 +1170,8 @@ private struct WorkspaceHeaderLayout: Layout {
             proposal: ProposedViewSize(width: titleWidth, height: titleHeight)
         )
 
-        let tabsX = bounds.minX + titleWidth + spacing
-        let tabsMaxX = max(tabsX, trailingX - spacing)
+        let tabsX = bounds.minX + titleWidth + titleSpacing
+        let tabsMaxX = max(tabsX, trailingX - trailingSpacing)
         let tabsWidth = max(0, tabsMaxX - tabsX)
 
         subviews[1].place(

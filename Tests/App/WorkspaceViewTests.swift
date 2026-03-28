@@ -126,7 +126,7 @@ final class WorkspaceViewTests: XCTestCase {
                 trailingWidth: 200,
                 tabCount: 3
             ),
-            200
+            194
         )
     }
 
