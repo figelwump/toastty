@@ -193,7 +193,7 @@ struct SidebarView: View {
                     workspacePrimaryContent(
                         workspace: workspace,
                         shortcutLabel: shortcutLabel,
-                        selectionSubtitle: selectionSubtitle(for: workspace),
+                        selectionSubtitle: nil,
                         isSelected: isSelected
                     ) {
                         Text(workspace.title)
@@ -225,7 +225,7 @@ struct SidebarView: View {
                 workspacePrimaryContent(
                     workspace: workspace,
                     shortcutLabel: shortcutLabel,
-                    selectionSubtitle: selectionSubtitle(for: workspace),
+                    selectionSubtitle: nil,
                     isSelected: isSelected
                 ) {
                     WorkspaceRenameTextField(
@@ -257,7 +257,7 @@ struct SidebarView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .padding(.vertical, 7)
+            .padding(.vertical, 14)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)

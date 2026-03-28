@@ -228,18 +228,20 @@ final class SidebarViewTests: XCTestCase {
         window.makeKeyAndOrderFront(nil)
         hostingView.layoutSubtreeIfNeeded()
 
+        // Subtitle should not appear even without activity
         XCTAssertFalse(
-            renderedTextValues(in: hostingView).contains(where: { $0.contains("1 pane · 1 busy") })
+            renderedTextValues(in: hostingView).contains(where: { $0.contains("pane") })
         )
 
+        // Subtitle should remain hidden even after runtime activity updates
         registry.setWorkspaceActivitySubtext([workspaceID: "1 busy"])
         pumpMainRunLoop()
         hostingView.layoutSubtreeIfNeeded()
 
         let textValues = renderedTextValues(in: hostingView)
-        XCTAssertTrue(
-            textValues.contains(where: { $0.contains("1 pane · 1 busy") }),
-            "Sidebar text values after runtime update: \(textValues)"
+        XCTAssertFalse(
+            textValues.contains(where: { $0.contains("pane") }),
+            "Workspace subtitle should be hidden but found: \(textValues)"
         )
     }
 
