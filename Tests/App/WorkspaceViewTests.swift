@@ -5,6 +5,16 @@ import SwiftUI
 import XCTest
 
 final class WorkspaceViewTests: XCTestCase {
+    @MainActor
+    private struct WorkspaceHarness {
+        let windowID: UUID
+        let workspaceID: UUID
+        let panelID: UUID
+        let store: AppStore
+        let hostingView: NSView
+        let window: NSWindow
+    }
+
     func testWorkspaceAgentTopBarModelUsesConfiguredProfileOrderAndDisplayNames() {
         let catalog = AgentCatalog(
             profiles: [
@@ -111,6 +121,51 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(ToastyTheme.workspaceTabUnreadDotDiameter, 7)
     }
 
+    @MainActor
+    func testPendingPanelFlashRequestPulsesAndClearsSelectedTerminalPanel() throws {
+        let harness = try makeWorkspaceHarness()
+        pumpMainRunLoop(duration: 0.2)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let baselineBitmap = try renderedBitmap(for: harness.hostingView)
+        let sampledRegion = stableTerminalCornerRegion(in: baselineBitmap)
+
+        harness.store.pendingPanelFlashRequest = PendingPanelFlashRequest(
+            requestID: UUID(),
+            windowID: harness.windowID,
+            workspaceID: harness.workspaceID,
+            panelID: harness.panelID
+        )
+        pumpMainRunLoop(duration: 0.12)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let peakBitmap = try renderedBitmap(for: harness.hostingView)
+
+        pumpMainRunLoop(duration: 0.5)
+        harness.hostingView.layoutSubtreeIfNeeded()
+        let settledBitmap = try renderedBitmap(for: harness.hostingView)
+
+        XCTAssertNil(harness.store.pendingPanelFlashRequest)
+        XCTAssertGreaterThan(
+            try differingPixelCount(
+                in: sampledRegion,
+                between: baselineBitmap,
+                and: peakBitmap
+            ),
+            0,
+            "Expected the terminal panel to visibly pulse when an explicit navigation flash request is handled"
+        )
+        XCTAssertEqual(
+            try differingPixelCount(
+                in: sampledRegion,
+                between: baselineBitmap,
+                and: settledBitmap
+            ),
+            0,
+            "Expected the terminal panel pulse to settle back to its baseline appearance"
+        )
+
+        harness.window.orderOut(nil)
+    }
+
     private func makeProfileShortcutRegistry(
         agentProfiles: AgentCatalog
     ) -> ProfileShortcutRegistry {
@@ -120,5 +175,155 @@ final class WorkspaceViewTests: XCTestCase {
             agentProfiles: agentProfiles,
             agentProfilesFilePath: "/tmp/agents.toml"
         )
+    }
+
+    @MainActor
+    private func makeWorkspaceHarness() throws -> WorkspaceHarness {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+        registry.synchronize(with: store.state)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let tempHomeDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: tempHomeDirectory,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        let agentCatalogStore = AgentCatalogStore(homeDirectoryPath: tempHomeDirectory.path)
+        let terminalProfileStore = TerminalProfileStore(
+            homeDirectoryPath: tempHomeDirectory.path,
+            environment: [:]
+        )
+        let agentLaunchService = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogStore
+        )
+        let workspaceView = WorkspaceView(
+            windowID: windowID,
+            store: store,
+            agentCatalogStore: agentCatalogStore,
+            terminalProfileStore: terminalProfileStore,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
+            agentLaunchService: agentLaunchService,
+            openAgentProfilesConfiguration: {},
+            terminalRuntimeContext: TerminalWindowRuntimeContext(
+                windowID: windowID,
+                runtimeRegistry: registry
+            ),
+            sidebarVisible: true
+        )
+        let hostingView = NSHostingView(rootView: workspaceView.frame(width: 900, height: 600))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+        return WorkspaceHarness(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            store: store,
+            hostingView: hostingView,
+            window: window
+        )
+    }
+
+    @MainActor
+    private func pumpMainRunLoop(duration: TimeInterval = 0) {
+        let expectation = expectation(description: "Flush SwiftUI update")
+        DispatchQueue.main.async {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 1)
+
+        guard duration > 0 else { return }
+        RunLoop.main.run(until: Date().addingTimeInterval(duration))
+    }
+
+    @MainActor
+    private func renderedBitmap(for view: NSView) throws -> NSBitmapImageRep {
+        view.layoutSubtreeIfNeeded()
+        let bounds = view.bounds
+        let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: bounds))
+        view.cacheDisplay(in: bounds, to: bitmap)
+        return bitmap
+    }
+
+    @MainActor
+    private func differingPixelCount(
+        between lhs: NSBitmapImageRep,
+        and rhs: NSBitmapImageRep
+    ) throws -> Int {
+        try differingPixelCount(
+            in: NSRect(x: 0, y: 0, width: lhs.pixelsWide, height: lhs.pixelsHigh),
+            between: lhs,
+            and: rhs
+        )
+    }
+
+    @MainActor
+    private func stableTerminalCornerRegion(in bitmap: NSBitmapImageRep) -> NSRect {
+        let insetX = CGFloat(max(32, bitmap.pixelsWide / 7))
+        let insetY = CGFloat(max(32, bitmap.pixelsHigh / 7))
+        let regionWidth = CGFloat(max(48, bitmap.pixelsWide / 10))
+        let regionHeight = CGFloat(max(48, bitmap.pixelsHigh / 10))
+
+        return NSRect(
+            x: CGFloat(bitmap.pixelsWide) - insetX - regionWidth,
+            y: insetY,
+            width: regionWidth,
+            height: regionHeight
+        )
+    }
+
+    @MainActor
+    private func differingPixelCount(
+        in region: NSRect,
+        between lhs: NSBitmapImageRep,
+        and rhs: NSBitmapImageRep
+    ) throws -> Int {
+        XCTAssertEqual(lhs.pixelsWide, rhs.pixelsWide)
+        XCTAssertEqual(lhs.pixelsHigh, rhs.pixelsHigh)
+
+        let lhsData = try XCTUnwrap(lhs.bitmapData)
+        let rhsData = try XCTUnwrap(rhs.bitmapData)
+        let bytesPerPixel = max(1, lhs.bitsPerPixel / 8)
+        XCTAssertEqual(lhs.bytesPerRow * lhs.pixelsHigh, rhs.bytesPerRow * rhs.pixelsHigh)
+
+        let minX = max(0, min(lhs.pixelsWide - 1, Int(region.minX.rounded(.down))))
+        let maxX = max(minX + 1, min(lhs.pixelsWide, Int(region.maxX.rounded(.up))))
+        let minY = max(0, min(lhs.pixelsHigh - 1, Int(region.minY.rounded(.down))))
+        let maxY = max(minY + 1, min(lhs.pixelsHigh, Int(region.maxY.rounded(.up))))
+
+        var differenceCount = 0
+        for y in minY..<maxY {
+            let rowOffset = y * lhs.bytesPerRow
+            for x in minX..<maxX {
+                let pixelOffset = rowOffset + (x * bytesPerPixel)
+                for byteOffset in 0..<bytesPerPixel where lhsData[pixelOffset + byteOffset] != rhsData[pixelOffset + byteOffset] {
+                    differenceCount += 1
+                    break
+                }
+            }
+        }
+
+        return differenceCount
     }
 }

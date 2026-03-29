@@ -28,8 +28,16 @@ struct WorkspaceView: View {
     @State private var renamingTabID: UUID?
     @State private var renameDraftTitle = ""
     @State private var pendingWorkspaceTabClose: PendingWorkspaceTabClose?
+    @State private var flashingPanelID: UUID?
+    @State private var flashingPanelOverlayOpacity = 0.0
+    @State private var activePanelFlashRequestID: UUID?
+    @State private var lastHandledPanelFlashRequestID: UUID?
+    @State private var panelFlashClearWorkItem: DispatchWorkItem?
+    @State private var panelFlashResetWorkItem: DispatchWorkItem?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+    private static let panelFlashPeakDuration: Double = 0.18
+    private static let panelFlashSettleDuration: Double = 0.28
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
@@ -97,6 +105,7 @@ struct WorkspaceView: View {
         .onAppear {
             appIsActive = NSApplication.shared.isActive
             scheduleFocusedUnreadPanelClearIfNeeded()
+            handlePendingPanelFlashRequest()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleFocusedUnreadPanelClearIfNeeded()
@@ -104,17 +113,26 @@ struct WorkspaceView: View {
         .onChange(of: store.state.workspacesByID) { _, _ in
             pruneTransientTabRenameState()
             prunePendingWorkspaceTabCloseState()
+            pruneTransientPanelFlashState()
         }
         .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
             consumePendingWorkspaceTabRenameRequestIfNeeded()
         }
+        .onChange(of: store.pendingPanelFlashRequest) { _, _ in
+            handlePendingPanelFlashRequest()
+        }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             pruneTransientTabRenameState()
             prunePendingWorkspaceTabCloseState()
+            pruneTransientPanelFlashState()
         }
         .onDisappear {
             focusedUnreadClearTask?.cancel()
             focusedUnreadClearTask = nil
+            panelFlashClearWorkItem?.cancel()
+            panelFlashResetWorkItem?.cancel()
+            panelFlashClearWorkItem = nil
+            panelFlashResetWorkItem = nil
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
@@ -350,7 +368,8 @@ struct WorkspaceView: View {
                         appIsActive: appIsActive,
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
-                        panelSessionStatusesByPanelID: panelSessionStatusesByPanelID
+                        panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
+                        panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
                     )
                 }
 
@@ -436,6 +455,82 @@ struct WorkspaceView: View {
             }
             _ = store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: focusedPanelID))
         }
+    }
+
+    @MainActor
+    private func handlePendingPanelFlashRequest() {
+        guard let request = store.pendingPanelFlashRequest,
+              request.windowID == windowID,
+              lastHandledPanelFlashRequestID != request.requestID else {
+            return
+        }
+
+        lastHandledPanelFlashRequestID = request.requestID
+        DispatchQueue.main.async {
+            guard let request = store.consumePendingPanelFlashRequest(
+                windowID: windowID,
+                requestID: request.requestID
+            ) else {
+                return
+            }
+            flashPanel(request.panelID, requestID: request.requestID)
+        }
+    }
+
+    @MainActor
+    private func flashPanel(_ panelID: UUID, requestID: UUID) {
+        activePanelFlashRequestID = requestID
+        panelFlashClearWorkItem?.cancel()
+        panelFlashResetWorkItem?.cancel()
+        panelFlashClearWorkItem = nil
+        panelFlashResetWorkItem = nil
+        flashingPanelID = panelID
+        flashingPanelOverlayOpacity = 0
+
+        withAnimation(.easeOut(duration: 0.08)) {
+            flashingPanelOverlayOpacity = 1
+        }
+
+        let clearWorkItem = DispatchWorkItem { [requestID] in
+            guard activePanelFlashRequestID == requestID else { return }
+            panelFlashClearWorkItem = nil
+            withAnimation(.easeOut(duration: Self.panelFlashSettleDuration)) {
+                flashingPanelOverlayOpacity = 0
+            }
+        }
+        panelFlashClearWorkItem = clearWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.panelFlashPeakDuration,
+            execute: clearWorkItem
+        )
+
+        let resetWorkItem = DispatchWorkItem { [requestID] in
+            guard activePanelFlashRequestID == requestID else { return }
+            activePanelFlashRequestID = nil
+            flashingPanelID = nil
+            flashingPanelOverlayOpacity = 0
+            panelFlashResetWorkItem = nil
+        }
+        panelFlashResetWorkItem = resetWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.panelFlashPeakDuration + Self.panelFlashSettleDuration,
+            execute: resetWorkItem
+        )
+    }
+
+    private func pruneTransientPanelFlashState() {
+        guard let flashingPanelID else { return }
+        if store.state.workspaceSelection(containingPanelID: flashingPanelID)?.windowID == windowID {
+            return
+        }
+
+        activePanelFlashRequestID = nil
+        self.flashingPanelID = nil
+        flashingPanelOverlayOpacity = 0
+        panelFlashClearWorkItem?.cancel()
+        panelFlashResetWorkItem?.cancel()
+        panelFlashClearWorkItem = nil
+        panelFlashResetWorkItem = nil
     }
 
     private var selectedWorkspace: WorkspaceState? {
@@ -1032,6 +1127,7 @@ private struct SlotPlacementView: View {
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
     let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
+    let panelFlashOverlayOpacity: Double
 
     var body: some View {
         Group {
@@ -1050,6 +1146,7 @@ private struct SlotPlacementView: View {
                     windowFontPoints: windowFontPoints,
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
+                    panelFlashOverlayOpacity: panelFlashOverlayOpacity,
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeContext: terminalRuntimeContext
@@ -1087,6 +1184,7 @@ private struct PanelCardView: View {
     let windowFontPoints: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
+    let panelFlashOverlayOpacity: Double
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
@@ -1151,6 +1249,20 @@ private struct PanelCardView: View {
                         Rectangle()
                             .fill(unfocusedSplitStyle.fillColor.color)
                             .opacity(unfocusedSplitStyle.fillOverlayOpacity)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .overlay {
+                    if panelFlashOverlayOpacity > 0 {
+                        Rectangle()
+                            .fill(ToastyTheme.accent.opacity(0.16 * panelFlashOverlayOpacity))
+                            .overlay {
+                                Rectangle()
+                                    .stroke(
+                                        ToastyTheme.accent.opacity(0.9 * panelFlashOverlayOpacity),
+                                        lineWidth: 1.5
+                                    )
+                            }
                             .allowsHitTesting(false)
                     }
                 }

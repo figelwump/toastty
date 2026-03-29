@@ -36,6 +36,13 @@ struct PendingSidebarSessionFlashRequest: Equatable {
     let panelID: UUID?
 }
 
+struct PendingPanelFlashRequest: Equatable {
+    let requestID: UUID
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -67,6 +74,9 @@ final class AppStore: ObservableObject {
     /// pulse the currently selected session row, or the workspace row when no
     /// session row is visible.
     @Published var pendingSidebarSessionFlashRequest: PendingSidebarSessionFlashRequest?
+    /// Set by explicit panel navigation so the target workspace view can briefly
+    /// pulse the destination terminal panel.
+    @Published var pendingPanelFlashRequest: PendingPanelFlashRequest?
 
     private let reducer = AppReducer()
     private let persistUserSettings: Bool
@@ -240,7 +250,7 @@ final class AppStore: ObservableObject {
             )
             return false
         }
-        return focusPanelTarget(target)
+        return focusPanelTarget(target, flashPanelOnSuccess: true)
     }
 
     @discardableResult
@@ -402,6 +412,31 @@ final class AppStore: ObservableObject {
         return request
     }
 
+    func consumePendingPanelFlashRequest(
+        windowID: UUID,
+        requestID: UUID
+    ) -> PendingPanelFlashRequest? {
+        guard let request = pendingPanelFlashRequest,
+              request.windowID == windowID,
+              request.requestID == requestID else { return nil }
+        pendingPanelFlashRequest = nil
+        return request
+    }
+
+    @discardableResult
+    func focusExplicitlyNavigatedPanel(
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID
+    ) -> Bool {
+        focusPanel(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            flashPanelOnSuccess: true
+        )
+    }
+
     @discardableResult
     func confirmWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
         let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
@@ -437,6 +472,11 @@ final class AppStore: ObservableObject {
            pendingSidebarSessionFlashRequestIsValid(request) == false {
             pendingSidebarSessionFlashRequest = nil
         }
+
+        if let request = pendingPanelFlashRequest,
+           pendingPanelFlashRequestIsValid(request) == false {
+            pendingPanelFlashRequest = nil
+        }
     }
 
     private func pendingRenameWorkspaceRequestIsValid(_ request: PendingWorkspaceRenameRequest) -> Bool {
@@ -466,6 +506,14 @@ final class AppStore: ObservableObject {
             return true
         }
         return workspace.panelState(for: panelID) != nil
+    }
+
+    private func pendingPanelFlashRequestIsValid(_ request: PendingPanelFlashRequest) -> Bool {
+        guard pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID),
+              let workspace = state.workspacesByID[request.workspaceID] else {
+            return false
+        }
+        return workspace.panelState(for: request.panelID) != nil
     }
 
     private func pendingWorkspaceRequestExists(windowID: UUID, workspaceID: UUID) -> Bool {
@@ -624,6 +672,14 @@ final class AppStore: ObservableObject {
             workspaceID: selection.workspace.id,
             panelID: selection.workspace.focusedPanelID
         )
+
+        if let focusedPanelID = selection.workspace.focusedPanelID {
+            requestPanelFlash(
+                windowID: selection.windowID,
+                workspaceID: selection.workspace.id,
+                panelID: focusedPanelID
+            )
+        }
     }
 
     private func logNextUnreadOrActivePanelResolution(
@@ -696,19 +752,35 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    private func focusPanelTarget(_ target: PanelNavigationTarget) -> Bool {
-        let previousSelectedWindowID = state.selectedWindowID
-        let targetWorkspaceID = target.workspaceID
-        let targetWindowID = target.windowID
-        let requiresWorkspaceSelection = state.selectedWorkspaceID(in: targetWindowID) != targetWorkspaceID
+    private func focusPanelTarget(
+        _ target: PanelNavigationTarget,
+        flashPanelOnSuccess: Bool = false
+    ) -> Bool {
+        focusPanel(
+            windowID: target.windowID,
+            workspaceID: target.workspaceID,
+            panelID: target.panelID,
+            flashPanelOnSuccess: flashPanelOnSuccess
+        )
+    }
 
-        if state.selectedWindowID != targetWindowID || requiresWorkspaceSelection {
-            guard send(.selectWorkspace(windowID: targetWindowID, workspaceID: targetWorkspaceID)) else {
+    @discardableResult
+    private func focusPanel(
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID,
+        flashPanelOnSuccess: Bool
+    ) -> Bool {
+        let previousSelectedWindowID = state.selectedWindowID
+        let requiresWorkspaceSelection = state.selectedWorkspaceID(in: windowID) != workspaceID
+
+        if state.selectedWindowID != windowID || requiresWorkspaceSelection {
+            guard send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID)) else {
                 return false
             }
         }
 
-        guard send(.focusPanel(workspaceID: targetWorkspaceID, panelID: target.panelID)) else {
+        guard send(.focusPanel(workspaceID: workspaceID, panelID: panelID)) else {
             return false
         }
 
@@ -717,7 +789,24 @@ final class AppStore: ObservableObject {
             windowActivationHandler(selectedWindowID)
         }
 
+        if flashPanelOnSuccess {
+            requestPanelFlash(
+                windowID: windowID,
+                workspaceID: workspaceID,
+                panelID: panelID
+            )
+        }
+
         return true
+    }
+
+    private func requestPanelFlash(windowID: UUID, workspaceID: UUID, panelID: UUID) {
+        pendingPanelFlashRequest = PendingPanelFlashRequest(
+            requestID: UUID(),
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID
+        )
     }
 
     private func windowLaunchSeed(from selection: WindowCommandSelection?) -> WindowLaunchSeed? {

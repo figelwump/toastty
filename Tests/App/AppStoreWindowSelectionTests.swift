@@ -406,6 +406,29 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.state.selectedWindowID, firstWindowID)
     }
 
+    func testSelectAdjacentWorkspaceTabDoesNotRequestPanelFlash() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state))
+        let createdTabID = try XCTUnwrap(state.workspacesByID[workspaceID]?.tabIDs.last)
+        let originalTabID = try XCTUnwrap(state.workspacesByID[workspaceID]?.tabIDs.first)
+        XCTAssertTrue(reducer.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID), state: &state))
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.selectAdjacentWorkspaceTab(
+                preferredWindowID: windowID,
+                direction: .next
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.resolvedSelectedTabID, createdTabID)
+        XCTAssertNil(store.pendingPanelFlashRequest)
+    }
+
     func testRenameSelectedWorkspaceFromCommandSetsPendingRenameRequest() throws {
         let workspace = WorkspaceState.bootstrap(title: "Dev")
         let windowID = UUID()
@@ -1045,6 +1068,17 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(flashRequest.workspaceID, workspace.id)
         XCTAssertEqual(try XCTUnwrap(flashRequest.panelID), tab.panelIDs[0])
         XCTAssertNil(store.pendingSidebarSessionFlashRequest)
+
+        let panelFlashRequest = try XCTUnwrap(
+            store.consumePendingPanelFlashRequest(
+                windowID: windowID,
+                requestID: try XCTUnwrap(store.pendingPanelFlashRequest?.requestID)
+            )
+        )
+        XCTAssertEqual(panelFlashRequest.windowID, windowID)
+        XCTAssertEqual(panelFlashRequest.workspaceID, workspace.id)
+        XCTAssertEqual(panelFlashRequest.panelID, tab.panelIDs[0])
+        XCTAssertNil(store.pendingPanelFlashRequest)
     }
 
     func testFocusNextUnreadOrActivePanelFromCommandRequestsSidebarFlashForFocusedReadyOnlyTarget() throws {
@@ -1171,6 +1205,85 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             )
         )
         XCTAssertEqual(store.pendingSidebarSessionFlashRequest?.requestID, currentRequestID)
+    }
+
+    func testFocusExplicitlyNavigatedPanelEnqueuesPanelFlashRequest() throws {
+        let fixture = makeTwoPanelWorkspace(title: "One")
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [fixture.workspace.id],
+                        selectedWorkspaceID: fixture.workspace.id
+                    )
+                ],
+                workspacesByID: [fixture.workspace.id: fixture.workspace],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+
+        XCTAssertTrue(
+            store.focusExplicitlyNavigatedPanel(
+                windowID: windowID,
+                workspaceID: fixture.workspace.id,
+                panelID: fixture.rightPanelID
+            )
+        )
+
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[fixture.workspace.id])
+        XCTAssertEqual(updatedWorkspace.focusedPanelID, fixture.rightPanelID)
+
+        let flashRequest = try XCTUnwrap(
+            store.consumePendingPanelFlashRequest(
+                windowID: windowID,
+                requestID: try XCTUnwrap(store.pendingPanelFlashRequest?.requestID)
+            )
+        )
+        XCTAssertEqual(flashRequest.windowID, windowID)
+        XCTAssertEqual(flashRequest.workspaceID, fixture.workspace.id)
+        XCTAssertEqual(flashRequest.panelID, fixture.rightPanelID)
+        XCTAssertNil(store.pendingPanelFlashRequest)
+    }
+
+    func testConsumePendingPanelFlashRequestIgnoresStaleRequestID() throws {
+        let fixture = makeTwoPanelWorkspace(title: "One")
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [fixture.workspace.id],
+                        selectedWorkspaceID: fixture.workspace.id
+                    )
+                ],
+                workspacesByID: [fixture.workspace.id: fixture.workspace],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+
+        XCTAssertTrue(
+            store.focusExplicitlyNavigatedPanel(
+                windowID: windowID,
+                workspaceID: fixture.workspace.id,
+                panelID: fixture.rightPanelID
+            )
+        )
+
+        let currentRequestID = try XCTUnwrap(store.pendingPanelFlashRequest?.requestID)
+        XCTAssertNil(
+            store.consumePendingPanelFlashRequest(
+                windowID: windowID,
+                requestID: UUID()
+            )
+        )
+        XCTAssertEqual(store.pendingPanelFlashRequest?.requestID, currentRequestID)
     }
 
     func testFocusNextUnreadOrActivePanelFromCommandRequestsSidebarFlashForFocusedIdleSessionWithoutOtherActiveTargets() throws {
@@ -1330,6 +1443,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(flashRequest.workspaceID, workspace.id)
         XCTAssertNil(flashRequest.panelID)
         XCTAssertNil(store.pendingSidebarSessionFlashRequest)
+        XCTAssertNil(store.pendingPanelFlashRequest)
     }
 
     func testFocusNextUnreadOrActivePanelFromCommandUsesFocusedWindowOverGlobalSelection() throws {
@@ -1400,6 +1514,17 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(updatedWorkspace.selectedTabID, secondUnreadTab.tab.id)
         XCTAssertEqual(updatedWorkspace.focusedPanelID, secondUnreadTab.panelIDs[2])
         XCTAssertTrue(updatedWorkspace.tabsByID[secondUnreadTab.tab.id]?.unreadPanelIDs.isEmpty == true)
+
+        let flashRequest = try XCTUnwrap(
+            store.consumePendingPanelFlashRequest(
+                windowID: secondWindowID,
+                requestID: try XCTUnwrap(store.pendingPanelFlashRequest?.requestID)
+            )
+        )
+        XCTAssertEqual(flashRequest.windowID, secondWindowID)
+        XCTAssertEqual(flashRequest.workspaceID, secondWorkspace.id)
+        XCTAssertEqual(flashRequest.panelID, secondUnreadTab.panelIDs[2])
+        XCTAssertNil(store.pendingPanelFlashRequest)
     }
 
     func testFocusNextUnreadOrActivePanelFromCommandActivatesRaisedWindow() throws {
