@@ -16,11 +16,42 @@ private enum AgentCommandShim {
             commandName: commandName,
             environment: environment
         ) else {
+            ToasttyLog.warning(
+                "Managed agent shim could not resolve the real binary path",
+                category: .terminal,
+                metadata: invocationLogMetadata(
+                    commandName: commandName,
+                    environment: environment,
+                    additional: ["real_binary_path": "none"]
+                )
+            )
             fputs("\(commandName): command not found\n", stderr)
             return 127
         }
 
+        ToasttyLog.info(
+            "Observed managed agent shim invocation",
+            category: .terminal,
+            metadata: invocationLogMetadata(
+                commandName: commandName,
+                environment: environment,
+                additional: ["real_binary_path": realBinaryPath]
+            )
+        )
+
         guard let invocation = Invocation(arguments: arguments) else {
+            ToasttyLog.info(
+                "Passing through managed agent shim invocation because agent inference failed",
+                category: .terminal,
+                metadata: invocationLogMetadata(
+                    commandName: commandName,
+                    environment: environment,
+                    additional: [
+                        "real_binary_path": realBinaryPath,
+                        "reason": "agent_inference_failed",
+                    ]
+                )
+            )
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: arguments,
@@ -28,7 +59,21 @@ private enum AgentCommandShim {
             )
         }
 
-        if shouldPassThrough(environment: environment) {
+        let passThroughReasons = passThroughReasons(environment: environment)
+        if passThroughReasons.isEmpty == false {
+            ToasttyLog.info(
+                "Passing through managed agent shim invocation without Toastty session management",
+                category: .terminal,
+                metadata: invocationLogMetadata(
+                    commandName: commandName,
+                    environment: environment,
+                    additional: [
+                        "agent": invocation.agent.rawValue,
+                        "real_binary_path": realBinaryPath,
+                        "reason": passThroughReasons.joined(separator: ","),
+                    ]
+                )
+            )
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
@@ -57,12 +102,44 @@ private enum AgentCommandShim {
             ),
             environment: environment
         ) else {
+            ToasttyLog.warning(
+                "Managed agent shim fell back to unmanaged launch after launch planning failed",
+                category: .terminal,
+                metadata: invocationLogMetadata(
+                    commandName: commandName,
+                    environment: environment,
+                    additional: [
+                        "agent": invocation.agent.rawValue,
+                        "panel_id": panelID.uuidString,
+                        "cwd": cwd,
+                        "real_binary_path": realBinaryPath,
+                        "reason": "prepare_managed_launch_failed",
+                    ]
+                )
+            )
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
                 environment: environment
             )
         }
+
+        ToasttyLog.info(
+            "Prepared managed agent shim launch",
+            category: .terminal,
+            metadata: invocationLogMetadata(
+                commandName: commandName,
+                environment: environment,
+                additional: [
+                    "agent": invocation.agent.rawValue,
+                    "panel_id": panelID.uuidString,
+                    "session_id": plan.sessionID,
+                    "cwd": cwd,
+                    "repo_root": plan.environment[ToasttyLaunchContextEnvironment.repoRootKey] ?? "none",
+                    "real_binary_path": realBinaryPath,
+                ]
+            )
+        )
 
         var childEnvironment = environment
         childEnvironment.merge(plan.environment) { _, new in new }
@@ -80,15 +157,21 @@ private enum AgentCommandShim {
         return exitStatus
     }
 
-    private static func shouldPassThrough(environment: [String: String]) -> Bool {
+    private static func passThroughReasons(environment: [String: String]) -> [String] {
+        var reasons: [String] = []
         if environment[ToasttyLaunchContextEnvironment.managedAgentShimBypassKey] == "1" {
-            return true
+            reasons.append("managed_agent_shim_bypass")
         }
         if environment[ToasttyLaunchContextEnvironment.sessionIDKey] != nil {
-            return true
+            reasons.append("session_id_present")
         }
-        return normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.panelIDKey]) == nil
-            || normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.cliPathKey]) == nil
+        if normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.panelIDKey]) == nil {
+            reasons.append("missing_panel_id")
+        }
+        if normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.cliPathKey]) == nil {
+            reasons.append("missing_cli_path")
+        }
+        return reasons
     }
 
     private static func resolveRealBinaryPath(
@@ -320,6 +403,71 @@ private enum AgentCommandShim {
 
     private static func childTerminatingSignal(_ status: Int32) -> Int32 {
         status & 0x7f
+    }
+
+    private static func invocationLogMetadata(
+        commandName: String,
+        environment: [String: String],
+        additional: [String: String] = [:]
+    ) -> [String: String] {
+        let shimDirectory = normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey])
+        let path = normalizedNonEmpty(environment["PATH"])
+
+        var metadata: [String: String] = [
+            "command_name": commandName,
+            "panel_id": normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.panelIDKey]) ?? "none",
+            "session_id_present": environment[ToasttyLaunchContextEnvironment.sessionIDKey] == nil ? "false" : "true",
+            "cli_path_present": normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.cliPathKey]) == nil ? "false" : "true",
+            "agent_shim_directory": shimDirectory ?? "none",
+            "path_starts_with_shim_directory": pathStartsWithDirectory(
+                path,
+                directoryPath: shimDirectory
+            ) ? "true" : "false",
+            "path_contains_shim_directory": pathContainsDirectory(
+                path,
+                directoryPath: shimDirectory
+            ) ? "true" : "false",
+            "path_sample": pathEntriesSample(path),
+            "pwd": normalizedNonEmpty(environment["PWD"]) ?? FileManager.default.currentDirectoryPath,
+        ]
+
+        for (key, value) in additional {
+            metadata[key] = value
+        }
+        return metadata
+    }
+
+    private static func normalizedPathEntries(_ path: String?) -> [String] {
+        guard let path else {
+            return []
+        }
+        return path
+            .split(separator: ":")
+            .map(String.init)
+            .filter { $0.isEmpty == false }
+    }
+
+    private static func pathEntriesSample(_ path: String?, limit: Int = 4) -> String {
+        let entries = normalizedPathEntries(path)
+        guard entries.isEmpty == false else {
+            return "none"
+        }
+        return entries.prefix(limit).joined(separator: " | ")
+    }
+
+    private static func pathStartsWithDirectory(_ path: String?, directoryPath: String?) -> Bool {
+        guard let directoryPath,
+              let firstEntry = normalizedPathEntries(path).first else {
+            return false
+        }
+        return firstEntry == directoryPath
+    }
+
+    private static func pathContainsDirectory(_ path: String?, directoryPath: String?) -> Bool {
+        guard let directoryPath else {
+            return false
+        }
+        return normalizedPathEntries(path).contains(directoryPath)
     }
 }
 
