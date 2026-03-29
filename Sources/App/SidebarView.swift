@@ -40,7 +40,7 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 4) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 0) {
                         if let window = store.window(id: windowID) {
                             ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
                                 if let workspace = store.state.workspacesByID[workspaceID] {
@@ -280,7 +280,7 @@ struct SidebarView: View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? ToastyTheme.elevatedBackground
-                : hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground.opacity(0.5)
+                : hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground
                 : Color.clear)
             .overlay {
                 Rectangle()
@@ -305,7 +305,7 @@ struct SidebarView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .padding(.vertical, 12)
+            .padding(.vertical, 10)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
