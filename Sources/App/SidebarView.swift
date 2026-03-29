@@ -652,12 +652,11 @@ struct SidebarView: View {
 
     private func focusSessionPanel(workspaceID: UUID, panelID: UUID) {
         cancelWorkspaceRename()
-
-        if store.selectedWorkspaceID(in: windowID) != workspaceID {
-            _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
-        }
-
-        _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+        _ = store.focusExplicitlyNavigatedPanel(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID
+        )
         terminalRuntimeContext.scheduleWorkspaceFocusRestore(
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: false
@@ -815,11 +814,11 @@ struct SidebarView: View {
     }
 
     static func sessionAgentFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
-        showsUnreadSessionAccent ? .bold : .medium
+        showsUnreadSessionAccent ? .heavy : .medium
     }
 
     static func sessionBodyFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
-        showsUnreadSessionAccent ? .semibold : .regular
+        showsUnreadSessionAccent ? .bold : .regular
     }
 
     static func sessionDetailUsesItalic(for kind: SessionStatusKind) -> Bool {

@@ -78,9 +78,9 @@ final class SidebarViewTests: XCTestCase {
 
     func testUnreadSessionTypographyUsesEmphasizedWeights() {
         XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: false), .medium)
-        XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: true), .bold)
+        XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: true), .heavy)
         XCTAssertEqual(SidebarView.sessionBodyFontWeight(showsUnreadSessionAccent: false), .regular)
-        XCTAssertEqual(SidebarView.sessionBodyFontWeight(showsUnreadSessionAccent: true), .semibold)
+        XCTAssertEqual(SidebarView.sessionBodyFontWeight(showsUnreadSessionAccent: true), .bold)
     }
 
     func testWorkingSessionDetailUsesItalicOnlyWhileWorking() {
