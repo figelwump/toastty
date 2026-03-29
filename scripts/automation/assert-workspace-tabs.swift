@@ -91,6 +91,8 @@ private let tabHeightPoints = 34.0
 private let tabSpacingPoints = 6.0
 private let tabTrailingPaddingPoints = 10.0
 private let tabTrailingSlotWidthPoints = 24.0
+private let tabTrailingSlotTopInsetPoints = 4.0
+private let tabTrailingSlotBottomInsetPoints = 2.0
 
 private extension ClosedRange<Int> {
     var length: Int { upperBound - lowerBound + 1 }
@@ -320,8 +322,8 @@ private func assertBadgeVisibility(
     let frame = snapshot.tabRuns[tabIndex - 1]
     let slotStartX = frame.upperBound - scaled(tabTrailingPaddingPoints + tabTrailingSlotWidthPoints, scale: scale) + scaled(2, scale: scale)
     let slotEndX = frame.upperBound - scaled(tabTrailingPaddingPoints, scale: scale) - scaled(2, scale: scale)
-    let slotTopY = min(image.height - 1, scaled(6, scale: scale))
-    let slotBottomY = min(image.height - 1, scaled(tabHeightPoints - 6, scale: scale))
+    let slotTopY = min(image.height - 1, scaled(tabTrailingSlotTopInsetPoints, scale: scale))
+    let slotBottomY = min(image.height - 1, scaled(tabHeightPoints - tabTrailingSlotBottomInsetPoints, scale: scale))
     let nonBackgroundPixelCount = countNonBackgroundPixels(
         in: image,
         xRange: slotStartX...slotEndX,

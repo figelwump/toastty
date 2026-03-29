@@ -68,6 +68,7 @@ final class WindowTrackingView: NSView {
 final class AppWindowSceneObserverCoordinator: NSObject {
     typealias MainActorScheduler = @Sendable (@escaping @MainActor @Sendable () -> Void) -> Void
     typealias WindowTitleProvider = @Sendable () -> String
+    typealias VisibleScreenFramesProvider = @Sendable () -> [CGRect]
     typealias WindowCloseConfirmationPresenter = @MainActor (
         _ window: NSWindow,
         _ completion: @escaping @MainActor (Bool) -> Void
@@ -87,6 +88,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
     private var lastPublishedWindowFrame: CGRect?
     private let scheduleOnMainActor: MainActorScheduler
     private let defaultWindowTitle: WindowTitleProvider
+    private let screenVisibleFramesProvider: VisibleScreenFramesProvider
     var shouldConfirmWindowClose: Bool
     private let presentWindowCloseConfirmation: WindowCloseConfirmationPresenter
     private let closeWindow: WindowCloser
@@ -117,6 +119,9 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         defaultWindowTitle: @escaping WindowTitleProvider = {
             AppWindowSceneObserverCoordinator.resolveDefaultWindowTitle(from: .main)
         },
+        screenVisibleFramesProvider: @escaping VisibleScreenFramesProvider = {
+            NSScreen.screens.map(\.visibleFrame)
+        },
         scheduleOnMainActor: @escaping MainActorScheduler = { operation in
             // Hop to the next MainActor turn so scene/window callbacks triggered
             // during updateNSView don't synchronously publish AppStore changes
@@ -136,6 +141,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         self.presentWindowCloseConfirmation = presentWindowCloseConfirmation
         self.closeWindow = closeWindow
         self.defaultWindowTitle = defaultWindowTitle
+        self.screenVisibleFramesProvider = screenVisibleFramesProvider
         self.scheduleOnMainActor = scheduleOnMainActor
         super.init()
     }
@@ -222,6 +228,17 @@ final class AppWindowSceneObserverCoordinator: NSObject {
                 }
             }
         )
+        observerTokens.append(
+            notificationCenter.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                scheduleOnMainActor { [weak self] in
+                    self?.clampObservedWindowFrameToVisibleScreensIfNeeded()
+                }
+            }
+        )
 
         applyDesiredFrameIfNeeded()
 
@@ -259,15 +276,19 @@ final class AppWindowSceneObserverCoordinator: NSObject {
 
     func applyDesiredFrameIfNeeded() {
         guard let observedWindow, let desiredFrame else { return }
-        guard framesEqual(observedWindow.frame, desiredFrame) == false else { return }
-        // Window move/resize notifications publish the live AppKit frame back
-        // into app state. Ignore that immediate state echo so SwiftUI updates do
-        // not replay a stale frame onto an actively dragged window.
+        // Preserve the live-drag suppression from raw AppKit frames before any
+        // display-aware clamping. Straddling two screens is valid while the user
+        // drags, even if the eventual settled frame would be clamped later.
         if let lastPublishedWindowFrame,
            framesEqual(lastPublishedWindowFrame, desiredFrame) {
             return
         }
-        observedWindow.setFrame(desiredFrame, display: true)
+        let resolvedDesiredFrame = adjustedFrameForVisibleScreens(desiredFrame)
+        guard framesEqual(observedWindow.frame, resolvedDesiredFrame) == false else { return }
+        // Window move/resize notifications publish the live AppKit frame back
+        // into app state. Ignore that immediate state echo so SwiftUI updates do
+        // not replay a stale frame onto an actively dragged window.
+        observedWindow.setFrame(resolvedDesiredFrame, display: true)
     }
 
     func applyWindowTitleIfNeeded() {
@@ -284,6 +305,13 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         let frame = observedWindow.frame
         lastPublishedWindowFrame = frame
         onWindowFrameChange(CGRectCodable(frame))
+    }
+
+    private func clampObservedWindowFrameToVisibleScreensIfNeeded() {
+        guard let observedWindow else { return }
+        let adjustedFrame = adjustedFrameForVisibleScreens(observedWindow.frame)
+        guard framesEqual(observedWindow.frame, adjustedFrame) == false else { return }
+        observedWindow.setFrame(adjustedFrame, display: true)
     }
 
     @objc
@@ -320,6 +348,76 @@ final class AppWindowSceneObserverCoordinator: NSObject {
             abs(lhs.origin.y - rhs.origin.y) < 0.5 &&
             abs(lhs.size.width - rhs.size.width) < 0.5 &&
             abs(lhs.size.height - rhs.size.height) < 0.5
+    }
+
+    private func adjustedFrameForVisibleScreens(_ frame: CGRect) -> CGRect {
+        let visibleFrames = screenVisibleFramesProvider().filter { $0.isEmpty == false && $0.isNull == false }
+        guard let targetVisibleFrame = bestVisibleFrame(for: frame, visibleFrames: visibleFrames) else {
+            return frame
+        }
+
+        // Keep the window fully reachable on the most relevant remaining screen
+        // after monitor unplug/rearrange events or when restoring stale frames.
+        let adjustedWidth = min(max(frame.width, 1), targetVisibleFrame.width)
+        let adjustedHeight = min(max(frame.height, 1), targetVisibleFrame.height)
+        let adjustedX = clampedValue(
+            frame.origin.x,
+            minimum: targetVisibleFrame.minX,
+            maximum: targetVisibleFrame.maxX - adjustedWidth
+        )
+        let adjustedY = clampedValue(
+            frame.origin.y,
+            minimum: targetVisibleFrame.minY,
+            maximum: targetVisibleFrame.maxY - adjustedHeight
+        )
+
+        return CGRect(
+            x: adjustedX,
+            y: adjustedY,
+            width: adjustedWidth,
+            height: adjustedHeight
+        )
+    }
+
+    private func bestVisibleFrame(for frame: CGRect, visibleFrames: [CGRect]) -> CGRect? {
+        let frameCenter = CGPoint(x: frame.midX, y: frame.midY)
+        return visibleFrames.max { lhs, rhs in
+            let lhsIntersectionArea = intersectionArea(between: frame, and: lhs)
+            let rhsIntersectionArea = intersectionArea(between: frame, and: rhs)
+            if abs(lhsIntersectionArea - rhsIntersectionArea) >= 0.5 {
+                return lhsIntersectionArea < rhsIntersectionArea
+            }
+
+            let lhsDistance = squaredDistance(from: frameCenter, to: lhs)
+            let rhsDistance = squaredDistance(from: frameCenter, to: rhs)
+            if abs(lhsDistance - rhsDistance) >= 0.5 {
+                return lhsDistance > rhsDistance
+            }
+
+            let lhsArea = lhs.width * lhs.height
+            let rhsArea = rhs.width * rhs.height
+            return lhsArea < rhsArea
+        }
+    }
+
+    private func intersectionArea(between lhs: CGRect, and rhs: CGRect) -> Double {
+        let intersection = lhs.intersection(rhs)
+        guard intersection.isNull == false, intersection.isEmpty == false else {
+            return 0
+        }
+        return intersection.width * intersection.height
+    }
+
+    private func squaredDistance(from point: CGPoint, to rect: CGRect) -> Double {
+        let closestX = clampedValue(point.x, minimum: rect.minX, maximum: rect.maxX)
+        let closestY = clampedValue(point.y, minimum: rect.minY, maximum: rect.maxY)
+        let deltaX = point.x - closestX
+        let deltaY = point.y - closestY
+        return deltaX * deltaX + deltaY * deltaY
+    }
+
+    private func clampedValue(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
+        min(max(value, minimum), maximum)
     }
 
     nonisolated private static func resolveDefaultWindowTitle(from bundle: Bundle) -> String {

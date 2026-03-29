@@ -33,7 +33,12 @@ final class SessionRuntimeStore: ObservableObject {
         synchronize(with: store.state)
 
         guard storeActionObserverToken == nil else { return }
-        storeActionObserverToken = store.addActionAppliedObserver { [weak self] _, _, nextState in
+        storeActionObserverToken = store.addActionAppliedObserver { [weak self] action, previousState, nextState in
+            self?.collapseReadyStatusAfterReadIfNeeded(
+                action: action,
+                previousState: previousState,
+                nextState: nextState
+            )
             self?.synchronize(with: nextState)
         }
     }
@@ -104,18 +109,35 @@ final class SessionRuntimeStore: ObservableObject {
         at now: Date
     ) {
         let previousRecord = sessionRegistry.sessionsByID[sessionID]
+        let storedStatus = normalizedStatusForStorage(
+            requestedStatus: status,
+            previousRecord: previousRecord,
+            state: store?.state
+        )
         var nextRegistry = sessionRegistry
-        nextRegistry.updateStatus(sessionID: sessionID, status: status, at: now)
+        nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
+        if let currentRecord = nextRegistry.sessionsByID[sessionID] {
+            ToasttyLog.debug(
+                "Updated managed session status",
+                category: .terminal,
+                metadata: sessionStatusTransitionMetadata(
+                    previousRecord: previousRecord,
+                    currentRecord: currentRecord,
+                    status: storedStatus,
+                    now: now
+                )
+            )
+        }
         publish(nextRegistry)
         clearUnreadForManagedSessionIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,
-            status: status
+            status: storedStatus
         )
         handleActionableStatusTransitionIfNeeded(
             previousRecord: previousRecord,
             sessionID: sessionID,
-            status: status
+            status: storedStatus
         )
     }
 
@@ -273,6 +295,34 @@ final class SessionRuntimeStore: ObservableObject {
         return metadata
     }
 
+    private func sessionStatusTransitionMetadata(
+        previousRecord: SessionRecord?,
+        currentRecord: SessionRecord,
+        status: SessionStatus,
+        now: Date
+    ) -> [String: String] {
+        var metadata: [String: String] = [
+            "session_id": currentRecord.sessionID,
+            "agent": currentRecord.agent.rawValue,
+            "panel_id": currentRecord.panelID.uuidString,
+            "window_id": currentRecord.windowID.uuidString,
+            "workspace_id": currentRecord.workspaceID.uuidString,
+            "previous_status_kind": previousRecord?.status?.kind.rawValue ?? "none",
+            "next_status_kind": status.kind.rawValue,
+            "uses_status_notifications": currentRecord.usesSessionStatusNotifications ? "true" : "false",
+            "updated_at_epoch_ms": String(Int(now.timeIntervalSince1970 * 1000)),
+        ]
+
+        if let summary = truncatedLogMetadataValue(status.summary, limit: 80) {
+            metadata["next_status_summary"] = summary
+        }
+        if let detail = truncatedLogMetadataValue(status.detail, limit: 160) {
+            metadata["next_status_detail"] = detail
+        }
+
+        return metadata
+    }
+
     private func sessionStartMetadata(
         sessionID: String,
         agent: AgentKind,
@@ -338,6 +388,62 @@ final class SessionRuntimeStore: ObservableObject {
         }
     }
 
+    private func collapseReadyStatusAfterReadIfNeeded(
+        action: AppAction,
+        previousState: AppState,
+        nextState: AppState,
+        now: Date = Date()
+    ) {
+        guard let readContext = readTransitionContext(
+            for: action,
+            previousState: previousState,
+            nextState: nextState
+        ),
+        let record = sessionRegistry.activeSession(for: readContext.panelID),
+        record.workspaceID == readContext.workspaceID,
+        record.status?.kind == .ready else {
+            return
+        }
+
+        updateStatus(
+            sessionID: record.sessionID,
+            status: collapsedReadyStatus(from: record.status ?? Self.readyCollapsedIdleStatus),
+            at: now
+        )
+    }
+
+    private func readTransitionContext(
+        for action: AppAction,
+        previousState: AppState,
+        nextState: AppState
+    ) -> (workspaceID: UUID, panelID: UUID)? {
+        let workspaceID: UUID
+        let panelID: UUID
+        switch action {
+        case .focusPanel(let readWorkspaceID, let readPanelID):
+            workspaceID = readWorkspaceID
+            panelID = readPanelID
+        case .markPanelNotificationsRead(let readWorkspaceID, let readPanelID):
+            workspaceID = readWorkspaceID
+            panelID = readPanelID
+        default:
+            return nil
+        }
+
+        guard panelIsUnread(
+            panelID: panelID,
+            in: previousState.workspacesByID[workspaceID]
+        ),
+        !panelIsUnread(
+            panelID: panelID,
+            in: nextState.workspacesByID[workspaceID]
+        ) else {
+            return nil
+        }
+
+        return (workspaceID, panelID)
+    }
+
     private func clearUnreadForManagedSessionIfNeeded(
         previousRecord: SessionRecord?,
         sessionID: String,
@@ -388,9 +494,52 @@ final class SessionRuntimeStore: ObservableObject {
         isApplicationActive() && isPanelCurrentlyFocused(record.panelID, state: state)
     }
 
+    private func normalizedStatusForStorage(
+        requestedStatus: SessionStatus,
+        previousRecord: SessionRecord?,
+        state: AppState?
+    ) -> SessionStatus {
+        guard requestedStatus.kind == .ready,
+              let previousRecord,
+              let state,
+              isActionableStatusTransitionSuppressed(for: previousRecord, state: state) else {
+            return requestedStatus
+        }
+
+        return collapsedReadyStatus(from: requestedStatus)
+    }
+
     private func isActionableStatusKind(_ kind: SessionStatusKind) -> Bool {
         kind == .needsApproval || kind == .ready || kind == .error
     }
+
+    private func panelIsUnread(panelID: UUID, in workspace: WorkspaceState?) -> Bool {
+        guard let workspace,
+              let tabID = workspace.tabID(containingPanelID: panelID) else {
+            return false
+        }
+        return workspace.tab(id: tabID)?.unreadPanelIDs.contains(panelID) == true
+    }
+
+    private func collapsedReadyStatus(from status: SessionStatus) -> SessionStatus {
+        SessionStatus(
+            kind: .idle,
+            summary: Self.readyCollapsedIdleStatus.summary,
+            detail: normalizedNonEmpty(status.detail)
+        )
+    }
+
+    private static let readyCollapsedIdleStatus = SessionStatus(
+        kind: .idle,
+        summary: "Waiting",
+        detail: nil
+    )
+
+    private static let interruptedIdleStatus = SessionStatus(
+        kind: .idle,
+        summary: "Waiting",
+        detail: "Ready for prompt"
+    )
 
     private func notificationTitle(for record: SessionRecord, status: SessionStatus) -> String {
         switch status.kind {
@@ -495,7 +644,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         updateStatus(
             sessionID: record.sessionID,
-            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            status: Self.interruptedIdleStatus,
             at: now
         )
         return true

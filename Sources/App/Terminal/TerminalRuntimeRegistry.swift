@@ -66,6 +66,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var profiledTerminalPanelIDsAwaitingStartupTitleCleanup: Set<UUID> = []
     private var launchedProfiledPanelIDs: Set<UUID> = []
     private var exitedTerminalPanelIDs: Set<UUID> = []
+    private var loggedLaunchEnvironmentPanelIDs: Set<UUID> = []
     private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
@@ -176,6 +177,93 @@ final class TerminalRuntimeRegistry: ObservableObject {
         _ provider: @escaping @Sendable (UUID) -> [String: String]
     ) {
         baseLaunchEnvironmentProvider = provider
+    }
+
+    private func logSurfaceLaunchEnvironmentIfNeeded(
+        panelID: UUID,
+        environment: [String: String]
+    ) {
+        guard loggedLaunchEnvironmentPanelIDs.insert(panelID).inserted else {
+            return
+        }
+
+        let shimDirectory = Self.normalizedLaunchContextValue(
+            environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey]
+        )
+        let path = Self.normalizedLaunchContextValue(environment["PATH"])
+        let launchContextPanelID = Self.normalizedLaunchContextValue(
+            environment[ToasttyLaunchContextEnvironment.panelIDKey]
+        )
+
+        ToasttyLog.info(
+            "Prepared terminal surface launch environment",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "launch_context_panel_id": launchContextPanelID ?? "none",
+                "launch_context_panel_matches_surface": launchContextPanelID == panelID.uuidString ? "true" : "false",
+                "socket_path": Self.normalizedLaunchContextValue(
+                    environment[ToasttyLaunchContextEnvironment.socketPathKey]
+                ) ?? "none",
+                "cli_path_present": Self.normalizedLaunchContextValue(
+                    environment[ToasttyLaunchContextEnvironment.cliPathKey]
+                ) == nil ? "false" : "true",
+                "session_id_present": Self.normalizedLaunchContextValue(
+                    environment[ToasttyLaunchContextEnvironment.sessionIDKey]
+                ) == nil ? "false" : "true",
+                "agent_shim_directory": shimDirectory ?? "none",
+                "path_starts_with_shim_directory": Self.pathStartsWithDirectory(
+                    path,
+                    directoryPath: shimDirectory
+                ) ? "true" : "false",
+                "path_contains_shim_directory": Self.pathContainsDirectory(
+                    path,
+                    directoryPath: shimDirectory
+                ) ? "true" : "false",
+                "path_sample": Self.pathEntriesSample(path),
+            ]
+        )
+    }
+
+    private static func normalizedLaunchContextValue(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func normalizedPathEntries(_ path: String?) -> [String] {
+        guard let path else {
+            return []
+        }
+        return path
+            .split(separator: ":")
+            .map(String.init)
+            .filter { $0.isEmpty == false }
+    }
+
+    private static func pathEntriesSample(_ path: String?, limit: Int = 4) -> String {
+        let entries = normalizedPathEntries(path)
+        guard entries.isEmpty == false else {
+            return "none"
+        }
+        return entries.prefix(limit).joined(separator: " | ")
+    }
+
+    private static func pathStartsWithDirectory(_ path: String?, directoryPath: String?) -> Bool {
+        guard let directoryPath,
+              let firstEntry = normalizedPathEntries(path).first else {
+            return false
+        }
+        return firstEntry == directoryPath
+    }
+
+    private static func pathContainsDirectory(_ path: String?, directoryPath: String?) -> Bool {
+        guard let directoryPath else {
+            return false
+        }
+        return normalizedPathEntries(path).contains(directoryPath)
     }
 
     @discardableResult
@@ -634,6 +722,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
     func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
         let baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
+        logSurfaceLaunchEnvironmentIfNeeded(panelID: panelID, environment: baseEnvironmentVariables)
 
         guard launchedProfiledPanelIDs.contains(panelID) == false else {
             return TerminalSurfaceLaunchConfiguration(environmentVariables: baseEnvironmentVariables)

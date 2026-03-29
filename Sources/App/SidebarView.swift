@@ -7,9 +7,14 @@ struct SidebarView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
+    /// Test seam for asserting scroll requests without depending on AppKit's
+    /// NSScrollView behavior inside unit-test hosting views.
+    let scrollRequestObserver: ((UUID, Bool) -> Void)?
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
+    @State private var hoveredWorkspaceID: UUID?
+    @State private var flashingWorkspaceID: UUID?
     @State private var flashingSessionPanelID: UUID?
     @State private var flashingSessionOverlayOpacity = 0.0
     @State private var activeSidebarFlashRequestID: UUID?
@@ -26,8 +31,25 @@ struct SidebarView: View {
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
         return lineHeight
     }()
+    private static let sessionStatusesTopSpacing: CGFloat = 0
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
+
+    init(
+        windowID: UUID,
+        store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        sessionRuntimeStore: SessionRuntimeStore,
+        terminalRuntimeContext: TerminalWindowRuntimeContext,
+        scrollRequestObserver: ((UUID, Bool) -> Void)? = nil
+    ) {
+        self.windowID = windowID
+        self.store = store
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.sessionRuntimeStore = sessionRuntimeStore
+        self.terminalRuntimeContext = terminalRuntimeContext
+        self.scrollRequestObserver = scrollRequestObserver
+    }
 
     private var selectedWorkspaceID: UUID? {
         store.selectedWorkspaceID(in: windowID)
@@ -37,7 +59,7 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 4) {
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 0) {
                         if let window = store.window(id: windowID) {
                             ForEach(Array(window.workspaceIDs.enumerated()), id: \.element) { index, workspaceID in
                                 if let workspace = store.state.workspacesByID[workspaceID] {
@@ -121,10 +143,10 @@ struct SidebarView: View {
             beginWorkspaceRename(workspace)
         }
         .onAppear {
-            handlePendingSidebarSessionFlashRequest()
+            schedulePendingSidebarSessionFlashRequestHandling()
         }
         .onChange(of: store.pendingSidebarSessionFlashRequest) { _, _ in
-            handlePendingSidebarSessionFlashRequest()
+            schedulePendingSidebarSessionFlashRequestHandling()
         }
         .onDisappear {
             sidebarFlashClearWorkItem?.cancel()
@@ -185,28 +207,36 @@ struct SidebarView: View {
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
-        return workspaceRowChrome(isSelected: isSelected) {
-            VStack(alignment: .leading, spacing: 2) {
+        return workspaceRowChrome(
+            workspaceID: workspaceID,
+            isSelected: isSelected,
+            isFlashing: flashingWorkspaceID == workspaceID
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
                 Button {
                     handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
                 } label: {
-                    workspacePrimaryContent(
-                        workspace: workspace,
-                        shortcutLabel: shortcutLabel,
-                        selectionSubtitle: selectionSubtitle(for: workspace),
-                        isSelected: isSelected
-                    ) {
-                        Text(workspace.title)
-                            .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
-                            .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                    workspaceHeaderContent {
+                        workspacePrimaryContent(
+                            workspace: workspace,
+                            shortcutLabel: shortcutLabel,
+                            selectionSubtitle: nil,
+                            isSelected: isSelected
+                        ) {
+                            Text(workspace.title)
+                                .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
+                                .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
                 }
                 .buttonStyle(SidebarRowButtonStyle())
 
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 14)
                 }
             }
         }
@@ -220,52 +250,83 @@ struct SidebarView: View {
     ) -> some View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
-        return workspaceRowChrome(isSelected: isSelected) {
-            VStack(alignment: .leading, spacing: 2) {
-                workspacePrimaryContent(
-                    workspace: workspace,
-                    shortcutLabel: shortcutLabel,
-                    selectionSubtitle: selectionSubtitle(for: workspace),
-                    isSelected: isSelected
-                ) {
-                    WorkspaceRenameTextField(
-                        text: $renameDraftTitle,
-                        itemID: workspaceID,
-                        placeholder: "Workspace name",
-                        font: .systemFont(ofSize: 12, weight: .semibold),
-                        accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
-                        onSubmit: {
-                            commitWorkspaceRename(workspaceID: workspaceID)
-                        },
-                        onCancel: {
-                            cancelWorkspaceRename()
-                            scheduleWorkspaceSlotFocusRestore()
-                        }
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
+        return workspaceRowChrome(
+            workspaceID: workspaceID,
+            isSelected: isSelected,
+            isFlashing: flashingWorkspaceID == workspaceID
+        ) {
+            VStack(alignment: .leading, spacing: 0) {
+                workspaceHeaderContent {
+                    workspacePrimaryContent(
+                        workspace: workspace,
+                        shortcutLabel: shortcutLabel,
+                        selectionSubtitle: nil,
+                        isSelected: isSelected
+                    ) {
+                        WorkspaceRenameTextField(
+                            text: $renameDraftTitle,
+                            itemID: workspaceID,
+                            placeholder: "Workspace name",
+                            font: .systemFont(ofSize: 12, weight: .semibold),
+                            accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
+                            onSubmit: {
+                                commitWorkspaceRename(workspaceID: workspaceID)
+                            },
+                            onCancel: {
+                                cancelWorkspaceRename()
+                                scheduleWorkspaceSlotFocusRestore()
+                            }
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
 
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 14)
                 }
             }
         }
     }
 
     private func workspaceRowChrome<Content: View>(
+        workspaceID: UUID,
         isSelected: Bool,
+        isFlashing: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .padding(.vertical, 7)
-            .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+            .background(isSelected ? ToastyTheme.elevatedBackground
+                : hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground
+                : Color.clear)
+            .overlay {
+                Rectangle()
+                    .fill(ToastyTheme.accent.opacity(0.28 * (isFlashing ? flashingSessionOverlayOpacity : 0)))
+            }
             .overlay(alignment: .leading) {
                 Rectangle()
                     .fill(isSelected ? ToastyTheme.accent : Color.clear)
                     .frame(width: 2)
             }
+            .contentShape(Rectangle())
+            .onHover { isHovering in
+                if isHovering {
+                    hoveredWorkspaceID = workspaceID
+                } else if hoveredWorkspaceID == workspaceID {
+                    hoveredWorkspaceID = nil
+                }
+            }
+    }
+
+    private func workspaceHeaderContent<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
     }
 
@@ -324,6 +385,7 @@ struct SidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Self.sessionStatusesTopSpacing)
     }
 
     private func selectionSubtitle(for workspace: WorkspaceState) -> String? {
@@ -395,17 +457,16 @@ struct SidebarView: View {
         isFlashing: Bool
     ) -> some View {
         let indicatorState = Self.sessionIndicatorState(for: status.kind)
-        let unreadOutlineKind = Self.unreadSessionOutlineKind(
+        let chipKind = Self.sessionStatusChipKind(
             for: status,
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
-        // Preserve the status outline until the session is read; hover still
-        // gets feedback from the row background fill.
         let borderColor = sessionStatusBorderColor(
-            unreadOutlineKind: unreadOutlineKind,
+            showsUnreadSessionAccent: showsUnreadSessionAccent,
             isHovered: isHovered
         )
         let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
+        let detailText = normalizedSessionDetail(status.detail)
 
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -413,34 +474,33 @@ struct SidebarView: View {
                     SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
                 }
 
-                Text(workspaceSessionStatus.agent.displayName)
-                    .font(ToastyTheme.fontWorkspaceSessionAgent)
+                Self.styledSessionAgentText(
+                    workspaceSessionStatus.agent.displayName,
+                    statusKind: status.kind,
+                    showsUnreadSessionAccent: showsUnreadSessionAccent
+                )
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     .lineLimit(1)
+
+                if let chipKind {
+                    sessionStatusChip(kind: chipKind)
+                }
 
                 Spacer(minLength: 0)
             }
 
-            if status.kind != .idle {
-                // Fixed 2-line height prevents sidebar jitter as summaries
-                // stream in at varying lengths. The placeholder sets the
-                // intrinsic height; the real text overlays it.
-                Text(status.detail ?? " ")
-                    .font(ToastyTheme.fontWorkspaceSessionDetail)
-                    .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: Self.sessionDetailFixedHeight,
-                        alignment: .topLeading
-                    )
+            if status.kind != .idle || detailText != nil {
+                sessionDetailLabel(
+                    detailText ?? " ",
+                    statusKind: status.kind,
+                    showsUnreadSessionAccent: showsUnreadSessionAccent
+                )
             }
 
             if let cwd = Self.abbreviatedPathLabel(workspaceSessionStatus.cwd) {
                 Text(cwd)
                     .font(ToastyTheme.fontWorkspaceSessionPath)
+                    .fontWeight(Self.sessionBodyFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent))
                     .foregroundStyle(ToastyTheme.sidebarSessionPathText)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -453,6 +513,7 @@ struct SidebarView: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(
                     sessionStatusBackgroundColor(
+                        showsUnreadSessionAccent: showsUnreadSessionAccent,
                         isActivePanel: isActivePanel,
                         isHovered: isHovered
                     )
@@ -474,6 +535,13 @@ struct SidebarView: View {
     }
 
     @MainActor
+    private func schedulePendingSidebarSessionFlashRequestHandling() {
+        DispatchQueue.main.async {
+            handlePendingSidebarSessionFlashRequest()
+        }
+    }
+
+    @MainActor
     private func handlePendingSidebarSessionFlashRequest() {
         guard let request = store.pendingSidebarSessionFlashRequest,
               request.windowID == windowID,
@@ -481,21 +549,44 @@ struct SidebarView: View {
             return
         }
 
-        lastHandledSidebarFlashRequestID = request.requestID
-        flashSidebarSession(panelID: request.panelID, requestID: request.requestID)
-        _ = store.consumePendingSidebarSessionFlashRequest(
+        guard let consumedRequest = store.consumePendingSidebarSessionFlashRequest(
             windowID: windowID,
             requestID: request.requestID
-        )
+        ) else {
+            return
+        }
+
+        lastHandledSidebarFlashRequestID = consumedRequest.requestID
+        if let panelID = consumedRequest.panelID,
+           sessionRuntimeStore
+            .workspaceStatuses(for: consumedRequest.workspaceID)
+            .contains(where: { $0.panelID == panelID }) {
+            flashSidebarSelection(
+                workspaceID: nil,
+                panelID: panelID,
+                requestID: consumedRequest.requestID
+            )
+        } else {
+            flashSidebarSelection(
+                workspaceID: consumedRequest.workspaceID,
+                panelID: nil,
+                requestID: consumedRequest.requestID
+            )
+        }
     }
 
     @MainActor
-    private func flashSidebarSession(panelID: UUID, requestID: UUID) {
+    private func flashSidebarSelection(
+        workspaceID: UUID?,
+        panelID: UUID?,
+        requestID: UUID
+    ) {
         activeSidebarFlashRequestID = requestID
         sidebarFlashClearWorkItem?.cancel()
         sidebarFlashResetWorkItem?.cancel()
         sidebarFlashClearWorkItem = nil
         sidebarFlashResetWorkItem = nil
+        flashingWorkspaceID = workspaceID
         flashingSessionPanelID = panelID
         flashingSessionOverlayOpacity = 0
 
@@ -519,6 +610,7 @@ struct SidebarView: View {
         let resetWorkItem = DispatchWorkItem { [requestID] in
             guard activeSidebarFlashRequestID == requestID else { return }
             activeSidebarFlashRequestID = nil
+            flashingWorkspaceID = nil
             flashingSessionPanelID = nil
             flashingSessionOverlayOpacity = 0
             sidebarFlashResetWorkItem = nil
@@ -531,6 +623,7 @@ struct SidebarView: View {
     }
 
     private func sessionStatusBackgroundColor(
+        showsUnreadSessionAccent: Bool,
         isActivePanel: Bool,
         isHovered: Bool
     ) -> Color {
@@ -538,17 +631,68 @@ struct SidebarView: View {
             return isHovered ? ToastyTheme.sidebarSessionActiveHoverBackground
                 : ToastyTheme.sidebarSessionActiveBackground
         }
+        if showsUnreadSessionAccent {
+            return ToastyTheme.sidebarSessionUnreadBackground
+        }
         return isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear
     }
 
     private func sessionStatusBorderColor(
-        unreadOutlineKind: SessionStatusKind?,
+        showsUnreadSessionAccent: Bool,
         isHovered: Bool
     ) -> Color {
-        if let unreadOutlineKind {
-            return ToastyTheme.sessionStatusOutlineColor(for: unreadOutlineKind)
+        if showsUnreadSessionAccent {
+            return ToastyTheme.sidebarSessionUnreadBorder
         }
         return isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear
+    }
+
+    private func sessionStatusChip(kind: SessionStatusKind) -> some View {
+        Text(Self.sessionStatusChipLabel(for: kind))
+            .font(ToastyTheme.fontWorkspaceSessionChip)
+            .foregroundStyle(ToastyTheme.sessionStatusTextColor(for: kind))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                ToastyTheme.sessionStatusBackgroundColor(for: kind),
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+    }
+
+    @ViewBuilder
+    private func sessionDetailLabel(
+        _ text: String,
+        statusKind: SessionStatusKind,
+        showsUnreadSessionAccent: Bool
+    ) -> some View {
+        // Keep weight inside the Font itself instead of chaining
+        // `.fontWeight(...)` after `.italic()`. For these small sidebar labels,
+        // SwiftUI can otherwise collapse the italicized detail text back to the
+        // upright face.
+        let styled = Self.styledSessionDetailText(
+            text,
+            statusKind: statusKind,
+            showsUnreadSessionAccent: showsUnreadSessionAccent
+        )
+
+        // Fixed 2-line height prevents sidebar jitter as summaries
+        // stream in at varying lengths. The placeholder sets the
+        // intrinsic height; the real text overlays it.
+        styled
+            .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.leading)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: Self.sessionDetailFixedHeight,
+                alignment: .topLeading
+            )
+    }
+
+    private func normalizedSessionDetail(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {
@@ -569,12 +713,11 @@ struct SidebarView: View {
 
     private func focusSessionPanel(workspaceID: UUID, panelID: UUID) {
         cancelWorkspaceRename()
-
-        if store.selectedWorkspaceID(in: windowID) != workspaceID {
-            _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: workspaceID))
-        }
-
-        _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+        _ = store.focusExplicitlyNavigatedPanel(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID
+        )
         terminalRuntimeContext.scheduleWorkspaceFocusRestore(
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: false
@@ -632,6 +775,7 @@ struct SidebarView: View {
         animated: Bool
     ) {
         guard let selectedWorkspaceID else { return }
+        scrollRequestObserver?(selectedWorkspaceID, animated)
 
         Task { @MainActor in
             if animated {
@@ -691,19 +835,30 @@ struct SidebarView: View {
         return true
     }
 
-    static func unreadSessionOutlineKind(
+    static func sessionStatusChipKind(
         for status: SessionStatus,
         showsUnreadSessionAccent: Bool
     ) -> SessionStatusKind? {
-        guard showsUnreadSessionAccent else {
-            return nil
-        }
-
         switch status.kind {
-        case .needsApproval, .ready, .error:
+        case .needsApproval, .error:
             return status.kind
+        case .ready:
+            return showsUnreadSessionAccent ? .ready : nil
         case .idle, .working:
             return nil
+        }
+    }
+
+    static func sessionStatusChipLabel(for kind: SessionStatusKind) -> String {
+        switch kind {
+        case .needsApproval:
+            return "needs approval"
+        case .ready:
+            return "ready"
+        case .error:
+            return "error"
+        case .idle, .working:
+            return ""
         }
     }
 
@@ -718,6 +873,55 @@ struct SidebarView: View {
         case .needsApproval, .ready, .error, .idle:
             return .hidden
         }
+    }
+
+    static func sessionAgentFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
+        showsUnreadSessionAccent ? .heavy : .medium
+    }
+
+    static func sessionBodyFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
+        showsUnreadSessionAccent ? .bold : .regular
+    }
+
+    static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
+        kind == .working
+    }
+
+    static func styledSessionAgentText(
+        _ text: String,
+        statusKind: SessionStatusKind,
+        showsUnreadSessionAccent: Bool
+    ) -> Text {
+        styledSessionText(
+            text,
+            font: ToastyTheme.workspaceSessionAgentFont(
+                weight: sessionAgentFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent)
+            ),
+            usesItalic: sessionTextUsesItalic(for: statusKind)
+        )
+    }
+
+    static func styledSessionDetailText(
+        _ text: String,
+        statusKind: SessionStatusKind,
+        showsUnreadSessionAccent: Bool
+    ) -> Text {
+        styledSessionText(
+            text,
+            font: ToastyTheme.workspaceSessionDetailFont(
+                weight: sessionBodyFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent)
+            ),
+            usesItalic: sessionTextUsesItalic(for: statusKind)
+        )
+    }
+
+    static func styledSessionText(
+        _ text: String,
+        font: Font,
+        usesItalic: Bool
+    ) -> Text {
+        let base = Text(text).font(font)
+        return usesItalic ? base.italic() : base
     }
 
     static func abbreviatedPathLabel(_ path: String?) -> String? {

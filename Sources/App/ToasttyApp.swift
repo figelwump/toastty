@@ -1050,6 +1050,29 @@ struct ToasttyApp: App {
         shimDirectoryPath: String?,
         basePath: String?
     ) {
+        let launchPath = shimDirectoryPath.map {
+            AgentCommandShimInstaller.pathValue(prepending: $0, to: basePath)
+        } ?? basePath
+        ToasttyLog.info(
+            "Configured terminal launch context environment",
+            category: .bootstrap,
+            metadata: [
+                "socket_path": socketPath,
+                "cli_path": cliExecutablePath ?? "none",
+                "cli_path_present": cliExecutablePath == nil ? "false" : "true",
+                "agent_shim_directory": shimDirectoryPath ?? "none",
+                "agent_shim_directory_present": shimDirectoryPath == nil ? "false" : "true",
+                "path_starts_with_shim_directory": pathStartsWithDirectory(
+                    launchPath,
+                    directoryPath: shimDirectoryPath
+                ) ? "true" : "false",
+                "path_contains_shim_directory": pathContainsDirectory(
+                    launchPath,
+                    directoryPath: shimDirectoryPath
+                ) ? "true" : "false",
+                "path_sample": pathEntriesSample(launchPath),
+            ]
+        )
         terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
             var environment: [String: String] = [
                 ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
@@ -1067,6 +1090,39 @@ struct ToasttyApp: App {
             }
             return environment
         }
+    }
+
+    private static func pathEntriesSample(_ path: String?, limit: Int = 4) -> String {
+        let entries = normalizedPathEntries(path)
+        guard entries.isEmpty == false else {
+            return "none"
+        }
+        return entries.prefix(limit).joined(separator: " | ")
+    }
+
+    private static func pathStartsWithDirectory(_ path: String?, directoryPath: String?) -> Bool {
+        guard let directoryPath,
+              let firstEntry = normalizedPathEntries(path).first else {
+            return false
+        }
+        return firstEntry == directoryPath
+    }
+
+    private static func pathContainsDirectory(_ path: String?, directoryPath: String?) -> Bool {
+        guard let directoryPath else {
+            return false
+        }
+        return normalizedPathEntries(path).contains(directoryPath)
+    }
+
+    private static func normalizedPathEntries(_ path: String?) -> [String] {
+        guard let path else {
+            return []
+        }
+        return path
+            .split(separator: ":")
+            .map(String.init)
+            .filter { $0.isEmpty == false }
     }
 
     var body: some Scene {

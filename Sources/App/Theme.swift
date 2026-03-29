@@ -22,6 +22,8 @@ enum ToastyTheme {
     static let sidebarSessionActiveHoverBackground = Color(hex: 0x484848)
     static let sidebarSessionHoverBackground = Color(hex: 0x222222)
     static let sidebarSessionHoverBorder = Color(hex: 0x555555)
+    static let sidebarSessionUnreadBackground = Color(hex: 0x5BA08A, alpha: 0.35)
+    static let sidebarSessionUnreadBorder = Color(hex: 0x5BA08A, alpha: 0.6)
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
@@ -31,12 +33,12 @@ enum ToastyTheme {
     static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)
     static let sessionWorkingText = Color(hex: 0x8B5E34)
     static let sessionWorkingBackground = Color(hex: 0x8B5E34, alpha: 0.12)
-    static let sessionNeedsApprovalText = Color(hex: 0x5BA08A)
-    static let sessionNeedsApprovalBackground = Color(hex: 0x5BA08A, alpha: 0.12)
+    static let sessionNeedsApprovalText = Color(hex: 0xE8A635)
+    static let sessionNeedsApprovalBackground = Color(hex: 0xE8A635, alpha: 0.16)
     static let sessionReadyText = Color(hex: 0x5BA08A)
-    static let sessionReadyBackground = Color(hex: 0x5BA08A, alpha: 0.12)
-    static let sessionErrorText = Color(hex: 0x5BA08A)
-    static let sessionErrorBackground = Color(hex: 0x5BA08A, alpha: 0.12)
+    static let sessionReadyBackground = Color(hex: 0x5BA08A, alpha: 0.14)
+    static let sessionErrorText = Color(hex: 0xE55C5C)
+    static let sessionErrorBackground = Color(hex: 0xE55C5C, alpha: 0.14)
     static let terminalProfileBadgeText = Color(hex: 0xF5D6A0)
     static let terminalProfileBadgeBackground = Color(hex: 0x5A3B14, alpha: 0.65)
     static let terminalProfileBadgeMissingText = Color(hex: 0xF4B183)
@@ -56,8 +58,8 @@ enum ToastyTheme {
     static let workspaceTabHoverText = Color(hex: 0xB8B8B8)
     static let workspaceTabUnreadDot = Color(hex: 0x5BA08A)
     static let workspaceTabUnreadDotDiameter: CGFloat = 7
-    static let workspaceTabBadgeSelectedText = Color(hex: 0x888888)
-    static let workspaceTabBadgeUnselectedText = Color(hex: 0x646464)
+    static let workspaceTabBadgeSelectedText = Color(hex: 0xA0A0A0)
+    static let workspaceTabBadgeUnselectedText = Color(hex: 0x7A7A7A)
     static let workspaceTabCloseBackground = Color(hex: 0x2A2A2A)
     static let workspaceTabCloseButton = Color(hex: 0x888888)
     static let workspaceTabCloseButtonHover = Color(hex: 0xCCCCCC)
@@ -100,7 +102,7 @@ enum ToastyTheme {
     static let fontBody = Font.system(size: 12, weight: .medium, design: .rounded)
     static let fontSubtext = Font.system(size: 11, weight: .medium)
     static let fontWorkspaceTab = Font.system(size: 11, weight: .medium, design: .monospaced)
-    static let fontWorkspaceTabBadge = Font.system(size: 9, weight: .regular, design: .monospaced)
+    static let fontWorkspaceTabBadge = Font.system(size: 10, weight: .medium, design: .monospaced)
     static let fontMonoHeader = Font.system(size: 12, weight: .semibold, design: .monospaced)
     static let fontMonoTerminalSlotTitle = Font.system(size: 12, weight: .regular, design: .monospaced)
 
@@ -115,6 +117,14 @@ enum ToastyTheme {
     static let fontShortcutBadge = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontTerminalProfileBadge = Font.system(size: 10, weight: .semibold, design: .monospaced)
     static let fontNewWorkspace = Font.system(size: 11, weight: .regular, design: .default)
+
+    static func workspaceSessionAgentFont(weight: Font.Weight) -> Font {
+        Font.system(size: 10, weight: weight, design: .monospaced)
+    }
+
+    static func workspaceSessionDetailFont(weight: Font.Weight) -> Font {
+        Font.system(size: 10, weight: weight, design: .default)
+    }
 
     static func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {
         switch kind {
@@ -165,11 +175,11 @@ enum ToastyTheme {
         case .working:
             colors = [Color(hex: 0x7D4927), Color(hex: 0xF5A623)]
         case .needsApproval:
-            colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
+            colors = [Color(hex: 0x8A5D20), Color(hex: 0xE8A635)]
         case .ready:
             colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
         case .error:
-            colors = [Color(hex: 0x3F7062), Color(hex: 0x5BA08A)]
+            colors = [Color(hex: 0x8A3434), Color(hex: 0xE55C5C)]
         }
         return LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
     }
@@ -181,11 +191,11 @@ enum ToastyTheme {
         case .working:
             return Color(hex: 0xF5A623, alpha: 0.28)
         case .needsApproval:
-            return Color(hex: 0x5BA08A, alpha: 0.24)
+            return Color(hex: 0xE8A635, alpha: 0.24)
         case .ready:
             return Color(hex: 0x5BA08A, alpha: 0.24)
         case .error:
-            return Color(hex: 0x5BA08A, alpha: 0.24)
+            return Color(hex: 0xE55C5C, alpha: 0.24)
         }
     }
 
@@ -196,11 +206,11 @@ enum ToastyTheme {
         case .working:
             return Color(hex: 0xFFF4D6, alpha: 0.78)
         case .needsApproval:
-            return Color(hex: 0xD7E9E2, alpha: 0.58)
+            return Color(hex: 0xFFF1D6, alpha: 0.62)
         case .ready:
             return Color(hex: 0xD7E9E2, alpha: 0.58)
         case .error:
-            return Color(hex: 0xD7E9E2, alpha: 0.58)
+            return Color(hex: 0xFFD9D9, alpha: 0.58)
         }
     }
 

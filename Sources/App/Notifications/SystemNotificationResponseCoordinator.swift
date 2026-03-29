@@ -22,18 +22,28 @@ final class SystemNotificationResponseCoordinator: NSObject {
         center.delegate = self
     }
 
-    private func handleResponse(hint: DesktopNotificationSelectionHint) {
+    func handleResponse(hint: DesktopNotificationSelectionHint) {
         guard let store else { return }
         var resolvedWorkspaceID: UUID?
         var resolvedPanelID: UUID?
 
         if let route = DesktopNotificationRouteResolver.resolve(hint: hint, state: store.state) {
-            _ = store.send(.selectWindow(windowID: route.windowID))
-            _ = store.send(.selectWorkspace(windowID: route.windowID, workspaceID: route.workspaceID))
             resolvedWorkspaceID = route.workspaceID
             if let panelID = route.panelID {
-                _ = store.send(.focusPanel(workspaceID: route.workspaceID, panelID: panelID))
+                guard store.focusExplicitlyNavigatedPanel(
+                    windowID: route.windowID,
+                    workspaceID: route.workspaceID,
+                    panelID: panelID
+                ) else {
+                    return
+                }
                 resolvedPanelID = panelID
+            } else {
+                // Workspace-only notification routes intentionally skip the
+                // panel flash because there is no concrete panel destination.
+                guard store.send(.selectWorkspace(windowID: route.windowID, workspaceID: route.workspaceID)) else {
+                    return
+                }
             }
             ToasttyLog.info(
                 "Routed notification response to workspace",

@@ -147,7 +147,8 @@ struct ToasttyCommandMenus: Commands {
             state: store.state,
             commandSelection: commandSelection,
             activePanelIDs: sessionRuntimeStore.activePanelIDs(
-                matching: AppStore.nextUnreadOrActiveFallbackStatusKinds
+                matching: AppStore.nextUnreadOrActionRequiredFallbackStatusKinds
+                    .union(AppStore.nextUnreadOrWorkingFallbackStatusKinds)
             )
         )
     }
