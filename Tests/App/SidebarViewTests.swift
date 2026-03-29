@@ -403,6 +403,66 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceHeaderPaddingClickSelectsWorkspace() throws {
+        let workspaces = (1...2).map { WorkspaceState.bootstrap(title: "Workspace \($0)") }
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 220),
+                    workspaceIDs: workspaces.map(\.id),
+                    selectedWorkspaceID: workspaces[0].id
+                )
+            ],
+            workspacesByID: Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0) }),
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let sessionRuntimeStore = SessionRuntimeStore()
+        let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        let sidebarView = SidebarView(
+            windowID: windowID,
+            store: store,
+            terminalRuntimeRegistry: registry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            terminalRuntimeContext: runtimeContext
+        )
+        let hostingView = NSHostingView(
+            rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: ToastyTheme.sidebarWidth, height: 220),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        defer { window.orderOut(nil) }
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+
+        let workspaceButtons = findSubviews(namedClass: "KeyViewProxy", in: hostingView)
+            .filter { $0.frame.height >= 40 }
+            .sorted { $0.frame.minY < $1.frame.minY }
+        let secondWorkspaceButton = try XCTUnwrap(workspaceButtons.dropFirst().first)
+        let clickPointInHost = NSPoint(
+            x: secondWorkspaceButton.frame.midX,
+            y: secondWorkspaceButton.frame.maxY - 6
+        )
+        let clickPointInWindow = hostingView.convert(clickPointInHost, to: nil)
+
+        XCTAssertGreaterThan(secondWorkspaceButton.frame.height, 40)
+        XCTAssertTrue(hostingView.bounds.contains(clickPointInHost))
+
+        try click(window: window, at: clickPointInWindow)
+        pumpMainRunLoop(duration: 0.2)
+
+        XCTAssertEqual(store.selectedWorkspaceID(in: windowID), workspaces[1].id)
+    }
+
     func testPendingSidebarFlashRequestPulsesAndClearsSelectedSessionRow() throws {
         let harness = try makeSidebarHarness(
             sessionID: "sess-flash",
@@ -741,6 +801,42 @@ final class SidebarViewTests: XCTestCase {
         return differenceCount
     }
 
+    private func click(
+        window: NSWindow,
+        at location: NSPoint,
+        clickCount: Int = 1
+    ) throws {
+        guard let mouseDown = NSEvent.mouseEvent(
+            with: .leftMouseDown,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            clickCount: clickCount,
+            pressure: 1
+        ) else {
+            throw NSError(domain: "SidebarViewTests", code: 1, userInfo: nil)
+        }
+        guard let mouseUp = NSEvent.mouseEvent(
+            with: .leftMouseUp,
+            location: location,
+            modifierFlags: [],
+            timestamp: 0.05,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 1,
+            clickCount: clickCount,
+            pressure: 0
+        ) else {
+            throw NSError(domain: "SidebarViewTests", code: 2, userInfo: nil)
+        }
+
+        window.sendEvent(mouseDown)
+        window.sendEvent(mouseUp)
+    }
+
     private func renderedTextValues(in rootView: NSView) -> [String] {
         let subviewValues = recursiveSubviewTextValues(in: rootView)
         let accessibilityValues = recursiveAccessibilityTextValues(in: rootView)
@@ -807,5 +903,21 @@ final class SidebarViewTests: XCTestCase {
         }
 
         return nil
+    }
+
+    private func findSubviews(
+        namedClass className: String,
+        in rootView: NSView
+    ) -> [NSView] {
+        var matches: [NSView] = []
+        if String(describing: type(of: rootView)) == className {
+            matches.append(rootView)
+        }
+
+        for subview in rootView.subviews {
+            matches.append(contentsOf: findSubviews(namedClass: className, in: subview))
+        }
+
+        return matches
     }
 }

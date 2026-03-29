@@ -191,27 +191,31 @@ struct SidebarView: View {
             isSelected: isSelected,
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 0) {
                 Button {
                     handleWorkspaceButtonActivation(workspaceID: workspaceID, workspace: workspace)
                 } label: {
-                    workspacePrimaryContent(
-                        workspace: workspace,
-                        shortcutLabel: shortcutLabel,
-                        selectionSubtitle: nil,
-                        isSelected: isSelected
-                    ) {
-                        Text(workspace.title)
-                            .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
-                            .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                    workspaceHeaderContent {
+                        workspacePrimaryContent(
+                            workspace: workspace,
+                            shortcutLabel: shortcutLabel,
+                            selectionSubtitle: nil,
+                            isSelected: isSelected
+                        ) {
+                            Text(workspace.title)
+                                .font(isSelected ? ToastyTheme.fontWorkspaceName : ToastyTheme.fontWorkspaceNameInactive)
+                                .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                        }
                     }
                 }
                 .buttonStyle(SidebarRowButtonStyle())
 
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 14)
                 }
             }
         }
@@ -229,32 +233,36 @@ struct SidebarView: View {
             isSelected: isSelected,
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
-            VStack(alignment: .leading, spacing: 2) {
-                workspacePrimaryContent(
-                    workspace: workspace,
-                    shortcutLabel: shortcutLabel,
-                    selectionSubtitle: nil,
-                    isSelected: isSelected
-                ) {
-                    WorkspaceRenameTextField(
-                        text: $renameDraftTitle,
-                        itemID: workspaceID,
-                        placeholder: "Workspace name",
-                        font: .systemFont(ofSize: 12, weight: .semibold),
-                        accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
-                        onSubmit: {
-                            commitWorkspaceRename(workspaceID: workspaceID)
-                        },
-                        onCancel: {
-                            cancelWorkspaceRename()
-                            scheduleWorkspaceSlotFocusRestore()
-                        }
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 0) {
+                workspaceHeaderContent {
+                    workspacePrimaryContent(
+                        workspace: workspace,
+                        shortcutLabel: shortcutLabel,
+                        selectionSubtitle: nil,
+                        isSelected: isSelected
+                    ) {
+                        WorkspaceRenameTextField(
+                            text: $renameDraftTitle,
+                            itemID: workspaceID,
+                            placeholder: "Workspace name",
+                            font: .systemFont(ofSize: 12, weight: .semibold),
+                            accessibilityID: renameTextFieldAccessibilityID(for: workspaceID),
+                            onSubmit: {
+                                commitWorkspaceRename(workspaceID: workspaceID)
+                            },
+                            onCancel: {
+                                cancelWorkspaceRename()
+                                scheduleWorkspaceSlotFocusRestore()
+                            }
+                        )
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
 
                 if !sessionStatuses.isEmpty {
                     sessionStatusesContent(sessionStatuses, workspace: workspace)
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 14)
                 }
             }
         }
@@ -266,8 +274,6 @@ struct SidebarView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .padding(.vertical, 14)
-            .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
             .overlay {
@@ -279,6 +285,16 @@ struct SidebarView: View {
                     .fill(isSelected ? ToastyTheme.accent : Color.clear)
                     .frame(width: 2)
             }
+            .contentShape(Rectangle())
+    }
+
+    private func workspaceHeaderContent<Content: View>(
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .padding(.vertical, 14)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
     }
 
