@@ -10,6 +10,7 @@ struct SidebarView: View {
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
+    @State private var hoveredWorkspaceID: UUID?
     @State private var flashingWorkspaceID: UUID?
     @State private var flashingSessionPanelID: UUID?
     @State private var flashingSessionOverlayOpacity = 0.0
@@ -188,6 +189,7 @@ struct SidebarView: View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
         return workspaceRowChrome(
+            workspaceID: workspaceID,
             isSelected: isSelected,
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
@@ -230,6 +232,7 @@ struct SidebarView: View {
         let sessionStatuses = sessionRuntimeStore.workspaceStatuses(for: workspace.id)
 
         return workspaceRowChrome(
+            workspaceID: workspaceID,
             isSelected: isSelected,
             isFlashing: flashingWorkspaceID == workspaceID
         ) {
@@ -269,13 +272,16 @@ struct SidebarView: View {
     }
 
     private func workspaceRowChrome<Content: View>(
+        workspaceID: UUID,
         isSelected: Bool,
         isFlashing: Bool,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? ToastyTheme.elevatedBackground : Color.clear)
+            .background(isSelected ? ToastyTheme.elevatedBackground
+                : hoveredWorkspaceID == workspaceID ? ToastyTheme.elevatedBackground.opacity(0.5)
+                : Color.clear)
             .overlay {
                 Rectangle()
                     .fill(ToastyTheme.accent.opacity(0.28 * (isFlashing ? flashingSessionOverlayOpacity : 0)))
@@ -286,13 +292,20 @@ struct SidebarView: View {
                     .frame(width: 2)
             }
             .contentShape(Rectangle())
+            .onHover { isHovering in
+                if isHovering {
+                    hoveredWorkspaceID = workspaceID
+                } else if hoveredWorkspaceID == workspaceID {
+                    hoveredWorkspaceID = nil
+                }
+            }
     }
 
     private func workspaceHeaderContent<Content: View>(
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .padding(.vertical, 14)
+            .padding(.vertical, 12)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
