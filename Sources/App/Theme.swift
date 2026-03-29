@@ -80,7 +80,7 @@ enum ToastyTheme {
     // Keep a small inset above the folder-style tabs so the accent line does
     // not sit flush against the window edge when the tab strip lives in the
     // header.
-    static let topBarHeight: CGFloat = workspaceTabBarHeight + 6
+    static let topBarHeight: CGFloat = workspaceTabBarHeight + 9
     static let workspaceTabWidth: CGFloat = 190
     static let workspaceTabMinimumWidth: CGFloat = 48
     static let workspaceTabHeight: CGFloat = workspaceTabBarHeight
