@@ -413,7 +413,10 @@ struct SidebarView: View {
             for: status,
             showsUnreadSessionAccent: showsUnreadSessionAccent
         )
-        let borderColor = sessionStatusBorderColor(isHovered: isHovered)
+        let borderColor = sessionStatusBorderColor(
+            showsUnreadSessionAccent: showsUnreadSessionAccent,
+            isHovered: isHovered
+        )
         let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
         let detailText = normalizedSessionDetail(status.detail)
 
@@ -584,7 +587,13 @@ struct SidebarView: View {
         return isHovered ? ToastyTheme.sidebarSessionHoverBackground : Color.clear
     }
 
-    private func sessionStatusBorderColor(isHovered: Bool) -> Color {
+    private func sessionStatusBorderColor(
+        showsUnreadSessionAccent: Bool,
+        isHovered: Bool
+    ) -> Color {
+        if showsUnreadSessionAccent {
+            return ToastyTheme.sidebarSessionUnreadBorder
+        }
         return isHovered ? ToastyTheme.sidebarSessionHoverBorder : Color.clear
     }
 
