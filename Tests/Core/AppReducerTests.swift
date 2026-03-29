@@ -1011,22 +1011,42 @@ struct AppReducerTests {
     }
 
     @Test
-    func setWorkspaceTabCustomTitleRejectsSingleTabWorkspace() throws {
+    func setWorkspaceTabCustomTitleAllowsSingleTabWorkspace() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.first)
-        let originalTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
 
         #expect(
             reducer.send(
                 .setWorkspaceTabCustomTitle(workspaceID: workspaceID, tabID: tabID, title: "Deploy"),
                 state: &state
-            ) == false
+            )
         )
 
         let updatedTab = try #require(state.workspacesByID[workspaceID]?.tab(id: tabID))
-        #expect(updatedTab == originalTab)
+        #expect(updatedTab.customTitle == "Deploy")
+        #expect(updatedTab.displayTitle == "Deploy")
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeWorkspaceTabOnLastTabClosesWorkspaceAndKeepsEmptyWindow() throws {
+        var state = AppState.bootstrap(defaultTerminalProfileID: "zmx")
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let tabID = try #require(state.workspacesByID[workspaceID]?.tabIDs.first)
+
+        #expect(reducer.send(.closeWorkspaceTab(workspaceID: workspaceID, tabID: tabID), state: &state))
+
+        #expect(state.workspacesByID[workspaceID] == nil)
+        let window = try #require(state.window(id: windowID))
+        #expect(window.workspaceIDs.isEmpty)
+        #expect(window.selectedWorkspaceID == nil)
+        #expect(state.windows.count == 1)
+        #expect(state.selectedWindowID == windowID)
+        #expect(state.defaultTerminalProfileID == "zmx")
         try StateValidator.validate(state)
     }
 

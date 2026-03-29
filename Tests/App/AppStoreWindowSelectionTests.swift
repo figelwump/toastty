@@ -494,12 +494,17 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
     }
 
-    func testRenameSelectedWorkspaceTabFromCommandRejectsSingleTabWorkspace() throws {
+    func testRenameSelectedWorkspaceTabFromCommandSupportsSingleTabWorkspace() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let selectedTabID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
 
-        XCTAssertFalse(store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: windowID))
-        XCTAssertNil(store.pendingRenameWorkspaceTabRequest)
+        XCTAssertTrue(store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: windowID))
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceTabRequest,
+            PendingWorkspaceTabRenameRequest(windowID: windowID, workspaceID: workspaceID, tabID: selectedTabID)
+        )
     }
 
     func testConsumePendingRenameWorkspaceTabRequestOnlyReturnsMatchingWindow() {

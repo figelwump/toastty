@@ -112,11 +112,11 @@ struct WorkspaceView: View {
     }
 
     nonisolated static func workspaceTabManagementAffordancesEnabled(tabCount: Int) -> Bool {
-        tabCount > 1
+        tabCount > 0
     }
 
     nonisolated static func workspaceTabInstallsContextMenu(tabCount: Int) -> Bool {
-        workspaceTabManagementAffordancesEnabled(tabCount: tabCount)
+        tabCount > 0
     }
 
     nonisolated static func workspaceTabMinimumTotalWidth(
@@ -1070,7 +1070,6 @@ struct WorkspaceView: View {
     private func pruneTransientTabRenameState() {
         guard let renamingTabID else { return }
         guard let workspace = selectedWorkspace,
-              workspace.tabIDs.count > 1,
               workspace.tabsByID[renamingTabID] != nil else {
             cancelTabRename()
             return
@@ -1123,7 +1122,6 @@ struct WorkspaceView: View {
         guard let request = store.consumePendingWorkspaceTabRenameRequest(windowID: windowID),
               let workspace = selectedWorkspace,
               workspace.id == request.workspaceID,
-              workspace.orderedTabs.count > 1,
               let tab = workspace.tab(id: request.tabID) else {
             return
         }

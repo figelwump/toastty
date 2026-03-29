@@ -593,9 +593,20 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(closeWorkspaceItem.action, #selector(WorkspaceMenuBridge.closeWorkspace(_:)))
         XCTAssertTrue(bridge.validateMenuItem(newWorkspaceItem))
         XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
-        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
+        XCTAssertTrue(bridge.validateMenuItem(renameTabItem))
         XCTAssertTrue(bridge.validateMenuItem(closeWorkspaceItem))
 
+        bridge.renameSelectedTab(nil)
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceTabRequest,
+            PendingWorkspaceTabRenameRequest(
+                windowID: secondWindowID,
+                workspaceID: secondWorkspace.id,
+                tabID: try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id]?.resolvedSelectedTabID)
+            )
+        )
+
+        store.pendingRenameWorkspaceTabRequest = nil
         bridge.renameWorkspace(nil)
         XCTAssertEqual(
             store.pendingRenameWorkspaceRequest,
@@ -654,7 +665,15 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertTrue(renameWorkspaceItem.target === bridge)
         XCTAssertEqual(renameWorkspaceItem.action, #selector(WorkspaceMenuBridge.renameWorkspace(_:)))
         XCTAssertTrue(bridge.validateMenuItem(renameWorkspaceItem))
-        XCTAssertFalse(bridge.validateMenuItem(renameTabItem))
+        XCTAssertTrue(bridge.validateMenuItem(renameTabItem))
+
+        bridge.renameSelectedTab(nil)
+        XCTAssertEqual(
+            store.pendingRenameWorkspaceTabRequest,
+            PendingWorkspaceTabRenameRequest(windowID: windowID, workspaceID: workspaceID, tabID: try XCTUnwrap(store.state.workspacesByID[workspaceID]?.resolvedSelectedTabID))
+        )
+
+        store.pendingRenameWorkspaceTabRequest = nil
 
         bridge.renameWorkspace(nil)
 

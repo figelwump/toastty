@@ -332,8 +332,7 @@ final class AppStore: ObservableObject {
 
     func canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
         guard let workspace = commandSelection(preferredWindowID: preferredWindowID)?.workspace else { return false }
-        guard workspace.orderedTabs.count > 1,
-              let selectedTabID = workspace.resolvedSelectedTabID else {
+        guard let selectedTabID = workspace.resolvedSelectedTabID else {
             return false
         }
         return workspace.tab(id: selectedTabID) != nil
@@ -343,8 +342,7 @@ final class AppStore: ObservableObject {
     func renameSelectedWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID) else { return false }
         let workspace = selection.workspace
-        guard workspace.orderedTabs.count > 1,
-              let selectedTabID = workspace.resolvedSelectedTabID,
+        guard let selectedTabID = workspace.resolvedSelectedTabID,
               workspace.tab(id: selectedTabID) != nil else {
             return false
         }

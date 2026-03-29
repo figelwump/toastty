@@ -89,13 +89,15 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceTabManagementAffordancesStayDisabledForSingleTabWorkspaces() {
-        XCTAssertFalse(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 1))
+    func testWorkspaceTabManagementAffordancesStayEnabledForVisibleTabs() {
+        XCTAssertFalse(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 0))
+        XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 1))
         XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 2))
     }
 
-    func testSingleTabWorkspaceDoesNotInstallTabContextMenu() {
-        XCTAssertFalse(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 1))
+    func testSingleTabWorkspaceStillInstallsTabContextMenu() {
+        XCTAssertFalse(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 0))
+        XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 1))
         XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 2))
     }
 
