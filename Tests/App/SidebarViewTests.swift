@@ -156,6 +156,23 @@ final class SidebarViewTests: XCTestCase {
             textValues.contains("ready"),
             "Sidebar text values should not include a ready chip label: \(textValues)"
         )
+        XCTAssertTrue(
+            textValues.contains(where: { $0.contains("Completed response") }),
+            "Sidebar text values should preserve the last ready detail after the chip disappears: \(textValues)"
+        )
+    }
+
+    func testIdleSessionWithDetailStillRendersDescription() throws {
+        let hostingView = try makeSidebarHostingView(
+            sessionID: "sess-idle-detail",
+            sessionStatus: SessionStatus(kind: .idle, summary: "Waiting", detail: "Completed response")
+        )
+
+        let textValues = renderedTextValues(in: hostingView)
+        XCTAssertTrue(
+            textValues.contains(where: { $0.contains("Completed response") }),
+            "Sidebar text values should include idle detail text when present: \(textValues)"
+        )
     }
 
     func testUnreadReadySessionRendersStatusChipLabel() throws {

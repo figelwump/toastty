@@ -413,6 +413,7 @@ struct SidebarView: View {
         )
         let borderColor = sessionStatusBorderColor(isHovered: isHovered)
         let flashOpacity = isFlashing ? flashingSessionOverlayOpacity : 0
+        let detailText = normalizedSessionDetail(status.detail)
 
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
@@ -432,11 +433,11 @@ struct SidebarView: View {
                 Spacer(minLength: 0)
             }
 
-            if status.kind != .idle {
+            if status.kind != .idle || detailText != nil {
                 // Fixed 2-line height prevents sidebar jitter as summaries
                 // stream in at varying lengths. The placeholder sets the
                 // intrinsic height; the real text overlays it.
-                Text(status.detail ?? " ")
+                Text(detailText ?? " ")
                     .font(ToastyTheme.fontWorkspaceSessionDetail)
                     .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
                     .lineLimit(1)
@@ -602,6 +603,11 @@ struct SidebarView: View {
                 ToastyTheme.sessionStatusBackgroundColor(for: kind),
                 in: RoundedRectangle(cornerRadius: 4)
             )
+    }
+
+    private func normalizedSessionDetail(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     private func handleWorkspaceButtonActivation(workspaceID: UUID, workspace: WorkspaceState) {

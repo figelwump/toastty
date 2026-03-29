@@ -407,7 +407,7 @@ final class SessionRuntimeStore: ObservableObject {
 
         updateStatus(
             sessionID: record.sessionID,
-            status: Self.readyCollapsedIdleStatus,
+            status: collapsedReadyStatus(from: record.status ?? Self.readyCollapsedIdleStatus),
             at: now
         )
     }
@@ -506,7 +506,7 @@ final class SessionRuntimeStore: ObservableObject {
             return requestedStatus
         }
 
-        return Self.readyCollapsedIdleStatus
+        return collapsedReadyStatus(from: requestedStatus)
     }
 
     private func isActionableStatusKind(_ kind: SessionStatusKind) -> Bool {
@@ -521,7 +521,21 @@ final class SessionRuntimeStore: ObservableObject {
         return workspace.tab(id: tabID)?.unreadPanelIDs.contains(panelID) == true
     }
 
+    private func collapsedReadyStatus(from status: SessionStatus) -> SessionStatus {
+        SessionStatus(
+            kind: .idle,
+            summary: Self.readyCollapsedIdleStatus.summary,
+            detail: normalizedNonEmpty(status.detail)
+        )
+    }
+
     private static let readyCollapsedIdleStatus = SessionStatus(
+        kind: .idle,
+        summary: "Waiting",
+        detail: nil
+    )
+
+    private static let interruptedIdleStatus = SessionStatus(
         kind: .idle,
         summary: "Waiting",
         detail: "Ready for prompt"
@@ -630,7 +644,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         updateStatus(
             sessionID: record.sessionID,
-            status: Self.readyCollapsedIdleStatus,
+            status: Self.interruptedIdleStatus,
             at: now
         )
         return true

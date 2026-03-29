@@ -297,6 +297,7 @@ struct SessionRuntimeStoreTests {
         )
 
         #expect(sessionStore.panelStatus(for: focusedPanelID)?.status.kind == .idle)
+        #expect(sessionStore.panelStatus(for: focusedPanelID)?.status.detail == "Finished")
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
     }
@@ -331,6 +332,7 @@ struct SessionRuntimeStoreTests {
 
         #expect(appStore.send(.focusPanel(workspaceID: selection.workspaceID, panelID: backgroundPanelID)))
         #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.kind == .idle)
+        #expect(sessionStore.panelStatus(for: backgroundPanelID)?.status.detail == "Finished")
         let workspaceAfter = try #require(appStore.state.workspacesByID[selection.workspaceID])
         #expect(workspaceAfter.unreadPanelIDs.isEmpty)
     }
