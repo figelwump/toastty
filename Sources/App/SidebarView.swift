@@ -606,12 +606,18 @@ struct SidebarView: View {
         statusKind: SessionStatusKind,
         showsUnreadSessionAccent: Bool
     ) -> some View {
-        let detail = Text(text)
-            // Fixed 2-line height prevents sidebar jitter as summaries
-            // stream in at varying lengths. The placeholder sets the
-            // intrinsic height; the real text overlays it.
+        // Apply Text-level modifiers (font, weight, italic) directly on
+        // Text before crossing into View modifiers, so SwiftUI correctly
+        // resolves the combined typeface.
+        let base = Text(text)
             .font(ToastyTheme.fontWorkspaceSessionDetail)
             .fontWeight(Self.sessionBodyFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent))
+        let styled = Self.sessionDetailUsesItalic(for: statusKind) ? base.italic() : base
+
+        // Fixed 2-line height prevents sidebar jitter as summaries
+        // stream in at varying lengths. The placeholder sets the
+        // intrinsic height; the real text overlays it.
+        styled
             .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -621,12 +627,6 @@ struct SidebarView: View {
                 minHeight: Self.sessionDetailFixedHeight,
                 alignment: .topLeading
             )
-
-        if Self.sessionDetailUsesItalic(for: statusKind) {
-            detail.italic()
-        } else {
-            detail
-        }
     }
 
     private func normalizedSessionDetail(_ value: String?) -> String? {
