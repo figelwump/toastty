@@ -27,7 +27,7 @@ struct SidebarView: View {
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
         return lineHeight
     }()
-    private static let sessionStatusesTopSpacing: CGFloat = 4
+    private static let sessionStatusesTopSpacing: CGFloat = 0
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
 
