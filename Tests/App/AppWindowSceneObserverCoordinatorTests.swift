@@ -441,6 +441,49 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.frame, secondFrame)
     }
 
+    func testApplyDesiredFrameDoesNotClampLiveDragFrameWhileCrossingDisplayBoundary() {
+        let recorder = ScheduledCallbackRecorder()
+        var publishedFrame: CGRectCodable?
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { frame in
+                publishedFrame = frame
+            },
+            onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [
+                    CGRect(x: 0, y: 0, width: 1_000, height: 800),
+                    CGRect(x: 1_000, y: 0, width: 1_000, height: 800),
+                ]
+            },
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+        let straddlingFrame = CGRect(x: 700, y: 120, width: 600, height: 500)
+
+        coordinator.attach(to: window)
+
+        window.setFrame(straddlingFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        XCTAssertFalse(recorder.callbacks.isEmpty)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        XCTAssertEqual(publishedFrame?.cgRect, straddlingFrame)
+
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = publishedFrame?.cgRect
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 0)
+        XCTAssertNil(window.lastSetFrame)
+        XCTAssertEqual(window.frame, straddlingFrame)
+    }
+
     func testApplyDesiredFrameStillAppliesExplicitExternalFrameChange() {
         let recorder = ScheduledCallbackRecorder()
         var publishedFrame: CGRectCodable?

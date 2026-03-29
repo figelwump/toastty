@@ -276,15 +276,18 @@ final class AppWindowSceneObserverCoordinator: NSObject {
 
     func applyDesiredFrameIfNeeded() {
         guard let observedWindow, let desiredFrame else { return }
+        // Preserve the live-drag suppression from raw AppKit frames before any
+        // display-aware clamping. Straddling two screens is valid while the user
+        // drags, even if the eventual settled frame would be clamped later.
+        if let lastPublishedWindowFrame,
+           framesEqual(lastPublishedWindowFrame, desiredFrame) {
+            return
+        }
         let resolvedDesiredFrame = adjustedFrameForVisibleScreens(desiredFrame)
         guard framesEqual(observedWindow.frame, resolvedDesiredFrame) == false else { return }
         // Window move/resize notifications publish the live AppKit frame back
         // into app state. Ignore that immediate state echo so SwiftUI updates do
         // not replay a stale frame onto an actively dragged window.
-        if let lastPublishedWindowFrame,
-           framesEqual(lastPublishedWindowFrame, resolvedDesiredFrame) {
-            return
-        }
         observedWindow.setFrame(resolvedDesiredFrame, display: true)
     }
 
