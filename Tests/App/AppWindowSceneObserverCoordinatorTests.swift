@@ -56,6 +56,9 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
             onWindowDidBecomeKey: {},
             onWindowFrameChange: { _ in },
             onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [CGRect(x: 0, y: 0, width: 4_000, height: 3_000)]
+            },
             scheduleOnMainActor: { _ in }
         )
         let window = TestWindow()
@@ -405,6 +408,9 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
                 publishedFrame = frame
             },
             onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [CGRect(x: 0, y: 0, width: 4_000, height: 3_000)]
+            },
             scheduleOnMainActor: { operation in
                 recorder.callbacks.append(operation)
             }
@@ -445,6 +451,9 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
                 publishedFrame = frame
             },
             onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [CGRect(x: 0, y: 0, width: 4_000, height: 3_000)]
+            },
             scheduleOnMainActor: { operation in
                 recorder.callbacks.append(operation)
             }
@@ -484,6 +493,9 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
                 publishedFrame = frame
             },
             onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [CGRect(x: 0, y: 0, width: 4_000, height: 3_000)]
+            },
             scheduleOnMainActor: { operation in
                 recorder.callbacks.append(operation)
             }
@@ -565,6 +577,82 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         coordinator.attach(to: TestWindow())
 
         XCTAssertTrue(recorder.callbacks.isEmpty)
+    }
+
+    func testApplyDesiredFrameClampsOffscreenFrameIntoVisibleScreenBounds() {
+        let desiredFrame = CGRect(x: 1_400, y: 100, width: 900, height: 600)
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 700)
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [visibleFrame]
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = desiredFrame
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, CGRect(x: 100, y: 100, width: 900, height: 600))
+        XCTAssertEqual(window.frame, CGRect(x: 100, y: 100, width: 900, height: 600))
+    }
+
+    func testApplyDesiredFrameShrinksOversizedFrameToVisibleScreenBounds() {
+        let desiredFrame = CGRect(x: 1_400, y: 300, width: 1_400, height: 900)
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 700)
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [visibleFrame]
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = desiredFrame
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, CGRect(x: 0, y: 0, width: 1_000, height: 700))
+        XCTAssertEqual(window.frame, CGRect(x: 0, y: 0, width: 1_000, height: 700))
+    }
+
+    func testScreenParametersChangeClampsLiveWindowFrameIntoRemainingVisibleScreenBounds() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 700)
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [visibleFrame]
+            },
+            scheduleOnMainActor: { operation in
+                MainActor.assumeIsolated {
+                    operation()
+                }
+            }
+        )
+        let window = TestWindow()
+        coordinator.attach(to: window)
+        window.setFrame(CGRect(x: 1_400, y: 100, width: 900, height: 600), display: false)
+        window.resetSetFrameTracking()
+
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, CGRect(x: 100, y: 100, width: 900, height: 600))
+        XCTAssertEqual(window.frame, CGRect(x: 100, y: 100, width: 900, height: 600))
     }
 }
 
