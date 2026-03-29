@@ -83,12 +83,50 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(SidebarView.sessionBodyFontWeight(showsUnreadSessionAccent: true), .bold)
     }
 
-    func testWorkingSessionDetailUsesItalicOnlyWhileWorking() {
-        XCTAssertTrue(SidebarView.sessionDetailUsesItalic(for: .working))
-        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .idle))
-        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .needsApproval))
-        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .ready))
-        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .error))
+    func testWorkingSessionTextUsesItalicOnlyWhileWorking() {
+        XCTAssertTrue(SidebarView.sessionTextUsesItalic(for: .working))
+        XCTAssertFalse(SidebarView.sessionTextUsesItalic(for: .idle))
+        XCTAssertFalse(SidebarView.sessionTextUsesItalic(for: .needsApproval))
+        XCTAssertFalse(SidebarView.sessionTextUsesItalic(for: .ready))
+        XCTAssertFalse(SidebarView.sessionTextUsesItalic(for: .error))
+    }
+
+    func testWorkingSessionDetailTextRendersDistinctItalicGlyphs() throws {
+        let normalBitmap = try renderedBitmap(
+            for: SidebarView.styledSessionDetailText(
+                "Inspecting compile issues",
+                statusKind: .idle,
+                showsUnreadSessionAccent: false
+            )
+        )
+        let workingBitmap = try renderedBitmap(
+            for: SidebarView.styledSessionDetailText(
+                "Inspecting compile issues",
+                statusKind: .working,
+                showsUnreadSessionAccent: false
+            )
+        )
+
+        XCTAssertGreaterThan(try differingPixelCount(between: normalBitmap, and: workingBitmap), 0)
+    }
+
+    func testWorkingSessionAgentTextRendersDistinctItalicGlyphs() throws {
+        let normalBitmap = try renderedBitmap(
+            for: SidebarView.styledSessionAgentText(
+                "Codex",
+                statusKind: .idle,
+                showsUnreadSessionAccent: false
+            )
+        )
+        let workingBitmap = try renderedBitmap(
+            for: SidebarView.styledSessionAgentText(
+                "Codex",
+                statusKind: .working,
+                showsUnreadSessionAccent: false
+            )
+        )
+
+        XCTAssertGreaterThan(try differingPixelCount(between: normalBitmap, and: workingBitmap), 0)
     }
 
     func testBackgroundTabSessionPanelRemainsFocusable() throws {
@@ -647,6 +685,35 @@ final class SidebarViewTests: XCTestCase {
         let bounds = view.bounds
         let bitmap = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: bounds))
         view.cacheDisplay(in: bounds, to: bitmap)
+        return bitmap
+    }
+
+    private func renderedBitmap(
+        for text: Text,
+        width: CGFloat = 320,
+        height: CGFloat = 60
+    ) throws -> NSBitmapImageRep {
+        let hostingView = NSHostingView(
+            rootView: ZStack(alignment: .topLeading) {
+                Color.white
+                text
+                    .foregroundStyle(Color.black)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            .frame(width: width, height: height)
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: width, height: height),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hostingView
+        window.makeKeyAndOrderFront(nil)
+        pumpMainRunLoop()
+        hostingView.layoutSubtreeIfNeeded()
+        let bitmap = try renderedBitmap(for: hostingView)
+        window.orderOut(nil)
         return bitmap
     }
 

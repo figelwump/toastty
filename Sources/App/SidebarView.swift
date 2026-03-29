@@ -426,9 +426,11 @@ struct SidebarView: View {
                     SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
                 }
 
-                Text(workspaceSessionStatus.agent.displayName)
-                    .font(ToastyTheme.fontWorkspaceSessionAgent)
-                    .fontWeight(Self.sessionAgentFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent))
+                Self.styledSessionAgentText(
+                    workspaceSessionStatus.agent.displayName,
+                    statusKind: status.kind,
+                    showsUnreadSessionAccent: showsUnreadSessionAccent
+                )
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     .lineLimit(1)
 
@@ -615,13 +617,15 @@ struct SidebarView: View {
         statusKind: SessionStatusKind,
         showsUnreadSessionAccent: Bool
     ) -> some View {
-        // Apply Text-level modifiers (font, weight, italic) directly on
-        // Text before crossing into View modifiers, so SwiftUI correctly
-        // resolves the combined typeface.
-        let base = Text(text)
-            .font(ToastyTheme.fontWorkspaceSessionDetail)
-            .fontWeight(Self.sessionBodyFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent))
-        let styled = Self.sessionDetailUsesItalic(for: statusKind) ? base.italic() : base
+        // Keep weight inside the Font itself instead of chaining
+        // `.fontWeight(...)` after `.italic()`. For these small sidebar labels,
+        // SwiftUI can otherwise collapse the italicized detail text back to the
+        // upright face.
+        let styled = Self.styledSessionDetailText(
+            text,
+            statusKind: statusKind,
+            showsUnreadSessionAccent: showsUnreadSessionAccent
+        )
 
         // Fixed 2-line height prevents sidebar jitter as summaries
         // stream in at varying lengths. The placeholder sets the
@@ -830,8 +834,45 @@ struct SidebarView: View {
         showsUnreadSessionAccent ? .bold : .regular
     }
 
-    static func sessionDetailUsesItalic(for kind: SessionStatusKind) -> Bool {
+    static func sessionTextUsesItalic(for kind: SessionStatusKind) -> Bool {
         kind == .working
+    }
+
+    static func styledSessionAgentText(
+        _ text: String,
+        statusKind: SessionStatusKind,
+        showsUnreadSessionAccent: Bool
+    ) -> Text {
+        styledSessionText(
+            text,
+            font: ToastyTheme.workspaceSessionAgentFont(
+                weight: sessionAgentFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent)
+            ),
+            usesItalic: sessionTextUsesItalic(for: statusKind)
+        )
+    }
+
+    static func styledSessionDetailText(
+        _ text: String,
+        statusKind: SessionStatusKind,
+        showsUnreadSessionAccent: Bool
+    ) -> Text {
+        styledSessionText(
+            text,
+            font: ToastyTheme.workspaceSessionDetailFont(
+                weight: sessionBodyFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent)
+            ),
+            usesItalic: sessionTextUsesItalic(for: statusKind)
+        )
+    }
+
+    static func styledSessionText(
+        _ text: String,
+        font: Font,
+        usesItalic: Bool
+    ) -> Text {
+        let base = Text(text).font(font)
+        return usesItalic ? base.italic() : base
     }
 
     static func abbreviatedPathLabel(_ path: String?) -> String? {
