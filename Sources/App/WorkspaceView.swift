@@ -352,7 +352,7 @@ struct WorkspaceView: View {
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
-            topBarFlashButton(title: "Split H", icon: { highlighted in
+            topBarFlashButton(icon: { highlighted in
                 SplitHorizontalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
                 split(orientation: .horizontal)
@@ -361,7 +361,7 @@ struct WorkspaceView: View {
             .help(ToasttyKeyboardShortcuts.splitHorizontal.helpText("Split Horizontally"))
             .accessibilityIdentifier("workspace.split.horizontal")
 
-            topBarFlashButton(title: "Split V", icon: { highlighted in
+            topBarFlashButton(icon: { highlighted in
                 SplitVerticalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
                 split(orientation: .vertical)
@@ -580,11 +580,11 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func focusedPanelToggle(identifier: String) -> some View {
         let isOn = isFocusedPanelModeActive
-        topBarButton(title: isOn ? "Restore Layout" : "Focus Panel", icon: {
-            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.inactiveText)
-        }, active: isOn) {
+        styledTopBarButton(active: isOn) {
             guard let workspaceID = selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+        } label: {
+            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.inactiveText)
         }
         .help(
             ToasttyKeyboardShortcuts.toggleFocusedPanel.helpText(
@@ -1153,23 +1153,6 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Top bar button variant that accepts a custom icon view (e.g. Canvas-based icons).
-    private func topBarButton<Icon: View>(
-        title: String,
-        @ViewBuilder icon: () -> Icon,
-        active: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        styledTopBarButton(active: active, action: action) {
-            HStack(spacing: 4) {
-                icon()
-                Text(title)
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-            }
-        }
-    }
-
     private func styledTopBarButton<Label: View>(
         active: Bool,
         action: @escaping () -> Void,
@@ -1192,15 +1175,14 @@ struct WorkspaceView: View {
     /// styling (accent icon, light text, elevated background) while pressed, then fades back.
     /// This intentionally bypasses `styledTopBarButton` and uses `TopBarFlashButtonStyle`.
     private func topBarFlashButton<Icon: View>(
-        title: String,
         @ViewBuilder icon: @escaping (_ isHighlighted: Bool) -> Icon,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             // Placeholder label — TopBarFlashButtonStyle renders the actual content.
-            Text(title)
+            Color.clear.frame(width: 0, height: 0)
         }
-        .buttonStyle(TopBarFlashButtonStyle(title: title, icon: icon))
+        .buttonStyle(TopBarFlashButtonStyle(icon: icon))
     }
 
     private func topBarFlashTextButton(
@@ -1779,33 +1761,33 @@ struct FocusIconView: View {
             // Four corner brackets
             var brackets = Path()
             // Top-left
-            brackets.move(to: CGPoint(x: 1.5, y: 3.5))
-            brackets.addLine(to: CGPoint(x: 1.5, y: 1.5))
-            brackets.addLine(to: CGPoint(x: 3.5, y: 1.5))
+            brackets.move(to: CGPoint(x: 2, y: 5))
+            brackets.addLine(to: CGPoint(x: 2, y: 2))
+            brackets.addLine(to: CGPoint(x: 5, y: 2))
             // Top-right
-            brackets.move(to: CGPoint(x: 7.5, y: 1.5))
-            brackets.addLine(to: CGPoint(x: 9.5, y: 1.5))
-            brackets.addLine(to: CGPoint(x: 9.5, y: 3.5))
+            brackets.move(to: CGPoint(x: 9, y: 2))
+            brackets.addLine(to: CGPoint(x: 12, y: 2))
+            brackets.addLine(to: CGPoint(x: 12, y: 5))
             // Bottom-right
-            brackets.move(to: CGPoint(x: 9.5, y: 7.5))
-            brackets.addLine(to: CGPoint(x: 9.5, y: 9.5))
-            brackets.addLine(to: CGPoint(x: 7.5, y: 9.5))
+            brackets.move(to: CGPoint(x: 12, y: 9))
+            brackets.addLine(to: CGPoint(x: 12, y: 12))
+            brackets.addLine(to: CGPoint(x: 9, y: 12))
             // Bottom-left
-            brackets.move(to: CGPoint(x: 3.5, y: 9.5))
-            brackets.addLine(to: CGPoint(x: 1.5, y: 9.5))
-            brackets.addLine(to: CGPoint(x: 1.5, y: 7.5))
+            brackets.move(to: CGPoint(x: 5, y: 12))
+            brackets.addLine(to: CGPoint(x: 2, y: 12))
+            brackets.addLine(to: CGPoint(x: 2, y: 9))
 
             context.stroke(
                 brackets,
                 with: .color(color),
-                style: StrokeStyle(lineWidth: 1.1, lineCap: .round, lineJoin: .round)
+                style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round)
             )
 
             // Center dot
-            let dot = Path(ellipseIn: CGRect(x: 5.5 - 1.2, y: 5.5 - 1.2, width: 2.4, height: 2.4))
+            let dot = Path(ellipseIn: CGRect(x: 7 - 1.5, y: 7 - 1.5, width: 3, height: 3))
             context.fill(dot, with: .color(color))
         }
-        .frame(width: 11, height: 11)
+        .frame(width: 14, height: 14)
     }
 }
 
@@ -1815,13 +1797,13 @@ struct SplitHorizontalIconView: View {
 
     var body: some View {
         Canvas { context, _ in
-            let left = Path(roundedRect: CGRect(x: 1.5, y: 1.5, width: 3.2, height: 8), cornerRadius: 0.8)
-            let right = Path(roundedRect: CGRect(x: 6.3, y: 1.5, width: 3.2, height: 8), cornerRadius: 0.8)
-            let style = StrokeStyle(lineWidth: 1.1)
+            let left = Path(roundedRect: CGRect(x: 2, y: 2, width: 4, height: 10), cornerRadius: 1)
+            let right = Path(roundedRect: CGRect(x: 8, y: 2, width: 4, height: 10), cornerRadius: 1)
+            let style = StrokeStyle(lineWidth: 1.2)
             context.stroke(left, with: .color(color), style: style)
             context.stroke(right, with: .color(color), style: style)
         }
-        .frame(width: 11, height: 11)
+        .frame(width: 14, height: 14)
     }
 }
 
@@ -1831,13 +1813,13 @@ struct SplitVerticalIconView: View {
 
     var body: some View {
         Canvas { context, _ in
-            let top = Path(roundedRect: CGRect(x: 1.5, y: 1.5, width: 8, height: 3.2), cornerRadius: 0.8)
-            let bottom = Path(roundedRect: CGRect(x: 1.5, y: 6.3, width: 8, height: 3.2), cornerRadius: 0.8)
-            let style = StrokeStyle(lineWidth: 1.1)
+            let top = Path(roundedRect: CGRect(x: 2, y: 2, width: 10, height: 4), cornerRadius: 1)
+            let bottom = Path(roundedRect: CGRect(x: 2, y: 8, width: 10, height: 4), cornerRadius: 1)
+            let style = StrokeStyle(lineWidth: 1.2)
             context.stroke(top, with: .color(color), style: style)
             context.stroke(bottom, with: .color(color), style: style)
         }
-        .frame(width: 11, height: 11)
+        .frame(width: 14, height: 14)
     }
 }
 
@@ -1847,25 +1829,19 @@ struct SplitVerticalIconView: View {
 /// (accent icon, primary text, elevated background + border) while pressed, with a
 /// smooth fade-out on release.
 private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
-    let title: String
     @ViewBuilder let icon: (_ isHighlighted: Bool) -> Icon
 
     func makeBody(configuration: Configuration) -> some View {
         let highlighted = configuration.isPressed
-        HStack(spacing: 4) {
-            icon(highlighted)
-            Text(title)
-                .font(ToastyTheme.fontSubtext)
-                .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
-        .overlay(
-            Rectangle()
-                .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
-        )
-        .animation(.easeOut(duration: 0.15), value: highlighted)
+        icon(highlighted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
+            .overlay(
+                Rectangle()
+                    .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+            )
+            .animation(.easeOut(duration: 0.15), value: highlighted)
     }
 }
 
