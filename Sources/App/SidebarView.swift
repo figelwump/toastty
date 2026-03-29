@@ -27,6 +27,7 @@ struct SidebarView: View {
         let lineHeight = ceil(font.ascender - font.descender + font.leading)
         return lineHeight
     }()
+    private static let sessionStatusesTopSpacing: CGFloat = 4
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
 
@@ -336,6 +337,7 @@ struct SidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, Self.sessionStatusesTopSpacing)
     }
 
     private func selectionSubtitle(for workspace: WorkspaceState) -> String? {
@@ -423,6 +425,7 @@ struct SidebarView: View {
 
                 Text(workspaceSessionStatus.agent.displayName)
                     .font(ToastyTheme.fontWorkspaceSessionAgent)
+                    .fontWeight(Self.sessionAgentFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent))
                     .foregroundStyle(ToastyTheme.sidebarSessionAgentText)
                     .lineLimit(1)
 
@@ -434,25 +437,17 @@ struct SidebarView: View {
             }
 
             if status.kind != .idle || detailText != nil {
-                // Fixed 2-line height prevents sidebar jitter as summaries
-                // stream in at varying lengths. The placeholder sets the
-                // intrinsic height; the real text overlays it.
-                Text(detailText ?? " ")
-                    .font(ToastyTheme.fontWorkspaceSessionDetail)
-                    .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .multilineTextAlignment(.leading)
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: Self.sessionDetailFixedHeight,
-                        alignment: .topLeading
-                    )
+                sessionDetailLabel(
+                    detailText ?? " ",
+                    statusKind: status.kind,
+                    showsUnreadSessionAccent: showsUnreadSessionAccent
+                )
             }
 
             if let cwd = Self.abbreviatedPathLabel(workspaceSessionStatus.cwd) {
                 Text(cwd)
                     .font(ToastyTheme.fontWorkspaceSessionPath)
+                    .fontWeight(Self.sessionBodyFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent))
                     .foregroundStyle(ToastyTheme.sidebarSessionPathText)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -603,6 +598,35 @@ struct SidebarView: View {
                 ToastyTheme.sessionStatusBackgroundColor(for: kind),
                 in: RoundedRectangle(cornerRadius: 4)
             )
+    }
+
+    @ViewBuilder
+    private func sessionDetailLabel(
+        _ text: String,
+        statusKind: SessionStatusKind,
+        showsUnreadSessionAccent: Bool
+    ) -> some View {
+        let detail = Text(text)
+            // Fixed 2-line height prevents sidebar jitter as summaries
+            // stream in at varying lengths. The placeholder sets the
+            // intrinsic height; the real text overlays it.
+            .font(ToastyTheme.fontWorkspaceSessionDetail)
+            .fontWeight(Self.sessionBodyFontWeight(showsUnreadSessionAccent: showsUnreadSessionAccent))
+            .foregroundStyle(ToastyTheme.sidebarSessionDetailText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .multilineTextAlignment(.leading)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: Self.sessionDetailFixedHeight,
+                alignment: .topLeading
+            )
+
+        if Self.sessionDetailUsesItalic(for: statusKind) {
+            detail.italic()
+        } else {
+            detail
+        }
     }
 
     private func normalizedSessionDetail(_ value: String?) -> String? {
@@ -788,6 +812,18 @@ struct SidebarView: View {
         case .needsApproval, .ready, .error, .idle:
             return .hidden
         }
+    }
+
+    static func sessionAgentFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
+        showsUnreadSessionAccent ? .bold : .medium
+    }
+
+    static func sessionBodyFontWeight(showsUnreadSessionAccent: Bool) -> Font.Weight {
+        showsUnreadSessionAccent ? .semibold : .regular
+    }
+
+    static func sessionDetailUsesItalic(for kind: SessionStatusKind) -> Bool {
+        kind == .working
     }
 
     static func abbreviatedPathLabel(_ path: String?) -> String? {

@@ -76,6 +76,21 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(SidebarView.sessionIndicatorState(for: .error), .hidden)
     }
 
+    func testUnreadSessionTypographyUsesEmphasizedWeights() {
+        XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: false), .medium)
+        XCTAssertEqual(SidebarView.sessionAgentFontWeight(showsUnreadSessionAccent: true), .bold)
+        XCTAssertEqual(SidebarView.sessionBodyFontWeight(showsUnreadSessionAccent: false), .regular)
+        XCTAssertEqual(SidebarView.sessionBodyFontWeight(showsUnreadSessionAccent: true), .semibold)
+    }
+
+    func testWorkingSessionDetailUsesItalicOnlyWhileWorking() {
+        XCTAssertTrue(SidebarView.sessionDetailUsesItalic(for: .working))
+        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .idle))
+        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .needsApproval))
+        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .ready))
+        XCTAssertFalse(SidebarView.sessionDetailUsesItalic(for: .error))
+    }
+
     func testBackgroundTabSessionPanelRemainsFocusable() throws {
         let backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
         let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")
@@ -234,7 +249,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(unreadColor.redComponent, readyColor.redComponent, accuracy: 0.001)
         XCTAssertEqual(unreadColor.greenComponent, readyColor.greenComponent, accuracy: 0.001)
         XCTAssertEqual(unreadColor.blueComponent, readyColor.blueComponent, accuracy: 0.001)
-        XCTAssertGreaterThan(unreadColor.alphaComponent, 0)
+        XCTAssertGreaterThan(unreadColor.alphaComponent, 0.2)
     }
 
     func testAttentionStatusChipColorsAreDistinct() throws {

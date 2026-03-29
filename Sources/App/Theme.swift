@@ -22,7 +22,7 @@ enum ToastyTheme {
     static let sidebarSessionActiveHoverBackground = Color(hex: 0x484848)
     static let sidebarSessionHoverBackground = Color(hex: 0x222222)
     static let sidebarSessionHoverBorder = Color(hex: 0x555555)
-    static let sidebarSessionUnreadBackground = Color(hex: 0x5BA08A, alpha: 0.14)
+    static let sidebarSessionUnreadBackground = Color(hex: 0x5BA08A, alpha: 0.22)
 
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
