@@ -129,7 +129,7 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertGreaterThan(try differingPixelCount(between: normalBitmap, and: workingBitmap), 0)
     }
 
-    func testSessionAgentTextUsesBumpedSidebarFontSize() throws {
+    func testSessionAgentTextUsesBaselineSidebarFontSize() throws {
         let styledBitmap = try renderedBitmap(
             for: SidebarView.styledSessionAgentText(
                 "Codex",
@@ -138,13 +138,13 @@ final class SidebarViewTests: XCTestCase {
             )
         )
         let expectedBitmap = try renderedBitmap(
-            for: Text("Codex").font(Font.system(size: 11, weight: .medium, design: .monospaced))
+            for: Text("Codex").font(Font.system(size: 10, weight: .medium, design: .monospaced))
         )
 
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
     }
 
-    func testSessionDetailTextUsesBumpedSidebarFontSize() throws {
+    func testSessionDetailTextUsesBaselineSidebarFontSize() throws {
         let styledBitmap = try renderedBitmap(
             for: SidebarView.styledSessionDetailText(
                 "Inspecting compile issues",
@@ -153,7 +153,7 @@ final class SidebarViewTests: XCTestCase {
             )
         )
         let expectedBitmap = try renderedBitmap(
-            for: Text("Inspecting compile issues").font(Font.system(size: 11, weight: .regular, design: .default))
+            for: Text("Inspecting compile issues").font(Font.system(size: 10, weight: .regular, design: .default))
         )
 
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
