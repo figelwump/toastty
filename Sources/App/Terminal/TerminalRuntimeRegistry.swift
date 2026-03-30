@@ -530,6 +530,16 @@ final class TerminalRuntimeRegistry: ObservableObject {
     }
 
     @discardableResult
+    func releaseInactiveSearchFieldFocus(activePanelID: UUID?) -> Bool {
+        guard let searchFieldFocusedPanelID,
+              searchFieldFocusedPanelID != activePanelID else {
+            return false
+        }
+        self.searchFieldFocusedPanelID = nil
+        return true
+    }
+
+    @discardableResult
     func startSearch(panelID: UUID) -> Bool {
         performSearchAction("start_search", panelID: panelID)
     }

@@ -1633,7 +1633,8 @@ private struct PanelCardView: View {
                 .overlay(alignment: .topTrailing) {
                     TerminalSearchOverlay(
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
-                        panelID: panelID
+                        panelID: panelID,
+                        isActivePanel: isFocused
                     )
                     .padding(.top, 6)
                     .padding(.trailing, 8)

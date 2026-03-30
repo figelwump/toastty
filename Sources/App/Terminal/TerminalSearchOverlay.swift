@@ -3,12 +3,17 @@ import SwiftUI
 struct TerminalSearchOverlay: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let panelID: UUID
+    let isActivePanel: Bool
 
     @State private var draftNeedle = ""
     @FocusState private var isFieldFocused: Bool
 
     private var searchState: TerminalSearchState? {
         terminalRuntimeRegistry.searchState(for: panelID)
+    }
+
+    private var registryOwnsSearchFieldFocus: Bool {
+        terminalRuntimeRegistry.isSearchFieldFocused(panelID: panelID)
     }
 
     var body: some View {
@@ -80,6 +85,9 @@ struct TerminalSearchOverlay: View {
                 .shadow(color: Color.black.opacity(0.22), radius: 10, y: 3)
                 .onAppear {
                     syncDraft(with: searchState)
+                    guard isActivePanel else {
+                        return
+                    }
                     requestFieldFocus()
                 }
                 .onDisappear {
@@ -93,7 +101,24 @@ struct TerminalSearchOverlay: View {
                 }
                 .onChange(of: searchState.focusRequestID) { _, _ in
                     syncDraft(with: terminalRuntimeRegistry.searchState(for: panelID))
+                    guard isActivePanel else {
+                        return
+                    }
                     requestFieldFocus()
+                }
+                .onChange(of: registryOwnsSearchFieldFocus) { _, ownsFocus in
+                    guard ownsFocus == false, isFieldFocused else {
+                        return
+                    }
+                    isFieldFocused = false
+                }
+                .onChange(of: isActivePanel) { _, isActive in
+                    guard isActive == false, isFieldFocused else {
+                        return
+                    }
+                    // Keep the search UI visible in inactive tabs, but return
+                    // keyboard focus to whichever panel the user just activated.
+                    isFieldFocused = false
                 }
                 .onChange(of: isFieldFocused) { _, focused in
                     terminalRuntimeRegistry.setSearchFieldFocused(focused, panelID: panelID)
