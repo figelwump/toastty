@@ -6,6 +6,8 @@ Focus mode currently zooms into a single panel and blocks split/resize/equalize/
 
 Focus mode is **tab-scoped**: each `WorkspaceTabState` owns its own focus state. Switching tabs shows that tab's own layout state unaffected.
 
+Today the persistent focus-mode affordance is too subtle, and `Jump to Next Unread or Active` can focus a panel that is hidden by an existing focus root. This plan fixes both problems while keeping focus mode tab-scoped rather than introducing a separate global inspection mode.
+
 This plan is intentionally split into phases:
 
 - **Phase 1:** subtree-backed focus mode for single-panel entry. Allow split, navigate, resize, equalize, and close within the focused subtree.
@@ -18,6 +20,8 @@ Aux panels are intentionally out of scope for this plan.
 The current aux-panel layout convention always builds or extends a dedicated right-edge column. That may not be the UX we want long term, and this plan should not lock in future aux-panel behavior around that assumption. The focus-mode work here should stay generic enough that a later aux-panel design can integrate by updating the focused subtree root when it wraps or replaces that root.
 
 No keyboard shortcut for multi-panel selection is included in this plan. Shift-click is enough for Phase 2. If we later want a keyboard path, we can decide then whether it should be app-owned or menu-bound.
+
+`Jump to Next Unread or Active` stays a normal focus/navigation command. It should compose with tab-scoped focus mode rather than creating a separate temporary cross-tab mode.
 
 ---
 
@@ -49,10 +53,50 @@ Add `selectedPanelIDs: Set<UUID>` to **`WorkspaceTabState`**. Empty means there 
 - **Shift-click** on a panel toggles it in/out of `selectedPanelIDs`
 - The first shift-click also adds the currently focused panel to the set
 - **Plain click** on a panel focuses that panel and clears `selectedPanelIDs`
-- **Enter focus mode** with `selectedPanelIDs` non-empty: compute the LCA of all selected panels, set `focusModeRootNodeID` to that node ID, then clear `selectedPanelIDs`
+- **Enter focus mode** with `selectedPanelIDs` non-empty:
+  - compute the LCA of all selected panels
+  - if the LCA is a proper subtree, set `focusModeRootNodeID` to that node ID and clear `selectedPanelIDs`
+  - if the LCA is the full workspace root, do not activate focus mode and leave `selectedPanelIDs` intact
 - **Visual indicator:** selected panels get a subtle border/highlight distinct from the focused-panel highlight
 
 This keeps multi-selection from becoming sticky. If the user stages a selection, then clicks another panel to keep working, the old staged selection should not survive and surprise them when they later toggle focus mode.
+
+If the computed LCA is the full workspace root, do not activate focus mode. That would be visually indistinguishable from the normal full-layout state and would make the mode indicator misleading. Leave the staged selection intact so the user can refine it.
+
+### Core invariants
+
+- Focus mode remains **tab-scoped**. Leaving a tab does not clear that tab's `focusModeRootNodeID`.
+- While focus mode is active, the visible root must always contain the tab's `focusedPanelID`.
+- Validate `focusModeRootNodeID` on every render and on every focus-changing action. Treat this as a primary safety contract, not a best-effort fallback.
+- If the stored root no longer resolves, fall back to the currently focused slot as the new root. If the focused slot cannot be resolved either, exit focus mode for that tab.
+- The "visible root contains focused panel" rule applies to all focus changes, not just split navigation. Jumps, plain panel focus, and close-follow-up focus resolution must all preserve visibility.
+
+### Visual treatment
+
+- The primary persistent status indicators are:
+  - an explicit `Focused` pill/badge in the tab strip
+  - a thin accent border or halo around the visible focused subtree / viewport
+- The border wraps the rendered focus root, not individual panels. This keeps the treatment valid once focus mode can show multiple panels.
+- Keep the existing focus-mode header button as the control for entering/exiting the mode, but do not rely on its state change as the only status signal.
+- Do not add more focus-mode-specific chrome to panel headers. Panel headers already encode focused, unread, and session-status state, and adding another treatment there risks visual overload.
+- The tab-strip indicator must be visible on background tabs so switching away and back still makes it obvious which tab is focused.
+
+### Motion
+
+- Animate focus chrome, not terminal content.
+- On entering focus mode or retargeting the focus root, briefly animate the focus border/halo in with a short settle. A subtle accent wash inside the viewport is acceptable if it stays brief.
+- Do not animate a large content zoom. It is harder to make feel crisp on terminal surfaces and becomes less legible once the focused root can be a multi-panel subtree.
+- Do not replay the full animation on ordinary tab re-selection. A passive border + tab pill should carry the steady-state affordance. Only focus entry or focus-root retarget should animate.
+- Respect macOS reduced-motion settings. In reduced-motion mode, update the focus border and badge immediately with no scale or pulse animation.
+
+### Jump To Next Unread Or Active
+
+- Keep the existing target-resolution order. The command still resolves "which panel should be focused next" the same way it does today.
+- The command does **not** create a separate global focus/inspection mode spanning multiple tabs.
+- If the destination tab is not already in focus mode, just focus the target panel. Do not auto-enter focus mode.
+- If the destination tab is already in focus mode and the target panel is inside the current focused subtree, keep the existing `focusModeRootNodeID`.
+- If the destination tab is already in focus mode and the target panel would be hidden by the current root, retarget that tab's `focusModeRootNodeID` to the target panel's slot ID so the target is visible immediately.
+- When jumping away from a focused tab, keep the source tab's existing focus root unchanged. The destination tab decides its own visibility independently.
 
 ---
 
@@ -107,9 +151,10 @@ public func renderedLayout(
 
 When `focusedPanelModeActive` is true:
 
-- If `focusModeRootNodeID` is set, render that subtree via `root.findSubtree(nodeID:)`
-- If the subtree cannot be found, fall back to the current single-slot rendering path
-- Use `focusModeRootNodeID` as `zoomedNodeID` in the render identity
+- If `focusModeRootNodeID` is set, validate that it resolves and that the focused panel still lives inside that subtree before rendering it
+- If the stored root is stale or no longer contains the focused panel, fall back to rendering the currently focused slot and use that slot as the safe replacement root
+- If the focused slot cannot be resolved, return the full layout and let the reducer clear focus mode on the next state mutation
+- Use the effective rendered root as `zoomedNodeID` in the render identity so the UI can key focus-border animation off root changes
 
 **Add `focusedSubtree()` helper:**
 
@@ -134,6 +179,7 @@ Returns a `WorkspaceSplitTree` wrapping the subtree rooted at `rootNodeID`. The 
 
 - Update `renderedLayout` to pass `focusModeRootNodeID`
 - Add `focusModeSubtree: WorkspaceSplitTree?`
+- Add helper(s) that answer whether a panel is inside the current focus root and that resolve a safe fallback root from the current focused slot
 - Add a `focusedPanelIDAfterClosing` variant or parameter that scopes `.previous` slot lookup to the focused subtree during focus mode
 
 ### 6. `Sources/Core/AppReducer.swift`
@@ -142,8 +188,17 @@ Returns a `WorkspaceSplitTree` wrapping the subtree rooted at `rootNodeID`. The 
 
 **`toggleFocusedPanelMode`:**
 
-- When toggling ON from normal mode, set `focusModeRootNodeID` to the focused panel's resolved slot ID
+- When toggling ON from normal mode, require that the focused panel resolves to a live slot and set `focusModeRootNodeID` to that slot ID
 - When toggling OFF, set `focusModeRootNodeID` to `nil`
+
+**`focusPanel`:**
+
+- Keep selecting the destination tab as today
+- If the destination tab is not in focus mode, update `focusedPanelID` only
+- If the destination tab is in focus mode, ensure the target panel is visible:
+  - if the target panel is already inside the current focused subtree, keep the current `focusModeRootNodeID`
+  - if the target panel is outside the current focused subtree, retarget `focusModeRootNodeID` to the target panel's slot ID instead of exiting focus mode
+- This is the core fix for `Jump to Next Unread or Active`, because that command already flows through `.focusPanel(...)`
 
 **`splitFocusedSlot`:**
 
@@ -190,8 +245,9 @@ Do not leave that as implicit bookkeeping.
 
 **`toggleFocusedPanelMode`:**
 
-- When toggling ON with `selectedPanelIDs` non-empty, compute the LCA of the selected panels and set `focusModeRootNodeID` to that LCA node ID
-- Clear `selectedPanelIDs` after consuming the selection
+- When toggling ON with `selectedPanelIDs` non-empty, compute the LCA of the selected panels
+- If the LCA is a proper subtree, set `focusModeRootNodeID` to that LCA node ID and clear `selectedPanelIDs`
+- If the LCA is the workspace root, leave focus mode off and preserve `selectedPanelIDs` so the user can refine the selection
 
 **`focusPanel`:**
 
@@ -213,6 +269,11 @@ Do not leave that as implicit bookkeeping.
 - Enable split controls while focus mode is active
 - Keep aux-panel controls disabled in focus mode because aux panels are out of scope here
 - Render the focused subtree using the updated `renderedLayout`
+- Add the persistent focus-mode viewport treatment: a thin accent border / halo around the rendered focus root
+- Add an explicit `Focused` pill/badge in the tab strip for tabs whose `focusedPanelModeActive` is true
+- Animate the focus chrome when `zoomedNodeID` changes because of focus entry or focus-root retarget
+- Do not replay the full animation on ordinary tab switching back to an already-focused tab
+- Keep the existing header toggle button, but do not add extra panel-header-specific focus-mode styling
 
 **Phase 2**
 
@@ -237,7 +298,7 @@ For Phase 2, if `selectedPanelIDs` is non-empty, consider changing the label fro
 
 ### 10. `WorkspaceRenderIdentity`
 
-Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a split node as well as a slot node.
+Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a split node as well as a slot node. The UI should also treat `zoomedNodeID` changes as the source of truth for focus-border animation triggers.
 
 ---
 
@@ -253,12 +314,18 @@ Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a sp
 6. **Toggle focus back on:** `focusModeRootNodeID` is set from the current focused slot. There is no memory of the previously zoomed subtree.
 7. **`focusModeRootNodeID` becomes stale:** defensively fall back to single-slot rendering if `findSubtree` returns `nil`.
 8. **Tab switching during focus mode:** tab A can stay focused while tab B shows its normal full layout. Switching back restores tab A's focused subtree.
+9. **Direct focus change to a hidden panel while focus mode is active:** retarget `focusModeRootNodeID` to the target panel's slot ID instead of silently hiding the target or exiting focus mode.
+10. **Jump to next unread or active lands on another tab that is not in focus mode:** focus the target panel but do not auto-enter focus mode on that tab.
+11. **Jump back to a tab that is already in focus mode:** keep that tab's existing root if it already contains the target; otherwise retarget the root and pulse the focus border.
+12. **Returning to an already-focused tab through ordinary tab switching:** show the passive border + tab badge only; do not replay the full focus-entry animation.
+13. **Reduced-motion enabled:** show the focused border + tab badge immediately with no pulse or transition.
 
 ### Phase 2
 
-9. **Multi-panel selection + focus:** selected panels focus the minimal subtree containing them, not an arbitrary cherry-picked set of leaves.
-10. **Selection cleared by normal focus work:** if the user stages a selection, then plain-clicks a panel, uses pane navigation, or focus moves after close, the staged selection is cleared.
-11. **Tab switch clears staged selection:** multi-selection should not survive leaving the tab and returning later.
+14. **Multi-panel selection + focus:** selected panels focus the minimal subtree containing them, not an arbitrary cherry-picked set of leaves.
+15. **Selection whose LCA is the workspace root:** do not activate focus mode, because no subtree would be hidden. Leave the staged selection intact so the user can refine it.
+16. **Selection cleared by normal focus work:** if the user stages a selection, then plain-clicks a panel, uses pane navigation, or focus moves after close, the staged selection is cleared.
+17. **Tab switch clears staged selection:** multi-selection should not survive leaving the tab and returning later.
 
 ---
 
@@ -268,6 +335,7 @@ Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a sp
 
 - `renderedLayoutShowsSubtreeAfterSplitInFocusMode`
 - `renderedLayoutFallsBackToSlotWhenFocusModeRootIDIsStale`
+- `renderedLayoutFallsBackToFocusedSlotWhenFocusedPanelLeavesFocusedRoot`
 - `focusTargetInFocusModeWrapsWithinSubtree`
 - `splittingPreservesCallerProvidedSplitNodeID`
 - `equalizeInFocusModeOnlyScopesToSubtree`
@@ -285,12 +353,16 @@ Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a sp
 - `closePanelInFocusModeCollapsesSubtree`
 - `toggleFocusOffClearsRootNodeID`
 - `reenterFocusModeResetsToSingleSlot`
+- `focusPanelInFocusModePreservesRootWhenTargetRemainsVisible`
+- `focusPanelInFocusModeRetargetsRootWhenTargetWouldBeHidden`
+- `toggleFocusModeRequiresResolvableFocusedSlot`
 
 Replace the current "blocked while focused mode active" tests for split/resize/equalize with positive coverage for the new behavior.
 
 **Phase 2**
 
 - `multiPanelSelectionFocusUsesLCA`
+- `multiPanelSelectionDoesNotEnterFocusModeWhenLCAIsWorkspaceRoot`
 - `multiPanelSelectionClearedOnFocusEntry`
 - `plainFocusPanelClearsMultiSelection`
 - `focusNavigationClearsMultiSelection`
@@ -300,6 +372,13 @@ Replace the current "blocked while focused mode active" tests for split/resize/e
 
 - `canAdjustSplitLayoutInFocusModeWhenFocusedSubtreeHasMultipleSlots`
 - `canAdjustSplitLayoutInFocusModeReturnsFalseForSingleSlotSubtree`
+
+### `AppStoreWindowSelectionTests.swift`
+
+- `focusNextUnreadOrActiveRetargetsDestinationFocusRootWhenNeeded`
+- `focusNextUnreadOrActivePreservesDestinationRootWhenTargetAlreadyVisible`
+- `focusNextUnreadOrActiveDoesNotAutoEnterFocusModeOnNormalDestinationTab`
+- `focusNextUnreadOrActivePreservesSourceTabFocusRoot`
 
 ### `AppStateCodableTests.swift`
 
@@ -325,6 +404,7 @@ Verify the snapshot restore path clears `focusModeRootNodeID` and `selectedPanel
 4. `./scripts/automation/smoke-ui.sh`
 5. Manual verification:
    - Enter focus mode on a panel
+   - Confirm the focused viewport gets the persistent border / halo and the tab gets the `Focused` pill
    - Split horizontally and vertically within focus mode
    - Navigate between visible panels
    - Resize a divider within the focused subtree
@@ -332,13 +412,19 @@ Verify the snapshot restore path clears `focusModeRootNodeID` and `selectedPanel
    - Close a panel within the focused subtree
    - Toggle focus off and confirm the subtree appears in the right place in the full layout
    - Toggle focus back on and confirm it resets to the current focused panel only
+   - Switch away from a focused tab and back again and confirm the passive indicators remain visible without replaying the full animation
+   - Trigger `Jump to Next Unread or Active` from a focused tab and verify the destination panel is always visible
+   - Verify that a jump into a non-focused tab does not auto-enter focus mode
+   - Verify that a jump into an already-focused tab retargets the root only when needed and replays the border pulse only for that retarget
+   - With reduced motion enabled, verify the indicator updates immediately with no pulse/settle animation
 
 ### Phase 2
 
 1. Shift-click two or more panels to stage a selection
 2. Enter focus mode and verify the visible subtree is the LCA subtree
-3. Plain-click another panel and verify the staged selection clears
-4. Switch tabs and verify staged selection clears
+3. Select panels whose LCA is the whole workspace and verify focus mode does not activate
+4. Plain-click another panel and verify the staged selection clears
+5. Switch tabs and verify staged selection clears
 
 ---
 
@@ -349,10 +435,10 @@ Verify the snapshot restore path clears `focusModeRootNodeID` and `selectedPanel
 1. `LayoutNode` additions needed for subtree lookup/replacement: `findSubtree`, `replaceNode`
 2. `WorkspaceSplitTree` changes: split root ID plumbing, subtree rendering, `focusedSubtree`
 3. `WorkspaceTabState` / `WorkspaceState` / `WorkspaceState+Layout` plumbing for `focusModeRootNodeID`
-4. `AppReducer` Phase 1 changes: split/focus/resize/equalize/close within focused subtree
-5. `WorkspaceView` and `WindowCommandController` updates for the newly enabled behavior
+4. `AppReducer` Phase 1 changes: split/focus/resize/equalize/close within focused subtree, plus the "focused panel must stay visible" invariant for `.focusPanel(...)`
+5. `WorkspaceView` and `WindowCommandController` updates for the newly enabled behavior and the persistent focus-mode affordance
 6. Rename `zoomedSlotID` to `zoomedNodeID`
-7. Phase 1 tests
+7. Phase 1 tests, including jump-to-next-unread-or-active coverage
 8. Build, smoke automation, and manual validation
 
 ### Phase 2
