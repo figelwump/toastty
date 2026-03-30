@@ -171,6 +171,10 @@ Ghostty actions currently routed into Toastty app state:
 - `resize_split:{up,down,left,right}`
 - `equalize_splits`
 - `toggle_split_zoom`
+- `start_search`
+- `end_search`
+- `search_total`
+- `search_selected`
 
 Still outside Toastty's current Ghostty action bridge:
 

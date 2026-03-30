@@ -138,6 +138,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 |---|---|---|
 | `RUN_ID` | timestamped `workspace-tabs-smoke-*` value | Run ID passed through to the app. |
 | `FIXTURE` | `workspace-tabs-wide` | Fixture passed through to the app before tab-count and screenshot assertions. |
+| `UNREAD_FIXTURE` | `workspace-tabs-wide-unread` | Fixture used for the unread-state screenshot/assertion pass before the script switches back to the main workspace-tabs fixture. |
 | `TOASTTY_WORKSPACE_TABS_RESTORE_FRONT_APP` | `1` | When truthy, the script restores the previously frontmost app after Toastty reaches automation readiness so local screenshot runs minimize focus theft. |
 | `DEV_RUN_ROOT` | `artifacts/dev-runs/<RUN_ID>` | Root directory for this workspace-tab smoke run's isolated derived data, runtime home, socket, and artifacts. |
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
