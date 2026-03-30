@@ -1135,6 +1135,7 @@ struct ToasttyApp: App {
                 store: store,
                 agentCatalogStore: agentCatalogStore,
                 terminalProfileStore: terminalProfileStore,
+                terminalRuntimeRegistry: terminalRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,

@@ -87,6 +87,21 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let find = ToasttyKeyboardShortcut(
+        "f",
+        modifiers: [.command]
+    )
+
+    static let findNext = ToasttyKeyboardShortcut(
+        "g",
+        modifiers: [.command]
+    )
+
+    static let findPrevious = ToasttyKeyboardShortcut(
+        "g",
+        modifiers: [.command, .shift]
+    )
+
     static let focusNextUnreadOrActivePanel = ToasttyKeyboardShortcut(
         "a",
         modifiers: [.command, .shift]

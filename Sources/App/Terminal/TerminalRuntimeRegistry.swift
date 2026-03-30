@@ -70,7 +70,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
     @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
     @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
+    @Published private(set) var searchStateByPanelID: [UUID: TerminalSearchState] = [:]
+    @Published private(set) var searchFieldFocusedPanelID: UUID?
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
+    private var searchDispatchTaskByPanelID: [UUID: Task<Void, Never>] = [:]
+    private var searchDispatchTokenByPanelID: [UUID: UUID] = [:]
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
@@ -80,6 +84,9 @@ final class TerminalRuntimeRegistry: ObservableObject {
     #endif
 
     deinit {
+        for task in searchDispatchTaskByPanelID.values {
+            task.cancel()
+        }
         #if TOASTTY_HAS_GHOSTTY_KIT
         let storeActionCoordinator = self.storeActionCoordinator
         Task { @MainActor in
@@ -325,6 +332,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         profiledTerminalPanelIDsAwaitingStartupTitleCleanup = profiledTerminalPanelIDsAwaitingStartupTitleCleanup
             .intersection(livePanelIDs)
         exitedTerminalPanelIDs = exitedTerminalPanelIDs.intersection(livePanelIDs)
+        pruneSearchState(livePanelIDs: livePanelIDs)
         #if TOASTTY_HAS_GHOSTTY_KIT
         workspaceMaintenanceService?.synchronize(
             state: state,
@@ -357,6 +365,59 @@ final class TerminalRuntimeRegistry: ObservableObject {
             return nil
         }
         return controller.automationReadVisibleText()
+    }
+
+    private func performSearchAction(_ action: String, panelID: UUID) -> Bool {
+        guard let controller = runtimeStore.existingController(for: panelID) else {
+            return false
+        }
+        return controller.performSearchAction(action)
+    }
+
+    private func scheduleSearchDispatch(needle: String, panelID: UUID) {
+        cancelPendingSearchDispatch(for: panelID)
+        let shouldDelay = needle.isEmpty == false && needle.count < 3
+        let dispatchToken = UUID()
+        searchDispatchTokenByPanelID[panelID] = dispatchToken
+        let task = Task { @MainActor [weak self] in
+            if shouldDelay {
+                try? await Task.sleep(for: .milliseconds(300))
+            }
+            guard Task.isCancelled == false else {
+                return
+            }
+            guard let self else {
+                return
+            }
+            guard self.searchDispatchTokenByPanelID[panelID] == dispatchToken else {
+                return
+            }
+            _ = self.performSearchAction("search:\(needle)", panelID: panelID)
+            guard self.searchDispatchTokenByPanelID[panelID] == dispatchToken else {
+                return
+            }
+            self.searchDispatchTaskByPanelID.removeValue(forKey: panelID)
+            self.searchDispatchTokenByPanelID.removeValue(forKey: panelID)
+        }
+        searchDispatchTaskByPanelID[panelID] = task
+    }
+
+    private func cancelPendingSearchDispatch(for panelID: UUID) {
+        searchDispatchTaskByPanelID.removeValue(forKey: panelID)?.cancel()
+        searchDispatchTokenByPanelID.removeValue(forKey: panelID)
+    }
+
+    private func pruneSearchState(livePanelIDs: Set<UUID>) {
+        for panelID in searchDispatchTaskByPanelID.keys where livePanelIDs.contains(panelID) == false {
+            cancelPendingSearchDispatch(for: panelID)
+        }
+        if searchStateByPanelID.isEmpty == false {
+            searchStateByPanelID = searchStateByPanelID.filter { livePanelIDs.contains($0.key) }
+        }
+        if let searchFieldFocusedPanelID,
+           livePanelIDs.contains(searchFieldFocusedPanelID) == false {
+            self.searchFieldFocusedPanelID = nil
+        }
     }
 
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
@@ -450,6 +511,65 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     func panelDisplayTitleOverride(for panelID: UUID) -> String? {
         panelDisplayTitleOverrideByID[panelID]
+    }
+
+    func searchState(for panelID: UUID) -> TerminalSearchState? {
+        searchStateByPanelID[panelID]
+    }
+
+    func isSearchFieldFocused(panelID: UUID) -> Bool {
+        searchFieldFocusedPanelID == panelID
+    }
+
+    func setSearchFieldFocused(_ focused: Bool, panelID: UUID) {
+        if focused {
+            searchFieldFocusedPanelID = panelID
+        } else if searchFieldFocusedPanelID == panelID {
+            searchFieldFocusedPanelID = nil
+        }
+    }
+
+    @discardableResult
+    func startSearch(panelID: UUID) -> Bool {
+        performSearchAction("start_search", panelID: panelID)
+    }
+
+    @discardableResult
+    func findNext(panelID: UUID) -> Bool {
+        performSearchAction("navigate_search:next", panelID: panelID)
+    }
+
+    @discardableResult
+    func findPrevious(panelID: UUID) -> Bool {
+        performSearchAction("navigate_search:previous", panelID: panelID)
+    }
+
+    @discardableResult
+    func endSearch(panelID: UUID) -> Bool {
+        cancelPendingSearchDispatch(for: panelID)
+        return performSearchAction("end_search", panelID: panelID)
+    }
+
+    func updateSearchNeedle(_ needle: String, panelID: UUID) {
+        guard var state = searchStateByPanelID[panelID] else {
+            return
+        }
+        guard state.needle != needle else {
+            return
+        }
+        state.needle = needle
+        searchStateByPanelID[panelID] = state
+        scheduleSearchDispatch(needle: needle, panelID: panelID)
+    }
+
+    func restoreTerminalFocusAfterSearch(panelID: UUID) {
+        if focusPanelIfPossible(panelID: panelID) {
+            return
+        }
+        schedulePanelFocusRestore(
+            panelID: panelID,
+            avoidStealingKeyboardFocus: false
+        )
     }
 
     func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
@@ -1054,6 +1174,56 @@ extension TerminalRuntimeRegistry: GhosttyRuntimeActionHandling {
 
 #if TOASTTY_HAS_GHOSTTY_KIT
 extension TerminalRuntimeRegistry {
+    func handleSearchRuntimeAction(
+        _ intent: GhosttyRuntimeAction.Intent,
+        panelID: UUID
+    ) -> Bool {
+        switch intent {
+        case .startSearch(let needle):
+            var nextState = searchStateByPanelID[panelID] ?? TerminalSearchState(
+                isPresented: true,
+                needle: needle
+            )
+            nextState.isPresented = true
+            if needle.isEmpty == false {
+                nextState.needle = needle
+            }
+            nextState.focusRequestID = UUID()
+            searchStateByPanelID[panelID] = nextState
+            if needle.isEmpty == false {
+                scheduleSearchDispatch(needle: needle, panelID: panelID)
+            }
+            return true
+
+        case .endSearch:
+            cancelPendingSearchDispatch(for: panelID)
+            if searchFieldFocusedPanelID == panelID {
+                searchFieldFocusedPanelID = nil
+            }
+            searchStateByPanelID.removeValue(forKey: panelID)
+            return true
+
+        case .searchTotal(let total):
+            guard var state = searchStateByPanelID[panelID] else {
+                return false
+            }
+            state.total = total
+            searchStateByPanelID[panelID] = state
+            return true
+
+        case .searchSelected(let selected):
+            guard var state = searchStateByPanelID[panelID] else {
+                return false
+            }
+            state.selected = selected
+            searchStateByPanelID[panelID] = state
+            return true
+
+        default:
+            return false
+        }
+    }
+
     func handleRuntimeMetadataAction(
         _ intent: GhosttyRuntimeAction.Intent,
         workspaceID: UUID,
