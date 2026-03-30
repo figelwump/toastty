@@ -27,8 +27,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 ## Features
 
 - **Workspaces in vertical tabs** — Named workspaces as vertical tabs, switch between them with `Option+1`–`Option+9`, and persist layouts across restarts
-- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then working sessions.
-- **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar (shell integration required)
+- **Jump to next active** — Keyboard shortcut to jump to the next active coding session. Unreads first, then approval/error sessions, then working sessions.
+- **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
 - **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
 - **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`
 - **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu or top bar, with live sidebar status and notifications
@@ -156,7 +156,7 @@ Use `Toastty > Manage Config…` to open or create the live config file, `Toastt
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
-- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed `codex` and `claude` wrappers into terminal `PATH` so manual invocations inside Toastty report session status automatically. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
+- `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
 - `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` update the active window's persisted layout state instead of rewriting your config file
 
 Example:
