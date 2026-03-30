@@ -68,7 +68,7 @@ struct WorkspaceView: View {
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
     private static let workspaceTabsToControlsSpacing: CGFloat = 12
-    private static let workspaceTabStripSpacing: CGFloat = 6
+    private static let workspaceTabStripSpacing: CGFloat = 0
 
     nonisolated static func resolvedWorkspaceTitleWidth(
         preferredWidth: CGFloat,
@@ -77,7 +77,7 @@ struct WorkspaceView: View {
         tabCount: Int,
         titleSpacing: CGFloat = 18,
         trailingSpacing: CGFloat = 12,
-        tabSpacing: CGFloat = 6,
+        tabSpacing: CGFloat = 0,
         titleMaxWidth: CGFloat = 260
     ) -> CGFloat {
         let cappedPreferredWidth = min(preferredWidth, titleMaxWidth)
@@ -132,7 +132,7 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceTabMinimumTotalWidth(
         tabCount: Int,
-        spacing: CGFloat = 6
+        spacing: CGFloat = 0
     ) -> CGFloat {
         workspaceTabTotalWidth(
             tabCount: tabCount,
@@ -143,7 +143,7 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceTabIdealTotalWidth(
         tabCount: Int,
-        spacing: CGFloat = 6
+        spacing: CGFloat = 0
     ) -> CGFloat {
         workspaceTabTotalWidth(
             tabCount: tabCount,
@@ -155,7 +155,7 @@ struct WorkspaceView: View {
     nonisolated static func resolvedWorkspaceTabWidth(
         availableWidth: CGFloat,
         tabCount: Int,
-        spacing: CGFloat = 6
+        spacing: CGFloat = 0
     ) -> CGFloat {
         guard tabCount > 0 else { return ToastyTheme.workspaceTabWidth }
 

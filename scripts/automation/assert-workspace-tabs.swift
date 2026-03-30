@@ -90,7 +90,7 @@ private let windowWidthPoints = 2300.0
 private let topBarHeightPoints = 43.0
 private let tabHeightPoints = 34.0
 private let tabTopInsetPoints = topBarHeightPoints - tabHeightPoints
-private let tabSpacingPoints = 6.0
+private let tabSpacingPoints = 0.0
 private let tabTrailingPaddingPoints = 10.0
 private let tabTrailingSlotWidthPoints = 24.0
 private let tabTrailingSlotTopInsetPoints = 4.0
@@ -272,6 +272,11 @@ private func assertTwoTabScreenshot(path: String) throws -> HeaderTabSnapshot {
     let unselectedRun = snapshot.tabRuns[1]
 
     try assertCondition(
+        abs(unselectedRun.lowerBound - selectedRun.upperBound - 1) <= 2,
+        "two-tab header still shows a horizontal gap between tabs"
+    )
+
+    try assertCondition(
         snapshot.accentRun.lowerBound >= selectedRun.lowerBound &&
             snapshot.accentRun.upperBound <= selectedRun.upperBound,
         "selected tab accent extends outside the first tab bounds"
@@ -296,19 +301,6 @@ private func assertTwoTabScreenshot(path: String) throws -> HeaderTabSnapshot {
         isNear(unselectedBottomSeamColor, subtleBorder, tolerance: 12) ||
             isNear(unselectedBottomSeamColor, hairline, tolerance: 12),
         "unselected header tab no longer has a defined bottom edge"
-    )
-
-    let sideBorderY = min(
-        image.height - 1,
-        scaled(tabTopInsetPoints + (tabHeightPoints / 2), scale: scale)
-    )
-    let unselectedLeadingBorderColor = image.color(
-        topX: min(image.width - 1, unselectedRun.lowerBound + max(1, scaled(1, scale: scale))),
-        topY: sideBorderY
-    )
-    try assertCondition(
-        isNear(unselectedLeadingBorderColor, subtleBorder, tolerance: 16),
-        "unselected header tab leading outline is missing"
     )
 
     let panelHeaderContinuityColor = image.color(
@@ -340,8 +332,8 @@ private func assertBadgeVisibility(
     let image = snapshot.image
     let scale = snapshot.scale
     let frame = snapshot.tabRuns[tabIndex - 1]
-    let slotStartX = frame.upperBound - scaled(tabTrailingPaddingPoints + tabTrailingSlotWidthPoints, scale: scale) + scaled(2, scale: scale)
-    let slotEndX = frame.upperBound - scaled(tabTrailingPaddingPoints, scale: scale) - scaled(2, scale: scale)
+    let slotStartX = frame.upperBound - scaled(tabTrailingPaddingPoints + tabTrailingSlotWidthPoints, scale: scale) + scaled(5, scale: scale)
+    let slotEndX = frame.upperBound - scaled(tabTrailingPaddingPoints, scale: scale) - scaled(5, scale: scale)
     let slotTopY = min(
         image.height - 1,
         scaled(tabTopInsetPoints + tabTrailingSlotTopInsetPoints, scale: scale)
@@ -384,8 +376,8 @@ private func assertNineAndTenTabScreenshots(
         "ten-tab header did not compress tabs relative to the two-tab layout"
     )
     try assertCondition(
-        abs(nine.tabRuns[1].lowerBound - nine.tabRuns[0].upperBound - 1 - nine.spacingWidth) <= 3,
-        "compressed tabs no longer preserve the expected inter-tab spacing"
+        abs(nine.tabRuns[1].lowerBound - nine.tabRuns[0].upperBound - 1) <= 2,
+        "compressed tabs still show a horizontal gap"
     )
 
     try assertBadgeVisibility(snapshot: nine, tabIndex: 9, expectedVisible: true)

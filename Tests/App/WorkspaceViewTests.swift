@@ -112,7 +112,7 @@ final class WorkspaceViewTests: XCTestCase {
     func testResolvedWorkspaceTabWidthCompressesTabsEquallyWhenHeaderGetsTight() {
         XCTAssertEqual(
             WorkspaceView.resolvedWorkspaceTabWidth(availableWidth: 524, tabCount: 5),
-            100
+            104
         )
     }
 
@@ -143,7 +143,14 @@ final class WorkspaceViewTests: XCTestCase {
                 trailingWidth: 200,
                 tabCount: 3
             ),
-            194
+            206
+        )
+    }
+
+    func testWorkspaceTabIdealTotalWidthRemovesInterTabGap() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabIdealTotalWidth(tabCount: 2),
+            ToastyTheme.workspaceTabWidth * 2
         )
     }
 
