@@ -215,7 +215,7 @@ their current profile bindings.
 
 #### Shell integration
 
-Use `Toastty > Install Shell Integration…` to set up live pane titles automatically.
+Use `Toastty > Install Shell Integration…` to set up live pane titles and pane-local command history for `zsh` and `bash` automatically.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:
@@ -224,8 +224,10 @@ Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 - `bash` → `~/.bash_profile` by default, or an existing `~/.profile`
 
 After installing, new profiled panes pick it up automatically. Existing `zmx`
-or `tmux` sessions need to restart, or you need to re-source the init file
-inside that session, before panel titles start updating.
+or `tmux` sessions may need to restart, or you may need to re-source the init
+file inside that session, before live titles update. Pane-local history applies
+to shells launched after Toastty injects the pane history environment, so older
+multiplexer sessions usually need a restart.
 
 Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
 
@@ -298,7 +300,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity
 - [Environment and Launch Flags](docs/environment-and-build-flags.md) — build toggles, runtime env vars, automation args, and script-level inputs
 - [Terminal Profiles](docs/terminal-profiles.md) — `terminal-profiles.toml` schema, shortcuts, and example profile setups
-- [Shell Integration](docs/shell-integration.md) — manual shell setup for live pane titles
+- [Shell Integration](docs/shell-integration.md) — manual shell setup for live pane titles and pane-local history
 - [Runtime Sandboxing](docs/runtime-sandboxing.md) — runtime-home strategies, `instance.json`, and cleanup guidance
 - [Privacy and Local Data](docs/privacy-and-local-data.md) — local files, permissions, sockets, logging, and Ghostty crash-reporting notes
 - [Socket Protocol](docs/socket-protocol.md) — v1.0 JSON-RPC automation protocol

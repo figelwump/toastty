@@ -54,6 +54,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let panelID = UUID()
         let slotID = UUID()
         let windowID = UUID()
+        let paneHistoryFilePath = "/tmp/toastty-history/\(panelID.uuidString).history"
         let state = AppState(
             windows: [
                 WindowState(
@@ -99,6 +100,12 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             )
         )
         registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
+        registry.setBaseLaunchEnvironmentProvider { requestedPanelID in
+            [
+                ToasttyLaunchContextEnvironment.paneHistoryFileKey: "/tmp/toastty-history/\(requestedPanelID.uuidString).history",
+                "HISTFILE": "/tmp/toastty-history/\(requestedPanelID.uuidString).history",
+            ]
+        }
         registry.bind(store: store)
 
         let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
@@ -106,8 +113,10 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertEqual(
             launchConfiguration.environmentVariables,
             [
+                "HISTFILE": paneHistoryFilePath,
                 "TOASTTY_LAUNCH_REASON": "restore",
                 "TOASTTY_PANEL_ID": panelID.uuidString,
+                "TOASTTY_PANE_HISTORY_FILE": paneHistoryFilePath,
                 "TOASTTY_TERMINAL_PROFILE_ID": "zmx",
             ]
         )

@@ -79,7 +79,7 @@ private enum ToasttyMenuActions {
 
         It will \(initFileAction).
 
-        New profiled shells will pick it up automatically. Existing zmx or tmux sessions need to restart or re-source that init file before titles start updating.
+        New profiled shells will pick it up automatically. Existing zmx or tmux sessions may need to restart or re-source that init file before live titles update. Pane-local history applies to shells launched after Toastty injects the pane history environment, so older multiplexer sessions usually need a restart.
         """
         confirmationAlert.alertStyle = .informational
         confirmationAlert.addButton(withTitle: "Install")
@@ -111,7 +111,7 @@ private enum ToasttyMenuActions {
             \(snippetMessage)
             \(initFileMessage)
 
-            New shells will pick it up automatically. Existing profiled sessions need to restart or re-source that init file.
+            New shells will pick it up automatically. Existing profiled sessions may need to restart or re-source that init file before live titles update. Pane-local history applies to shells launched after Toastty injects the pane history environment, so older multiplexer sessions usually need a restart.
             """
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
@@ -822,6 +822,7 @@ struct ToasttyApp: App {
         }
         Self.configureBaseLaunchEnvironmentProvider(
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            runtimePaths: runtimePaths,
             socketPath: socketPath,
             cliExecutablePath: cliExecutablePath,
             shimDirectoryPath: shimDirectoryPath,
@@ -1028,6 +1029,7 @@ struct ToasttyApp: App {
 
     private static func configureBaseLaunchEnvironmentProvider(
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        runtimePaths: ToasttyRuntimePaths,
         socketPath: String,
         cliExecutablePath: String?,
         shimDirectoryPath: String?,
@@ -1045,6 +1047,7 @@ struct ToasttyApp: App {
                 "cli_path_present": cliExecutablePath == nil ? "false" : "true",
                 "agent_shim_directory": shimDirectoryPath ?? "none",
                 "agent_shim_directory_present": shimDirectoryPath == nil ? "false" : "true",
+                "pane_history_directory": runtimePaths.paneHistoryDirectoryURL.path,
                 "path_starts_with_shim_directory": pathStartsWithDirectory(
                     launchPath,
                     directoryPath: shimDirectoryPath
@@ -1057,9 +1060,12 @@ struct ToasttyApp: App {
             ]
         )
         terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
+            let paneHistoryFilePath = runtimePaths.paneHistoryFileURL(for: panelID).path
             var environment: [String: String] = [
                 ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
                 ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
+                ToasttyLaunchContextEnvironment.paneHistoryFileKey: paneHistoryFilePath,
+                "HISTFILE": paneHistoryFilePath,
             ]
             if let cliExecutablePath {
                 environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
@@ -1181,6 +1187,7 @@ struct ToasttyApp: App {
             )
             Self.configureBaseLaunchEnvironmentProvider(
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                runtimePaths: runtimePaths,
                 socketPath: agentLaunchSocketPath,
                 cliExecutablePath: agentLaunchCLIExecutablePath,
                 shimDirectoryPath: shimDirectoryPath,
@@ -1190,6 +1197,7 @@ struct ToasttyApp: App {
             failureMessages.append("Failed to update managed agent command shims: \(error.localizedDescription)")
             Self.configureBaseLaunchEnvironmentProvider(
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                runtimePaths: runtimePaths,
                 socketPath: agentLaunchSocketPath,
                 cliExecutablePath: agentLaunchCLIExecutablePath,
                 shimDirectoryPath: nil,

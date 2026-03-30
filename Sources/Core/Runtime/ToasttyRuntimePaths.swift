@@ -13,6 +13,8 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
     private static let configDirectoryName = ".toastty"
     private static let logDirectoryName = "logs"
     private static let runDirectoryName = "run"
+    private static let historyDirectoryName = "history"
+    private static let paneHistoryDirectoryName = "panes"
     private static let artifactsDirectoryName = "artifacts"
     private static let devRunsDirectoryName = "dev-runs"
     private static let worktreeRuntimePrefix = "worktree-"
@@ -102,6 +104,19 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
             .appending(path: "bin", directoryHint: .isDirectory)
     }
 
+    public var paneHistoryDirectoryURL: URL {
+        configDirectoryURL
+            .appending(path: Self.historyDirectoryName, directoryHint: .isDirectory)
+            .appending(path: Self.paneHistoryDirectoryName, directoryHint: .isDirectory)
+    }
+
+    public func paneHistoryFileURL(for panelID: UUID) -> URL {
+        paneHistoryDirectoryURL.appending(
+            path: "\(panelID.uuidString).history",
+            directoryHint: .notDirectory
+        )
+    }
+
     public var instanceFileURL: URL? {
         runtimeHomeURL?.appending(path: Self.instanceFileName, directoryHint: .notDirectory)
     }
@@ -156,6 +171,10 @@ public struct ToasttyRuntimePaths: Equatable, Sendable {
         )
         try fileManager.createDirectory(
             at: agentShimDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: paneHistoryDirectoryURL,
             withIntermediateDirectories: true
         )
         if let automationSocketFileURL {
