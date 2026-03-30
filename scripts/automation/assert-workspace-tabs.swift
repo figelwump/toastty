@@ -86,8 +86,9 @@ private let selectedBackground = RGB(hex: 0x1A1A1A)
 private let hairline = RGB(hex: 0x1F1F1F)
 
 private let windowWidthPoints = 2300.0
-private let topBarHeightPoints = 40.0
+private let topBarHeightPoints = 43.0
 private let tabHeightPoints = 34.0
+private let tabTopInsetPoints = topBarHeightPoints - tabHeightPoints
 private let tabSpacingPoints = 6.0
 private let tabTrailingPaddingPoints = 10.0
 private let tabTrailingSlotWidthPoints = 24.0
@@ -187,10 +188,14 @@ private func tabRun(
 private func headerTabSnapshot(path: String, expectedTabCount: Int) throws -> HeaderTabSnapshot {
     let image = try ImageSampler(path: path)
     let scale = Double(image.width) / windowWidthPoints
-    let accentSearchBottomY = max(scaled(12, scale: scale), 4)
+    let accentSearchTopY = max(scaled(max(tabTopInsetPoints - 2, 0), scale: scale), 0)
+    let accentSearchBottomY = min(
+        image.height,
+        max(accentSearchTopY + 1, scaled(tabTopInsetPoints + 10, scale: scale))
+    )
     let accent = try longestAccentRun(
         in: image,
-        yRange: 0..<min(accentSearchBottomY, image.height),
+        yRange: accentSearchTopY..<accentSearchBottomY,
         startSearchX: 0
     )
     let rowY = min(
@@ -322,8 +327,14 @@ private func assertBadgeVisibility(
     let frame = snapshot.tabRuns[tabIndex - 1]
     let slotStartX = frame.upperBound - scaled(tabTrailingPaddingPoints + tabTrailingSlotWidthPoints, scale: scale) + scaled(2, scale: scale)
     let slotEndX = frame.upperBound - scaled(tabTrailingPaddingPoints, scale: scale) - scaled(2, scale: scale)
-    let slotTopY = min(image.height - 1, scaled(tabTrailingSlotTopInsetPoints, scale: scale))
-    let slotBottomY = min(image.height - 1, scaled(tabHeightPoints - tabTrailingSlotBottomInsetPoints, scale: scale))
+    let slotTopY = min(
+        image.height - 1,
+        scaled(tabTopInsetPoints + tabTrailingSlotTopInsetPoints, scale: scale)
+    )
+    let slotBottomY = min(
+        image.height - 1,
+        scaled(tabTopInsetPoints + tabHeightPoints - tabTrailingSlotBottomInsetPoints, scale: scale)
+    )
     let nonBackgroundPixelCount = countNonBackgroundPixels(
         in: image,
         xRange: slotStartX...slotEndX,
