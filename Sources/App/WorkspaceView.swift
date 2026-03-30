@@ -928,7 +928,7 @@ struct WorkspaceView: View {
             .overlay {
                 if let borderColor = chromeSpec.borderColor {
                     WorkspaceTabShape()
-                        .stroke(borderColor, lineWidth: 1)
+                        .stroke(borderColor, lineWidth: 1.5)
                 }
             }
             .contentShape(Rectangle())

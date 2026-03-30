@@ -53,7 +53,7 @@ enum ToastyTheme {
     static let panelHeaderErrorDivider = Color(hex: 0x5BA08A)
     static let workspaceTabSelectedBackground = elevatedBackground
     static let workspaceTabSelectedAccent = accent
-    static let workspaceTabUnselectedText = Color(hex: 0x909090)
+    static let workspaceTabUnselectedText = Color(hex: 0xA8A8A8)
     static let workspaceTabHoverBackground = Color(hex: 0x1C1C1C)
     static let workspaceTabHoverText = Color(hex: 0xB8B8B8)
     static let workspaceTabUnreadDot = Color(hex: 0x5BA08A)
