@@ -179,6 +179,7 @@ final class WorkspaceViewTests: XCTestCase {
         try assertColor(spec.text, equals: ToastyTheme.primaryText)
         let accentColor = try XCTUnwrap(spec.accentColor)
         try assertColor(accentColor, equals: ToastyTheme.workspaceTabSelectedAccent)
+        XCTAssertNil(spec.borderColor)
     }
 
     func testWorkspaceTabChromeSpecSelectedBackgroundMatchesPanelHeaderBackground() throws {
@@ -203,6 +204,8 @@ final class WorkspaceViewTests: XCTestCase {
         try assertColor(spec.background, equals: ToastyTheme.workspaceTabHoverBackground)
         try assertColor(spec.text, equals: ToastyTheme.primaryText)
         XCTAssertNil(spec.accentColor)
+        let borderColor = try XCTUnwrap(spec.borderColor)
+        try assertColor(borderColor, equals: ToastyTheme.subtleBorder)
     }
 
     func testWorkspaceTabChromeSpecRenamingSelectedPreservesAccent() throws {
@@ -216,6 +219,37 @@ final class WorkspaceViewTests: XCTestCase {
         try assertColor(spec.background, equals: ToastyTheme.workspaceTabSelectedBackground)
         let accentColor = try XCTUnwrap(spec.accentColor)
         try assertColor(accentColor, equals: ToastyTheme.workspaceTabSelectedAccent.opacity(0.5))
+        XCTAssertNil(spec.borderColor)
+    }
+
+    func testWorkspaceTabChromeSpecUnselectedStateUsesSubtleOutline() throws {
+        let spec = WorkspaceView.workspaceTabChromeSpec(
+            isSelected: false,
+            isHovered: false,
+            isRenaming: false,
+            appIsActive: true
+        )
+
+        try assertColor(spec.background, equals: .clear)
+        try assertColor(spec.text, equals: ToastyTheme.workspaceTabUnselectedText)
+        XCTAssertNil(spec.accentColor)
+        let borderColor = try XCTUnwrap(spec.borderColor)
+        try assertColor(borderColor, equals: ToastyTheme.subtleBorder)
+    }
+
+    func testWorkspaceTabChromeSpecHoveredUnselectedKeepsOutline() throws {
+        let spec = WorkspaceView.workspaceTabChromeSpec(
+            isSelected: false,
+            isHovered: true,
+            isRenaming: false,
+            appIsActive: true
+        )
+
+        try assertColor(spec.background, equals: ToastyTheme.workspaceTabHoverBackground)
+        try assertColor(spec.text, equals: ToastyTheme.workspaceTabHoverText)
+        XCTAssertNil(spec.accentColor)
+        let borderColor = try XCTUnwrap(spec.borderColor)
+        try assertColor(borderColor, equals: ToastyTheme.subtleBorder)
     }
 
     func testWorkspaceTabUnreadDotUsesLargerDiameter() {

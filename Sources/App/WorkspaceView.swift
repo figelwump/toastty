@@ -13,6 +13,7 @@ struct WorkspaceView: View {
         let background: Color
         let text: Color
         let accentColor: Color?
+        let borderColor: Color?
     }
 
     private struct WorkspaceTabShape: Shape {
@@ -177,14 +178,16 @@ struct WorkspaceView: View {
                 return WorkspaceTabChromeSpec(
                     background: ToastyTheme.workspaceTabSelectedBackground,
                     text: ToastyTheme.primaryText,
-                    accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive)
+                    accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive),
+                    borderColor: nil
                 )
             }
 
             return WorkspaceTabChromeSpec(
                 background: ToastyTheme.workspaceTabHoverBackground,
                 text: ToastyTheme.primaryText,
-                accentColor: nil
+                accentColor: nil,
+                borderColor: ToastyTheme.subtleBorder
             )
         }
 
@@ -192,7 +195,8 @@ struct WorkspaceView: View {
             return WorkspaceTabChromeSpec(
                 background: ToastyTheme.workspaceTabSelectedBackground,
                 text: ToastyTheme.primaryText,
-                accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive)
+                accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive),
+                borderColor: nil
             )
         }
 
@@ -200,14 +204,16 @@ struct WorkspaceView: View {
             return WorkspaceTabChromeSpec(
                 background: ToastyTheme.workspaceTabHoverBackground,
                 text: ToastyTheme.workspaceTabHoverText,
-                accentColor: nil
+                accentColor: nil,
+                borderColor: ToastyTheme.subtleBorder
             )
         }
 
         return WorkspaceTabChromeSpec(
             background: .clear,
             text: ToastyTheme.workspaceTabUnselectedText,
-            accentColor: nil
+            accentColor: nil,
+            borderColor: ToastyTheme.subtleBorder
         )
     }
 
@@ -900,6 +906,12 @@ struct WorkspaceView: View {
                         .fill(accentColor)
                         .frame(height: ToastyTheme.workspaceTabAccentLineHeight)
                         .clipShape(WorkspaceTabShape())
+                }
+            }
+            .overlay {
+                if let borderColor = chromeSpec.borderColor {
+                    WorkspaceTabShape()
+                        .stroke(borderColor, lineWidth: 1)
                 }
             }
             .contentShape(Rectangle())

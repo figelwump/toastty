@@ -84,6 +84,7 @@ private final class ImageSampler {
 private let chromeBackground = RGB(hex: 0x111111)
 private let selectedBackground = RGB(hex: 0x1A1A1A)
 private let hairline = RGB(hex: 0x1F1F1F)
+private let subtleBorder = RGB(hex: 0x2A2A2A)
 
 private let windowWidthPoints = 2300.0
 private let topBarHeightPoints = 43.0
@@ -292,8 +293,22 @@ private func assertTwoTabScreenshot(path: String) throws -> HeaderTabSnapshot {
         topY: seamY
     )
     try assertCondition(
-        isNear(unselectedBottomSeamColor, hairline, tolerance: 12),
-        "idle header tab area no longer shows the header seam"
+        isNear(unselectedBottomSeamColor, subtleBorder, tolerance: 12) ||
+            isNear(unselectedBottomSeamColor, hairline, tolerance: 12),
+        "unselected header tab no longer has a defined bottom edge"
+    )
+
+    let sideBorderY = min(
+        image.height - 1,
+        scaled(tabTopInsetPoints + (tabHeightPoints / 2), scale: scale)
+    )
+    let unselectedLeadingBorderColor = image.color(
+        topX: min(image.width - 1, unselectedRun.lowerBound + max(1, scaled(1, scale: scale))),
+        topY: sideBorderY
+    )
+    try assertCondition(
+        isNear(unselectedLeadingBorderColor, subtleBorder, tolerance: 16),
+        "unselected header tab leading outline is missing"
     )
 
     let panelHeaderContinuityColor = image.color(
