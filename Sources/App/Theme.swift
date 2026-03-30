@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -116,8 +117,9 @@ enum ToastyTheme {
     static let fontMonoTerminalSlotTitle = Font.system(size: 12, weight: .regular, design: .monospaced)
 
     // Sidebar-specific fonts matching design spec
-    static let fontWorkspaceName = Font.system(size: 13, weight: .semibold, design: .default)
-    static let fontWorkspaceNameInactive = Font.system(size: 13, weight: .medium, design: .default)
+    private static let sidebarWorkspaceNameFontSize: CGFloat = 13
+    static let fontWorkspaceName = Font.system(size: sidebarWorkspaceNameFontSize, weight: .semibold, design: .default)
+    static let fontWorkspaceNameInactive = Font.system(size: sidebarWorkspaceNameFontSize, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontWorkspaceSessionAgent = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontWorkspaceSessionChip = Font.system(size: 10, weight: .medium, design: .default)
@@ -129,6 +131,13 @@ enum ToastyTheme {
 
     static func workspaceSessionAgentFont(weight: Font.Weight) -> Font {
         Font.system(size: 11, weight: weight, design: .monospaced)
+    }
+
+    static func sidebarWorkspaceNameNSFont(isSelected: Bool) -> NSFont {
+        .systemFont(
+            ofSize: sidebarWorkspaceNameFontSize,
+            weight: isSelected ? .semibold : .medium
+        )
     }
 
     static func workspaceSessionDetailFont(weight: Font.Weight) -> Font {

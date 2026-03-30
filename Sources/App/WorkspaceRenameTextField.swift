@@ -22,6 +22,30 @@ struct WorkspaceRenameTextField: NSViewRepresentable {
     func makeNSView(context: Context) -> NSTextField {
         let textField = NSTextField(string: text)
         textField.delegate = context.coordinator
+        configure(textField)
+        return textField
+    }
+
+    func updateNSView(_ textField: NSTextField, context: Context) {
+        context.coordinator.update(
+            text: $text,
+            onSubmit: onSubmit,
+            onCancel: onCancel
+        )
+
+        configure(textField)
+        context.coordinator.synchronizeDisplayedText(with: text, in: textField)
+        context.coordinator.requestInitialSelection(
+            for: itemID,
+            in: textField
+        )
+    }
+
+    static func dismantleNSView(_ textField: NSTextField, coordinator: Coordinator) {
+        coordinator.resetSelectionState()
+    }
+
+    private func configure(_ textField: NSTextField) {
         textField.placeholderString = placeholder
         textField.isBordered = false
         textField.isBezeled = false
@@ -34,25 +58,6 @@ struct WorkspaceRenameTextField: NSViewRepresentable {
         textField.setAccessibilityIdentifier(accessibilityID)
         textField.setContentHuggingPriority(.defaultLow, for: .horizontal)
         textField.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        return textField
-    }
-
-    func updateNSView(_ textField: NSTextField, context: Context) {
-        context.coordinator.update(
-            text: $text,
-            onSubmit: onSubmit,
-            onCancel: onCancel
-        )
-
-        context.coordinator.synchronizeDisplayedText(with: text, in: textField)
-        context.coordinator.requestInitialSelection(
-            for: itemID,
-            in: textField
-        )
-    }
-
-    static func dismantleNSView(_ textField: NSTextField, coordinator: Coordinator) {
-        coordinator.resetSelectionState()
     }
 
     @MainActor
