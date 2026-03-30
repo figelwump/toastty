@@ -1635,7 +1635,8 @@ private struct PanelCardView: View {
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         panelID: panelID
                     )
-                    .padding(10)
+                    .padding(.top, 6)
+                    .padding(.trailing, 8)
                 }
                 .frame(
                     maxWidth: .infinity,

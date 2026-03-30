@@ -14,14 +14,14 @@ struct TerminalSearchOverlay: View {
     var body: some View {
         Group {
             if let searchState, searchState.isPresented {
-                HStack(spacing: 8) {
-                    TextField("Search Scrollback", text: searchBinding)
+                HStack(spacing: 6) {
+                    TextField("Search", text: searchBinding)
                         .textFieldStyle(.plain)
-                        .font(ToastyTheme.fontBody)
+                        .font(ToastyTheme.fontTitle)
                         .foregroundStyle(ToastyTheme.primaryText)
-                        .frame(width: 220)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
+                        .frame(width: 280)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
                         .background(
                             RoundedRectangle(cornerRadius: 7, style: .continuous)
                                 .fill(ToastyTheme.surfaceBackground.opacity(0.96))
@@ -45,26 +45,30 @@ struct TerminalSearchOverlay: View {
                                     .font(ToastyTheme.fontWorkspaceTabBadge)
                                     .foregroundStyle(ToastyTheme.inactiveText)
                                     .monospacedDigit()
-                                    .padding(.trailing, 10)
+                                    .padding(.trailing, 12)
                             }
                         }
 
-                    overlayButton(
-                        systemImage: "chevron.up",
-                        action: { _ = terminalRuntimeRegistry.findPrevious(panelID: panelID) }
-                    )
+                    HStack(spacing: 3) {
+                        overlayButton(
+                            systemImage: "chevron.up",
+                            action: { _ = terminalRuntimeRegistry.findPrevious(panelID: panelID) }
+                        )
 
-                    overlayButton(
-                        systemImage: "chevron.down",
-                        action: { _ = terminalRuntimeRegistry.findNext(panelID: panelID) }
-                    )
+                        overlayButton(
+                            systemImage: "chevron.down",
+                            action: { _ = terminalRuntimeRegistry.findNext(panelID: panelID) }
+                        )
 
-                    overlayButton(
-                        systemImage: "xmark",
-                        action: closeSearch
-                    )
+                        overlayButton(
+                            systemImage: "xmark",
+                            action: closeSearch
+                        )
+                    }
                 }
-                .padding(8)
+                .padding(.leading, 5)
+                .padding(.trailing, 7)
+                .padding(.vertical, 4)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(ToastyTheme.elevatedBackground.opacity(0.98))
@@ -115,17 +119,10 @@ struct TerminalSearchOverlay: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-                .frame(width: 22, height: 22)
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(ToastyTheme.primaryText)
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(ToastyTheme.chromeBackground)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(ToastyTheme.hairline, lineWidth: 1)
-                }
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
