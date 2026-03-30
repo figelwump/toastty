@@ -170,6 +170,28 @@ final class SidebarViewTests: XCTestCase {
         XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
     }
 
+    func testWorkspaceTitleUsesConfiguredSidebarFontSize() throws {
+        let styledBitmap = try renderedBitmap(
+            for: Text("Workspace 1").font(ToastyTheme.fontWorkspaceName)
+        )
+        let expectedBitmap = try renderedBitmap(
+            for: Text("Workspace 1").font(Font.system(size: 13, weight: .semibold, design: .default))
+        )
+
+        XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
+    }
+
+    func testInactiveWorkspaceTitleUsesConfiguredSidebarFontSize() throws {
+        let styledBitmap = try renderedBitmap(
+            for: Text("Workspace 1").font(ToastyTheme.fontWorkspaceNameInactive)
+        )
+        let expectedBitmap = try renderedBitmap(
+            for: Text("Workspace 1").font(Font.system(size: 13, weight: .medium, design: .default))
+        )
+
+        XCTAssertEqual(try differingPixelCount(between: styledBitmap, and: expectedBitmap), 0)
+    }
+
     func testBackgroundTabSessionPanelRemainsFocusable() throws {
         let backgroundTab = WorkspaceTabState.bootstrap(terminalTitle: "Background Agent")
         let selectedTab = WorkspaceTabState.bootstrap(terminalTitle: "Foreground Terminal")

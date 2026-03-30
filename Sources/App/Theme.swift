@@ -107,8 +107,8 @@ enum ToastyTheme {
     static let fontMonoTerminalSlotTitle = Font.system(size: 12, weight: .regular, design: .monospaced)
 
     // Sidebar-specific fonts matching design spec
-    static let fontWorkspaceName = Font.system(size: 12, weight: .semibold, design: .default)
-    static let fontWorkspaceNameInactive = Font.system(size: 12, weight: .medium, design: .default)
+    static let fontWorkspaceName = Font.system(size: 13, weight: .semibold, design: .default)
+    static let fontWorkspaceNameInactive = Font.system(size: 13, weight: .medium, design: .default)
     static let fontWorkspaceSubtitle = Font.system(size: 10, weight: .regular, design: .monospaced)
     static let fontWorkspaceSessionAgent = Font.system(size: 11, weight: .medium, design: .monospaced)
     static let fontWorkspaceSessionChip = Font.system(size: 10, weight: .medium, design: .default)
