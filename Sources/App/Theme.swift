@@ -122,11 +122,11 @@ enum ToastyTheme {
     static let fontNewWorkspace = Font.system(size: 11, weight: .regular, design: .default)
 
     static func workspaceSessionAgentFont(weight: Font.Weight) -> Font {
-        Font.system(size: 10, weight: weight, design: .monospaced)
+        Font.system(size: 11, weight: weight, design: .monospaced)
     }
 
     static func workspaceSessionDetailFont(weight: Font.Weight) -> Font {
-        Font.system(size: 10, weight: weight, design: .default)
+        Font.system(size: 11, weight: weight, design: .default)
     }
 
     static func sessionStatusTextColor(for kind: SessionStatusKind) -> Color {
