@@ -18,6 +18,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Saved workspace and window layout snapshots, including window-local terminal font overrides.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash).
+- `~/.toastty/history/panes/`
+  - Pane-local shell history files used by Toastty's `zsh` and `bash` history integration.
 - By default, `~/Library/Logs/Toastty/toastty.log`
   - Structured JSON logs.
 - By default, `~/Library/Logs/Toastty/toastty.previous.log`
@@ -27,6 +29,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/config-reference`
   - `<runtime-home>/terminal-profiles.toml`
   - `<runtime-home>/workspace-layout-profiles.json`
+  - `<runtime-home>/history/panes/`
   - `<runtime-home>/logs/toastty.log`
   - `<runtime-home>/instance.json`
   - a dedicated `UserDefaults` suite derived from that runtime-home path

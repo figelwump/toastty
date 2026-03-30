@@ -109,8 +109,9 @@ public enum TerminalProfilesFile {
         # - TOASTTY_LAUNCH_REASON   ("create" or "restore")
         #
         # For multiplexers like zmx/tmux, install Toastty shell integration so
-        # the shell inside the session keeps emitting live pane titles.
-        # Use Terminal > Install Shell Integration… or see the README.
+        # the shell inside the session keeps emitting live pane titles and
+        # restored zsh/bash panes can reuse pane-local command history.
+        # Use Toastty > Install Shell Integration… or see the README.
         #
         # Example: bind each Toastty pane to its own persistent zmx session.
         #

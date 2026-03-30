@@ -2,7 +2,7 @@ import CoreState
 import Darwin
 import Foundation
 
-enum ProfileShellIntegrationShell: Equatable {
+enum ProfileShellIntegrationShell: CaseIterable, Equatable {
     case zsh
     case bash
 
@@ -37,6 +37,15 @@ enum ProfileShellIntegrationShell: Equatable {
         }
     }
 
+    var candidateInitFileNames: [String] {
+        switch self {
+        case .zsh:
+            return [".zshrc"]
+        case .bash:
+            return [".bash_profile", ".profile"]
+        }
+    }
+
     var sourceLine: String {
         "source \"$HOME/\(managedSnippetRelativePath)\""
     }
@@ -57,6 +66,19 @@ enum ProfileShellIntegrationShell: Equatable {
             \texport PATH
             }
 
+            _toastty_configure_pane_history() {
+            \tlocal pane_history_file="${TOASTTY_PANE_HISTORY_FILE:-}"
+            \t[[ -n "$pane_history_file" ]] || return
+
+            \tlocal pane_history_dir="${pane_history_file:h}"
+            \tcommand mkdir -p "$pane_history_dir" 2>/dev/null || return
+
+            \tif [[ -z ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
+            \t\tfc -p "$pane_history_file" 2>/dev/null || return
+            \t\ttypeset -g _TOASTTY_PANE_HISTORY_INITIALIZED=1
+            \tfi
+            }
+
             _toastty_emit_title() {
             \t[[ -t 1 ]] || return
             \t[[ -w /dev/tty ]] || return
@@ -71,6 +93,9 @@ enum ProfileShellIntegrationShell: Equatable {
             }
 
             _toastty_precmd() {
+            \tif [[ -n ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
+            \t\tfc -AI
+            \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
             \t_toastty_emit_title "$cwd"
             }
@@ -82,6 +107,7 @@ enum ProfileShellIntegrationShell: Equatable {
 
             if [[ -o interactive ]]; then
             \t_toastty_restore_agent_shim_path
+            \t_toastty_configure_pane_history
             \tif [[ -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
             \t\tautoload -Uz add-zsh-hook
             \t\tadd-zsh-hook precmd _toastty_precmd
@@ -112,6 +138,22 @@ enum ProfileShellIntegrationShell: Equatable {
             \texport PATH
             }
 
+            _toastty_configure_pane_history() {
+            \tlocal pane_history_file="${TOASTTY_PANE_HISTORY_FILE:-}"
+            \t[[ -n "$pane_history_file" ]] || return
+
+            \tlocal pane_history_dir="${pane_history_file%/*}"
+            \tcommand mkdir -p "$pane_history_dir" 2>/dev/null || return
+
+            \tif [[ -z "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
+            \t\tHISTFILE="$pane_history_file"
+            \t\texport HISTFILE
+            \t\thistory -c
+            \t\thistory -r "$HISTFILE" 2>/dev/null || true
+            \t\t_TOASTTY_PANE_HISTORY_INITIALIZED=1
+            \tfi
+            }
+
             _toastty_emit_title() {
             \t[[ $- == *i* ]] || return
             \t[[ -t 1 ]] || return
@@ -127,12 +169,16 @@ enum ProfileShellIntegrationShell: Equatable {
             }
 
             _toastty_prompt_command() {
+            \tif [[ -n "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
+            \t\thistory -a
+            \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
             \t_toastty_emit_title "$cwd"
             }
 
             if [[ $- == *i* ]]; then
             \t_toastty_restore_agent_shim_path
+            \t_toastty_configure_pane_history
             \tif [[ -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
             \t\tPROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
             \t\t_TOASTTY_TITLE_HOOKS_INSTALLED=1
@@ -158,6 +204,10 @@ enum ProfileShellIntegrationShell: Equatable {
             }
             return homeDirectoryURL.appendingPathComponent(defaultInitFileName)
         }
+    }
+
+    func candidateInitFileURLs(homeDirectoryURL: URL) -> [URL] {
+        candidateInitFileNames.map { homeDirectoryURL.appendingPathComponent($0) }
     }
 }
 
@@ -221,8 +271,8 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable {
 final class ProfileShellIntegrationInstaller {
     private static let managedSourceCommentLines = [
         "# Added by Toastty terminal profile shell integration",
-        "# Keep this near the end of this file, after all other PATH changes, so Toastty can",
-        "# restore its managed shim directory to the front of PATH.",
+        "# Keep this near the end of this file, after all other PATH and history-file changes,",
+        "# so Toastty can restore its managed shim directory and pane-local history settings.",
     ]
 
     private let fileManager: FileManager
@@ -272,23 +322,25 @@ final class ProfileShellIntegrationInstaller {
     }
 
     func refreshManagedSnippetIfInstalled() throws -> Bool {
-        guard let shell = Self.detectedShell(from: shellPathProvider()) else {
-            return false
+        var updated = false
+
+        for shell in ProfileShellIntegrationShell.allCases {
+            let plan = ProfileShellIntegrationInstallPlan(
+                shell: shell,
+                initFileURL: shell.preferredInitFileURL(homeDirectoryURL: homeDirectoryURL, fileManager: fileManager),
+                managedSnippetURL: homeDirectoryURL.appendingPathComponent(shell.managedSnippetRelativePath)
+            )
+            guard try shouldRefreshManagedSnippet(for: plan) else {
+                continue
+            }
+
+            try ensureDirectoryExists(at: plan.managedSnippetURL.deletingLastPathComponent())
+            if try writeManagedSnippet(for: plan) {
+                updated = true
+            }
         }
 
-        let plan = ProfileShellIntegrationInstallPlan(
-            shell: shell,
-            initFileURL: shell.preferredInitFileURL(homeDirectoryURL: homeDirectoryURL, fileManager: fileManager),
-            managedSnippetURL: homeDirectoryURL.appendingPathComponent(shell.managedSnippetRelativePath)
-        )
-        let initFileContents = try readFileIfPresent(at: plan.initFileURL)
-        let snippetExists = fileManager.fileExists(atPath: plan.managedSnippetURL.path)
-        guard snippetExists || contents(initFileContents, referencesManagedSnippetFor: plan) else {
-            return false
-        }
-
-        try ensureDirectoryExists(at: plan.managedSnippetURL.deletingLastPathComponent())
-        return try writeManagedSnippet(for: plan)
+        return updated
     }
 
     func installationStatus() throws -> ProfileShellIntegrationInstallStatus {
@@ -328,6 +380,23 @@ final class ProfileShellIntegrationInstaller {
             environment: ProcessInfo.processInfo.environment,
             loginShellPath: loginShellPath()
         )
+    }
+
+    private func shouldRefreshManagedSnippet(
+        for plan: ProfileShellIntegrationInstallPlan
+    ) throws -> Bool {
+        if fileManager.fileExists(atPath: plan.managedSnippetURL.path) {
+            return true
+        }
+
+        for initFileURL in plan.shell.candidateInitFileURLs(homeDirectoryURL: homeDirectoryURL) {
+            let initFileContents = try readFileIfPresent(at: initFileURL)
+            if contents(initFileContents, referencesManagedSnippetFor: plan) {
+                return true
+            }
+        }
+
+        return false
     }
 
     static func resolvedShellPath(
