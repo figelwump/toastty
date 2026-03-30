@@ -68,7 +68,7 @@ struct WorkspaceView: View {
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
     private static let workspaceTabsToControlsSpacing: CGFloat = 12
-    private static let workspaceTabStripSpacing: CGFloat = 0
+    private static let workspaceTabStripSpacing: CGFloat = -1.5
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
 
@@ -473,14 +473,16 @@ struct WorkspaceView: View {
             accessorySpacing: Self.workspaceTabAccessorySpacing
         ) {
             ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                let isSelected = workspace.resolvedSelectedTabID == tab.id
                 workspaceTabRow(
                     workspaceID: workspace.id,
                     tab: tab,
                     index: index,
-                    isSelected: workspace.resolvedSelectedTabID == tab.id,
+                    isSelected: isSelected,
                     allowsManagementAffordances: allowsManagementAffordances,
                     installsContextMenu: installsContextMenu
                 )
+                .zIndex(isSelected ? 1 : 0)
             }
 
             newTabButton
