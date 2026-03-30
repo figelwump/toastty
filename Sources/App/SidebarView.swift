@@ -324,7 +324,7 @@ struct SidebarView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
-            .padding(.vertical, 10)
+            .padding(.vertical, 12)
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
