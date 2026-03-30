@@ -9,6 +9,35 @@ struct WorkspaceView: View {
         case empty
     }
 
+    struct WorkspaceTabChromeSpec {
+        let background: Color
+        let text: Color
+        let accentColor: Color?
+    }
+
+    private struct WorkspaceTabShape: Shape {
+        func path(in rect: CGRect) -> Path {
+            let radius = min(ToastyTheme.workspaceTabCornerRadius, rect.width / 2, rect.height)
+            var path = Path()
+
+            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + radius))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.minX + radius, y: rect.minY),
+                control: CGPoint(x: rect.minX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX - radius, y: rect.minY))
+            path.addQuadCurve(
+                to: CGPoint(x: rect.maxX, y: rect.minY + radius),
+                control: CGPoint(x: rect.maxX, y: rect.minY)
+            )
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+            path.closeSubpath()
+
+            return path
+        }
+    }
+
     let windowID: UUID
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
@@ -36,14 +65,43 @@ struct WorkspaceView: View {
     @State private var panelFlashResetWorkItem: DispatchWorkItem?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
+    private static let workspaceTitleToTabsSpacing: CGFloat = 18
+    private static let workspaceTabsToControlsSpacing: CGFloat = 12
+    private static let workspaceTabStripSpacing: CGFloat = 6
+
+    nonisolated static func resolvedWorkspaceTitleWidth(
+        preferredWidth: CGFloat,
+        availableWidth: CGFloat,
+        trailingWidth: CGFloat,
+        tabCount: Int,
+        titleSpacing: CGFloat = 18,
+        trailingSpacing: CGFloat = 12,
+        tabSpacing: CGFloat = 6,
+        titleMaxWidth: CGFloat = 260
+    ) -> CGFloat {
+        let cappedPreferredWidth = min(preferredWidth, titleMaxWidth)
+        guard availableWidth.isFinite else { return cappedPreferredWidth }
+
+        guard tabCount > 0 else {
+            return max(0, min(cappedPreferredWidth, availableWidth - trailingWidth - trailingSpacing))
+        }
+
+        let minimumTabsWidth = workspaceTabMinimumTotalWidth(
+            tabCount: tabCount,
+            spacing: tabSpacing
+        )
+        let availableTitleWidth = availableWidth - trailingWidth - titleSpacing - trailingSpacing - minimumTabsWidth
+        return max(0, min(cappedPreferredWidth, availableTitleWidth))
+    }
     private static let panelFlashPeakDuration: Double = 0.18
     private static let panelFlashSettleDuration: Double = 0.28
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
-        isHovered: Bool
+        isHovered: Bool,
+        showsCloseAffordance: Bool
     ) -> WorkspaceTabTrailingAccessory {
-        if isHovered {
+        if isHovered && showsCloseAffordance {
             return .closeButton
         }
 
@@ -53,10 +111,104 @@ struct WorkspaceView: View {
         return .badge(shortcutLabel)
     }
 
-    /// The tab strip lives below the titlebar, so it should not reserve
-    /// traffic-light/sidebar-toggle clearance when the sidebar is hidden.
-    nonisolated static func workspaceTabLeadingPadding(sidebarVisible _: Bool) -> CGFloat {
-        ToastyTheme.workspaceTabLeadingPadding
+    nonisolated static func workspaceTabManagementAffordancesEnabled(tabCount: Int) -> Bool {
+        tabCount > 0
+    }
+
+    nonisolated static func workspaceTabInstallsContextMenu(tabCount: Int) -> Bool {
+        tabCount > 0
+    }
+
+    nonisolated static func workspaceTabMinimumTotalWidth(
+        tabCount: Int,
+        spacing: CGFloat = 6
+    ) -> CGFloat {
+        workspaceTabTotalWidth(
+            tabCount: tabCount,
+            tabWidth: ToastyTheme.workspaceTabMinimumWidth,
+            spacing: spacing
+        )
+    }
+
+    nonisolated static func workspaceTabIdealTotalWidth(
+        tabCount: Int,
+        spacing: CGFloat = 6
+    ) -> CGFloat {
+        workspaceTabTotalWidth(
+            tabCount: tabCount,
+            tabWidth: ToastyTheme.workspaceTabWidth,
+            spacing: spacing
+        )
+    }
+
+    nonisolated static func resolvedWorkspaceTabWidth(
+        availableWidth: CGFloat,
+        tabCount: Int,
+        spacing: CGFloat = 6
+    ) -> CGFloat {
+        guard tabCount > 0 else { return ToastyTheme.workspaceTabWidth }
+
+        let spacingWidth = CGFloat(max(tabCount - 1, 0)) * spacing
+        let availableTabWidth = max(0, availableWidth - spacingWidth)
+        let fittedWidth = floor(availableTabWidth / CGFloat(tabCount))
+        return min(
+            ToastyTheme.workspaceTabWidth,
+            max(ToastyTheme.workspaceTabMinimumWidth, fittedWidth)
+        )
+    }
+
+    nonisolated private static func workspaceTabTotalWidth(
+        tabCount: Int,
+        tabWidth: CGFloat,
+        spacing: CGFloat
+    ) -> CGFloat {
+        guard tabCount > 0 else { return 0 }
+        return CGFloat(tabCount) * tabWidth + CGFloat(max(tabCount - 1, 0)) * spacing
+    }
+
+    nonisolated static func workspaceTabChromeSpec(
+        isSelected: Bool,
+        isHovered: Bool,
+        isRenaming: Bool,
+        appIsActive: Bool
+    ) -> WorkspaceTabChromeSpec {
+        if isRenaming {
+            if isSelected {
+                return WorkspaceTabChromeSpec(
+                    background: ToastyTheme.workspaceTabSelectedBackground,
+                    text: ToastyTheme.primaryText,
+                    accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive)
+                )
+            }
+
+            return WorkspaceTabChromeSpec(
+                background: ToastyTheme.workspaceTabHoverBackground,
+                text: ToastyTheme.primaryText,
+                accentColor: nil
+            )
+        }
+
+        if isSelected {
+            return WorkspaceTabChromeSpec(
+                background: ToastyTheme.workspaceTabSelectedBackground,
+                text: ToastyTheme.primaryText,
+                accentColor: ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: appIsActive)
+            )
+        }
+
+        if isHovered {
+            return WorkspaceTabChromeSpec(
+                background: ToastyTheme.workspaceTabHoverBackground,
+                text: ToastyTheme.workspaceTabHoverText,
+                accentColor: nil
+            )
+        }
+
+        return WorkspaceTabChromeSpec(
+            background: .clear,
+            text: ToastyTheme.workspaceTabUnselectedText,
+            accentColor: nil
+        )
     }
 
     private var agentTopBarModel: WorkspaceAgentTopBarModel {
@@ -69,17 +221,6 @@ struct WorkspaceView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             topBar
-            Rectangle()
-                .fill(ToastyTheme.hairline)
-                .frame(height: 1)
-
-            if let workspace = selectedWorkspace,
-               workspace.tabIDs.count > 1 {
-                workspaceTabBar(for: workspace)
-                Rectangle()
-                    .fill(ToastyTheme.hairline)
-                    .frame(height: 1)
-            }
 
             if let window = store.window(id: windowID) {
                 workspaceStack(for: window)
@@ -139,20 +280,60 @@ struct WorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             appIsActive = false
+            hoveredTabID = nil
+            hoveredTabCloseButtonID = nil
         }
     }
 
     private var topBar: some View {
+        ZStack(alignment: .bottomLeading) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(height: 1)
+
+            Group {
+                if let workspace = selectedWorkspace {
+                    WorkspaceHeaderLayout(
+                        tabCount: workspace.tabIDs.count,
+                        titleSpacing: Self.workspaceTitleToTabsSpacing,
+                        trailingSpacing: Self.workspaceTabsToControlsSpacing,
+                        tabSpacing: Self.workspaceTabStripSpacing
+                    ) {
+                        workspaceTitleLabel
+                        workspaceHeaderTabStrip(for: workspace)
+                        topBarTrailingControls
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                } else {
+                    HStack(alignment: .center, spacing: Self.workspaceTabsToControlsSpacing) {
+                        workspaceTitleLabel
+                        Spacer(minLength: 0)
+                        topBarTrailingControls
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+            }
+            .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
+            .padding(.trailing, 12)
+            .padding(.top, ToastyTheme.topBarContentTopPadding)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+        .frame(height: ToastyTheme.topBarHeight)
+        .background(ToastyTheme.chromeBackground)
+        .accessibilityIdentifier("topbar.container")
+    }
+
+    private var workspaceTitleLabel: some View {
+        Text(selectedWorkspace?.title ?? "")
+            .font(ToastyTheme.fontTitle)
+            .foregroundStyle(ToastyTheme.primaryText)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .accessibilityIdentifier("topbar.workspace.title")
+    }
+
+    private var topBarTrailingControls: some View {
         HStack(spacing: 6) {
-            Text(selectedWorkspace?.title ?? "")
-                .font(ToastyTheme.fontTitle)
-                .foregroundStyle(ToastyTheme.primaryText)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .accessibilityIdentifier("topbar.workspace.title")
-
-            Spacer(minLength: 12)
-
             if agentTopBarModel.showsAddAgentsButton {
                 topBarFlashTextButton(title: WorkspaceAgentTopBarModel.addAgentsTitle) {
                     openAgentProfilesConfiguration()
@@ -171,7 +352,7 @@ struct WorkspaceView: View {
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
-            topBarFlashButton(title: "Split H", icon: { highlighted in
+            topBarFlashButton(icon: { highlighted in
                 SplitHorizontalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
                 split(orientation: .horizontal)
@@ -180,7 +361,7 @@ struct WorkspaceView: View {
             .help(ToasttyKeyboardShortcuts.splitHorizontal.helpText("Split Horizontally"))
             .accessibilityIdentifier("workspace.split.horizontal")
 
-            topBarFlashButton(title: "Split V", icon: { highlighted in
+            topBarFlashButton(icon: { highlighted in
                 SplitVerticalIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
             }) {
                 split(orientation: .vertical)
@@ -188,55 +369,48 @@ struct WorkspaceView: View {
             .disabled(isFocusedPanelModeActive)
             .help(ToasttyKeyboardShortcuts.splitVertical.helpText("Split Vertically"))
             .accessibilityIdentifier("workspace.split.vertical")
+
+            newTabButton
         }
-        .padding(.leading, sidebarVisible ? 12 : ToastyTheme.topBarLeadingPaddingWithoutSidebar)
-        .padding(.trailing, 12)
-        .padding(.top, ToastyTheme.topBarContentTopPadding)
-        .frame(height: ToastyTheme.topBarHeight)
-        .background(ToastyTheme.chromeBackground)
-        .accessibilityIdentifier("topbar.container")
     }
 
-    private func workspaceTabBar(for workspace: WorkspaceState) -> some View {
-        HStack(spacing: 8) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
-                        workspaceTabRow(
-                            workspaceID: workspace.id,
-                            tab: tab,
-                            index: index,
-                            isSelected: workspace.resolvedSelectedTabID == tab.id
-                        )
-                    }
-                }
-                .padding(
-                    .leading,
-                    Self.workspaceTabLeadingPadding(sidebarVisible: sidebarVisible)
-                )
-                .padding(.vertical, 4)
-            }
+    private func workspaceHeaderTabStrip(for workspace: WorkspaceState) -> some View {
+        let allowsManagementAffordances = Self.workspaceTabManagementAffordancesEnabled(tabCount: workspace.tabIDs.count)
+        let installsContextMenu = Self.workspaceTabInstallsContextMenu(tabCount: workspace.tabIDs.count)
 
-            Button(action: createTabInSelectedWorkspace) {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .frame(width: 20, height: 20)
-                    .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5)
-                            .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
-                    )
+        return WorkspaceTabStripLayout(spacing: Self.workspaceTabStripSpacing) {
+            ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
+                workspaceTabRow(
+                    workspaceID: workspace.id,
+                    tab: tab,
+                    index: index,
+                    isSelected: workspace.resolvedSelectedTabID == tab.id,
+                    allowsManagementAffordances: allowsManagementAffordances,
+                    installsContextMenu: installsContextMenu
+                )
             }
-            .buttonStyle(.plain)
-            .padding(.trailing, 12)
-            .disabled(selectedWorkspace == nil)
-            .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
-            .accessibilityIdentifier("workspace.tabs.new")
         }
-        .frame(height: ToastyTheme.workspaceTabBarHeight)
-        .background(ToastyTheme.chromeBackground)
+        .frame(height: ToastyTheme.workspaceTabHeight, alignment: .bottom)
+        .clipped()
         .accessibilityIdentifier("workspace.tabs.container")
+    }
+
+    private var newTabButton: some View {
+        Button(action: createTabInSelectedWorkspace) {
+            Image(systemName: "plus")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .frame(width: 20, height: 20)
+                .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(selectedWorkspace == nil)
+        .help(ToasttyKeyboardShortcuts.newTab.helpText("New Tab"))
+        .accessibilityIdentifier("workspace.tabs.new")
     }
 
     private func split(orientation: SplitOrientation) {
@@ -406,11 +580,11 @@ struct WorkspaceView: View {
     @ViewBuilder
     private func focusedPanelToggle(identifier: String) -> some View {
         let isOn = isFocusedPanelModeActive
-        topBarButton(title: isOn ? "Restore Layout" : "Focus Panel", icon: {
-            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.inactiveText)
-        }, active: isOn) {
+        styledTopBarButton(active: isOn) {
             guard let workspaceID = selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+        } label: {
+            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.inactiveText)
         }
         .help(
             ToasttyKeyboardShortcuts.toggleFocusedPanel.helpText(
@@ -559,28 +733,31 @@ struct WorkspaceView: View {
         )
     }
 
+    @ViewBuilder
     private func workspaceTabRow(
         workspaceID: UUID,
         tab: WorkspaceTabState,
         index: Int,
-        isSelected: Bool
+        isSelected: Bool,
+        allowsManagementAffordances: Bool,
+        installsContextMenu: Bool
     ) -> some View {
         let hasUnread = tab.unreadPanelIDs.isEmpty == false
         let isRenaming = renamingTabID == tab.id
-        let isHovered = isRenaming == false && hoveredTabID == tab.id
-        let colors = resolveTabColors(
+        let isHovered = appIsActive && isRenaming == false && hoveredTabID == tab.id
+        let chromeSpec = Self.workspaceTabChromeSpec(
             isSelected: isSelected,
             isHovered: isHovered,
-            hasUnread: hasUnread,
+            isRenaming: isRenaming,
             appIsActive: appIsActive
         )
 
-        return ZStack(alignment: .trailing) {
+        let row = ZStack(alignment: .trailing) {
             if isRenaming {
                 workspaceTabRenameRow(
                     workspaceID: workspaceID,
                     tab: tab,
-                    colors: colors,
+                    chromeSpec: chromeSpec,
                     hasUnread: hasUnread
                 )
             } else {
@@ -590,11 +767,11 @@ struct WorkspaceView: View {
                     }
                     _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
                 } label: {
-                    workspaceTabChrome(colors: colors) {
+                    workspaceTabChrome(chromeSpec: chromeSpec) {
                         HStack(spacing: 5) {
                             workspaceTabTitleContent(
                                 tab: tab,
-                                textColor: colors.text,
+                                textColor: chromeSpec.text,
                                 hasUnread: hasUnread
                             )
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -602,7 +779,8 @@ struct WorkspaceView: View {
                             workspaceTabTrailingContent(
                                 index: index,
                                 isSelected: isSelected,
-                                isHovered: isHovered
+                                isHovered: isHovered,
+                                showsCloseAffordance: allowsManagementAffordances
                             )
                             .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
                         }
@@ -612,19 +790,15 @@ struct WorkspaceView: View {
                 .accessibilityLabel(tab.displayTitle)
                 .help(tab.displayTitle)
                 .accessibilityIdentifier("workspace.tab.\(tab.id.uuidString)")
-                .animation(.easeInOut(duration: 0.15), value: isSelected)
                 .animation(.easeOut(duration: 0.1), value: isHovered)
             }
 
-            if isHovered {
+            if isHovered && allowsManagementAffordances {
                 workspaceTabCloseButton(workspaceID: workspaceID, tab: tab)
                     .padding(.trailing, 10)
             }
         }
         .contentShape(Rectangle())
-        .contextMenu {
-            workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
-        }
         .onHover { hovering in
             guard isRenaming == false else { return }
             if hovering {
@@ -635,6 +809,14 @@ struct WorkspaceView: View {
                     hoveredTabCloseButtonID = nil
                 }
             }
+        }
+
+        if installsContextMenu {
+            row.contextMenu {
+                workspaceTabContextMenu(workspaceID: workspaceID, tab: tab)
+            }
+        } else {
+            row
         }
     }
 
@@ -665,10 +847,10 @@ struct WorkspaceView: View {
     private func workspaceTabRenameRow(
         workspaceID: UUID,
         tab: WorkspaceTabState,
-        colors: (background: Color, border: Color, text: Color),
+        chromeSpec: WorkspaceTabChromeSpec,
         hasUnread: Bool
     ) -> some View {
-        workspaceTabChrome(colors: colors) {
+        workspaceTabChrome(chromeSpec: chromeSpec) {
             HStack(spacing: 5) {
                 if hasUnread {
                     Circle()
@@ -702,67 +884,39 @@ struct WorkspaceView: View {
     }
 
     private func workspaceTabChrome<Content: View>(
-        colors: (background: Color, border: Color, text: Color),
+        chromeSpec: WorkspaceTabChromeSpec,
         @ViewBuilder content: () -> Content
     ) -> some View {
         content()
             .padding(.horizontal, 10)
-            .frame(width: ToastyTheme.workspaceTabWidth, height: ToastyTheme.workspaceTabHeight)
+            .frame(maxWidth: .infinity, minHeight: ToastyTheme.workspaceTabHeight, maxHeight: ToastyTheme.workspaceTabHeight)
             .background(
-                colors.background,
-                in: RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
+                chromeSpec.background,
+                in: WorkspaceTabShape()
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: ToastyTheme.workspaceTabCornerRadius)
-                    .stroke(colors.border, lineWidth: 1)
-            )
+            .overlay(alignment: .top) {
+                if let accentColor = chromeSpec.accentColor {
+                    Rectangle()
+                        .fill(accentColor)
+                        .frame(height: ToastyTheme.workspaceTabAccentLineHeight)
+                        .clipShape(WorkspaceTabShape())
+                }
+            }
             .contentShape(Rectangle())
-    }
-
-    private func resolveTabColors(
-        isSelected: Bool,
-        isHovered: Bool,
-        hasUnread: Bool,
-        appIsActive: Bool
-    ) -> (background: Color, border: Color, text: Color) {
-        if isSelected {
-            return (
-                ToastyTheme.workspaceTabSelectedBackground,
-                ToastyTheme.workspaceTabSelectedBorderColor(appIsActive: appIsActive),
-                ToastyTheme.primaryText
-            )
-        }
-
-        if isHovered {
-            return (
-                ToastyTheme.workspaceTabHoverBackground,
-                ToastyTheme.workspaceTabHoverBorder,
-                ToastyTheme.workspaceTabHoverText
-            )
-        }
-
-        if hasUnread {
-            return (
-                ToastyTheme.workspaceTabUnreadBackground,
-                ToastyTheme.workspaceTabUnreadBorder,
-                ToastyTheme.workspaceTabUnreadText
-            )
-        }
-
-        return (
-            ToastyTheme.workspaceTabUnselectedBackground,
-            ToastyTheme.workspaceTabUnselectedBorder,
-            ToastyTheme.workspaceTabUnselectedText
-        )
     }
 
     @ViewBuilder
     private func workspaceTabTrailingContent(
         index: Int,
         isSelected: Bool,
-        isHovered: Bool
+        isHovered: Bool,
+        showsCloseAffordance: Bool
     ) -> some View {
-        switch Self.workspaceTabTrailingAccessory(index: index, isHovered: isHovered) {
+        switch Self.workspaceTabTrailingAccessory(
+            index: index,
+            isHovered: isHovered,
+            showsCloseAffordance: showsCloseAffordance
+        ) {
         case .closeButton:
             Color.clear.frame(height: 16)
         case .badge(let shortcutLabel):
@@ -916,7 +1070,6 @@ struct WorkspaceView: View {
     private func pruneTransientTabRenameState() {
         guard let renamingTabID else { return }
         guard let workspace = selectedWorkspace,
-              workspace.tabIDs.count > 1,
               workspace.tabsByID[renamingTabID] != nil else {
             cancelTabRename()
             return
@@ -969,7 +1122,6 @@ struct WorkspaceView: View {
         guard let request = store.consumePendingWorkspaceTabRenameRequest(windowID: windowID),
               let workspace = selectedWorkspace,
               workspace.id == request.workspaceID,
-              workspace.orderedTabs.count > 1,
               let tab = workspace.tab(id: request.tabID) else {
             return
         }
@@ -1001,23 +1153,6 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Top bar button variant that accepts a custom icon view (e.g. Canvas-based icons).
-    private func topBarButton<Icon: View>(
-        title: String,
-        @ViewBuilder icon: () -> Icon,
-        active: Bool,
-        action: @escaping () -> Void
-    ) -> some View {
-        styledTopBarButton(active: active, action: action) {
-            HStack(spacing: 4) {
-                icon()
-                Text(title)
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(active ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-            }
-        }
-    }
-
     private func styledTopBarButton<Label: View>(
         active: Bool,
         action: @escaping () -> Void,
@@ -1040,15 +1175,14 @@ struct WorkspaceView: View {
     /// styling (accent icon, light text, elevated background) while pressed, then fades back.
     /// This intentionally bypasses `styledTopBarButton` and uses `TopBarFlashButtonStyle`.
     private func topBarFlashButton<Icon: View>(
-        title: String,
         @ViewBuilder icon: @escaping (_ isHighlighted: Bool) -> Icon,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             // Placeholder label — TopBarFlashButtonStyle renders the actual content.
-            Text(title)
+            Color.clear.frame(width: 0, height: 0)
         }
-        .buttonStyle(TopBarFlashButtonStyle(title: title, icon: icon))
+        .buttonStyle(TopBarFlashButtonStyle(icon: icon))
     }
 
     private func topBarFlashTextButton(
@@ -1068,6 +1202,142 @@ private struct PendingWorkspaceTabClose: Identifiable {
     let assessment: WorkspaceTabCloseConfirmationAssessment
 
     var id: UUID { tabID }
+}
+
+private struct WorkspaceHeaderLayout: Layout {
+    let tabCount: Int
+    let titleSpacing: CGFloat
+    let trailingSpacing: CGFloat
+    let tabSpacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        guard subviews.count == 3 else { return .zero }
+
+        let titleSize = subviews[0].sizeThatFits(.unspecified)
+        let tabsSize = subviews[1].sizeThatFits(
+            ProposedViewSize(width: nil, height: ToastyTheme.workspaceTabHeight)
+        )
+        let trailingSize = subviews[2].sizeThatFits(.unspecified)
+        let width = if let proposedWidth = proposal.width, proposedWidth.isFinite {
+            proposedWidth
+        } else {
+            min(titleSize.width, ToastyTheme.workspaceTitleMaxWidth) +
+                titleSpacing + tabsSize.width + trailingSpacing + trailingSize.width
+        }
+
+        return CGSize(
+            width: width,
+            height: max(ToastyTheme.topBarHeight, titleSize.height, trailingSize.height, ToastyTheme.workspaceTabHeight)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        guard subviews.count == 3 else { return }
+
+        let titleSize = subviews[0].sizeThatFits(.unspecified)
+        let trailingSize = subviews[2].sizeThatFits(.unspecified)
+        let trailingX = max(bounds.minX, bounds.maxX - trailingSize.width)
+        let titleWidth = WorkspaceView.resolvedWorkspaceTitleWidth(
+            preferredWidth: titleSize.width,
+            availableWidth: bounds.width,
+            trailingWidth: trailingSize.width,
+            tabCount: tabCount,
+            titleSpacing: titleSpacing,
+            trailingSpacing: trailingSpacing,
+            tabSpacing: tabSpacing,
+            titleMaxWidth: ToastyTheme.workspaceTitleMaxWidth
+        )
+        let titleHeight = min(bounds.height, titleSize.height)
+        let tabBandMinY = max(bounds.minY, bounds.maxY - ToastyTheme.workspaceTabHeight)
+        let titleY = tabBandMinY + ((ToastyTheme.workspaceTabHeight - titleHeight) / 2)
+
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: titleY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: titleWidth, height: titleHeight)
+        )
+
+        let tabsX = bounds.minX + titleWidth + titleSpacing
+        let tabsMaxX = max(tabsX, trailingX - trailingSpacing)
+        let tabsWidth = max(0, tabsMaxX - tabsX)
+
+        subviews[1].place(
+            at: CGPoint(x: tabsX, y: bounds.maxY),
+            anchor: .bottomLeading,
+            proposal: ProposedViewSize(width: tabsWidth, height: ToastyTheme.workspaceTabHeight)
+        )
+
+        let trailingHeight = min(bounds.height, trailingSize.height)
+        let trailingY = bounds.minY + ((bounds.height - trailingHeight) / 2)
+
+        subviews[2].place(
+            at: CGPoint(x: trailingX, y: trailingY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: trailingSize.width, height: trailingHeight)
+        )
+    }
+}
+
+private struct WorkspaceTabStripLayout: Layout {
+    let spacing: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+
+        let height = ToastyTheme.workspaceTabHeight
+        let idealWidth = WorkspaceView.workspaceTabIdealTotalWidth(
+            tabCount: subviews.count,
+            spacing: spacing
+        )
+        let minimumWidth = WorkspaceView.workspaceTabMinimumTotalWidth(
+            tabCount: subviews.count,
+            spacing: spacing
+        )
+
+        guard let proposedWidth = proposal.width, proposedWidth.isFinite else {
+            return CGSize(width: idealWidth, height: height)
+        }
+
+        return CGSize(width: max(proposedWidth, minimumWidth), height: height)
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal _: ProposedViewSize,
+        subviews: Subviews,
+        cache _: inout ()
+    ) {
+        guard !subviews.isEmpty else { return }
+
+        let tabWidth = WorkspaceView.resolvedWorkspaceTabWidth(
+            availableWidth: bounds.width,
+            tabCount: subviews.count,
+            spacing: spacing
+        )
+        var nextX = bounds.minX
+
+        for subview in subviews {
+            subview.place(
+                at: CGPoint(x: nextX, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: tabWidth, height: bounds.height)
+            )
+            nextX += tabWidth + spacing
+        }
+    }
 }
 
 struct WorkspaceAgentTopBarModel: Equatable {
@@ -1284,10 +1554,21 @@ private struct PanelCardView: View {
             }
         }
         .background(ToastyTheme.surfaceBackground)
-        .overlay(
+        .overlay(alignment: .leading) {
             Rectangle()
-                .strokeBorder(ToastyTheme.hairline, lineWidth: 1)
-        )
+                .fill(ToastyTheme.hairline)
+                .frame(width: 1)
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(width: 1)
+        }
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(ToastyTheme.hairline)
+                .frame(height: 1)
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {
@@ -1480,33 +1761,33 @@ struct FocusIconView: View {
             // Four corner brackets
             var brackets = Path()
             // Top-left
-            brackets.move(to: CGPoint(x: 1.5, y: 3.5))
-            brackets.addLine(to: CGPoint(x: 1.5, y: 1.5))
-            brackets.addLine(to: CGPoint(x: 3.5, y: 1.5))
+            brackets.move(to: CGPoint(x: 2, y: 5))
+            brackets.addLine(to: CGPoint(x: 2, y: 2))
+            brackets.addLine(to: CGPoint(x: 5, y: 2))
             // Top-right
-            brackets.move(to: CGPoint(x: 7.5, y: 1.5))
-            brackets.addLine(to: CGPoint(x: 9.5, y: 1.5))
-            brackets.addLine(to: CGPoint(x: 9.5, y: 3.5))
+            brackets.move(to: CGPoint(x: 9, y: 2))
+            brackets.addLine(to: CGPoint(x: 12, y: 2))
+            brackets.addLine(to: CGPoint(x: 12, y: 5))
             // Bottom-right
-            brackets.move(to: CGPoint(x: 9.5, y: 7.5))
-            brackets.addLine(to: CGPoint(x: 9.5, y: 9.5))
-            brackets.addLine(to: CGPoint(x: 7.5, y: 9.5))
+            brackets.move(to: CGPoint(x: 12, y: 9))
+            brackets.addLine(to: CGPoint(x: 12, y: 12))
+            brackets.addLine(to: CGPoint(x: 9, y: 12))
             // Bottom-left
-            brackets.move(to: CGPoint(x: 3.5, y: 9.5))
-            brackets.addLine(to: CGPoint(x: 1.5, y: 9.5))
-            brackets.addLine(to: CGPoint(x: 1.5, y: 7.5))
+            brackets.move(to: CGPoint(x: 5, y: 12))
+            brackets.addLine(to: CGPoint(x: 2, y: 12))
+            brackets.addLine(to: CGPoint(x: 2, y: 9))
 
             context.stroke(
                 brackets,
                 with: .color(color),
-                style: StrokeStyle(lineWidth: 1.1, lineCap: .round, lineJoin: .round)
+                style: StrokeStyle(lineWidth: 1.2, lineCap: .round, lineJoin: .round)
             )
 
             // Center dot
-            let dot = Path(ellipseIn: CGRect(x: 5.5 - 1.2, y: 5.5 - 1.2, width: 2.4, height: 2.4))
+            let dot = Path(ellipseIn: CGRect(x: 7 - 1.5, y: 7 - 1.5, width: 3, height: 3))
             context.fill(dot, with: .color(color))
         }
-        .frame(width: 11, height: 11)
+        .frame(width: 14, height: 14)
     }
 }
 
@@ -1516,13 +1797,13 @@ struct SplitHorizontalIconView: View {
 
     var body: some View {
         Canvas { context, _ in
-            let left = Path(roundedRect: CGRect(x: 1.5, y: 1.5, width: 3.2, height: 8), cornerRadius: 0.8)
-            let right = Path(roundedRect: CGRect(x: 6.3, y: 1.5, width: 3.2, height: 8), cornerRadius: 0.8)
-            let style = StrokeStyle(lineWidth: 1.1)
+            let left = Path(roundedRect: CGRect(x: 2, y: 2, width: 4, height: 10), cornerRadius: 1)
+            let right = Path(roundedRect: CGRect(x: 8, y: 2, width: 4, height: 10), cornerRadius: 1)
+            let style = StrokeStyle(lineWidth: 1.2)
             context.stroke(left, with: .color(color), style: style)
             context.stroke(right, with: .color(color), style: style)
         }
-        .frame(width: 11, height: 11)
+        .frame(width: 14, height: 14)
     }
 }
 
@@ -1532,13 +1813,13 @@ struct SplitVerticalIconView: View {
 
     var body: some View {
         Canvas { context, _ in
-            let top = Path(roundedRect: CGRect(x: 1.5, y: 1.5, width: 8, height: 3.2), cornerRadius: 0.8)
-            let bottom = Path(roundedRect: CGRect(x: 1.5, y: 6.3, width: 8, height: 3.2), cornerRadius: 0.8)
-            let style = StrokeStyle(lineWidth: 1.1)
+            let top = Path(roundedRect: CGRect(x: 2, y: 2, width: 10, height: 4), cornerRadius: 1)
+            let bottom = Path(roundedRect: CGRect(x: 2, y: 8, width: 10, height: 4), cornerRadius: 1)
+            let style = StrokeStyle(lineWidth: 1.2)
             context.stroke(top, with: .color(color), style: style)
             context.stroke(bottom, with: .color(color), style: style)
         }
-        .frame(width: 11, height: 11)
+        .frame(width: 14, height: 14)
     }
 }
 
@@ -1548,25 +1829,19 @@ struct SplitVerticalIconView: View {
 /// (accent icon, primary text, elevated background + border) while pressed, with a
 /// smooth fade-out on release.
 private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
-    let title: String
     @ViewBuilder let icon: (_ isHighlighted: Bool) -> Icon
 
     func makeBody(configuration: Configuration) -> some View {
         let highlighted = configuration.isPressed
-        HStack(spacing: 4) {
-            icon(highlighted)
-            Text(title)
-                .font(ToastyTheme.fontSubtext)
-                .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
-        .overlay(
-            Rectangle()
-                .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
-        )
-        .animation(.easeOut(duration: 0.15), value: highlighted)
+        icon(highlighted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
+            .overlay(
+                Rectangle()
+                    .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+            )
+            .animation(.easeOut(duration: 0.15), value: highlighted)
     }
 }
 

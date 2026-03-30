@@ -105,7 +105,6 @@ public struct AppReducer {
 
         case .setWorkspaceTabCustomTitle(let workspaceID, let tabID, let title):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.tabIDs.count > 1 else { return false }
             let normalizedTitle = normalizedMetadataValue(title)
             guard workspace.tabsByID[tabID] != nil else { return false }
             guard title == nil || normalizedTitle != nil else { return false }
@@ -129,7 +128,13 @@ public struct AppReducer {
 
         case .closeWorkspaceTab(let workspaceID, let tabID):
             guard let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) else { return false }
-            return removeWorkspaceTab(tabID, workspaceID: workspaceID, windowID: windowID, state: &state)
+            return removeWorkspaceTab(
+                tabID,
+                workspaceID: workspaceID,
+                windowID: windowID,
+                emptyWorkspaceDisposition: .removeWorkspace(.keepWindow),
+                state: &state
+            )
 
         case .focusPanel(let workspaceID, let panelID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }

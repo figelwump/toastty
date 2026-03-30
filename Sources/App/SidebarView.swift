@@ -7,6 +7,9 @@ struct SidebarView: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let terminalRuntimeContext: TerminalWindowRuntimeContext
+    /// Test seam for asserting scroll requests without depending on AppKit's
+    /// NSScrollView behavior inside unit-test hosting views.
+    let scrollRequestObserver: ((UUID, Bool) -> Void)?
     @State private var renamingWorkspaceID: UUID?
     @State private var renameDraftTitle = ""
     @State private var hoveredPanelID: UUID?
@@ -31,6 +34,22 @@ struct SidebarView: View {
     private static let sessionStatusesTopSpacing: CGFloat = 0
     private static let sessionFlashPeakDuration: Double = 0.18
     private static let sessionFlashSettleDuration: Double = 0.28
+
+    init(
+        windowID: UUID,
+        store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        sessionRuntimeStore: SessionRuntimeStore,
+        terminalRuntimeContext: TerminalWindowRuntimeContext,
+        scrollRequestObserver: ((UUID, Bool) -> Void)? = nil
+    ) {
+        self.windowID = windowID
+        self.store = store
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.sessionRuntimeStore = sessionRuntimeStore
+        self.terminalRuntimeContext = terminalRuntimeContext
+        self.scrollRequestObserver = scrollRequestObserver
+    }
 
     private var selectedWorkspaceID: UUID? {
         store.selectedWorkspaceID(in: windowID)
@@ -756,6 +775,7 @@ struct SidebarView: View {
         animated: Bool
     ) {
         guard let selectedWorkspaceID else { return }
+        scrollRequestObserver?(selectedWorkspaceID, animated)
 
         Task { @MainActor in
             if animated {

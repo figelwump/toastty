@@ -265,6 +265,7 @@ send_request "automation.ping" '{}' >/dev/null
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
 
 assert_tab_snapshot 1 1
+SINGLE_TAB_SCREENSHOT_PATH="$(capture_screenshot "workspace-tabs-1")"
 
 perform_action "workspace.tab.new"
 perform_action "workspace.tab.select" '{"index":1}'
@@ -309,6 +310,7 @@ perform_action "workspace.tab.close" '{"index":10}'
 assert_tab_snapshot 9 ""
 
 swift "$ROOT_DIR/scripts/automation/assert-workspace-tabs.swift" \
+  "$SINGLE_TAB_SCREENSHOT_PATH" \
   "$TWO_TABS_SCREENSHOT_PATH" \
   "$TWO_TABS_HIDDEN_SIDEBAR_SCREENSHOT_PATH" \
   "$NINE_TABS_SCREENSHOT_PATH" \
@@ -316,6 +318,7 @@ swift "$ROOT_DIR/scripts/automation/assert-workspace-tabs.swift" \
 
 echo "ready file: $READY_FILE"
 echo "socket path: $SOCKET_PATH"
+echo "single-tab screenshot: $SINGLE_TAB_SCREENSHOT_PATH"
 echo "two-tab screenshot: $TWO_TABS_SCREENSHOT_PATH"
 echo "two-tab hidden-sidebar screenshot: $TWO_TABS_HIDDEN_SIDEBAR_SCREENSHOT_PATH"
 echo "nine-tab screenshot: $NINE_TABS_SCREENSHOT_PATH"

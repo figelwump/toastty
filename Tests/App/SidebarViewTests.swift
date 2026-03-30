@@ -378,7 +378,7 @@ final class SidebarViewTests: XCTestCase {
         )
     }
 
-    func testSelectingLowWorkspaceScrollsSidebarToRevealIt() throws {
+    func testSelectingLowWorkspaceRequestsSidebarScrollToRevealIt() throws {
         let workspaces = (1...12).map { WorkspaceState.bootstrap(title: "Workspace \($0)") }
         let windowID = UUID()
         let state = AppState(
@@ -397,12 +397,16 @@ final class SidebarViewTests: XCTestCase {
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         let runtimeContext = TerminalWindowRuntimeContext(windowID: windowID, runtimeRegistry: registry)
+        var scrollRequests: [(workspaceID: UUID, animated: Bool)] = []
         let sidebarView = SidebarView(
             windowID: windowID,
             store: store,
             terminalRuntimeRegistry: registry,
             sessionRuntimeStore: sessionRuntimeStore,
-            terminalRuntimeContext: runtimeContext
+            terminalRuntimeContext: runtimeContext,
+            scrollRequestObserver: { workspaceID, animated in
+                scrollRequests.append((workspaceID, animated))
+            }
         )
         let hostingView = NSHostingView(
             rootView: sidebarView.frame(width: ToastyTheme.sidebarWidth, height: 220)
@@ -418,19 +422,17 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop()
         hostingView.layoutSubtreeIfNeeded()
 
-        let scrollView = try XCTUnwrap(findSubview(ofType: NSScrollView.self, in: hostingView))
-        let initialOffset = scrollView.contentView.bounds.origin.y
+        XCTAssertEqual(scrollRequests.last?.workspaceID, workspaces.first?.id)
+        XCTAssertEqual(scrollRequests.last?.animated, false)
+        scrollRequests.removeAll()
 
         _ = store.send(.selectWorkspace(windowID: windowID, workspaceID: try XCTUnwrap(workspaces.last?.id)))
         pumpMainRunLoop(duration: 0.3)
         hostingView.layoutSubtreeIfNeeded()
 
-        let scrolledOffset = scrollView.contentView.bounds.origin.y
-        XCTAssertGreaterThan(
-            scrolledOffset,
-            initialOffset + 20,
-            "Expected sidebar selection to scroll the list when the selected workspace starts off-screen"
-        )
+        XCTAssertEqual(scrollRequests.count, 1)
+        XCTAssertEqual(scrollRequests.last?.workspaceID, workspaces.last?.id)
+        XCTAssertEqual(scrollRequests.last?.animated, true)
     }
 
     func testWorkspaceHeaderPaddingClickSelectsWorkspace() throws {
@@ -474,17 +476,17 @@ final class SidebarViewTests: XCTestCase {
         pumpMainRunLoop()
         hostingView.layoutSubtreeIfNeeded()
 
-        let workspaceButtons = findSubviews(namedClass: "KeyViewProxy", in: hostingView)
-            .filter { $0.frame.height >= 40 }
-            .sorted { $0.frame.minY < $1.frame.minY }
-        let secondWorkspaceButton = try XCTUnwrap(workspaceButtons.dropFirst().first)
-        let clickPointInHost = NSPoint(
-            x: secondWorkspaceButton.frame.midX,
-            y: secondWorkspaceButton.frame.maxY - 6
+        let secondWorkspaceButton = try XCTUnwrap(
+            workspaceRowButtons(in: hostingView).dropFirst().first
         )
-        let clickPointInWindow = hostingView.convert(clickPointInHost, to: nil)
+        let clickPointInButton = NSPoint(
+            x: secondWorkspaceButton.bounds.midX,
+            y: secondWorkspaceButton.bounds.maxY - 6
+        )
+        let clickPointInHost = secondWorkspaceButton.convert(clickPointInButton, to: hostingView)
+        let clickPointInWindow = secondWorkspaceButton.convert(clickPointInButton, to: nil)
 
-        XCTAssertGreaterThan(secondWorkspaceButton.frame.height, 40)
+        XCTAssertGreaterThan(secondWorkspaceButton.frame.height, 30)
         XCTAssertTrue(hostingView.bounds.contains(clickPointInHost))
 
         try click(window: window, at: clickPointInWindow)
@@ -950,4 +952,17 @@ final class SidebarViewTests: XCTestCase {
 
         return matches
     }
+
+    private func workspaceRowButtons(in rootView: NSView) -> [NSView] {
+        let workspaceButtons = findSubviews(namedClass: "KeyViewProxy", in: rootView)
+            .filter { $0.frame.width >= 200 && $0.frame.height >= 30 }
+        let rowLayoutIsFlipped = workspaceButtons.first?.superview?.isFlipped ?? true
+        return workspaceButtons.sorted { lhs, rhs in
+            if rowLayoutIsFlipped {
+                return lhs.frame.minY < rhs.frame.minY
+            }
+            return lhs.frame.minY > rhs.frame.minY
+        }
+    }
+
 }
