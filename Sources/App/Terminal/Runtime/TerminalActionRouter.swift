@@ -30,6 +30,12 @@ final class TerminalActionRouter {
         }
 
         switch action.intent {
+        case .startSearch, .endSearch, .searchTotal, .searchSelected:
+            return registry.handleSearchRuntimeAction(
+                action.intent,
+                panelID: resolution.panelID
+            )
+
         case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             return registry.handleRuntimeMetadataAction(
                 action.intent,
@@ -83,6 +89,9 @@ final class TerminalActionRouter {
 
         case .toggleFocusedPanelMode:
             handled = store.send(.toggleFocusedPanelMode(workspaceID: resolution.workspaceID))
+
+        case .startSearch, .endSearch, .searchTotal, .searchSelected:
+            handled = false
 
         case .setTerminalTitle, .setTerminalCWD, .showChildExited, .commandFinished:
             handled = false

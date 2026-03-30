@@ -1,3 +1,4 @@
+import AppKit
 import CoreState
 import SwiftUI
 
@@ -106,6 +107,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var store: AppStore
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -160,6 +162,54 @@ struct ToasttyCommandMenus: Commands {
         )
     }
 
+    private var commandFocusedTerminalPanelID: UUID? {
+        guard let workspace = commandWorkspace,
+              let panelID = workspace.focusedPanelID,
+              workspace.layoutTree.slotContaining(panelID: panelID) != nil,
+              case .terminal = workspace.panels[panelID] else {
+            return nil
+        }
+        return panelID
+    }
+
+    private var commandFocusedTerminalSearchState: TerminalSearchState? {
+        guard let panelID = commandFocusedTerminalPanelID else {
+            return nil
+        }
+        return terminalRuntimeRegistry.searchState(for: panelID)
+    }
+
+    private var commandFocusedTerminalSearchFieldFocused: Bool {
+        guard let panelID = commandFocusedTerminalPanelID else {
+            return false
+        }
+        return terminalRuntimeRegistry.isSearchFieldFocused(panelID: panelID)
+    }
+
+    private var textInputOwnsFindCommands: Bool {
+        guard let keyWindow = NSApp.keyWindow else {
+            return false
+        }
+        return Self.textInputOwnsFindCommands(
+            modalWindowPresent: keyWindow.sheetParent != nil || NSApp.modalWindow != nil,
+            firstResponderIsTextInput: keyWindow.firstResponder is NSTextInputClient,
+            terminalSearchFieldIsFocused: commandFocusedTerminalSearchFieldFocused
+        )
+    }
+
+    private var canStartScrollbackSearch: Bool {
+        guard commandFocusedTerminalPanelID != nil else {
+            return false
+        }
+        return textInputOwnsFindCommands == false
+    }
+
+    private var canNavigateScrollbackSearch: Bool {
+        commandFocusedTerminalPanelID != nil &&
+        commandFocusedTerminalSearchState != nil &&
+        textInputOwnsFindCommands == false
+    }
+
     var body: some Commands {
         let preferredWindowID = preferredCommandWindowID
         let fontCommandWindowID = store.commandWindowID(preferredWindowID: preferredWindowID)
@@ -200,6 +250,42 @@ struct ToasttyCommandMenus: Commands {
             Button("Install Shell Integration…") {
                 terminalProfilesMenuController.installShellIntegration()
             }
+        }
+
+        CommandGroup(after: .pasteboard) {
+            Divider()
+
+            Button("Find…") {
+                startScrollbackSearchFromCommandSelection()
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.find.key,
+                modifiers: ToasttyKeyboardShortcuts.find.modifiers
+            )
+            .disabled(!canStartScrollbackSearch)
+
+            Button("Find Next") {
+                findNextFromCommandSelection()
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.findNext.key,
+                modifiers: ToasttyKeyboardShortcuts.findNext.modifiers
+            )
+            .disabled(!canNavigateScrollbackSearch)
+
+            Button("Find Previous") {
+                findPreviousFromCommandSelection()
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.findPrevious.key,
+                modifiers: ToasttyKeyboardShortcuts.findPrevious.modifiers
+            )
+            .disabled(!canNavigateScrollbackSearch)
+
+            Button("Hide Find") {
+                hideFindFromCommandSelection()
+            }
+            .disabled(!canNavigateScrollbackSearch)
         }
 
         CommandMenu("Terminal") {
@@ -386,6 +472,27 @@ struct ToasttyCommandMenus: Commands {
         _ = focusedPanelCommandController.closeFocusedPanel(in: commandWorkspace?.id)
     }
 
+    private func startScrollbackSearchFromCommandSelection() {
+        guard let panelID = commandFocusedTerminalPanelID else { return }
+        _ = terminalRuntimeRegistry.startSearch(panelID: panelID)
+    }
+
+    private func findNextFromCommandSelection() {
+        guard let panelID = commandFocusedTerminalPanelID else { return }
+        _ = terminalRuntimeRegistry.findNext(panelID: panelID)
+    }
+
+    private func findPreviousFromCommandSelection() {
+        guard let panelID = commandFocusedTerminalPanelID else { return }
+        _ = terminalRuntimeRegistry.findPrevious(panelID: panelID)
+    }
+
+    private func hideFindFromCommandSelection() {
+        guard let panelID = commandFocusedTerminalPanelID else { return }
+        _ = terminalRuntimeRegistry.endSearch(panelID: panelID)
+        terminalRuntimeRegistry.restoreTerminalFocusAfterSearch(panelID: panelID)
+    }
+
     private func canLaunchAgent(profileID: String) -> Bool {
         agentLaunchService.canLaunchAgent(
             profileID: profileID,
@@ -535,6 +642,17 @@ struct ToasttyCommandMenus: Commands {
         ) { _, panelID in
             activePanelIDs.contains(panelID)
         } != nil
+    }
+
+    nonisolated static func textInputOwnsFindCommands(
+        modalWindowPresent: Bool,
+        firstResponderIsTextInput: Bool,
+        terminalSearchFieldIsFocused: Bool
+    ) -> Bool {
+        if modalWindowPresent {
+            return true
+        }
+        return firstResponderIsTextInput && terminalSearchFieldIsFocused == false
     }
 
     nonisolated static func resolvedCommandWindowID(focusedWindowID: UUID?, keyWindowID: UUID?) -> UUID? {

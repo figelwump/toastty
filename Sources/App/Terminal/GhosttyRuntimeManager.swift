@@ -19,6 +19,10 @@ struct GhosttyRuntimeAction: Sendable {
         case resizeSplit(SplitResizeDirection, amount: Int)
         case equalizeSplits
         case toggleFocusedPanelMode
+        case startSearch(needle: String)
+        case endSearch
+        case searchTotal(Int?)
+        case searchSelected(Int?)
         case setTerminalTitle(String)
         case setTerminalCWD(String)
         case showChildExited(exitCode: Int)
@@ -41,6 +45,14 @@ struct GhosttyRuntimeAction: Sendable {
             return "equalize_splits"
         case .toggleFocusedPanelMode:
             return "toggle_focused_panel_mode"
+        case .startSearch:
+            return "start_search"
+        case .endSearch:
+            return "end_search"
+        case .searchTotal:
+            return "search_total"
+        case .searchSelected:
+            return "search_selected"
         case .setTerminalTitle:
             return "set_terminal_title"
         case .setTerminalCWD:
@@ -134,6 +146,14 @@ private func ghosttyActionName(_ action: ghostty_action_s) -> String {
         return "equalize_splits"
     case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
         return "toggle_split_zoom"
+    case GHOSTTY_ACTION_START_SEARCH:
+        return "start_search"
+    case GHOSTTY_ACTION_END_SEARCH:
+        return "end_search"
+    case GHOSTTY_ACTION_SEARCH_TOTAL:
+        return "search_total"
+    case GHOSTTY_ACTION_SEARCH_SELECTED:
+        return "search_selected"
     case GHOSTTY_ACTION_SCROLLBAR:
         return "scrollbar"
     case GHOSTTY_ACTION_SET_TITLE:
@@ -196,6 +216,21 @@ private func makeGhosttyRuntimeAction(target: ghostty_target_s, action: ghostty_
 
     case GHOSTTY_ACTION_TOGGLE_SPLIT_ZOOM:
         intent = .toggleFocusedPanelMode
+
+    case GHOSTTY_ACTION_START_SEARCH:
+        let needle = action.action.start_search.needle.map { String(cString: $0) } ?? ""
+        intent = .startSearch(needle: needle)
+
+    case GHOSTTY_ACTION_END_SEARCH:
+        intent = .endSearch
+
+    case GHOSTTY_ACTION_SEARCH_TOTAL:
+        let rawTotal = Int(action.action.search_total.total)
+        intent = .searchTotal(rawTotal >= 0 ? rawTotal : nil)
+
+    case GHOSTTY_ACTION_SEARCH_SELECTED:
+        let rawSelected = Int(action.action.search_selected.selected)
+        intent = .searchSelected(rawSelected >= 0 ? rawSelected : nil)
 
     case GHOSTTY_ACTION_SET_TITLE:
         let title = action.action.set_title.title.map { String(cString: $0) } ?? ""

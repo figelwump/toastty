@@ -201,6 +201,28 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertTrue(registry.activatePanelIfNeeded(originalPanelID))
         XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
     }
+
+    func testReleaseInactiveSearchFieldFocusClearsBackgroundSearchFieldFocus() {
+        let registry = TerminalRuntimeRegistry()
+        let searchPanelID = UUID()
+        let activePanelID = UUID()
+
+        registry.setSearchFieldFocused(true, panelID: searchPanelID)
+
+        XCTAssertTrue(registry.releaseInactiveSearchFieldFocus(activePanelID: activePanelID))
+        XCTAssertFalse(registry.isSearchFieldFocused(panelID: searchPanelID))
+        XCTAssertFalse(registry.isSearchFieldFocused(panelID: activePanelID))
+    }
+
+    func testReleaseInactiveSearchFieldFocusKeepsActiveSearchFieldFocus() {
+        let registry = TerminalRuntimeRegistry()
+        let searchPanelID = UUID()
+
+        registry.setSearchFieldFocused(true, panelID: searchPanelID)
+
+        XCTAssertFalse(registry.releaseInactiveSearchFieldFocus(activePanelID: searchPanelID))
+        XCTAssertTrue(registry.isSearchFieldFocused(panelID: searchPanelID))
+    }
 }
 
 final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {

@@ -196,6 +196,161 @@ final class TerminalRuntimeRegistryActionRoutingTests: XCTestCase {
         }
     }
 
+    func testAppTargetStartSearchOpensSearchWithoutChangingFocus() async throws {
+        try await MainActor.run {
+            let state = AppState.bootstrap()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let focusedPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+            let handled = registry.handleGhosttyRuntimeAction(
+                GhosttyRuntimeAction(surfaceHandle: nil, intent: .startSearch(needle: ""))
+            )
+
+            XCTAssertTrue(handled)
+            XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, focusedPanelID)
+            XCTAssertEqual(
+                registry.searchState(for: focusedPanelID),
+                TerminalSearchState(
+                    isPresented: true,
+                    needle: "",
+                    total: nil,
+                    selected: nil,
+                    focusRequestID: registry.searchState(for: focusedPanelID)?.focusRequestID ?? UUID()
+                )
+            )
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testSurfaceTargetSearchCallbacksUpdateResolvedPanelWithoutChangingFocus() async throws {
+        try await MainActor.run {
+            let state = try makeSplitState()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let workspaceBefore = try XCTUnwrap(store.selectedWorkspace)
+            let windowID = try XCTUnwrap(store.selectedWindow?.id)
+            let workspaceID = workspaceBefore.id
+            let initiallyFocusedPanelID = try XCTUnwrap(workspaceBefore.focusedPanelID)
+            let targetPanelID = try XCTUnwrap(
+                workspaceBefore.panels.keys.first(where: { $0 != initiallyFocusedPanelID })
+            )
+            let surface = fakeSurfaceHandle(0x505)
+            registry.registerSurfaceHandleForTesting(
+                surface,
+                for: targetPanelID,
+                workspaceID: workspaceID,
+                windowID: windowID,
+                state: store.state
+            )
+
+            defer {
+                registry.unregisterSurfaceHandle(surface, for: targetPanelID)
+            }
+
+            XCTAssertTrue(
+                registry.handleGhosttyRuntimeAction(
+                    GhosttyRuntimeAction(
+                        surfaceHandle: UInt(bitPattern: surface),
+                        intent: .startSearch(needle: "")
+                    )
+                )
+            )
+            XCTAssertTrue(
+                registry.handleGhosttyRuntimeAction(
+                    GhosttyRuntimeAction(
+                        surfaceHandle: UInt(bitPattern: surface),
+                        intent: .searchTotal(5)
+                    )
+                )
+            )
+            XCTAssertTrue(
+                registry.handleGhosttyRuntimeAction(
+                    GhosttyRuntimeAction(
+                        surfaceHandle: UInt(bitPattern: surface),
+                        intent: .searchSelected(2)
+                    )
+                )
+            )
+
+            let workspaceAfter = try XCTUnwrap(store.selectedWorkspace)
+            XCTAssertEqual(workspaceAfter.focusedPanelID, initiallyFocusedPanelID)
+            let searchState = try XCTUnwrap(registry.searchState(for: targetPanelID))
+            XCTAssertTrue(searchState.isPresented)
+            XCTAssertEqual(searchState.needle, "")
+            XCTAssertEqual(searchState.total, 5)
+            XCTAssertEqual(searchState.selected, 2)
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testSurfaceTargetEndSearchClearsResolvedPanelSearchState() async throws {
+        try await MainActor.run {
+            let state = try makeSplitState()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let workspaceBefore = try XCTUnwrap(store.selectedWorkspace)
+            let windowID = try XCTUnwrap(store.selectedWindow?.id)
+            let targetPanelID = try XCTUnwrap(workspaceBefore.panels.keys.first)
+            let surface = fakeSurfaceHandle(0x606)
+            registry.registerSurfaceHandleForTesting(
+                surface,
+                for: targetPanelID,
+                workspaceID: workspaceBefore.id,
+                windowID: windowID,
+                state: store.state
+            )
+
+            defer {
+                registry.unregisterSurfaceHandle(surface, for: targetPanelID)
+            }
+
+            XCTAssertTrue(
+                registry.handleGhosttyRuntimeAction(
+                    GhosttyRuntimeAction(
+                        surfaceHandle: UInt(bitPattern: surface),
+                        intent: .startSearch(needle: "")
+                    )
+                )
+            )
+            XCTAssertNotNil(registry.searchState(for: targetPanelID))
+
+            XCTAssertTrue(
+                registry.handleGhosttyRuntimeAction(
+                    GhosttyRuntimeAction(
+                        surfaceHandle: UInt(bitPattern: surface),
+                        intent: .endSearch
+                    )
+                )
+            )
+
+            XCTAssertNil(registry.searchState(for: targetPanelID))
+            try StateValidator.validate(store.state)
+        }
+    }
+
+    func testClosingPanelPrunesSearchState() async throws {
+        try await MainActor.run {
+            let state = try makeSplitState()
+            let (store, registry) = makeStoreAndRegistry(state: state)
+            let workspace = try XCTUnwrap(store.selectedWorkspace)
+            let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
+            let targetPanelID = try XCTUnwrap(
+                workspace.panels.keys.first(where: { $0 != focusedPanelID })
+            )
+
+            XCTAssertTrue(
+                registry.handleSearchRuntimeAction(
+                    .startSearch(needle: ""),
+                    panelID: targetPanelID
+                )
+            )
+            XCTAssertNotNil(registry.searchState(for: targetPanelID))
+
+            XCTAssertTrue(store.send(.closePanel(panelID: targetPanelID)))
+
+            XCTAssertNil(registry.searchState(for: targetPanelID))
+            try StateValidator.validate(store.state)
+        }
+    }
+
     func testChildExitedMetadataMakesPanelSafeToCloseWithoutController() async throws {
         try await MainActor.run {
             let state = AppState.bootstrap()

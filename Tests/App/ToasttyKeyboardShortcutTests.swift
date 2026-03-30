@@ -37,6 +37,9 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameTab.symbolLabel, "⌥⇧E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.closeWorkspace.symbolLabel, "⇧⌘W")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.find.symbolLabel, "⌘F")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.findNext.symbolLabel, "⌘G")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.findPrevious.symbolLabel, "⇧⌘G")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusPreviousPane.symbolLabel, "⌘[")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusNextPane.symbolLabel, "⌘]")
     }
@@ -50,6 +53,9 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.renameTab,
             ToasttyKeyboardShortcuts.closeWorkspace,
             ToasttyKeyboardShortcuts.toggleFocusedPanel,
+            ToasttyKeyboardShortcuts.find,
+            ToasttyKeyboardShortcuts.findNext,
+            ToasttyKeyboardShortcuts.findPrevious,
             ToasttyKeyboardShortcuts.splitHorizontal,
             ToasttyKeyboardShortcuts.splitVertical,
             ToasttyKeyboardShortcuts.focusPreviousPane,

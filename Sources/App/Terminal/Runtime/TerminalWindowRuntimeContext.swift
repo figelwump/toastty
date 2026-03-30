@@ -29,4 +29,9 @@ struct TerminalWindowRuntimeContext {
         )
     }
 
+    @discardableResult
+    func releaseInactiveSearchFieldFocus(activePanelID: UUID?) -> Bool {
+        runtimeRegistry.releaseInactiveSearchFieldFocus(activePanelID: activePanelID)
+    }
+
 }

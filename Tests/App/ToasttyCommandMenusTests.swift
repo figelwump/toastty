@@ -254,6 +254,36 @@ final class ToasttyCommandMenusTests: XCTestCase {
             )
         )
     }
+
+    func testFindCommandsYieldToUnrelatedTextInput() {
+        XCTAssertTrue(
+            ToasttyCommandMenus.textInputOwnsFindCommands(
+                modalWindowPresent: false,
+                firstResponderIsTextInput: true,
+                terminalSearchFieldIsFocused: false
+            )
+        )
+    }
+
+    func testFindCommandsStayAvailableWhileTerminalSearchFieldOwnsFocus() {
+        XCTAssertFalse(
+            ToasttyCommandMenus.textInputOwnsFindCommands(
+                modalWindowPresent: false,
+                firstResponderIsTextInput: true,
+                terminalSearchFieldIsFocused: true
+            )
+        )
+    }
+
+    func testFindCommandsYieldToModalContexts() {
+        XCTAssertTrue(
+            ToasttyCommandMenus.textInputOwnsFindCommands(
+                modalWindowPresent: true,
+                firstResponderIsTextInput: false,
+                terminalSearchFieldIsFocused: true
+            )
+        )
+    }
 }
 
 private func makeProfileShortcutRegistry(

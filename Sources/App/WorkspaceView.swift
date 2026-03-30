@@ -1588,6 +1588,7 @@ private struct SlotPlacementView: View {
                     panelFlashOverlayOpacity: panelFlashOverlayOpacity,
                     store: store,
                     terminalProfileStore: terminalProfileStore,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
@@ -1626,6 +1627,7 @@ private struct PanelCardView: View {
     let panelFlashOverlayOpacity: Double
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
+    @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
 
     private var isFocused: Bool {
@@ -1704,6 +1706,15 @@ private struct PanelCardView: View {
                             }
                             .allowsHitTesting(false)
                     }
+                }
+                .overlay(alignment: .topTrailing) {
+                    TerminalSearchOverlay(
+                        terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        panelID: panelID,
+                        isActivePanel: isFocused
+                    )
+                    .padding(.top, 6)
+                    .padding(.trailing, 8)
                 }
                 .frame(
                     maxWidth: .infinity,

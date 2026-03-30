@@ -756,6 +756,19 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         #endif
     }
 
+    @discardableResult
+    func performSearchAction(_ action: String) -> Bool {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else {
+            return false
+        }
+        return invokeGhosttyBindingAction(action, on: ghosttySurface)
+        #else
+        _ = action
+        return false
+        #endif
+    }
+
     func canAcceptImageFileDrop() -> Bool {
         #if TOASTTY_HAS_GHOSTTY_KIT
         return ghosttySurface != nil

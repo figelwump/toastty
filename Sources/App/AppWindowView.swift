@@ -73,7 +73,7 @@ struct AppWindowView: View {
             scheduleWindowFocusRestore()
         }
         .onChange(of: slotFocusSignature) { _, _ in
-            scheduleWindowFocusRestore()
+            handleSlotFocusSignatureChange()
         }
         .onChange(of: store.state.workspacesByID) { _, _ in
             if let pendingWorkspaceClose,
@@ -146,6 +146,18 @@ struct AppWindowView: View {
             workspaceID: workspaceID,
             avoidStealingKeyboardFocus: avoidStealingKeyboardFocus
         )
+    }
+
+    private func handleSlotFocusSignatureChange() {
+        DispatchQueue.main.async {
+            let activePanelID = slotFocusSignature?.focusedPanelID
+            let releasedBackgroundSearchFieldFocus = terminalRuntimeContext.releaseInactiveSearchFieldFocus(
+                activePanelID: activePanelID
+            )
+            scheduleWindowFocusRestore(
+                avoidStealingKeyboardFocus: releasedBackgroundSearchFieldFocus == false
+            )
+        }
     }
 
     private var pendingWorkspaceCloseBinding: Binding<Bool> {
