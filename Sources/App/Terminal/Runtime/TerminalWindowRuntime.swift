@@ -63,6 +63,13 @@ final class TerminalWindowRuntime {
         }
     }
 
+    @discardableResult
+    func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
+        workspaceRuntimesByID.values.reduce(into: 0) { result, runtime in
+            result += runtime.resetTrackedGhosttyModifiersForApplicationDeactivation()
+        }
+    }
+
     func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
         for runtime in workspaceRuntimesByID.values {
             runtime.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)

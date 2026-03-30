@@ -312,6 +312,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         runtimeStore.synchronizeGhosttySurfaceFocusFromApplicationState()
     }
 
+    @discardableResult
+    func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
+        runtimeStore.resetTrackedGhosttyModifiersForApplicationDeactivation()
+    }
+
     func synchronize(with state: AppState) {
         let removedPanelIDs = runtimeStore.synchronize(with: state)
         let livePanelIDs = liveTerminalPanelIDs(in: state)

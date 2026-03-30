@@ -104,6 +104,15 @@ final class TerminalControllerStore {
         }
     }
 
+    @discardableResult
+    func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
+        var releasedModifierKeyCount = 0
+        forEachController { controller in
+            releasedModifierKeyCount += controller.resetTrackedGhosttyModifiersForApplicationDeactivation()
+        }
+        return releasedModifierKeyCount
+    }
+
     func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
         guard previousPoints != nextPoints else { return }
         forEachController { controller in

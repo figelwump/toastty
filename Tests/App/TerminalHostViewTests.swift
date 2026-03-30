@@ -454,6 +454,158 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertFalse(hostView.resolvedGhosttySurfaceFocusState())
     }
 
+    func testResetTrackedGhosttyModifiersForApplicationDeactivationSendsSyntheticControlRelease() throws {
+        let hostView = TerminalHostView()
+        let keyRecorder = GhosttyKeyEventRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, keyEvent in
+                keyRecorder.record(keyEvent)
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1234))
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x3B,
+                modifierFlags: [.control]
+            )
+        )
+
+        let releasedCount = hostView.resetTrackedGhosttyModifiersForApplicationDeactivation()
+
+        XCTAssertEqual(releasedCount, 1)
+        XCTAssertEqual(
+            keyRecorder.events.map(\.actionRawValue),
+            [GHOSTTY_ACTION_PRESS.rawValue, GHOSTTY_ACTION_RELEASE.rawValue]
+        )
+        XCTAssertEqual(
+            keyRecorder.events.map(\.keyCode),
+            [UInt32(0x3B), UInt32(0x3B)]
+        )
+        XCTAssertEqual(keyRecorder.events.first?.modsRawValue, GHOSTTY_MODS_CTRL.rawValue)
+        XCTAssertEqual(keyRecorder.events.last?.modsRawValue, GHOSTTY_MODS_NONE.rawValue)
+    }
+
+    func testResetTrackedGhosttyModifiersForApplicationDeactivationPreservesRemainingRightShiftState() throws {
+        let hostView = TerminalHostView()
+        let keyRecorder = GhosttyKeyEventRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, keyEvent in
+                keyRecorder.record(keyEvent)
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1235))
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x3C,
+                modifierFlags: NSEvent.ModifierFlags(
+                    rawValue: NSEvent.ModifierFlags.shift.rawValue | UInt(NX_DEVICERSHIFTKEYMASK)
+                )
+            )
+        )
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x3B,
+                modifierFlags: NSEvent.ModifierFlags.shift.union(.control)
+            )
+        )
+
+        let releasedCount = hostView.resetTrackedGhosttyModifiersForApplicationDeactivation()
+
+        XCTAssertEqual(releasedCount, 2)
+        let syntheticReleases = Array(keyRecorder.events.suffix(2))
+        XCTAssertEqual(
+            syntheticReleases.map(\.keyCode),
+            [UInt32(0x3B), UInt32(0x3C)]
+        )
+        XCTAssertEqual(
+            syntheticReleases.map(\.modsRawValue),
+            [
+                GHOSTTY_MODS_SHIFT.rawValue | GHOSTTY_MODS_SHIFT_RIGHT.rawValue,
+                GHOSTTY_MODS_NONE.rawValue,
+            ]
+        )
+    }
+
+    func testSetGhosttySurfaceReplacementDrainsTrackedModifiersFromPreviousSurface() throws {
+        let hostView = TerminalHostView()
+        let keyRecorder = GhosttyKeyEventRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, keyEvent in
+                keyRecorder.record(keyEvent)
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1237))
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x3B,
+                modifierFlags: [.control]
+            )
+        )
+
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1238))
+
+        XCTAssertEqual(
+            keyRecorder.events.map(\.actionRawValue),
+            [GHOSTTY_ACTION_PRESS.rawValue, GHOSTTY_ACTION_RELEASE.rawValue]
+        )
+        XCTAssertEqual(
+            keyRecorder.events.map(\.keyCode),
+            [UInt32(0x3B), UInt32(0x3B)]
+        )
+        XCTAssertEqual(keyRecorder.events.last?.modsRawValue, GHOSTTY_MODS_NONE.rawValue)
+        XCTAssertEqual(hostView.resetTrackedGhosttyModifiersForApplicationDeactivation(), 0)
+    }
+
+    func testResetTrackedGhosttyModifiersForApplicationDeactivationIsIdempotent() throws {
+        let hostView = TerminalHostView()
+        let keyRecorder = GhosttyKeyEventRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, keyEvent in
+                keyRecorder.record(keyEvent)
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1236))
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x3B,
+                modifierFlags: [.control]
+            )
+        )
+
+        XCTAssertEqual(hostView.resetTrackedGhosttyModifiersForApplicationDeactivation(), 1)
+        let eventCountAfterFirstReset = keyRecorder.events.count
+
+        XCTAssertEqual(hostView.resetTrackedGhosttyModifiersForApplicationDeactivation(), 0)
+        XCTAssertEqual(keyRecorder.events.count, eventCountAfterFirstReset)
+    }
+
     func testSetGhosttySurfaceSkipsRepeatedAssignmentForSameSurface() {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -529,6 +681,61 @@ private func makeMouseEvent(
         throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
     }
     return event
+}
+
+private func makeKeyEvent(
+    type: NSEvent.EventType,
+    keyCode: UInt16,
+    modifierFlags: NSEvent.ModifierFlags,
+    characters: String = "",
+    charactersIgnoringModifiers: String = ""
+) throws -> NSEvent {
+    guard let event = NSEvent.keyEvent(
+        with: type,
+        location: .zero,
+        modifierFlags: modifierFlags,
+        timestamp: 0,
+        windowNumber: 0,
+        context: nil,
+        characters: characters,
+        charactersIgnoringModifiers: charactersIgnoringModifiers,
+        isARepeat: false,
+        keyCode: keyCode
+    ) else {
+        throw NSError(domain: "TerminalHostViewTests", code: 2, userInfo: nil)
+    }
+    return event
+}
+
+private struct RecordedGhosttyKeyEvent: Equatable {
+    let actionRawValue: UInt32
+    let modsRawValue: UInt32
+    let keyCode: UInt32
+}
+
+private final class GhosttyKeyEventRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [RecordedGhosttyKeyEvent] = []
+
+    func record(_ keyEvent: ghostty_input_key_s) {
+        lock.lock()
+        storage.append(
+            RecordedGhosttyKeyEvent(
+                actionRawValue: keyEvent.action.rawValue,
+                modsRawValue: keyEvent.mods.rawValue,
+                keyCode: keyEvent.keycode
+            )
+        )
+        lock.unlock()
+    }
+
+    var events: [RecordedGhosttyKeyEvent] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
+    }
 }
 
 private final class HookCallCounter: @unchecked Sendable {

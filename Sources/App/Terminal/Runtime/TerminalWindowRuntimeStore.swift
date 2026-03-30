@@ -101,6 +101,13 @@ final class TerminalWindowRuntimeStore {
         }
     }
 
+    @discardableResult
+    func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
+        windowRuntimesByID.values.reduce(into: 0) { result, runtime in
+            result += runtime.resetTrackedGhosttyModifiersForApplicationDeactivation()
+        }
+    }
+
     func applyGhosttyFontChange(windowID: UUID, from previousPoints: Double, to nextPoints: Double) {
         guard previousPoints != nextPoints,
               let runtime = windowRuntimesByID[windowID] else {

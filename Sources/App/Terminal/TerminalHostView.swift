@@ -34,6 +34,7 @@ final class TerminalHostView: NSView {
     private weak var observedWindow: NSWindow?
     private var windowOcclusionObserver: NSObjectProtocol?
     private var lastKnownSurfaceVisibility: Bool?
+    private var trackedPressedModifierKeyCodes: [UInt16] = []
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
@@ -118,6 +119,26 @@ final class TerminalHostView: NSView {
         var setFocus: @Sendable (ghostty_surface_t, Bool) -> Void
         var setOcclusion: @Sendable (ghostty_surface_t, Bool) -> Void
         var refresh: @Sendable (ghostty_surface_t) -> Void
+        var keyTranslationMods: @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e
+        var sendKey: @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool
+
+        init(
+            setFocus: @escaping @Sendable (ghostty_surface_t, Bool) -> Void,
+            setOcclusion: @escaping @Sendable (ghostty_surface_t, Bool) -> Void,
+            refresh: @escaping @Sendable (ghostty_surface_t) -> Void,
+            keyTranslationMods: @escaping @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e = { surface, mods in
+                ghostty_surface_key_translation_mods(surface, mods)
+            },
+            sendKey: @escaping @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool = { surface, keyEvent in
+                ghostty_surface_key(surface, keyEvent)
+            }
+        ) {
+            self.setFocus = setFocus
+            self.setOcclusion = setOcclusion
+            self.refresh = refresh
+            self.keyTranslationMods = keyTranslationMods
+            self.sendKey = sendKey
+        }
 
         static let live = GhosttySurfaceHooks(
             setFocus: { surface, focused in
@@ -128,6 +149,12 @@ final class TerminalHostView: NSView {
             },
             refresh: { surface in
                 ghostty_surface_refresh(surface)
+            },
+            keyTranslationMods: { surface, mods in
+                ghostty_surface_key_translation_mods(surface, mods)
+            },
+            sendKey: { surface, keyEvent in
+                ghostty_surface_key(surface, keyEvent)
             }
         )
     }
@@ -291,11 +318,16 @@ final class TerminalHostView: NSView {
             return
         }
 
+        // If a live surface is being replaced while a modifier is held, release
+        // it against the old surface before switching pointers so Ghostty does
+        // not retain dirty per-surface modifier state.
+        _ = drainTrackedGhosttyModifiers(reason: "surface_replacement")
         ghosttySurface = surface
         lastAppliedSurfaceFocus = nil
         rightMousePressWasForwarded = false
         pendingImageFileDrop = nil
         lastKnownSurfaceVisibility = nil
+        trackedPressedModifierKeyCodes.removeAll()
         ghosttyMouseCursorStyle = .horizontalText
         ghosttyMouseCursorVisible = true
         ghosttyMouseOverLinkURL = nil
@@ -877,6 +909,9 @@ final class TerminalHostView: NSView {
         // Apply the modifier transition first so stationary pointer hover
         // state re-evaluates against Ghostty's current modifier set.
         let handled = handleKeyEvent(event, action: action)
+        if handled {
+            updateTrackedModifierKeyCodes(keyCode: event.keyCode, action: action)
+        }
 
         // FlagsChanged events can carry stale or zero-origin locationInWindow
         // values, so use the window's live mouse location instead of the event's.
@@ -891,42 +926,56 @@ final class TerminalHostView: NSView {
     }
 
     private func handleKeyEvent(_ event: NSEvent, action: ghostty_input_action_e) -> Bool {
+        let text = Self.ghosttyText(for: event)
+        return forwardGhosttyKeyEvent(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
+            action: action,
+            text: text,
+            unshiftedCodepoint: Self.ghosttyUnshiftedCodepoint(for: event)
+        )
+    }
+
+    private func forwardGhosttyKeyEvent(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        action: ghostty_input_action_e,
+        text: String?,
+        unshiftedCodepoint: UInt32
+    ) -> Bool {
         guard let ghosttySurface else {
             ToasttyLog.debug(
                 "Dropped key event because Ghostty surface is unavailable",
                 category: .input,
                 metadata: [
-                    "key_code": String(event.keyCode),
+                    "key_code": String(keyCode),
                     "action": Self.ghosttyInputActionName(action),
                 ]
             )
             return false
         }
-        let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
+        let mods = Self.ghosttyModifierFlags(for: modifierFlags)
         // Translation mods are only for keyboard-layout text translation (for example
         // option-as-alt) and should not strip control/command from the actual key event.
-        let translationMods = ghostty_surface_key_translation_mods(ghosttySurface, mods)
+        let translationMods = ghosttySurfaceHooks.keyTranslationMods(ghosttySurface, mods)
         var keyEvent = ghostty_input_key_s(
             action: action,
             mods: mods,
             consumed_mods: Self.ghosttyConsumedModifierFlags(forTranslationMods: translationMods),
-            keycode: UInt32(event.keyCode),
+            keycode: UInt32(keyCode),
             text: nil,
-            unshifted_codepoint: 0,
+            unshifted_codepoint: unshiftedCodepoint,
             composing: false
         )
 
-        keyEvent.unshifted_codepoint = Self.ghosttyUnshiftedCodepoint(for: event)
-
-        let text = Self.ghosttyText(for: event)
         let handled: Bool
         if let text, !text.isEmpty {
             handled = text.withCString { pointer in
                 keyEvent.text = pointer
-                return ghostty_surface_key(ghosttySurface, keyEvent)
+                return ghosttySurfaceHooks.sendKey(ghosttySurface, keyEvent)
             }
         } else {
-            handled = ghostty_surface_key(ghosttySurface, keyEvent)
+            handled = ghosttySurfaceHooks.sendKey(ghosttySurface, keyEvent)
         }
 
         ToasttyLog.debug(
@@ -934,14 +983,74 @@ final class TerminalHostView: NSView {
             category: .input,
             metadata: [
                 "handled": handled ? "true" : "false",
-                "key_code": String(event.keyCode),
+                "key_code": String(keyCode),
                 "action": Self.ghosttyInputActionName(action),
-                "modifiers": Self.modifierDescription(event.modifierFlags),
+                "modifiers": Self.modifierDescription(modifierFlags),
                 "text_length": String(text?.count ?? 0),
             ]
         )
 
         return handled
+    }
+
+    @discardableResult
+    func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
+        drainTrackedGhosttyModifiers(reason: "app_deactivation")
+    }
+
+    @discardableResult
+    private func drainTrackedGhosttyModifiers(reason: String) -> Int {
+        let pressedKeyCodes = trackedPressedModifierKeyCodes
+        trackedPressedModifierKeyCodes.removeAll()
+        guard pressedKeyCodes.isEmpty == false else {
+            return 0
+        }
+
+        var remainingKeyCodes = Set(pressedKeyCodes)
+        var releasedKeyCount = 0
+        for keyCode in pressedKeyCodes.reversed() {
+            remainingKeyCodes.remove(keyCode)
+            let modifierFlags = Self.modifierFlags(forTrackedModifierKeyCodes: remainingKeyCodes)
+            if forwardGhosttyKeyEvent(
+                keyCode: keyCode,
+                modifierFlags: modifierFlags,
+                action: GHOSTTY_ACTION_RELEASE,
+                text: nil,
+                unshiftedCodepoint: 0
+            ) {
+                releasedKeyCount += 1
+            }
+        }
+
+        ToasttyLog.debug(
+            "Reset tracked Ghostty modifiers",
+            category: .input,
+            metadata: [
+                "reason": reason,
+                "tracked_modifier_key_count": String(pressedKeyCodes.count),
+                "released_modifier_key_count": String(releasedKeyCount),
+            ]
+        )
+        return releasedKeyCount
+    }
+
+    private func updateTrackedModifierKeyCodes(
+        keyCode: UInt16,
+        action: ghostty_input_action_e
+    ) {
+        guard Self.isTrackableModifierKeyCode(keyCode) else {
+            return
+        }
+
+        switch action {
+        case GHOSTTY_ACTION_PRESS:
+            trackedPressedModifierKeyCodes.removeAll(where: { $0 == keyCode })
+            trackedPressedModifierKeyCodes.append(keyCode)
+        case GHOSTTY_ACTION_RELEASE:
+            trackedPressedModifierKeyCodes.removeAll(where: { $0 == keyCode })
+        default:
+            break
+        }
     }
 
     private func notifyLocalInterruptIfNeeded(_ event: NSEvent, action: ghostty_input_action_e) {
@@ -1315,6 +1424,46 @@ final class TerminalHostView: NSView {
         }
 
         return sidePressed ? GHOSTTY_ACTION_PRESS : GHOSTTY_ACTION_RELEASE
+    }
+
+    private static func isTrackableModifierKeyCode(_ keyCode: UInt16) -> Bool {
+        switch keyCode {
+        case 0x38, 0x3C, 0x3B, 0x3E, 0x3A, 0x3D, 0x37, 0x36:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func modifierFlags(
+        forTrackedModifierKeyCodes keyCodes: Set<UInt16>
+    ) -> NSEvent.ModifierFlags {
+        var flags: NSEvent.ModifierFlags = []
+        if keyCodes.contains(0x38) || keyCodes.contains(0x3C) {
+            flags.insert(.shift)
+        }
+        if keyCodes.contains(0x3B) || keyCodes.contains(0x3E) {
+            flags.insert(.control)
+        }
+        if keyCodes.contains(0x3A) || keyCodes.contains(0x3D) {
+            flags.insert(.option)
+        }
+        if keyCodes.contains(0x37) || keyCodes.contains(0x36) {
+            flags.insert(.command)
+        }
+        if keyCodes.contains(0x3C) {
+            flags.insert(NSEvent.ModifierFlags(rawValue: UInt(NX_DEVICERSHIFTKEYMASK)))
+        }
+        if keyCodes.contains(0x3E) {
+            flags.insert(NSEvent.ModifierFlags(rawValue: UInt(NX_DEVICERCTLKEYMASK)))
+        }
+        if keyCodes.contains(0x3D) {
+            flags.insert(NSEvent.ModifierFlags(rawValue: UInt(NX_DEVICERALTKEYMASK)))
+        }
+        if keyCodes.contains(0x36) {
+            flags.insert(NSEvent.ModifierFlags(rawValue: UInt(NX_DEVICERCMDKEYMASK)))
+        }
+        return flags
     }
 
     static func ghosttyMouseCursorStyle(

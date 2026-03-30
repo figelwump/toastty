@@ -1391,6 +1391,11 @@ extension TerminalSurfaceController {
         terminalHostView.synchronizeGhosttySurfaceFocusFromApplicationState()
     }
 
+    @discardableResult
+    func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
+        terminalHostView.resetTrackedGhosttyModifiersForApplicationDeactivation()
+    }
+
     private func recordLatestViewportUpdate(
         terminalState: TerminalPanelState,
         focused: Bool,

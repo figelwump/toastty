@@ -163,6 +163,7 @@ func restoreHiddenToasttyWindows(
 private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
     private weak var store: AppStore?
+    private weak var terminalRuntimeRegistry: TerminalRuntimeRegistry?
     private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
@@ -195,6 +196,10 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func configureStore(_ store: AppStore) {
         self.store = store
+    }
+
+    func configureTerminalRuntimeRegistry(_ terminalRuntimeRegistry: TerminalRuntimeRegistry) {
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
     }
 
     func configureMenuBridges(
@@ -235,14 +240,18 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     nonisolated func applicationDidBecomeActive(_ notification: Notification) {
+        _ = notification
+        #if TOASTTY_HAS_GHOSTTY_KIT
         Task { @MainActor [weak self] in
             self?.hasCompletedLaunch = true
             self?.scheduleMenuBridgeInstallations()
-        }
-        _ = notification
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        Task { @MainActor in
             GhosttyRuntimeManager.shared.setAppFocus(true)
+            self?.terminalRuntimeRegistry?.synchronizeGhosttySurfaceFocusFromApplicationState()
+        }
+        #else
+        Task { @MainActor [weak self] in
+            self?.hasCompletedLaunch = true
+            self?.scheduleMenuBridgeInstallations()
         }
         #endif
     }
@@ -250,8 +259,10 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     nonisolated func applicationDidResignActive(_ notification: Notification) {
         _ = notification
         #if TOASTTY_HAS_GHOSTTY_KIT
-        Task { @MainActor in
+        Task { @MainActor [weak self] in
+            _ = self?.terminalRuntimeRegistry?.resetTrackedGhosttyModifiersForApplicationDeactivation()
             GhosttyRuntimeManager.shared.setAppFocus(false)
+            self?.terminalRuntimeRegistry?.synchronizeGhosttySurfaceFocusFromApplicationState()
         }
         #endif
     }
@@ -692,31 +703,6 @@ private final class AppTerminationObserver: NSObject {
     }
 }
 
-private final class AppResignActiveObserver: NSObject {
-    private let onDidResignActive: () -> Void
-
-    init(onDidResignActive: @escaping () -> Void) {
-        self.onDidResignActive = onDidResignActive
-        super.init()
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(handleDidResignActiveNotification),
-            name: NSApplication.didResignActiveNotification,
-            object: nil
-        )
-    }
-
-    deinit {
-        NotificationCenter.default.removeObserver(self)
-    }
-
-    @objc
-    private func handleDidResignActiveNotification(_ notification: Notification) {
-        _ = notification
-        onDidResignActive()
-    }
-}
-
 @MainActor
 @main
 struct ToasttyApp: App {
@@ -738,7 +724,6 @@ struct ToasttyApp: App {
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
-    private let appResignActiveObserver: AppResignActiveObserver
     private let agentLaunchService: AgentLaunchService
     private let systemNotificationResponseCoordinator: SystemNotificationResponseCoordinator
     private let fileSplitMenuBridge: FileSplitMenuBridge
@@ -938,9 +923,6 @@ struct ToasttyApp: App {
         self.runtimePaths = runtimePaths
         agentLaunchSocketPath = socketPath
         agentLaunchCLIExecutablePath = cliExecutablePath
-        appResignActiveObserver = AppResignActiveObserver { [weak terminalRuntimeRegistry] in
-            terminalRuntimeRegistry?.synchronizeGhosttySurfaceFocusFromApplicationState()
-        }
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -1009,6 +991,7 @@ struct ToasttyApp: App {
             hiddenSystemMenuItemsBridge: hiddenSystemMenuItemsBridge
         )
         appLifecycleDelegate.configureStore(store)
+        appLifecycleDelegate.configureTerminalRuntimeRegistry(terminalRuntimeRegistry)
     }
 
     private static func refreshManagedShellIntegrationSnippetIfInstalled(processInfo: ProcessInfo) {

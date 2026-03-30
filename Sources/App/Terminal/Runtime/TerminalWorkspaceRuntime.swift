@@ -55,6 +55,15 @@ final class TerminalWorkspaceRuntime {
         #endif
     }
 
+    @discardableResult
+    func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        controllerStore.resetTrackedGhosttyModifiersForApplicationDeactivation()
+        #else
+        0
+        #endif
+    }
+
     func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
         #if TOASTTY_HAS_GHOSTTY_KIT
         controllerStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)
