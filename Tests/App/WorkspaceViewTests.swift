@@ -338,7 +338,7 @@ final class WorkspaceViewTests: XCTestCase {
             appIsActive: true
         )
 
-        try assertColor(spec.background, equals: .clear)
+        try assertColor(spec.background, equals: ToastyTheme.chromeBackground)
         try assertColor(spec.text, equals: ToastyTheme.workspaceTabUnselectedText)
         XCTAssertNil(spec.accentColor)
         let borderColor = try XCTUnwrap(spec.borderColor)

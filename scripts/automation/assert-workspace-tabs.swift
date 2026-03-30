@@ -90,7 +90,8 @@ private let windowWidthPoints = 2300.0
 private let topBarHeightPoints = 43.0
 private let tabHeightPoints = 34.0
 private let tabTopInsetPoints = topBarHeightPoints - tabHeightPoints
-private let tabSpacingPoints = 0.0
+// Mirror WorkspaceView.workspaceTabStripSpacing.
+private let tabSpacingPoints = -1.5
 private let tabTrailingPaddingPoints = 10.0
 private let tabTrailingSlotWidthPoints = 24.0
 private let tabTrailingSlotTopInsetPoints = 4.0
@@ -245,6 +246,95 @@ private func countNonBackgroundPixels(
     return count
 }
 
+private func averageRed(
+    in image: ImageSampler,
+    xRange: ClosedRange<Int>,
+    rowY: Int
+) -> Int {
+    var total = 0
+    var count = 0
+
+    for x in xRange {
+        total += image.color(topX: x, topY: rowY).red
+        count += 1
+    }
+
+    guard count > 0 else { return 0 }
+    return Int(round(Double(total) / Double(count)))
+}
+
+private func longestRun(
+    in xRange: ClosedRange<Int>,
+    predicate: (Int) -> Bool
+) -> Int {
+    var longest = 0
+    var current = 0
+
+    for x in xRange {
+        if predicate(x) {
+            current += 1
+            longest = max(longest, current)
+        } else {
+            current = 0
+        }
+    }
+
+    return longest
+}
+
+private func assertSingleWidthSeam(
+    snapshot: HeaderTabSnapshot,
+    leadingTabIndex: Int,
+    trailingTabIndex: Int,
+    requiresVisibleSeparator: Bool,
+    messagePrefix: String
+) throws {
+    let image = snapshot.image
+    let scale = snapshot.scale
+    let leadingRun = snapshot.tabRuns[leadingTabIndex - 1]
+    let trailingRun = snapshot.tabRuns[trailingTabIndex - 1]
+    let seamX = trailingRun.lowerBound
+    let seamRowY = min(
+        image.height - 1,
+        scaled(tabTopInsetPoints + 6, scale: scale)
+    )
+    let searchRadius = max(2, scaled(4, scale: scale))
+    let seamRange = max(0, seamX - searchRadius)...min(image.width - 1, seamX + searchRadius)
+    let leadingFillSampleWidth = max(2, scaled(6, scale: scale))
+    let trailingFillSampleWidth = max(2, scaled(6, scale: scale))
+    let leadingFillRange = max(0, seamX - searchRadius - leadingFillSampleWidth)...max(0, seamX - searchRadius - 1)
+    let trailingFillRange = min(image.width - 1, seamX + searchRadius + 1)...min(
+        image.width - 1,
+        seamX + searchRadius + trailingFillSampleWidth
+    )
+
+    let seamWidth: Int
+    if requiresVisibleSeparator {
+        let fillBaseline = averageRed(in: image, xRange: leadingFillRange, rowY: seamRowY)
+        seamWidth = longestRun(in: seamRange) { x in
+            image.color(topX: x, topY: seamRowY).red >= fillBaseline + 8
+        }
+
+        try assertCondition(seamWidth > 0, "\(messagePrefix) separator highlight disappeared")
+    } else {
+        let leadingFill = averageRed(in: image, xRange: leadingFillRange, rowY: seamRowY)
+        let trailingFill = averageRed(in: image, xRange: trailingFillRange, rowY: seamRowY)
+        seamWidth = longestRun(in: seamRange) { x in
+            let red = image.color(topX: x, topY: seamRowY).red
+            return abs(red - leadingFill) > 4 && abs(red - trailingFill) > 4
+        }
+    }
+
+    try assertCondition(
+        seamWidth <= max(2, scaled(requiresVisibleSeparator ? 3.5 : 2.5, scale: scale)),
+        "\(messagePrefix) seam still looks double-width"
+    )
+    try assertCondition(
+        trailingRun.lowerBound <= leadingRun.upperBound + max(1, scaled(1, scale: scale)),
+        "\(messagePrefix) tabs are no longer visually overlapping"
+    )
+}
+
 private func assertSingleTabScreenshot(path: String) throws {
     let snapshot = try headerTabSnapshot(path: path, expectedTabCount: 1)
     let run = snapshot.selectedTabRun
@@ -310,6 +400,14 @@ private func assertTwoTabScreenshot(path: String) throws -> HeaderTabSnapshot {
     try assertCondition(
         isNear(panelHeaderContinuityColor, selectedBackground, tolerance: 10),
         "panel header no longer visually connects with the selected tab"
+    )
+
+    try assertSingleWidthSeam(
+        snapshot: snapshot,
+        leadingTabIndex: 1,
+        trailingTabIndex: 2,
+        requiresVisibleSeparator: false,
+        messagePrefix: "selected-to-unselected workspace tab seam"
     )
 
     try assertBadgeVisibility(snapshot: snapshot, tabIndex: 2, expectedVisible: true)
@@ -383,6 +481,14 @@ private func assertNineAndTenTabScreenshots(
     try assertBadgeVisibility(snapshot: nine, tabIndex: 9, expectedVisible: true)
     try assertBadgeVisibility(snapshot: ten, tabIndex: 9, expectedVisible: true)
     try assertBadgeVisibility(snapshot: ten, tabIndex: 10, expectedVisible: false)
+
+    try assertSingleWidthSeam(
+        snapshot: nine,
+        leadingTabIndex: 2,
+        trailingTabIndex: 3,
+        requiresVisibleSeparator: true,
+        messagePrefix: "unselected workspace tab seam"
+    )
 
     try assertCondition(
         ten.accentRun.length >= max(ten.tabWidth - scaled(6, scale: ten.scale), scaled(80, scale: ten.scale)),

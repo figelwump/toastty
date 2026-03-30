@@ -275,7 +275,9 @@ struct WorkspaceView: View {
         }
 
         return WorkspaceTabChromeSpec(
-            background: .clear,
+            // Keep unselected tabs visually matching the chrome while still
+            // painting opaque pixels so overlapped borders can be occluded.
+            background: ToastyTheme.chromeBackground,
             text: ToastyTheme.workspaceTabUnselectedText,
             accentColor: nil,
             borderColor: ToastyTheme.subtleBorder
@@ -482,7 +484,7 @@ struct WorkspaceView: View {
                     allowsManagementAffordances: allowsManagementAffordances,
                     installsContextMenu: installsContextMenu
                 )
-                .zIndex(isSelected ? 1 : 0)
+                .zIndex(isSelected ? Double(workspace.orderedTabs.count) : Double(index))
             }
 
             newTabButton
