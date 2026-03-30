@@ -37,7 +37,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Scrollback find** — Search the active terminal's Ghostty scrollback in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
-- **Pane-local terminal history** — With shell integration installed, restored `zsh` and `bash` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
+- **Persisted terminal history** — With shell integration installed, restored `zsh` and `bash` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
 - **Font control** — Increase, decrease, or reset terminal font size per window, with new windows inheriting the source window's current size and layouts remembering window-local overrides
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
