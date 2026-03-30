@@ -116,6 +116,18 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testResolvedWorkspaceTabWidthReservesTrailingNewTabButtonWidth() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTabWidth(
+                availableWidth: 524,
+                tabCount: 5,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 6
+            ),
+            99
+        )
+    }
+
     func testResolvedWorkspaceTabWidthStopsAtConfiguredMinimumWidth() {
         XCTAssertEqual(
             WorkspaceView.resolvedWorkspaceTabWidth(availableWidth: 140, tabCount: 5),
@@ -147,10 +159,35 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testResolvedWorkspaceTitleWidthLeavesRoomForTrailingNewTabButton() {
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTitleWidth(
+                preferredWidth: 320,
+                availableWidth: 580,
+                trailingWidth: 200,
+                tabCount: 3,
+                tabAccessoryWidth: 20,
+                tabAccessorySpacing: 6
+            ),
+            180
+        )
+    }
+
     func testWorkspaceTabIdealTotalWidthRemovesInterTabGap() {
         XCTAssertEqual(
             WorkspaceView.workspaceTabIdealTotalWidth(tabCount: 2),
             ToastyTheme.workspaceTabWidth * 2
+        )
+    }
+
+    func testWorkspaceTabIdealTotalWidthIncludesTrailingAccessory() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabIdealTotalWidth(
+                tabCount: 2,
+                trailingAccessoryWidth: 20,
+                trailingAccessorySpacing: 6
+            ),
+            (ToastyTheme.workspaceTabWidth * 2) + 26
         )
     }
 

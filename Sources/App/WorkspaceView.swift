@@ -69,6 +69,8 @@ struct WorkspaceView: View {
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
     private static let workspaceTabsToControlsSpacing: CGFloat = 12
     private static let workspaceTabStripSpacing: CGFloat = 0
+    private static let workspaceTabAccessorySpacing: CGFloat = 6
+    private static let workspaceNewTabButtonSize: CGFloat = 20
 
     nonisolated static func resolvedWorkspaceTitleWidth(
         preferredWidth: CGFloat,
@@ -78,19 +80,23 @@ struct WorkspaceView: View {
         titleSpacing: CGFloat = 18,
         trailingSpacing: CGFloat = 12,
         tabSpacing: CGFloat = 0,
+        tabAccessoryWidth: CGFloat = 0,
+        tabAccessorySpacing: CGFloat = 0,
         titleMaxWidth: CGFloat = 260
     ) -> CGFloat {
         let cappedPreferredWidth = min(preferredWidth, titleMaxWidth)
         guard availableWidth.isFinite else { return cappedPreferredWidth }
 
-        guard tabCount > 0 else {
-            return max(0, min(cappedPreferredWidth, availableWidth - trailingWidth - trailingSpacing))
-        }
-
         let minimumTabsWidth = workspaceTabMinimumTotalWidth(
             tabCount: tabCount,
-            spacing: tabSpacing
+            spacing: tabSpacing,
+            trailingAccessoryWidth: tabAccessoryWidth,
+            trailingAccessorySpacing: tabAccessorySpacing
         )
+
+        guard minimumTabsWidth > 0 else {
+            return max(0, min(cappedPreferredWidth, availableWidth - trailingWidth - trailingSpacing))
+        }
         let availableTitleWidth = availableWidth - trailingWidth - titleSpacing - trailingSpacing - minimumTabsWidth
         return max(0, min(cappedPreferredWidth, availableTitleWidth))
     }
@@ -132,35 +138,54 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceTabMinimumTotalWidth(
         tabCount: Int,
-        spacing: CGFloat = 0
+        spacing: CGFloat = 0,
+        trailingAccessoryWidth: CGFloat = 0,
+        trailingAccessorySpacing: CGFloat = 0
     ) -> CGFloat {
         workspaceTabTotalWidth(
             tabCount: tabCount,
             tabWidth: ToastyTheme.workspaceTabMinimumWidth,
             spacing: spacing
+        ) + workspaceTabTrailingAccessoryTotalWidth(
+            tabCount: tabCount,
+            accessoryWidth: trailingAccessoryWidth,
+            accessorySpacing: trailingAccessorySpacing
         )
     }
 
     nonisolated static func workspaceTabIdealTotalWidth(
         tabCount: Int,
-        spacing: CGFloat = 0
+        spacing: CGFloat = 0,
+        trailingAccessoryWidth: CGFloat = 0,
+        trailingAccessorySpacing: CGFloat = 0
     ) -> CGFloat {
         workspaceTabTotalWidth(
             tabCount: tabCount,
             tabWidth: ToastyTheme.workspaceTabWidth,
             spacing: spacing
+        ) + workspaceTabTrailingAccessoryTotalWidth(
+            tabCount: tabCount,
+            accessoryWidth: trailingAccessoryWidth,
+            accessorySpacing: trailingAccessorySpacing
         )
     }
 
     nonisolated static func resolvedWorkspaceTabWidth(
         availableWidth: CGFloat,
         tabCount: Int,
-        spacing: CGFloat = 0
+        spacing: CGFloat = 0,
+        trailingAccessoryWidth: CGFloat = 0,
+        trailingAccessorySpacing: CGFloat = 0
     ) -> CGFloat {
         guard tabCount > 0 else { return ToastyTheme.workspaceTabWidth }
 
         let spacingWidth = CGFloat(max(tabCount - 1, 0)) * spacing
-        let availableTabWidth = max(0, availableWidth - spacingWidth)
+        let accessoryWidth = workspaceTabTrailingAccessoryTotalWidth(
+            tabCount: tabCount,
+            accessoryWidth: trailingAccessoryWidth,
+            accessorySpacing: trailingAccessorySpacing
+        )
+        let availableTabWidth = max(0, availableWidth - spacingWidth - accessoryWidth)
         let fittedWidth = floor(availableTabWidth / CGFloat(tabCount))
         return min(
             ToastyTheme.workspaceTabWidth,
@@ -175,6 +200,16 @@ struct WorkspaceView: View {
     ) -> CGFloat {
         guard tabCount > 0 else { return 0 }
         return CGFloat(tabCount) * tabWidth + CGFloat(max(tabCount - 1, 0)) * spacing
+    }
+
+    nonisolated private static func workspaceTabTrailingAccessoryTotalWidth(
+        tabCount: Int,
+        accessoryWidth: CGFloat,
+        accessorySpacing: CGFloat
+    ) -> CGFloat {
+        guard accessoryWidth > 0 else { return 0 }
+        guard tabCount > 0 else { return accessoryWidth }
+        return accessorySpacing + accessoryWidth
     }
 
     nonisolated static func workspaceTabChromeSpec(
@@ -313,7 +348,9 @@ struct WorkspaceView: View {
                         tabCount: workspace.tabIDs.count,
                         titleSpacing: Self.workspaceTitleToTabsSpacing,
                         trailingSpacing: Self.workspaceTabsToControlsSpacing,
-                        tabSpacing: Self.workspaceTabStripSpacing
+                        tabSpacing: Self.workspaceTabStripSpacing,
+                        tabAccessoryWidth: Self.workspaceNewTabButtonSize,
+                        tabAccessorySpacing: Self.workspaceTabAccessorySpacing
                     ) {
                         workspaceTitleLabel
                         workspaceHeaderTabStrip(for: workspace)
@@ -385,8 +422,6 @@ struct WorkspaceView: View {
             .disabled(isFocusedPanelModeActive)
             .help(ToasttyKeyboardShortcuts.splitVertical.helpText("Split Vertically"))
             .accessibilityIdentifier("workspace.split.vertical")
-
-            newTabButton
         }
     }
 
@@ -394,7 +429,10 @@ struct WorkspaceView: View {
         let allowsManagementAffordances = Self.workspaceTabManagementAffordancesEnabled(tabCount: workspace.tabIDs.count)
         let installsContextMenu = Self.workspaceTabInstallsContextMenu(tabCount: workspace.tabIDs.count)
 
-        return WorkspaceTabStripLayout(spacing: Self.workspaceTabStripSpacing) {
+        return WorkspaceTabStripLayout(
+            spacing: Self.workspaceTabStripSpacing,
+            accessorySpacing: Self.workspaceTabAccessorySpacing
+        ) {
             ForEach(Array(workspace.orderedTabs.enumerated()), id: \.element.id) { index, tab in
                 workspaceTabRow(
                     workspaceID: workspace.id,
@@ -405,9 +443,12 @@ struct WorkspaceView: View {
                     installsContextMenu: installsContextMenu
                 )
             }
+
+            newTabButton
         }
         .frame(height: ToastyTheme.workspaceTabHeight, alignment: .bottom)
         .clipped()
+        .animation(.easeInOut(duration: 0.18), value: workspace.orderedTabs.map(\.id))
         .accessibilityIdentifier("workspace.tabs.container")
     }
 
@@ -416,7 +457,7 @@ struct WorkspaceView: View {
             Image(systemName: "plus")
                 .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(ToastyTheme.inactiveText)
-                .frame(width: 20, height: 20)
+                .frame(width: Self.workspaceNewTabButtonSize, height: Self.workspaceNewTabButtonSize)
                 .background(ToastyTheme.elevatedBackground, in: RoundedRectangle(cornerRadius: 5))
                 .overlay(
                     RoundedRectangle(cornerRadius: 5)
@@ -1231,6 +1272,8 @@ private struct WorkspaceHeaderLayout: Layout {
     let titleSpacing: CGFloat
     let trailingSpacing: CGFloat
     let tabSpacing: CGFloat
+    let tabAccessoryWidth: CGFloat
+    let tabAccessorySpacing: CGFloat
 
     func sizeThatFits(
         proposal: ProposedViewSize,
@@ -1276,6 +1319,8 @@ private struct WorkspaceHeaderLayout: Layout {
             titleSpacing: titleSpacing,
             trailingSpacing: trailingSpacing,
             tabSpacing: tabSpacing,
+            tabAccessoryWidth: tabAccessoryWidth,
+            tabAccessorySpacing: tabAccessorySpacing,
             titleMaxWidth: ToastyTheme.workspaceTitleMaxWidth
         )
         let titleHeight = min(bounds.height, titleSize.height)
@@ -1313,6 +1358,7 @@ private struct WorkspaceHeaderLayout: Layout {
 
 private struct WorkspaceTabStripLayout: Layout {
     let spacing: CGFloat
+    let accessorySpacing: CGFloat
 
     func sizeThatFits(
         proposal: ProposedViewSize,
@@ -1322,13 +1368,19 @@ private struct WorkspaceTabStripLayout: Layout {
         guard !subviews.isEmpty else { return .zero }
 
         let height = ToastyTheme.workspaceTabHeight
+        let tabCount = max(subviews.count - 1, 0)
+        let accessoryWidth = subviews.last?.sizeThatFits(.unspecified).width ?? 0
         let idealWidth = WorkspaceView.workspaceTabIdealTotalWidth(
-            tabCount: subviews.count,
-            spacing: spacing
+            tabCount: tabCount,
+            spacing: spacing,
+            trailingAccessoryWidth: accessoryWidth,
+            trailingAccessorySpacing: accessorySpacing
         )
         let minimumWidth = WorkspaceView.workspaceTabMinimumTotalWidth(
-            tabCount: subviews.count,
-            spacing: spacing
+            tabCount: tabCount,
+            spacing: spacing,
+            trailingAccessoryWidth: accessoryWidth,
+            trailingAccessorySpacing: accessorySpacing
         )
 
         guard let proposedWidth = proposal.width, proposedWidth.isFinite else {
@@ -1346,14 +1398,19 @@ private struct WorkspaceTabStripLayout: Layout {
     ) {
         guard !subviews.isEmpty else { return }
 
+        let tabCount = max(subviews.count - 1, 0)
+        let accessorySubview = subviews.last
+        let accessorySize = accessorySubview?.sizeThatFits(.unspecified) ?? .zero
         let tabWidth = WorkspaceView.resolvedWorkspaceTabWidth(
             availableWidth: bounds.width,
-            tabCount: subviews.count,
-            spacing: spacing
+            tabCount: tabCount,
+            spacing: spacing,
+            trailingAccessoryWidth: accessorySize.width,
+            trailingAccessorySpacing: accessorySpacing
         )
         var nextX = bounds.minX
 
-        for subview in subviews {
+        for subview in subviews.dropLast() {
             subview.place(
                 at: CGPoint(x: nextX, y: bounds.minY),
                 anchor: .topLeading,
@@ -1361,6 +1418,17 @@ private struct WorkspaceTabStripLayout: Layout {
             )
             nextX += tabWidth + spacing
         }
+
+        guard let accessorySubview else { return }
+
+        let accessoryX = nextX + (tabCount > 0 ? accessorySpacing : 0)
+        let accessoryY = bounds.minY + ((bounds.height - accessorySize.height) / 2)
+
+        accessorySubview.place(
+            at: CGPoint(x: accessoryX, y: accessoryY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: accessorySize.width, height: accessorySize.height)
+        )
     }
 }
 
