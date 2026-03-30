@@ -255,7 +255,7 @@ struct ToasttyCommandMenus: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
 
-            Button("Find in Scrollback…") {
+            Button("Find…") {
                 startScrollbackSearchFromCommandSelection()
             }
             .keyboardShortcut(
