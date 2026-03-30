@@ -1,5 +1,7 @@
 # Focus Mode Splits
 
+Date: 2026-03-30
+
 ## Context
 
 Focus mode currently zooms into a single panel and blocks split/resize/equalize/focus-navigate operations. We want to allow those operations within focus mode while still mutating the real layout tree in place. When the user exits focus mode, the updated subtree should appear in its original position in the full layout. Re-entering focus mode from normal mode always zooms to the current focused panel; there is no subtree memory between sessions.
@@ -12,6 +14,17 @@ This plan is intentionally split into phases:
 
 - **Phase 1:** subtree-backed focus mode for single-panel entry. Allow split, navigate, resize, equalize, and close within the focused subtree.
 - **Phase 2:** multi-panel selection that focuses the lowest common ancestor (LCA) subtree of the selected panels.
+
+## Current State
+
+Today the implementation is still hard-wired to "zoom one slot and freeze the rest":
+
+- `WorkspaceSplitTree.renderedLayout(...)` only knows how to render the full tree or a single focused slot leaf. Its render identity is `zoomedSlotID`, not a generic subtree node ID.
+- `AppReducer.toggleFocusedPanelMode(...)` only toggles `focusedPanelModeActive`; it does not track a focused subtree root.
+- `AppReducer.splitFocusedSlot(...)`, `focusSlot(...)`, `resizeFocusedSlotSplit(...)`, and `equalizeLayoutSplits(...)` all early-return while focus mode is active.
+- `AppReducer.closePanel(...)` removes panels on the full tree and chooses follow-up focus from the full-tree previous slot, with no concept of a focused subtree root collapsing or surviving.
+- `WindowCommandController.canAdjustSplitLayout(...)` disables resize/equalize outright while focus mode is active.
+- Existing tests encode that blocked behavior, so Phase 1 needs explicit replacement coverage rather than just deleting those assertions.
 
 ## Out Of Scope
 
@@ -32,7 +45,7 @@ No keyboard shortcut for multi-panel selection is included in this plan. Shift-c
 Add `focusModeRootNodeID: UUID?` to **`WorkspaceTabState`**. This tracks the root of the subtree being rendered during focus mode.
 
 - **Enter focus (single panel):** set to the focused panel's slot ID (a leaf)
-- **Split within focus:** if the split replaces the node at `focusModeRootNodeID` (the first split from a single-panel focus), update it to the new split node's ID
+- **Split within focus:** if the split replaces the node at `focusModeRootNodeID`, update it to the new split node's ID
 - **Subsequent subtree mutations:** if a mutation operates below the root, leave `focusModeRootNodeID` unchanged
 - **Exit focus:** set to `nil`
 - **Transient:** never persisted, decoded as `nil`
@@ -68,8 +81,15 @@ If the computed LCA is the full workspace root, do not activate focus mode. That
 - Focus mode remains **tab-scoped**. Leaving a tab does not clear that tab's `focusModeRootNodeID`.
 - While focus mode is active, the visible root must always contain the tab's `focusedPanelID`.
 - Validate `focusModeRootNodeID` on every render and on every focus-changing action. Treat this as a primary safety contract, not a best-effort fallback.
+- Any reducer path that mutates `layoutTree`, `focusedPanelID`, or `selectedTabID` must either preserve that contract or repair `focusModeRootNodeID` before committing workspace state. This is not limited to the explicit focus-mode actions.
 - If the stored root no longer resolves, fall back to the currently focused slot as the new root. If the focused slot cannot be resolved either, exit focus mode for that tab.
 - The "visible root contains focused panel" rule applies to all focus changes, not just split navigation. Jumps, plain panel focus, and close-follow-up focus resolution must all preserve visibility.
+
+### State Repair vs. Render Fallback
+
+- Render-time fallback is **read-only**. The renderer may choose an effective root for the current frame, but it does not mutate `focusModeRootNodeID`.
+- Reducers must use the same root-resolution helper before committing state so persisted runtime state converges back to the effective root instead of drifting behind the UI.
+- `Jump to Next Unread or Active` keeps its existing target-resolution order. The visibility fix is downstream of target resolution: once `.focusPanel(...)` selects a panel, focus-mode state must ensure that panel is visible.
 
 ### Visual treatment
 
@@ -96,6 +116,7 @@ If the computed LCA is the full workspace root, do not activate focus mode. That
 - If the destination tab is not already in focus mode, just focus the target panel. Do not auto-enter focus mode.
 - If the destination tab is already in focus mode and the target panel is inside the current focused subtree, keep the existing `focusModeRootNodeID`.
 - If the destination tab is already in focus mode and the target panel would be hidden by the current root, retarget that tab's `focusModeRootNodeID` to the target panel's slot ID so the target is visible immediately.
+- Do not skip an otherwise valid destination just because it is outside the current focused subtree. Visibility repair happens after target selection, not by changing the target-selection algorithm.
 - When jumping away from a focused tab, keep the source tab's existing focus root unchanged. The destination tab decides its own visibility independently.
 
 ---
@@ -104,7 +125,7 @@ If the computed LCA is the full workspace root, do not activate focus mode. That
 
 ### 1. `Sources/Core/LayoutNode.swift`
 
-Add two Phase 1 methods and one Phase 2 method:
+Add three Phase 1 methods, a tracked-removal result, and one Phase 2 method:
 
 ```swift
 /// Find a subtree by its root node ID (slot ID or split node ID).
@@ -113,6 +134,15 @@ func findSubtree(nodeID: UUID) -> LayoutNode?
 /// Replace any node (slot or split) by its ID.
 mutating func replaceNode(nodeID: UUID, with replacement: LayoutNode) -> Bool
 
+struct PanelRemovalResult {
+    let node: LayoutNode?
+    let removed: Bool
+    let trackedAncestorReplacementNodeID: UUID?
+}
+
+/// Remove a panel and, if requested, report which node replaced the tracked ancestor.
+func removingPanel(_ panelID: UUID, trackingAncestorNodeID: UUID?) -> PanelRemovalResult
+
 /// Phase 2: find the lowest common ancestor node ID containing all specified slot IDs.
 /// Returns nil if any slot ID is not found in the tree.
 func lowestCommonAncestor(containing slotIDs: Set<UUID>) -> UUID?
@@ -120,23 +150,40 @@ func lowestCommonAncestor(containing slotIDs: Set<UUID>) -> UUID?
 
 `findSubtree` walks the tree depth-first and returns the node whose ID matches (slot's `slotID` or split's `nodeID`). `replaceNode` is like `replaceSlot` but works on split nodes too.
 
+`removingPanel(_:trackingAncestorNodeID:)` is the Phase 1 close-path bookkeeping primitive. When the tracked ancestor survives, `trackedAncestorReplacementNodeID` stays equal to that ancestor ID. When that ancestor collapses away because one of its descendants was removed, the result reports the surviving node/slot ID that replaced it. If the whole tab disappears, the replacement ID is `nil`.
+
 `lowestCommonAncestor` is only needed for Phase 2.
 
 ### 2. `Sources/Core/WorkspaceSplitTree.swift`
 
-**Modify `splitting()` signature** to accept a caller-provided split node ID:
+**Replace `splitting()` with a result that reports the new split node ID:**
 
 ```swift
+public struct SplitMutationResult: Equatable, Sendable {
+    let tree: WorkspaceSplitTree
+    let newSplitNodeID: UUID
+}
+
 public func splitting(
     slotID: UUID,
     direction: SlotSplitDirection,
     newPanelID: UUID,
-    newSlotID: UUID,
-    newSplitNodeID: UUID = UUID()
-) -> WorkspaceSplitTree?
+    newSlotID: UUID
+) -> SplitMutationResult?
 ```
 
-This lets the reducer know the new split root ID when the first split in focus mode converts a single slot into a split subtree.
+This keeps split-node identity generation inside the tree layer while still letting the reducer update `focusModeRootNodeID` when the current root slot is replaced by a new split.
+
+**Add a root-resolution helper:**
+
+```swift
+public func effectiveFocusModeRootNodeID(
+    preferredRootNodeID: UUID?,
+    focusedPanelID: UUID?
+) -> UUID?
+```
+
+If the preferred root resolves and contains the focused panel, return it. Otherwise fall back to the focused slot ID. If the focused slot cannot be resolved, return `nil`.
 
 **Modify `renderedLayout()` signature:**
 
@@ -151,8 +198,8 @@ public func renderedLayout(
 
 When `focusedPanelModeActive` is true:
 
-- If `focusModeRootNodeID` is set, validate that it resolves and that the focused panel still lives inside that subtree before rendering it
-- If the stored root is stale or no longer contains the focused panel, fall back to rendering the currently focused slot and use that slot as the safe replacement root
+- Resolve an effective render root via `effectiveFocusModeRootNodeID(...)`
+- If the stored root is stale or no longer contains the focused panel, render from the focused slot for this frame only
 - If the focused slot cannot be resolved, return the full layout and let the reducer clear focus mode on the next state mutation
 - Use the effective rendered root as `zoomedNodeID` in the render identity so the UI can key focus-border animation off root changes
 
@@ -179,7 +226,7 @@ Returns a `WorkspaceSplitTree` wrapping the subtree rooted at `rootNodeID`. The 
 
 - Update `renderedLayout` to pass `focusModeRootNodeID`
 - Add `focusModeSubtree: WorkspaceSplitTree?`
-- Add helper(s) that answer whether a panel is inside the current focus root and that resolve a safe fallback root from the current focused slot
+- Add helper(s) that answer whether a panel is inside the current focus root, apply `effectiveFocusModeRootNodeID(...)`, and repair `focusModeRootNodeID` after any layout/focus mutation before state is committed
 - Add a `focusedPanelIDAfterClosing` variant or parameter that scopes `.previous` slot lookup to the focused subtree during focus mode
 
 ### 6. `Sources/Core/AppReducer.swift`
@@ -199,11 +246,12 @@ Returns a `WorkspaceSplitTree` wrapping the subtree rooted at `rootNodeID`. The 
   - if the target panel is already inside the current focused subtree, keep the current `focusModeRootNodeID`
   - if the target panel is outside the current focused subtree, retarget `focusModeRootNodeID` to the target panel's slot ID instead of exiting focus mode
 - This is the core fix for `Jump to Next Unread or Active`, because that command already flows through `.focusPanel(...)`
+- This retargeting rule applies to successful focus changes that would otherwise leave the focused panel hidden. It is a visibility repair step, not a change to how the target panel is chosen.
 
 **`splitFocusedSlot`:**
 
 - Remove the `focusedPanelModeActive == false` guard
-- Generate `newSplitNodeID` and pass it to `splitting()`
+- Use the `SplitMutationResult` returned from `splitting()`
 - After splitting: if `focusModeRootNodeID` equals the slot ID that was split, update it to `newSplitNodeID`
 
 **`focusSlot`:**
@@ -228,18 +276,13 @@ Returns a `WorkspaceSplitTree` wrapping the subtree rooted at `rootNodeID`. The 
 **`closePanel`:**
 
 - Keep removal on the full tree
-- After removal, if `focusModeRootNodeID` still exists in the updated tree, keep it
-- If it no longer exists because the focused subtree collapsed, retarget `focusModeRootNodeID` to the replacement subtree root
+- Call `removingPanel(_:trackingAncestorNodeID:)`, passing the current `focusModeRootNodeID` when focus mode is active
+- After removal, if the tracked root still exists, keep it
+- If it collapsed away, retarget `focusModeRootNodeID` to `trackedAncestorReplacementNodeID`
 - If the focused subtree collapses to a single slot, `focusModeRootNodeID` becomes that slot ID
 - If the tab/workspace is removed, focus mode exits naturally
 - Focus resolution should prefer panels within the focused subtree
-
-The plan should explicitly capture how the reducer discovers the replacement root after close. That likely means either:
-
-- capturing the pre-removal focused subtree before mutating the tree, or
-- extending the removal API to report replacement-root information
-
-Do not leave that as implicit bookkeeping.
+- If there is no tracked replacement because the whole tab was removed, focus mode exits with the tab/workspace removal path
 
 **Phase 2**
 
@@ -252,6 +295,7 @@ Do not leave that as implicit bookkeeping.
 **`focusPanel`:**
 
 - Plain `.focusPanel(...)` clears `selectedPanelIDs`
+- Any programmatic focus change that resolves through `.focusPanel(...)` also clears `selectedPanelIDs`
 
 **`selectWorkspaceTab`:**
 
@@ -307,7 +351,7 @@ Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a sp
 ### Phase 1
 
 1. **First split in focus mode:** `focusModeRootNodeID` starts as a slot ID. After the split, it becomes the new split node ID. Both panels render.
-2. **Multiple splits in focus mode:** only the first split changes `focusModeRootNodeID`; later splits stay inside the subtree.
+2. **Multiple splits in focus mode:** only a split that replaces the current focus root changes `focusModeRootNodeID`; later descendant splits stay inside the subtree.
 3. **Close last-but-one panel in focused subtree:** the subtree collapses from a split to a single slot. `focusModeRootNodeID` becomes that remaining slot ID.
 4. **Close all panels in focused subtree:** the tab/workspace is removed and focus mode exits naturally.
 5. **Toggle focus off after splits:** `focusModeRootNodeID` is cleared and the full tree renders with the updated subtree in place.
@@ -326,6 +370,7 @@ Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a sp
 15. **Selection whose LCA is the workspace root:** do not activate focus mode, because no subtree would be hidden. Leave the staged selection intact so the user can refine it.
 16. **Selection cleared by normal focus work:** if the user stages a selection, then plain-clicks a panel, uses pane navigation, or focus moves after close, the staged selection is cleared.
 17. **Tab switch clears staged selection:** multi-selection should not survive leaving the tab and returning later.
+18. **Selected panel closes before focus entry:** remove it from `selectedPanelIDs`; if the set empties, staged multi-selection is gone.
 
 ---
 
@@ -336,26 +381,31 @@ Rename `zoomedSlotID` to `zoomedNodeID` because the focused root can now be a sp
 - `renderedLayoutShowsSubtreeAfterSplitInFocusMode`
 - `renderedLayoutFallsBackToSlotWhenFocusModeRootIDIsStale`
 - `renderedLayoutFallsBackToFocusedSlotWhenFocusedPanelLeavesFocusedRoot`
+- `effectiveFocusModeRootNodeIDPrefersTrackedRootWhenItStillContainsFocus`
+- `effectiveFocusModeRootNodeIDFallsBackToFocusedSlotWhenTrackedRootIsInvalid`
 - `focusTargetInFocusModeWrapsWithinSubtree`
-- `splittingPreservesCallerProvidedSplitNodeID`
+- `splittingReturnsNewSplitNodeID`
 - `equalizeInFocusModeOnlyScopesToSubtree`
 - `resizeInFocusModeStopsAtSubtreeBoundary`
+- `removingPanelReportsTrackedAncestorReplacementNodeIDAfterCollapse`
 
 ### `AppReducerTests.swift`
 
 **Phase 1**
 
 - `splitInFocusModeUpdatesFocusModeRootNodeID`
-- `secondSplitInFocusModePreservesRootNodeID`
+- `splitInFocusModeOnlyPromotesRootWhenCurrentRootNodeIsReplaced`
 - `focusNavigationInFocusModeStaysInSubtree`
 - `resizeInFocusModeOnlyMutatesFocusedSubtree`
 - `equalizeInFocusModeOnlyMutatesFocusedSubtree`
 - `closePanelInFocusModeCollapsesSubtree`
+- `closePanelInFocusModeRetargetsRootUsingTrackedReplacementNodeID`
 - `toggleFocusOffClearsRootNodeID`
 - `reenterFocusModeResetsToSingleSlot`
 - `focusPanelInFocusModePreservesRootWhenTargetRemainsVisible`
 - `focusPanelInFocusModeRetargetsRootWhenTargetWouldBeHidden`
 - `toggleFocusModeRequiresResolvableFocusedSlot`
+- `layoutMutationsRepairFocusModeRootBeforeCommittingState`
 
 Replace the current "blocked while focused mode active" tests for split/resize/equalize with positive coverage for the new behavior.
 
@@ -367,6 +417,7 @@ Replace the current "blocked while focused mode active" tests for split/resize/e
 - `plainFocusPanelClearsMultiSelection`
 - `focusNavigationClearsMultiSelection`
 - `tabSwitchClearsMultiSelection`
+- `closeSelectedPanelClearsItFromMultiSelection`
 
 ### `WindowCommandControllerTests.swift`
 
@@ -433,13 +484,14 @@ Verify the snapshot restore path clears `focusModeRootNodeID` and `selectedPanel
 ### Phase 1
 
 1. `LayoutNode` additions needed for subtree lookup/replacement: `findSubtree`, `replaceNode`
-2. `WorkspaceSplitTree` changes: split root ID plumbing, subtree rendering, `focusedSubtree`
-3. `WorkspaceTabState` / `WorkspaceState` / `WorkspaceState+Layout` plumbing for `focusModeRootNodeID`
-4. `AppReducer` Phase 1 changes: split/focus/resize/equalize/close within focused subtree, plus the "focused panel must stay visible" invariant for `.focusPanel(...)`
-5. `WorkspaceView` and `WindowCommandController` updates for the newly enabled behavior and the persistent focus-mode affordance
-6. Rename `zoomedSlotID` to `zoomedNodeID`
-7. Phase 1 tests, including jump-to-next-unread-or-active coverage
-8. Build, smoke automation, and manual validation
+2. `LayoutNode.removingPanel(_:trackingAncestorNodeID:)` so close-path root retargeting is explicit instead of inferred
+3. `WorkspaceSplitTree` changes: split result plumbing, effective-root resolution, subtree rendering, `focusedSubtree`
+4. `WorkspaceTabState` / `WorkspaceState` / `WorkspaceState+Layout` plumbing for `focusModeRootNodeID`
+5. `AppReducer` Phase 1 changes: split/focus/resize/equalize/close within focused subtree, plus the "focused panel must stay visible" invariant for `.focusPanel(...)`
+6. `WorkspaceView` and `WindowCommandController` updates for the newly enabled behavior and the persistent focus-mode affordance
+7. Rename `zoomedSlotID` to `zoomedNodeID`
+8. Phase 1 tests, including jump-to-next-unread-or-active coverage and root-repair coverage
+9. Build, smoke automation, and manual validation
 
 ### Phase 2
 
