@@ -122,9 +122,9 @@ final class WorkspaceViewTests: XCTestCase {
                 availableWidth: 524,
                 tabCount: 5,
                 trailingAccessoryWidth: 20,
-                trailingAccessorySpacing: 6
+                trailingAccessorySpacing: 10
             ),
-            99
+            98
         )
     }
 
@@ -167,9 +167,9 @@ final class WorkspaceViewTests: XCTestCase {
                 trailingWidth: 200,
                 tabCount: 3,
                 tabAccessoryWidth: 20,
-                tabAccessorySpacing: 6
+                tabAccessorySpacing: 10
             ),
-            180
+            176
         )
     }
 
@@ -185,9 +185,9 @@ final class WorkspaceViewTests: XCTestCase {
             WorkspaceView.workspaceTabIdealTotalWidth(
                 tabCount: 2,
                 trailingAccessoryWidth: 20,
-                trailingAccessorySpacing: 6
+                trailingAccessorySpacing: 10
             ),
-            (ToastyTheme.workspaceTabWidth * 2) + 26
+            (ToastyTheme.workspaceTabWidth * 2) + 30
         )
     }
 

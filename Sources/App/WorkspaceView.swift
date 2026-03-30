@@ -69,7 +69,7 @@ struct WorkspaceView: View {
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
     private static let workspaceTabsToControlsSpacing: CGFloat = 12
     private static let workspaceTabStripSpacing: CGFloat = 0
-    private static let workspaceTabAccessorySpacing: CGFloat = 6
+    private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
 
     nonisolated static func resolvedWorkspaceTitleWidth(
