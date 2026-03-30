@@ -110,6 +110,26 @@ struct WorkspaceView: View {
         return min(max(0, hiddenSidebarOriginY), max(0, boundsHeight - resolvedTitleHeight))
     }
 
+    nonisolated static func workspaceUnreadSummaryText(unreadPanelCount: Int) -> String? {
+        guard unreadPanelCount > 0 else { return nil }
+        return unreadPanelCount == 1 ? "1 unread" : "\(unreadPanelCount) unreads"
+    }
+
+    nonisolated static func workspaceHeaderTitleColumnPreferredWidth(
+        titleWidth: CGFloat,
+        unreadSummaryWidth: CGFloat
+    ) -> CGFloat {
+        max(titleWidth, unreadSummaryWidth)
+    }
+
+    nonisolated static func workspaceHeaderUnreadSummaryOriginY(
+        titleOriginY: CGFloat,
+        titleHeight: CGFloat,
+        spacing: CGFloat
+    ) -> CGFloat {
+        titleOriginY + titleHeight + spacing
+    }
+
     private static let panelFlashPeakDuration: Double = 0.18
     private static let panelFlashSettleDuration: Double = 0.28
 
@@ -353,6 +373,7 @@ struct WorkspaceView: View {
                         tabAccessorySpacing: Self.workspaceTabAccessorySpacing
                     ) {
                         workspaceTitleLabel
+                        workspaceUnreadSummaryLabel(for: workspace)
                         workspaceHeaderTabStrip(for: workspace)
                         topBarTrailingControls
                             .fixedSize(horizontal: true, vertical: false)
@@ -383,6 +404,24 @@ struct WorkspaceView: View {
             .lineLimit(1)
             .truncationMode(.tail)
             .accessibilityIdentifier("topbar.workspace.title")
+    }
+
+    @ViewBuilder
+    private func workspaceUnreadSummaryLabel(for workspace: WorkspaceState) -> some View {
+        if let summary = Self.workspaceUnreadSummaryText(unreadPanelCount: workspace.unreadPanelCount) {
+            Text(summary)
+                .font(ToastyTheme.fontWorkspaceSubtitle)
+                .foregroundStyle(ToastyTheme.inactiveWorkspaceSubtitleText)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .accessibilityIdentifier("topbar.workspace.unreads")
+        } else {
+            // Preserve the explicit unread-summary layout slot without
+            // changing width or height when the label is hidden.
+            Color.clear
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
     }
 
     private var topBarTrailingControls: some View {
@@ -1268,6 +1307,7 @@ private struct PendingWorkspaceTabClose: Identifiable {
 }
 
 private struct WorkspaceHeaderLayout: Layout {
+    // Subview order: title, unread summary slot, tab strip, trailing controls.
     let tabCount: Int
     let titleSpacing: CGFloat
     let trailingSpacing: CGFloat
@@ -1280,23 +1320,37 @@ private struct WorkspaceHeaderLayout: Layout {
         subviews: Subviews,
         cache _: inout ()
     ) -> CGSize {
-        guard subviews.count == 3 else { return .zero }
+        guard subviews.count == 4 else {
+            assertionFailure("WorkspaceHeaderLayout expected title, unread summary, tabs, and trailing controls")
+            return .zero
+        }
 
         let titleSize = subviews[0].sizeThatFits(.unspecified)
-        let tabsSize = subviews[1].sizeThatFits(
+        let unreadSummarySize = subviews[1].sizeThatFits(.unspecified)
+        let tabsSize = subviews[2].sizeThatFits(
             ProposedViewSize(width: nil, height: ToastyTheme.workspaceTabHeight)
         )
-        let trailingSize = subviews[2].sizeThatFits(.unspecified)
+        let trailingSize = subviews[3].sizeThatFits(.unspecified)
+        let titleColumnWidth = min(
+            WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
+                titleWidth: titleSize.width,
+                unreadSummaryWidth: unreadSummarySize.width
+            ),
+            ToastyTheme.workspaceTitleMaxWidth
+        )
+        let titleColumnHeight = titleSize.height +
+            (unreadSummarySize.height > 0 ? ToastyTheme.topBarUnreadSummaryTopSpacing : 0) +
+            unreadSummarySize.height
         let width = if let proposedWidth = proposal.width, proposedWidth.isFinite {
             proposedWidth
         } else {
-            min(titleSize.width, ToastyTheme.workspaceTitleMaxWidth) +
+            titleColumnWidth +
                 titleSpacing + tabsSize.width + trailingSpacing + trailingSize.width
         }
 
         return CGSize(
             width: width,
-            height: max(ToastyTheme.topBarHeight, titleSize.height, trailingSize.height, ToastyTheme.workspaceTabHeight)
+            height: max(ToastyTheme.topBarHeight, titleColumnHeight, trailingSize.height, ToastyTheme.workspaceTabHeight)
         )
     }
 
@@ -1306,13 +1360,21 @@ private struct WorkspaceHeaderLayout: Layout {
         subviews: Subviews,
         cache _: inout ()
     ) {
-        guard subviews.count == 3 else { return }
+        guard subviews.count == 4 else {
+            assertionFailure("WorkspaceHeaderLayout expected title, unread summary, tabs, and trailing controls")
+            return
+        }
 
         let titleSize = subviews[0].sizeThatFits(.unspecified)
-        let trailingSize = subviews[2].sizeThatFits(.unspecified)
+        let unreadSummarySize = subviews[1].sizeThatFits(.unspecified)
+        let trailingSize = subviews[3].sizeThatFits(.unspecified)
         let trailingX = max(bounds.minX, bounds.maxX - trailingSize.width)
-        let titleWidth = WorkspaceView.resolvedWorkspaceTitleWidth(
-            preferredWidth: titleSize.width,
+        let titleColumnPreferredWidth = WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
+            titleWidth: titleSize.width,
+            unreadSummaryWidth: unreadSummarySize.width
+        )
+        let titleColumnWidth = WorkspaceView.resolvedWorkspaceTitleWidth(
+            preferredWidth: titleColumnPreferredWidth,
             availableWidth: bounds.width,
             trailingWidth: trailingSize.width,
             tabCount: tabCount,
@@ -1332,14 +1394,29 @@ private struct WorkspaceHeaderLayout: Layout {
         subviews[0].place(
             at: CGPoint(x: bounds.minX, y: titleY),
             anchor: .topLeading,
-            proposal: ProposedViewSize(width: titleWidth, height: titleHeight)
+            proposal: ProposedViewSize(width: titleColumnWidth, height: titleHeight)
         )
 
-        let tabsX = bounds.minX + titleWidth + titleSpacing
+        let unreadSummaryY = WorkspaceView.workspaceHeaderUnreadSummaryOriginY(
+            titleOriginY: titleY,
+            titleHeight: titleHeight,
+            spacing: ToastyTheme.topBarUnreadSummaryTopSpacing
+        )
+        let unreadSummaryHeight = min(
+            unreadSummarySize.height,
+            max(0, bounds.maxY - unreadSummaryY)
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX, y: unreadSummaryY),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: titleColumnWidth, height: unreadSummaryHeight)
+        )
+
+        let tabsX = bounds.minX + titleColumnWidth + titleSpacing
         let tabsMaxX = max(tabsX, trailingX - trailingSpacing)
         let tabsWidth = max(0, tabsMaxX - tabsX)
 
-        subviews[1].place(
+        subviews[2].place(
             at: CGPoint(x: tabsX, y: bounds.maxY),
             anchor: .bottomLeading,
             proposal: ProposedViewSize(width: tabsWidth, height: ToastyTheme.workspaceTabHeight)
@@ -1348,7 +1425,7 @@ private struct WorkspaceHeaderLayout: Layout {
         let trailingHeight = min(bounds.height, trailingSize.height)
         let trailingY = bounds.minY + ((bounds.height - trailingHeight) / 2)
 
-        subviews[2].place(
+        subviews[3].place(
             at: CGPoint(x: trailingX, y: trailingY),
             anchor: .topLeading,
             proposal: ProposedViewSize(width: trailingSize.width, height: trailingHeight)

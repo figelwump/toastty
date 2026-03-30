@@ -15,6 +15,8 @@ public enum AutomationFixtureLoader {
             return makeSplitWorkspaceFixture()
         case "workspace-tabs-wide":
             return makeWorkspaceTabsWideFixture()
+        case "workspace-tabs-wide-unread":
+            return makeWorkspaceTabsWideUnreadFixture()
         default:
             return nil
         }
@@ -103,6 +105,37 @@ public enum AutomationFixtureLoader {
 
     private static func makeWorkspaceTabsWideFixture() -> AppState {
         let workspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let windowID = UUID(uuidString: "32D1DAA2-E951-4215-8975-8D82A3A59321")!
+        let window = WindowState(
+            id: windowID,
+            frame: CGRectCodable(x: 80, y: 80, width: 2300, height: 760),
+            workspaceIDs: [workspace.id],
+            selectedWorkspaceID: workspace.id,
+            sidebarVisible: true
+        )
+
+        return AppState(
+            windows: [window],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+    }
+
+    private static func makeWorkspaceTabsWideUnreadFixture() -> AppState {
+        var workspace = WorkspaceState.bootstrap(title: "Workspace 1")
+        let unreadPanelID = UUID()
+        let unreadTab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: unreadPanelID),
+            panels: [
+                unreadPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
+            ],
+            focusedPanelID: unreadPanelID,
+            unreadPanelIDs: [unreadPanelID]
+        )
+        // Keep unread on a background tab; selected-tab unread auto-clears on appear.
+        workspace.appendTab(unreadTab, select: false)
+
         let windowID = UUID(uuidString: "32D1DAA2-E951-4215-8975-8D82A3A59321")!
         let window = WindowState(
             id: windowID,

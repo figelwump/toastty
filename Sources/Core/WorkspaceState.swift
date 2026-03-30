@@ -24,6 +24,11 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             partialResult + tab.unreadPanelIDs.count
         }
     }
+    public var unreadPanelCount: Int {
+        tabsByID.values.reduce(0) { partialResult, tab in
+            partialResult + tab.unreadPanelIDs.count
+        }
+    }
 
     public init(
         id: UUID,

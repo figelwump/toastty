@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BOOTSTRAP_WORKTREE_SCRIPT="$ROOT_DIR/scripts/dev/bootstrap-worktree.sh"
 RUN_ID="${RUN_ID:-workspace-tabs-smoke-$(date +%Y%m%d-%H%M%S)}"
 FIXTURE="${FIXTURE:-workspace-tabs-wide}"
+UNREAD_FIXTURE="${UNREAD_FIXTURE:-workspace-tabs-wide-unread}"
 RESTORE_FRONT_APP_AFTER_LAUNCH="${TOASTTY_WORKSPACE_TABS_RESTORE_FRONT_APP:-1}"
 DEV_RUN_ROOT="${DEV_RUN_ROOT:-$ROOT_DIR/artifacts/dev-runs/$RUN_ID}"
 DERIVED_PATH="${DERIVED_PATH:-$DEV_RUN_ROOT/Derived}"
@@ -236,8 +237,9 @@ perform_action() {
 
 capture_screenshot() {
   local step="$1"
+  local fixture_name="${2:-$FIXTURE}"
   local response
-  response="$(send_request "automation.capture_screenshot" "{\"step\":\"${step}\",\"fixture\":\"${FIXTURE}\"}")"
+  response="$(send_request "automation.capture_screenshot" "{\"step\":\"${step}\",\"fixture\":\"${fixture_name}\"}")"
   local path
   path="$(extract_string_field "$response" "path")"
   if [[ -z "$path" || ! -f "$path" ]]; then
@@ -266,6 +268,14 @@ send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
 
 assert_tab_snapshot 1 1
 SINGLE_TAB_SCREENSHOT_PATH="$(capture_screenshot "workspace-tabs-1")"
+
+send_request "automation.load_fixture" "{\"name\":\"${UNREAD_FIXTURE}\"}" >/dev/null
+assert_tab_snapshot 2 1
+sleep 0.2
+UNREAD_SCREENSHOT_PATH="$(capture_screenshot "workspace-tabs-unread" "$UNREAD_FIXTURE")"
+
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+assert_tab_snapshot 1 1
 
 perform_action "workspace.tab.new"
 perform_action "workspace.tab.select" '{"index":1}'
@@ -319,6 +329,7 @@ swift "$ROOT_DIR/scripts/automation/assert-workspace-tabs.swift" \
 echo "ready file: $READY_FILE"
 echo "socket path: $SOCKET_PATH"
 echo "single-tab screenshot: $SINGLE_TAB_SCREENSHOT_PATH"
+echo "unread screenshot: $UNREAD_SCREENSHOT_PATH"
 echo "two-tab screenshot: $TWO_TABS_SCREENSHOT_PATH"
 echo "two-tab hidden-sidebar screenshot: $TWO_TABS_HIDDEN_SIDEBAR_SCREENSHOT_PATH"
 echo "nine-tab screenshot: $NINE_TABS_SCREENSHOT_PATH"

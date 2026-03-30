@@ -89,6 +89,7 @@ enum ToastyTheme {
     static let workspaceTabAccentLineHeight: CGFloat = 2
     static let workspaceTabTrailingSlotWidth: CGFloat = 24
     static let workspaceTitleMaxWidth: CGFloat = 260
+    static let topBarUnreadSummaryTopSpacing: CGFloat = 1
     static let topBarContentTopPadding: CGFloat = 0
     static let fontHUDTopPadding: CGFloat = topBarHeight + 12
     /// Standard macOS compact titlebar height on current supported macOS releases.

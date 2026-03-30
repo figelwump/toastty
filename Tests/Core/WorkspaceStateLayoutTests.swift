@@ -4,6 +4,27 @@ import Testing
 
 struct WorkspaceStateLayoutTests {
     @Test
+    func unreadPanelCountTracksPanelsSeparatelyFromWorkspaceLevelNotifications() {
+        var workspace = WorkspaceState.bootstrap(title: "Workspace")
+        let unreadPanelID = UUID()
+        let unreadTab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: unreadPanelID),
+            panels: [
+                unreadPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
+            ],
+            focusedPanelID: unreadPanelID,
+            unreadPanelIDs: [unreadPanelID]
+        )
+
+        workspace.appendTab(unreadTab, select: false)
+        workspace.unreadWorkspaceNotificationCount = 2
+
+        #expect(workspace.unreadPanelCount == 1)
+        #expect(workspace.unreadNotificationCount == 3)
+    }
+
+    @Test
     func synchronizeFocusedPanelToLayoutRepairsStaleFocus() throws {
         let panelID = UUID()
         let slotID = UUID()

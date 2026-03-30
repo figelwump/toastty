@@ -147,6 +147,23 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testResolvedWorkspaceTitleWidthUsesUnreadSummaryWidthWhenItIsWider() {
+        let preferredWidth = WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
+            titleWidth: 120,
+            unreadSummaryWidth: 170
+        )
+
+        XCTAssertEqual(
+            WorkspaceView.resolvedWorkspaceTitleWidth(
+                preferredWidth: preferredWidth,
+                availableWidth: 900,
+                trailingWidth: 240,
+                tabCount: 3
+            ),
+            170
+        )
+    }
+
     func testResolvedWorkspaceTitleWidthShrinksOnlyAfterTabsReachMinimumWidth() {
         XCTAssertEqual(
             WorkspaceView.resolvedWorkspaceTitleWidth(
@@ -191,6 +208,25 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceUnreadSummaryTextHidesZeroCount() {
+        XCTAssertNil(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 0))
+    }
+
+    func testWorkspaceUnreadSummaryTextUsesSingularAndPluralForms() {
+        XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 1), "1 unread")
+        XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
+    }
+
+    func testWorkspaceHeaderTitleColumnPreferredWidthUsesWidestLine() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
+                titleWidth: 120,
+                unreadSummaryWidth: 170
+            ),
+            170
+        )
+    }
+
     func testWorkspaceHeaderTitleOriginYAlignsToTitlebarToggleBaseline() {
         let titleHeight: CGFloat = 16
         XCTAssertEqual(
@@ -201,6 +237,22 @@ final class WorkspaceViewTests: XCTestCase {
             ToastyTheme.titlebarSidebarToggleTopPadding +
                 ((ToastyTheme.titlebarSidebarToggleButtonSize - titleHeight) / 2)
         )
+    }
+
+    func testWorkspaceHeaderUnreadSummaryOriginYPlacesSummaryBelowTitle() {
+        let titleOriginY: CGFloat = 8
+        let titleHeight: CGFloat = 16
+        let unreadSummaryOriginY = WorkspaceView.workspaceHeaderUnreadSummaryOriginY(
+            titleOriginY: titleOriginY,
+            titleHeight: titleHeight,
+            spacing: ToastyTheme.topBarUnreadSummaryTopSpacing
+        )
+
+        XCTAssertEqual(
+            unreadSummaryOriginY,
+            titleOriginY + titleHeight + ToastyTheme.topBarUnreadSummaryTopSpacing
+        )
+        XCTAssertGreaterThanOrEqual(unreadSummaryOriginY, titleOriginY + titleHeight)
     }
 
     func testWorkspaceTabSelectedAccentFadesWhenAppIsInactive() throws {
