@@ -97,15 +97,9 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceHeaderTitleOriginY(
         boundsHeight: CGFloat,
-        titleHeight: CGFloat,
-        sidebarVisible: Bool
+        titleHeight: CGFloat
     ) -> CGFloat {
         let resolvedTitleHeight = min(boundsHeight, titleHeight)
-        if sidebarVisible {
-            let tabBandMinY = max(0, boundsHeight - ToastyTheme.workspaceTabHeight)
-            return tabBandMinY + ((ToastyTheme.workspaceTabHeight - resolvedTitleHeight) / 2)
-        }
-
         let hiddenSidebarOriginY = ToastyTheme.hiddenSidebarTitleCenterY - (resolvedTitleHeight / 2)
         return min(max(0, hiddenSidebarOriginY), max(0, boundsHeight - resolvedTitleHeight))
     }
@@ -317,7 +311,6 @@ struct WorkspaceView: View {
                 if let workspace = selectedWorkspace {
                     WorkspaceHeaderLayout(
                         tabCount: workspace.tabIDs.count,
-                        sidebarVisible: sidebarVisible,
                         titleSpacing: Self.workspaceTitleToTabsSpacing,
                         trailingSpacing: Self.workspaceTabsToControlsSpacing,
                         tabSpacing: Self.workspaceTabStripSpacing
@@ -1235,7 +1228,6 @@ private struct PendingWorkspaceTabClose: Identifiable {
 
 private struct WorkspaceHeaderLayout: Layout {
     let tabCount: Int
-    let sidebarVisible: Bool
     let titleSpacing: CGFloat
     let trailingSpacing: CGFloat
     let tabSpacing: CGFloat
@@ -1289,8 +1281,7 @@ private struct WorkspaceHeaderLayout: Layout {
         let titleHeight = min(bounds.height, titleSize.height)
         let titleY = bounds.minY + WorkspaceView.workspaceHeaderTitleOriginY(
             boundsHeight: bounds.height,
-            titleHeight: titleHeight,
-            sidebarVisible: sidebarVisible
+            titleHeight: titleHeight
         )
 
         subviews[0].place(

@@ -147,24 +147,12 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
-    func testWorkspaceHeaderTitleOriginYCentersInTabBandWhenSidebarIsVisible() {
-        XCTAssertEqual(
-            WorkspaceView.workspaceHeaderTitleOriginY(
-                boundsHeight: ToastyTheme.topBarHeight,
-                titleHeight: 16,
-                sidebarVisible: true
-            ),
-            18
-        )
-    }
-
-    func testWorkspaceHeaderTitleOriginYAlignsToSidebarToggleWhenSidebarIsHidden() {
+    func testWorkspaceHeaderTitleOriginYAlignsToTitlebarToggleBaseline() {
         let titleHeight: CGFloat = 16
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderTitleOriginY(
                 boundsHeight: ToastyTheme.topBarHeight,
-                titleHeight: titleHeight,
-                sidebarVisible: false
+                titleHeight: titleHeight
             ),
             ToastyTheme.titlebarSidebarToggleTopPadding +
                 ((ToastyTheme.titlebarSidebarToggleButtonSize - titleHeight) / 2)
