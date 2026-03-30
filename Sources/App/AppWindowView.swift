@@ -110,15 +110,18 @@ struct AppWindowView: View {
             )
         }
         .buttonStyle(.plain)
-        .frame(width: 22, height: 22)
+        .frame(
+            width: ToastyTheme.titlebarSidebarToggleButtonSize,
+            height: ToastyTheme.titlebarSidebarToggleButtonSize
+        )
         .contentShape(Rectangle())
         .help(
             ToasttyKeyboardShortcuts.toggleSidebar.helpText(
                 sidebarVisible ? "Hide Workspaces" : "Show Workspaces"
             )
         )
-        .padding(.leading, 76)
-        .padding(.top, 5)
+        .padding(.leading, ToastyTheme.titlebarSidebarToggleLeadingPadding)
+        .padding(.top, ToastyTheme.titlebarSidebarToggleTopPadding)
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 

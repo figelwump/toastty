@@ -147,6 +147,30 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testWorkspaceHeaderTitleOriginYCentersInTabBandWhenSidebarIsVisible() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceHeaderTitleOriginY(
+                boundsHeight: ToastyTheme.topBarHeight,
+                titleHeight: 16,
+                sidebarVisible: true
+            ),
+            18
+        )
+    }
+
+    func testWorkspaceHeaderTitleOriginYAlignsToSidebarToggleWhenSidebarIsHidden() {
+        let titleHeight: CGFloat = 16
+        XCTAssertEqual(
+            WorkspaceView.workspaceHeaderTitleOriginY(
+                boundsHeight: ToastyTheme.topBarHeight,
+                titleHeight: titleHeight,
+                sidebarVisible: false
+            ),
+            ToastyTheme.titlebarSidebarToggleTopPadding +
+                ((ToastyTheme.titlebarSidebarToggleButtonSize - titleHeight) / 2)
+        )
+    }
+
     func testWorkspaceTabSelectedAccentFadesWhenAppIsInactive() throws {
         let activeAccent = try XCTUnwrap(
             NSColor(ToastyTheme.workspaceTabSelectedAccentColor(appIsActive: true))
