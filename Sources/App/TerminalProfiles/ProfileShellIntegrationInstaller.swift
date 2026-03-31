@@ -3,6 +3,8 @@ import Darwin
 import Foundation
 
 enum ProfileShellIntegrationShell: CaseIterable, Equatable {
+    static let defaultPaneHistoryEntryCount = 5_000
+
     case zsh
     case bash
 
@@ -72,9 +74,28 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable {
 
             \tlocal pane_history_dir="${pane_history_file:h}"
             \tcommand mkdir -p "$pane_history_dir" 2>/dev/null || return
+            \tlocal configured_history_size="${HISTSIZE:-}"
+            \tlocal configured_save_history_size="${SAVEHIST:-}"
+            \tlocal save_history_size=""
+            \tif [[ "$configured_save_history_size" == <-> && "$configured_save_history_size" -gt 0 ]]; then
+            \t\tsave_history_size="$configured_save_history_size"
+            \telif [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
+            \t\t# Fresh interactive zsh shells default to HISTSIZE=30/SAVEHIST=0 even when
+            \t\t# the user has not configured history. That default is too small to be useful
+            \t\t# for restored pane-local history, so treat it as "unset" here.
+            \t\tsave_history_size="$configured_history_size"
+            \telse
+            \t\tsave_history_size="\(Self.defaultPaneHistoryEntryCount)"
+            \tfi
+            \tlocal history_size=""
+            \tif [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
+            \t\thistory_size="$configured_history_size"
+            \telse
+            \t\thistory_size="$save_history_size"
+            \tfi
 
             \tif [[ -z ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
-            \t\tfc -p "$pane_history_file" 2>/dev/null || return
+            \t\tfc -p "$pane_history_file" "$history_size" "$save_history_size" 2>/dev/null || return
             \t\ttypeset -g _TOASTTY_PANE_HISTORY_INITIALIZED=1
             \tfi
             }
@@ -138,14 +159,30 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable {
             \texport PATH
             }
 
+            _toastty_resolved_history_limit() {
+            \tlocal configured_limit="$1"
+            \tlocal default_limit="$2"
+            \tif [[ "$configured_limit" =~ ^[0-9]+$ ]] && (( configured_limit > 0 )); then
+            \t\tprintf '%s\\n' "$configured_limit"
+            \telse
+            \t\tprintf '%s\\n' "$default_limit"
+            \tfi
+            }
+
             _toastty_configure_pane_history() {
             \tlocal pane_history_file="${TOASTTY_PANE_HISTORY_FILE:-}"
             \t[[ -n "$pane_history_file" ]] || return
 
             \tlocal pane_history_dir="${pane_history_file%/*}"
             \tcommand mkdir -p "$pane_history_dir" 2>/dev/null || return
+            \tlocal history_size="$(_toastty_resolved_history_limit "${HISTSIZE:-}" "\(Self.defaultPaneHistoryEntryCount)")"
+            \tlocal history_file_size="$(_toastty_resolved_history_limit "${HISTFILESIZE:-}" "$history_size")"
 
             \tif [[ -z "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
+            \t\tHISTSIZE="$history_size"
+            \t\tHISTFILESIZE="$history_file_size"
+            \t\texport HISTSIZE
+            \t\texport HISTFILESIZE
             \t\tHISTFILE="$pane_history_file"
             \t\texport HISTFILE
             \t\thistory -c

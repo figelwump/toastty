@@ -773,6 +773,12 @@ struct ToasttyApp: App {
             processInfo: processInfo,
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
+        if usesPersistentPreferences {
+            Self.prunePaneHistoryFiles(
+                runtimePaths: runtimePaths,
+                liveTerminalPanelIDs: bootstrap.state.allTerminalPanelIDs
+            )
+        }
         let preferredSocketPath = bootstrap.automationConfig?.socketPath
             ?? AutomationConfig.resolveServerSocketPath(environment: processInfo.environment)
         let socketPath = AutomationSocketServer.recommendedSocketPath(
@@ -1472,6 +1478,38 @@ struct ToasttyApp: App {
             automationConfig: automationConfig,
             socketPathOverride: socketPathOverride
         )
+    }
+
+    private static func prunePaneHistoryFiles(
+        runtimePaths: ToasttyRuntimePaths,
+        liveTerminalPanelIDs: Set<UUID>
+    ) {
+        let result = PaneHistoryStore(runtimePaths: runtimePaths)
+            .pruneUnreferencedHistoryFiles(keepingPanelIDs: liveTerminalPanelIDs)
+
+        if result.removedFileCount > 0 {
+            ToasttyLog.info(
+                "Pruned stale pane history files",
+                category: .bootstrap,
+                metadata: [
+                    "directory": runtimePaths.paneHistoryDirectoryURL.path,
+                    "removed_count": String(result.removedFileCount),
+                    "live_panel_count": String(liveTerminalPanelIDs.count),
+                ]
+            )
+        }
+
+        if result.failedRemovalCount > 0 {
+            ToasttyLog.warning(
+                "Failed removing some stale pane history files",
+                category: .bootstrap,
+                metadata: [
+                    "directory": runtimePaths.paneHistoryDirectoryURL.path,
+                    "failed_removal_count": String(result.failedRemovalCount),
+                    "live_panel_count": String(liveTerminalPanelIDs.count),
+                ]
+            )
+        }
     }
 
     private static func ensureTerminalProfilesTemplateExists() {
