@@ -110,10 +110,6 @@ struct AgentGetStartedSheet: View {
             Text(headerTitle)
                 .font(.system(size: 20, weight: .semibold, design: .rounded))
                 .foregroundStyle(ToastyTheme.primaryText)
-            Text(headerBody)
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(ToastyTheme.inactiveText)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 24)
         .padding(.top, 24)
@@ -132,130 +128,12 @@ struct AgentGetStartedSheet: View {
 
     private var chooserContent: some View {
         VStack(alignment: .leading, spacing: 14) {
-            optionCard(
-                eyebrow: "Recommended",
+            sectionCard(
                 title: "Typed Commands",
                 body: """
-                Type codex, claude, or supported wrapper executables directly in Toastty terminals. Shell integration keeps live titles, preserves pane-local history across restarts, and helps manual sessions stay visible in the sidebar.
+                Type codex, claude, or supported wrapper executables directly in Toastty terminals. Shell integration keeps agent sessions visible on the sidebar and preserves terminal history across restarts.
                 """
-            )
-
-            optionCard(
-                eyebrow: nil,
-                title: "Quick-Launch Buttons",
-                body: """
-                Configure ~/.toastty/agents.toml when you want dedicated header buttons, Agent menu entries, and optional keyboard shortcuts for your favorite launch commands.
-                """
-            )
-
-            if let openAgentProfilesErrorMessage {
-                inlineMessage(
-                    openAgentProfilesErrorMessage,
-                    textColor: ToastyTheme.sessionErrorText,
-                    backgroundColor: ToastyTheme.sessionErrorBackground,
-                    identifier: "sheet.agent.get-started.error.open"
-                )
-            }
-        }
-        .padding(24)
-    }
-
-    @ViewBuilder
-    private var shellIntegrationContent: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            switch shellIntegrationState {
-            case .loading:
-                loadingContent(message: "Checking whether shell integration is available for this shell.")
-
-            case .installable(let status):
-                shellIntegrationStatusContent(status: status)
-
-            case .alreadyInstalled(let status):
-                inlineMessage(
-                    "Shell integration is already installed for \(status.plan.shell.displayName).",
-                    textColor: ToastyTheme.sessionReadyText,
-                    backgroundColor: ToastyTheme.sessionReadyBackground,
-                    identifier: "sheet.agent.get-started.ready"
-                )
-                shellIntegrationDetails(
-                    leadingText: "Init file",
-                    leadingValue: status.plan.initFileURL.path,
-                    trailingText: "Managed snippet",
-                    trailingValue: status.plan.managedSnippetURL.path
-                )
-
-            case .installing(let status):
-                shellIntegrationStatusContent(status: status)
-                loadingContent(message: "Installing shell integration.")
-
-            case .installSucceeded(let result):
-                inlineMessage(
-                    "Shell integration is installed.",
-                    textColor: ToastyTheme.sessionReadyText,
-                    backgroundColor: ToastyTheme.sessionReadyBackground,
-                    identifier: "sheet.agent.get-started.installed"
-                )
-                shellIntegrationDetails(
-                    leadingText: "Managed snippet",
-                    leadingValue: ProfileShellIntegrationMessaging.managedSnippetResultLine(for: result),
-                    trailingText: "Init file",
-                    trailingValue: ProfileShellIntegrationMessaging.initFileResultLine(for: result)
-                )
-                Text(ProfileShellIntegrationMessaging.restartNotice)
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-            case .unavailable(let message):
-                inlineMessage(
-                    message,
-                    textColor: ToastyTheme.sessionErrorText,
-                    backgroundColor: ToastyTheme.sessionErrorBackground,
-                    identifier: "sheet.agent.get-started.unavailable"
-                )
-                Text("You can still configure dedicated quick-launch buttons in ~/.toastty/agents.toml.")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundStyle(ToastyTheme.inactiveText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-            case .installFailed(let status, let message):
-                shellIntegrationStatusContent(status: status)
-                inlineMessage(
-                    message,
-                    textColor: ToastyTheme.sessionErrorText,
-                    backgroundColor: ToastyTheme.sessionErrorBackground,
-                    identifier: "sheet.agent.get-started.error.install"
-                )
-            }
-
-            if let openAgentProfilesErrorMessage {
-                inlineMessage(
-                    openAgentProfilesErrorMessage,
-                    textColor: ToastyTheme.sessionErrorText,
-                    backgroundColor: ToastyTheme.sessionErrorBackground,
-                    identifier: "sheet.agent.get-started.error.open"
-                )
-            }
-        }
-        .padding(24)
-    }
-
-    private var buttonBar: some View {
-        HStack(spacing: 10) {
-            switch step {
-            case .chooser:
-                Button("Not now") {
-                    dismiss()
-                }
-                .accessibilityIdentifier("sheet.agent.get-started.not-now")
-
-                Spacer(minLength: 0)
-
-                Button("Open agents.toml") {
-                    openAgentProfiles()
-                }
-                .accessibilityIdentifier("sheet.agent.get-started.open-agents")
-
+            ) {
                 Button("Set Up Typed Commands") {
                     openAgentProfilesErrorMessage = nil
                     step = .shellIntegration
@@ -263,6 +141,61 @@ struct AgentGetStartedSheet: View {
                 }
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("sheet.agent.get-started.typed-commands")
+            }
+
+            quickLaunchButtonsCard
+        }
+        .padding(24)
+    }
+
+    @ViewBuilder
+    private var shellIntegrationContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionCard(
+                title: "Shell Integration",
+                body: "Shell integration keeps agent sessions visible on the sidebar and preserves terminal history across restarts."
+            ) {
+                shellIntegrationStateContent
+            }
+
+            quickLaunchButtonsCard
+        }
+        .padding(24)
+    }
+
+    private var quickLaunchButtonsCard: some View {
+        sectionCard(
+            title: "Quick-Launch Buttons",
+            body: """
+                Configure ~/.toastty/agents.toml when you want dedicated header buttons, agent menu entries, and optional keyboard shortcuts for your favorite agent launch commands.
+                """
+        ) {
+            if let openAgentProfilesErrorMessage {
+                inlineMessage(
+                    openAgentProfilesErrorMessage,
+                    textColor: ToastyTheme.sessionErrorText,
+                    backgroundColor: ToastyTheme.sessionErrorBackground,
+                    identifier: "sheet.agent.get-started.error.open"
+                )
+            }
+
+            Button("Open agents.toml") {
+                openAgentProfiles()
+            }
+            .accessibilityIdentifier("sheet.agent.get-started.open-agents")
+        }
+    }
+
+    private var buttonBar: some View {
+        HStack(spacing: 10) {
+            switch step {
+            case .chooser:
+                Spacer(minLength: 0)
+
+                Button("Not now") {
+                    dismiss()
+                }
+                .accessibilityIdentifier("sheet.agent.get-started.not-now")
 
             case .shellIntegration:
                 Button("Back") {
@@ -276,43 +209,11 @@ struct AgentGetStartedSheet: View {
 
                 Spacer(minLength: 0)
 
-                Button("Open agents.toml") {
-                    openAgentProfiles()
+                Button("Done") {
+                    dismiss()
                 }
-                .accessibilityIdentifier("sheet.agent.get-started.open-agents")
-
-                switch shellIntegrationState {
-                case .installable(let status):
-                    Button("Install Integration") {
-                        installShellIntegration(status: status)
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("sheet.agent.get-started.install-integration")
-
-                case .installFailed(let status, _):
-                    Button("Install Integration") {
-                        installShellIntegration(status: status)
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("sheet.agent.get-started.install-integration")
-
-                case .installing:
-                    Button("Installing…") {}
-                        .disabled(true)
-                        .accessibilityIdentifier("sheet.agent.get-started.installing")
-
-                case .alreadyInstalled, .installSucceeded, .unavailable:
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("sheet.agent.get-started.done")
-
-                case .loading:
-                    Button("Checking…") {}
-                        .disabled(true)
-                        .accessibilityIdentifier("sheet.agent.get-started.loading")
-                }
+                .disabled(shellIntegrationState.blocksNavigation)
+                .accessibilityIdentifier("sheet.agent.get-started.done")
             }
         }
         .padding(.horizontal, 24)
@@ -328,26 +229,89 @@ struct AgentGetStartedSheet: View {
         }
     }
 
-    private var headerBody: String {
-        switch step {
-        case .chooser:
-            return "Choose whether you want to launch agents from typed terminal commands or from dedicated quick-launch buttons."
-        case .shellIntegration:
-            return "Shell integration improves typed-command workflows by keeping new shells aligned with Toastty's managed history, title updates, and agent command shims."
+    @ViewBuilder
+    private var shellIntegrationStateContent: some View {
+        switch shellIntegrationState {
+        case .loading:
+            loadingContent(message: "Checking whether shell integration is available for this shell.")
+
+        case .installable(let status):
+            shellIntegrationStatusContent(status: status)
+            Button("Install Integration") {
+                installShellIntegration(status: status)
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("sheet.agent.get-started.install-integration")
+
+        case .alreadyInstalled(let status):
+            inlineMessage(
+                "Shell integration is already installed for \(status.plan.shell.displayName).",
+                textColor: ToastyTheme.sessionReadyText,
+                backgroundColor: ToastyTheme.sessionReadyBackground,
+                identifier: "sheet.agent.get-started.ready"
+            )
+            shellIntegrationDetails(
+                leadingText: "Init file",
+                leadingValue: status.plan.initFileURL.path,
+                trailingText: "Managed snippet",
+                trailingValue: status.plan.managedSnippetURL.path
+            )
+
+        case .installing(let status):
+            shellIntegrationStatusContent(status: status)
+            loadingContent(message: "Installing shell integration.")
+            Button("Installing…") {}
+                .disabled(true)
+                .accessibilityIdentifier("sheet.agent.get-started.installing")
+
+        case .installSucceeded(let result):
+            inlineMessage(
+                "Shell integration is installed.",
+                textColor: ToastyTheme.sessionReadyText,
+                backgroundColor: ToastyTheme.sessionReadyBackground,
+                identifier: "sheet.agent.get-started.installed"
+            )
+            shellIntegrationDetails(
+                leadingText: "Managed snippet",
+                leadingValue: ProfileShellIntegrationMessaging.managedSnippetResultLine(for: result),
+                trailingText: "Init file",
+                trailingValue: ProfileShellIntegrationMessaging.initFileResultLine(for: result)
+            )
+            Text(ProfileShellIntegrationMessaging.restartNotice)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .fixedSize(horizontal: false, vertical: true)
+
+        case .unavailable(let message):
+            inlineMessage(
+                message,
+                textColor: ToastyTheme.sessionErrorText,
+                backgroundColor: ToastyTheme.sessionErrorBackground,
+                identifier: "sheet.agent.get-started.unavailable"
+            )
+
+        case .installFailed(let status, let message):
+            shellIntegrationStatusContent(status: status)
+            inlineMessage(
+                message,
+                textColor: ToastyTheme.sessionErrorText,
+                backgroundColor: ToastyTheme.sessionErrorBackground,
+                identifier: "sheet.agent.get-started.error.install"
+            )
+            Button("Install Integration") {
+                installShellIntegration(status: status)
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityIdentifier("sheet.agent.get-started.install-integration")
         }
     }
 
-    private func optionCard(
-        eyebrow: String?,
+    private func sectionCard<Content: View>(
         title: String,
-        body: String
+        body: String,
+        @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let eyebrow {
-                Text(eyebrow)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(ToastyTheme.accent)
-            }
+        VStack(alignment: .leading, spacing: 12) {
             Text(title)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(ToastyTheme.primaryText)
@@ -355,6 +319,7 @@ struct AgentGetStartedSheet: View {
                 .font(.system(size: 12, weight: .regular))
                 .foregroundStyle(ToastyTheme.inactiveText)
                 .fixedSize(horizontal: false, vertical: true)
+            content()
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -454,11 +419,7 @@ struct AgentGetStartedSheet: View {
 
     private func openAgentProfiles() {
         let result = openAgentProfilesConfiguration()
-        if let errorMessage = AgentGetStartedSheetBehavior.openAgentProfilesErrorMessage(for: result) {
-            openAgentProfilesErrorMessage = errorMessage
-        } else {
-            dismiss()
-        }
+        openAgentProfilesErrorMessage = AgentGetStartedSheetBehavior.openAgentProfilesErrorMessage(for: result)
     }
 
     private func loadShellIntegrationStatus() {
