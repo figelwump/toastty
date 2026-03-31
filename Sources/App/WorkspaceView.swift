@@ -613,7 +613,8 @@ struct WorkspaceView: View {
         let renderedLayout = WorkspaceSplitTree(root: tab.layoutTree).renderedLayout(
             workspaceID: workspace.id,
             focusedPanelModeActive: tab.focusedPanelModeActive,
-            focusedPanelID: tab.focusedPanelID
+            focusedPanelID: tab.focusedPanelID,
+            focusModeRootNodeID: tab.focusModeRootNodeID
         )
 
         GeometryReader { geometry in
@@ -643,7 +644,8 @@ struct WorkspaceView: View {
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
                         panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
-                        panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
+                        panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0,
+                        isSelectedForFocusMode: tab.selectedPanelIDs.contains(placement.panelID)
                     )
                 }
 
@@ -663,6 +665,13 @@ struct WorkspaceView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
+            .overlay {
+                FocusModeViewportChrome(
+                    isActive: tab.focusedPanelModeActive,
+                    zoomedNodeID: renderedLayout.identity.zoomedNodeID
+                )
+                .allowsHitTesting(false)
+            }
         }
     }
 
@@ -941,6 +950,15 @@ struct WorkspaceView: View {
                 .foregroundStyle(textColor)
                 .lineLimit(1)
                 .truncationMode(.tail)
+
+            if tab.focusedPanelModeActive {
+                Text("Focused")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(ToastyTheme.accentDark)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(ToastyTheme.accent, in: Capsule())
+            }
         }
     }
 
@@ -1310,6 +1328,65 @@ private struct PendingWorkspaceTabClose: Identifiable {
     var id: UUID { tabID }
 }
 
+private struct FocusModeViewportChrome: View {
+    let isActive: Bool
+    let zoomedNodeID: UUID?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var highlightOpacity = 0.0
+    @State private var highlightScale = 1.0
+    @State private var lastAnimatedNodeID: UUID?
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 10)
+            .strokeBorder(ToastyTheme.accent.opacity(isActive ? 0.95 : 0), lineWidth: 1.5)
+            .background {
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(ToastyTheme.accent.opacity(isActive ? 0.05 * highlightOpacity : 0))
+            }
+            .scaleEffect(highlightScale)
+            .padding(3)
+            .onAppear {
+                guard isActive else { return }
+                highlightOpacity = 1
+                lastAnimatedNodeID = zoomedNodeID
+            }
+            .onChange(of: isActive) { _, isNowActive in
+                if isNowActive {
+                    runPulseIfNeeded(force: true)
+                } else {
+                    highlightOpacity = 0
+                    highlightScale = 1
+                }
+            }
+            .onChange(of: zoomedNodeID) { _, newNodeID in
+                guard isActive, newNodeID != lastAnimatedNodeID else { return }
+                runPulseIfNeeded(force: false)
+            }
+    }
+
+    private func runPulseIfNeeded(force: Bool) {
+        lastAnimatedNodeID = zoomedNodeID
+        if reduceMotion {
+            highlightOpacity = isActive ? 1 : 0
+            highlightScale = 1
+            return
+        }
+
+        let shouldPulse = force || zoomedNodeID != nil
+        highlightOpacity = isActive ? 1 : 0
+        guard shouldPulse else {
+            highlightScale = 1
+            return
+        }
+
+        highlightScale = 0.988
+        withAnimation(.easeOut(duration: 0.18)) {
+            highlightScale = 1
+            highlightOpacity = 1
+        }
+    }
+}
+
 private struct WorkspaceHeaderLayout: Layout {
     // Subview order: title, unread summary slot, tab strip, trailing controls.
     let tabCount: Int
@@ -1571,6 +1648,7 @@ private struct SlotPlacementView: View {
     let terminalShortcutNumbersByPanelID: [UUID: Int]
     let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
     let panelFlashOverlayOpacity: Double
+    let isSelectedForFocusMode: Bool
 
     var body: some View {
         Group {
@@ -1590,6 +1668,7 @@ private struct SlotPlacementView: View {
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     panelFlashOverlayOpacity: panelFlashOverlayOpacity,
+                    isSelectedForFocusMode: isSelectedForFocusMode,
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1629,6 +1708,7 @@ private struct PanelCardView: View {
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let panelFlashOverlayOpacity: Double
+    let isSelectedForFocusMode: Bool
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -1753,10 +1833,23 @@ private struct PanelCardView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
         }
+        .overlay {
+            if isSelectedForFocusMode {
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(ToastyTheme.badgeBlue, lineWidth: 1.5)
+                    .padding(1)
+                    .allowsHitTesting(false)
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {
-            store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            let modifierFlags = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+            if modifierFlags.contains(.shift) {
+                store.send(.togglePanelSelection(workspaceID: workspaceID, panelID: panelID))
+            } else {
+                store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+            }
         }
     }
 

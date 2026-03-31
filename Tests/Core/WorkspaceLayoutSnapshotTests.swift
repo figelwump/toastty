@@ -29,6 +29,8 @@ struct WorkspaceLayoutSnapshotTests {
             focusedPanelID: rightPanelID,
             auxPanelVisibility: [.diff],
             focusedPanelModeActive: true,
+            focusModeRootNodeID: rightSlotID,
+            selectedPanelIDs: [leftPanelID, rightPanelID],
             unreadPanelIDs: [leftPanelID],
             unreadWorkspaceNotificationCount: 3,
             recentlyClosedPanels: [
@@ -80,6 +82,8 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(rightTerminalState.launchWorkingDirectory == "/tmp/ui")
 
         #expect(restoredWorkspace.focusedPanelModeActive == false)
+        #expect(restoredWorkspace.focusModeRootNodeID == nil)
+        #expect(restoredWorkspace.selectedPanelIDs.isEmpty)
         #expect(restoredWorkspace.unreadPanelIDs.isEmpty)
         #expect(restoredWorkspace.unreadWorkspaceNotificationCount == 0)
         #expect(restoredWorkspace.recentlyClosedPanels.isEmpty)

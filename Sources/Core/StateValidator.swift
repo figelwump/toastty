@@ -16,6 +16,9 @@ public enum StateInvariantViolation: Error, Equatable, Sendable {
     case focusedPanelMissing(workspaceID: UUID, panelID: UUID)
     case focusedPanelNotInLayoutTree(workspaceID: UUID, panelID: UUID)
     case unreadPanelMissing(workspaceID: UUID, panelID: UUID)
+    case selectedPanelMissing(workspaceID: UUID, panelID: UUID)
+    case focusModeRootMissing(workspaceID: UUID, nodeID: UUID)
+    case focusModeRootDoesNotContainFocusedPanel(workspaceID: UUID, nodeID: UUID, panelID: UUID)
     case duplicateNodeID(workspaceID: UUID, nodeID: UUID)
 }
 
@@ -98,6 +101,10 @@ public enum StateValidator {
                     throw StateInvariantViolation.unreadPanelMissing(workspaceID: workspace.id, panelID: unreadPanelID)
                 }
 
+                for selectedPanelID in tab.selectedPanelIDs where tab.panels[selectedPanelID] == nil {
+                    throw StateInvariantViolation.selectedPanelMissing(workspaceID: workspace.id, panelID: selectedPanelID)
+                }
+
                 if let focusedPanelID = tab.focusedPanelID {
                     guard tab.panels[focusedPanelID] != nil else {
                         throw StateInvariantViolation.focusedPanelMissing(workspaceID: workspace.id, panelID: focusedPanelID)
@@ -105,6 +112,30 @@ public enum StateValidator {
 
                     guard tab.layoutTree.slotContaining(panelID: focusedPanelID) != nil else {
                         throw StateInvariantViolation.focusedPanelNotInLayoutTree(workspaceID: workspace.id, panelID: focusedPanelID)
+                    }
+                }
+
+                if let focusModeRootNodeID = tab.focusModeRootNodeID,
+                   tab.layoutTree.findSubtree(nodeID: focusModeRootNodeID) == nil {
+                    throw StateInvariantViolation.focusModeRootMissing(
+                        workspaceID: workspace.id,
+                        nodeID: focusModeRootNodeID
+                    )
+                }
+
+                if tab.focusedPanelModeActive,
+                   let focusedPanelID = tab.focusedPanelID,
+                   let effectiveRootNodeID = WorkspaceSplitTree(root: tab.layoutTree).effectiveFocusModeRootNodeID(
+                    preferredRootNodeID: tab.focusModeRootNodeID,
+                    focusedPanelID: focusedPanelID
+                   ) {
+                    let subtree = tab.layoutTree.findSubtree(nodeID: effectiveRootNodeID)
+                    if subtree?.slotContaining(panelID: focusedPanelID) == nil {
+                        throw StateInvariantViolation.focusModeRootDoesNotContainFocusedPanel(
+                            workspaceID: workspace.id,
+                            nodeID: effectiveRootNodeID,
+                            panelID: focusedPanelID
+                        )
                     }
                 }
             }

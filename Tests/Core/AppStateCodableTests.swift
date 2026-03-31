@@ -29,11 +29,13 @@ struct AppStateCodableTests {
     }
 
     @Test
-    func focusedPanelModeFlagResetsWhenDecodingAppState() throws {
+    func focusedPanelModeTransientFieldsResetWhenDecodingAppState() throws {
         var state = AppState.bootstrap()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         var workspace = try #require(state.workspacesByID[workspaceID])
         workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.allSlotInfos.first?.slotID
+        workspace.selectedPanelIDs = Set(workspace.panels.keys)
         state.workspacesByID[workspaceID] = workspace
 
         let encoded = try JSONEncoder().encode(state)
@@ -41,6 +43,8 @@ struct AppStateCodableTests {
         let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
 
         #expect(decodedWorkspace.focusedPanelModeActive == false)
+        #expect(decodedWorkspace.focusModeRootNodeID == nil)
+        #expect(decodedWorkspace.selectedPanelIDs.isEmpty)
         try StateValidator.validate(decoded)
     }
 
@@ -99,6 +103,10 @@ struct AppStateCodableTests {
         #expect(decodedWorkspace.tab(id: secondTabID)?.displayTitle == "Deploy")
         #expect(decodedWorkspace.tab(id: originalTabID)?.focusedPanelModeActive == false)
         #expect(decodedWorkspace.tab(id: secondTabID)?.focusedPanelModeActive == false)
+        #expect(decodedWorkspace.tab(id: originalTabID)?.focusModeRootNodeID == nil)
+        #expect(decodedWorkspace.tab(id: secondTabID)?.focusModeRootNodeID == nil)
+        #expect(decodedWorkspace.tab(id: originalTabID)?.selectedPanelIDs.isEmpty == true)
+        #expect(decodedWorkspace.tab(id: secondTabID)?.selectedPanelIDs.isEmpty == true)
         try StateValidator.validate(decoded)
     }
 

@@ -2,11 +2,11 @@ import Foundation
 
 public struct WorkspaceRenderIdentity: Hashable, Sendable {
     public let workspaceID: UUID
-    public let zoomedSlotID: UUID?
+    public let zoomedNodeID: UUID?
 
-    public init(workspaceID: UUID, zoomedSlotID: UUID?) {
+    public init(workspaceID: UUID, zoomedNodeID: UUID?) {
         self.workspaceID = workspaceID
-        self.zoomedSlotID = zoomedSlotID
+        self.zoomedNodeID = zoomedNodeID
     }
 }
 
@@ -35,6 +35,16 @@ public struct WorkspaceRenderedLayout: Equatable, Sendable {
 }
 
 public struct WorkspaceSplitTree: Equatable, Sendable {
+    public struct SplitMutationResult: Equatable, Sendable {
+        public let tree: WorkspaceSplitTree
+        public let newSplitNodeID: UUID
+
+        public init(tree: WorkspaceSplitTree, newSplitNodeID: UUID) {
+            self.tree = tree
+            self.newSplitNodeID = newSplitNodeID
+        }
+    }
+
     public struct FocusedPanelResolution: Equatable, Sendable {
         public let panelID: UUID
         public let slot: SlotInfo
@@ -108,7 +118,7 @@ public struct WorkspaceSplitTree: Equatable, Sendable {
         direction: SlotSplitDirection,
         newPanelID: UUID,
         newSlotID: UUID
-    ) -> WorkspaceSplitTree? {
+    ) -> SplitMutationResult? {
         guard let sourceLeaf = root.slotNode(slotID: slotID),
               case .slot(_, let sourcePanelID) = sourceLeaf else {
             return nil
@@ -135,8 +145,9 @@ public struct WorkspaceSplitTree: Equatable, Sendable {
             secondNode = originalLeaf
         }
 
+        let newSplitNodeID = UUID()
         let split = LayoutNode.split(
-            nodeID: UUID(),
+            nodeID: newSplitNodeID,
             orientation: orientation,
             ratio: 0.5,
             first: firstNode,
@@ -147,7 +158,10 @@ public struct WorkspaceSplitTree: Equatable, Sendable {
         guard updatedRoot.replaceSlot(slotID: slotID, with: split) else {
             return nil
         }
-        return WorkspaceSplitTree(root: updatedRoot)
+        return SplitMutationResult(
+            tree: WorkspaceSplitTree(root: updatedRoot),
+            newSplitNodeID: newSplitNodeID
+        )
     }
 
     public func resized(
@@ -179,29 +193,53 @@ public struct WorkspaceSplitTree: Equatable, Sendable {
     public func renderedLayout(
         workspaceID: UUID,
         focusedPanelModeActive: Bool,
-        focusedPanelID: UUID?
+        focusedPanelID: UUID?,
+        focusModeRootNodeID: UUID?
     ) -> WorkspaceRenderedLayout {
         let fullLayout = WorkspaceRenderedLayout(
             layoutTree: root,
-            identity: WorkspaceRenderIdentity(workspaceID: workspaceID, zoomedSlotID: nil)
+            identity: WorkspaceRenderIdentity(workspaceID: workspaceID, zoomedNodeID: nil)
         )
         guard focusedPanelModeActive else {
             return fullLayout
         }
-        guard let focusedPanelID else {
-            return fullLayout
-        }
-        guard let focusedSlot = root.slotContaining(panelID: focusedPanelID) else {
-            assertionFailure("Focused panel mode requires the focused panel to resolve to a live layout slot.")
+        guard let resolvedRootNodeID = effectiveFocusModeRootNodeID(
+            preferredRootNodeID: focusModeRootNodeID,
+            focusedPanelID: focusedPanelID
+        ),
+        let focusedSubtree = root.findSubtree(nodeID: resolvedRootNodeID) else {
             return fullLayout
         }
 
-        // Focused-panel mode intentionally renders the focused slot leaf as the
-        // workspace root, mirroring Ghostty's zoomed split rendering.
         return WorkspaceRenderedLayout(
-            layoutTree: .slot(slotID: focusedSlot.slotID, panelID: focusedSlot.panelID),
-            identity: WorkspaceRenderIdentity(workspaceID: workspaceID, zoomedSlotID: focusedSlot.slotID)
+            layoutTree: focusedSubtree,
+            identity: WorkspaceRenderIdentity(workspaceID: workspaceID, zoomedNodeID: resolvedRootNodeID)
         )
+    }
+
+    public func effectiveFocusModeRootNodeID(
+        preferredRootNodeID: UUID?,
+        focusedPanelID: UUID?
+    ) -> UUID? {
+        guard let focusedPanelID,
+              let focusedSlot = root.slotContaining(panelID: focusedPanelID) else {
+            return nil
+        }
+
+        if let preferredRootNodeID,
+           let subtree = root.findSubtree(nodeID: preferredRootNodeID),
+           subtree.slotContaining(panelID: focusedPanelID) != nil {
+            return preferredRootNodeID
+        }
+
+        return focusedSlot.slotID
+    }
+
+    public func focusedSubtree(rootNodeID: UUID) -> WorkspaceSplitTree? {
+        guard let subtree = root.findSubtree(nodeID: rootNodeID) else {
+            return nil
+        }
+        return WorkspaceSplitTree(root: subtree)
     }
 }
 

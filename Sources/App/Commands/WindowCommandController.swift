@@ -259,8 +259,8 @@ final class SplitLayoutCommandController {
         guard let workspace = commandSelection(preferredWindowID: preferredWindowID)?.workspace else {
             return false
         }
-        guard workspace.focusedPanelModeActive != true else {
-            return false
+        if workspace.focusedPanelModeActive {
+            return workspace.focusModeSubtree?.root.allSlotInfos.count ?? 0 > 1
         }
         return workspace.focusedPanelID != nil
     }
