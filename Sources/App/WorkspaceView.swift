@@ -72,8 +72,7 @@ struct WorkspaceView: View {
     private static let workspaceTabStripSpacing: CGFloat = -1.5
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
-    fileprivate static let focusModeTransitionResponse = 0.32
-    fileprivate static let focusModeTransitionCleanupDelay = 0.6
+    fileprivate nonisolated static let focusModeTransitionResponse = 0.32
     fileprivate nonisolated static func focusModeTransitionAnimation(reduceMotion: Bool) -> Animation? {
         guard reduceMotion == false else { return nil }
         return .spring(
@@ -659,10 +658,6 @@ struct WorkspaceView: View {
                 width: geometry.size.width,
                 height: geometry.size.height
             )
-            let fullProjection = tab.layoutTree.projectLayout(
-                in: viewportFrame,
-                dividerThickness: 1
-            )
             let projection = renderedLayout.projectLayout(
                 in: viewportFrame,
                 dividerThickness: 1
@@ -713,15 +708,12 @@ struct WorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
             .overlay {
-                FocusModeViewportOverlay(
-                    isActive: tab.focusedPanelModeActive,
-                    zoomedNodeID: renderedLayout.identity.zoomedNodeID,
-                    layoutTree: tab.layoutTree,
-                    fullProjection: fullProjection,
-                    viewportSize: geometry.size,
-                    isPresented: isWorkspaceSelected && isTabSelected
-                )
-                .allowsHitTesting(false)
+                if isWorkspaceSelected,
+                   isTabSelected,
+                   tab.focusedPanelModeActive {
+                    FocusModeViewportChrome()
+                        .allowsHitTesting(false)
+                }
             }
         }
     }
@@ -1396,231 +1388,15 @@ private struct FocusModeLayoutAnimationKey: Equatable {
     let zoomedNodeID: UUID?
 }
 
-private struct FocusModeViewportTransitionKey: Equatable {
-    let isActive: Bool
-    let zoomedNodeID: UUID?
-}
-
-private enum FocusModeViewportTransitionPhase {
-    case entering
-    case exiting
-}
-
-private struct FocusModeViewportOverlay: View {
-    let isActive: Bool
-    let zoomedNodeID: UUID?
-    let layoutTree: LayoutNode
-    let fullProjection: LayoutProjection
-    let viewportSize: CGSize
-    let isPresented: Bool
-
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var transitionFrame: CGRect?
-    @State private var transitionPhase: FocusModeViewportTransitionPhase?
-    @State private var cleanupWorkItem: DispatchWorkItem?
-
-    private var transitionKey: FocusModeViewportTransitionKey {
-        FocusModeViewportTransitionKey(isActive: isActive, zoomedNodeID: zoomedNodeID)
-    }
-
-    private var viewportFrame: CGRect {
-        CGRect(origin: .zero, size: viewportSize)
-    }
-
-    private var shouldShowPersistentChrome: Bool {
-        isPresented && isActive && transitionPhase != .entering
-    }
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            if shouldShowPersistentChrome {
-                FocusModeViewportChrome(
-                    isActive: true,
-                    zoomedNodeID: zoomedNodeID
-                )
-            }
-
-            if let transitionFrame, let transitionPhase {
-                FocusModeTransitionChrome(
-                    frame: transitionFrame,
-                    phase: transitionPhase
-                )
-            }
-        }
-        .clipped()
-        .onChange(of: transitionKey) { oldValue, newValue in
-            handleTransitionChange(from: oldValue, to: newValue)
-        }
-        .onChange(of: isPresented) { _, isNowPresented in
-            guard isNowPresented == false else { return }
-            clearTransition()
-        }
-        .onDisappear {
-            clearTransition()
-        }
-    }
-
-    private func handleTransitionChange(
-        from oldValue: FocusModeViewportTransitionKey,
-        to newValue: FocusModeViewportTransitionKey
-    ) {
-        cleanupWorkItem?.cancel()
-        cleanupWorkItem = nil
-
-        guard isPresented, reduceMotion == false else {
-            clearTransition()
-            return
-        }
-
-        switch (oldValue.isActive, newValue.isActive) {
-        case (false, true):
-            guard let sourceNodeID = newValue.zoomedNodeID,
-                  let sourceFrame = referenceFrame(for: sourceNodeID) else {
-                clearTransition()
-                return
-            }
-            startTransition(
-                phase: .entering,
-                from: sourceFrame,
-                to: viewportFrame
-            )
-
-        case (true, false):
-            guard let destinationNodeID = oldValue.zoomedNodeID,
-                  let destinationFrame = referenceFrame(for: destinationNodeID) else {
-                clearTransition()
-                return
-            }
-            startTransition(
-                phase: .exiting,
-                from: viewportFrame,
-                to: destinationFrame
-            )
-
-        default:
-            clearTransition()
-        }
-    }
-
-    private func startTransition(
-        phase: FocusModeViewportTransitionPhase,
-        from sourceFrame: CGRect,
-        to destinationFrame: CGRect
-    ) {
-        transitionPhase = phase
-        transitionFrame = sourceFrame
-
-        DispatchQueue.main.async {
-            withAnimation(WorkspaceView.focusModeTransitionAnimation(reduceMotion: false)) {
-                transitionFrame = destinationFrame
-            }
-        }
-
-        let cleanup = DispatchWorkItem {
-            clearTransition()
-        }
-        cleanupWorkItem = cleanup
-        DispatchQueue.main.asyncAfter(
-            // Keep the transient chrome alive past the spring response so it
-            // does not disappear before the border visibly settles.
-            deadline: .now() + WorkspaceView.focusModeTransitionCleanupDelay,
-            execute: cleanup
-        )
-    }
-
-    private func referenceFrame(for nodeID: UUID) -> CGRect? {
-        WorkspaceView.focusModeReferenceFrame(
-            nodeID: nodeID,
-            layoutTree: layoutTree,
-            projection: fullProjection
-        )
-    }
-
-    private func clearTransition() {
-        cleanupWorkItem?.cancel()
-        cleanupWorkItem = nil
-        transitionFrame = nil
-        transitionPhase = nil
-    }
-}
-
-private struct FocusModeTransitionChrome: View {
-    let frame: CGRect
-    let phase: FocusModeViewportTransitionPhase
-
+private struct FocusModeViewportChrome: View {
     var body: some View {
         Rectangle()
             .strokeBorder(ToastyTheme.focusModeAccent.opacity(0.95), lineWidth: 1.5)
             .background {
                 Rectangle()
-                    .fill(
-                        ToastyTheme.focusModeAccent.opacity(
-                            phase == .entering ? 0.05 : 0.035
-                        )
-                    )
+                    .fill(ToastyTheme.focusModeAccent.opacity(0.05))
             }
             .padding(1)
-            .frame(width: frame.width, height: frame.height)
-            .offset(x: frame.minX, y: frame.minY)
-    }
-}
-
-private struct FocusModeViewportChrome: View {
-    let isActive: Bool
-    let zoomedNodeID: UUID?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var highlightOpacity = 0.0
-    @State private var highlightScale = 1.0
-    @State private var lastAnimatedNodeID: UUID?
-
-    var body: some View {
-        Rectangle()
-            .strokeBorder(ToastyTheme.focusModeAccent.opacity(isActive ? 0.95 : 0), lineWidth: 1.5)
-            .background {
-                Rectangle()
-                    .fill(ToastyTheme.focusModeAccent.opacity(isActive ? 0.05 * highlightOpacity : 0))
-            }
-            .scaleEffect(highlightScale)
-            .padding(1)
-            .onAppear {
-                guard isActive else { return }
-                highlightOpacity = 1
-                lastAnimatedNodeID = zoomedNodeID
-            }
-            .onChange(of: isActive) { _, isNowActive in
-                if isNowActive {
-                    runPulseIfNeeded(force: true)
-                } else {
-                    highlightOpacity = 0
-                    highlightScale = 1
-                }
-            }
-            .onChange(of: zoomedNodeID) { _, newNodeID in
-                guard isActive, newNodeID != lastAnimatedNodeID else { return }
-                runPulseIfNeeded(force: false)
-            }
-    }
-
-    private func runPulseIfNeeded(force: Bool) {
-        lastAnimatedNodeID = zoomedNodeID
-        if reduceMotion {
-            highlightOpacity = isActive ? 1 : 0
-            highlightScale = 1
-            return
-        }
-
-        let shouldPulse = force || zoomedNodeID != nil
-        highlightOpacity = isActive ? 1 : 0
-        guard shouldPulse else {
-            highlightScale = 1
-            return
-        }
-
-        highlightScale = 0.988
-        withAnimation(.easeOut(duration: 0.18)) {
-            highlightScale = 1
-            highlightOpacity = 1
-        }
     }
 }
 
