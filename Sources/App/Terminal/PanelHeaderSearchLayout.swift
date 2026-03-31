@@ -14,8 +14,8 @@ struct PanelHeaderSearchLayout: Equatable, Sendable {
     static let minimumFieldWidth: CGFloat = 132
     static let matchLabelWidthThreshold: CGFloat = 156
     static let titleMinimumWidth: CGFloat = 64
-    static let searchFieldHeight: CGFloat = 20
-    static let searchButtonSize: CGFloat = 16
+    static let searchFieldHeight: CGFloat = 22
+    static let searchButtonSize: CGFloat = 17
     static let searchButtonSpacing: CGFloat = 2
     static let searchControlsSpacing: CGFloat = 4
     private static let indicatorReservedWidth: CGFloat = 16
