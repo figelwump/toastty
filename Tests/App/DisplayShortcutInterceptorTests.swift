@@ -138,6 +138,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
     }
 
+    func testClosePanelShortcutWindowIDAllowsTerminalHostViewResponder() {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        window.forcedFirstResponder = TerminalHostView()
+
+        XCTAssertEqual(
+            DisplayShortcutInterceptor.closePanelShortcutWindowID(
+                keyWindow: window,
+                modalWindow: nil
+            ),
+            windowID
+        )
+    }
+
     func testClosePanelShortcutWindowIDRejectsModalWindow() {
         let keyWindow = ShortcutTestWindow()
         keyWindow.identifier = NSUserInterfaceItemIdentifier(UUID().uuidString)

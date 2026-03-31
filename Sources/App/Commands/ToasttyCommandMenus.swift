@@ -201,7 +201,7 @@ struct ToasttyCommandMenus: Commands {
         }
         return Self.textInputOwnsFindCommands(
             modalWindowPresent: keyWindow.sheetParent != nil || NSApp.modalWindow != nil,
-            firstResponderIsTextInput: keyWindow.firstResponder is NSTextInputClient,
+            firstResponderIsTextInput: toasttyResponderUsesReservedTextInput(keyWindow.firstResponder),
             terminalSearchFieldIsFocused: commandFocusedTerminalSearchFieldFocused
         )
     }
