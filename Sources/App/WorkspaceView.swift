@@ -690,7 +690,7 @@ struct WorkspaceView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
-            .overlay {
+            .overlay(alignment: .topLeading) {
                 if isWorkspaceSelected,
                    isTabSelected,
                    tab.focusedPanelModeActive {
