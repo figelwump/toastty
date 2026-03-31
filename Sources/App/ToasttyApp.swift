@@ -170,16 +170,13 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var workspaceMenuBridge: WorkspaceMenuBridge?
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
-    private var sparkleMenuBridge: SparkleMenuBridge?
     private var hasCompletedLaunch = false
     private var menuBridgeInstallationTask: Task<Void, Never>?
-    let sparkleUpdaterBridge: SparkleUpdaterBridge
 
     override init() {
         let processInfo = ProcessInfo.processInfo
         let isInteractiveSession = Self.isInteractiveSession(processInfo)
         shouldConfirmQuit = isInteractiveSession
-        sparkleUpdaterBridge = SparkleUpdaterBridge(startingUpdater: isInteractiveSession)
         super.init()
     }
 
@@ -221,10 +218,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         }
         hiddenSystemMenuItemsBridge.setOnDynamicMenuBridgeRefreshRequested { [weak self] in
             self?.installDynamicMenuBridges()
-        }
-
-        if sparkleMenuBridge == nil {
-            sparkleMenuBridge = SparkleMenuBridge(sparkleUpdaterBridge: sparkleUpdaterBridge)
         }
 
         guard hasCompletedLaunch else { return }
@@ -322,7 +315,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private func installDynamicMenuBridges() {
         workspaceMenuBridge?.installIfNeeded()
         helpMenuBridge?.installIfNeeded()
-        sparkleMenuBridge?.installIfNeeded()
     }
 
     private func scheduleMenuBridgeInstallations() {
@@ -711,6 +703,7 @@ struct ToasttyApp: App {
     @StateObject private var store: AppStore
     @StateObject private var agentCatalogStore: AgentCatalogStore
     @StateObject private var terminalProfileStore: TerminalProfileStore
+    @StateObject private var sparkleUpdaterBridge: SparkleUpdaterBridge
     private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
@@ -748,6 +741,7 @@ struct ToasttyApp: App {
     init() {
         let processInfo = ProcessInfo.processInfo
         let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
+        let isInteractiveSession = AppLifecycleDelegate.isInteractiveSession(processInfo)
         Self.prepareRuntimeEnvironment(processInfo: processInfo)
         Self.ensureTerminalProfilesTemplateExists()
         Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
@@ -922,6 +916,9 @@ struct ToasttyApp: App {
         _store = StateObject(wrappedValue: store)
         _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
         _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
+        _sparkleUpdaterBridge = StateObject(
+            wrappedValue: SparkleUpdaterBridge(startingUpdater: isInteractiveSession)
+        )
         appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
@@ -1153,6 +1150,8 @@ struct ToasttyApp: App {
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 terminalProfilesMenuController: terminalProfilesMenuController,
+                canCheckForUpdates: sparkleUpdaterBridge.canCheckForUpdates,
+                checkForUpdates: sparkleUpdaterBridge.checkForUpdates,
                 supportsConfigurationReload: supportsConfigurationReload,
                 reloadConfiguration: reloadConfiguration,
                 openManageConfig: openManageConfig,

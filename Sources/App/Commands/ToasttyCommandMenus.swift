@@ -113,6 +113,8 @@ struct ToasttyCommandMenus: Commands {
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let terminalProfilesMenuController: TerminalProfilesMenuController
+    let canCheckForUpdates: Bool
+    let checkForUpdates: @MainActor () -> Void
     let supportsConfigurationReload: Bool
     let reloadConfiguration: () -> Void
     let openManageConfig: () -> Void
@@ -234,6 +236,11 @@ struct ToasttyCommandMenus: Commands {
         }
 
         CommandGroup(after: .appInfo) {
+            Button("Check for Updates...") {
+                checkForUpdates()
+            }
+            .disabled(canCheckForUpdates == false)
+
             Divider()
 
             Button("Manage Config…", action: openManageConfig)
