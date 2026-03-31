@@ -9,6 +9,19 @@ struct WorkspaceView: View {
         case empty
     }
 
+    struct FocusModePresentationState: Equatable {
+        let workspaceID: UUID
+        let tabID: UUID
+        let focusedPanelModeActive: Bool
+        let effectiveRootNodeID: UUID?
+    }
+
+    struct TransientUnfocusHighlightRequest: Equatable {
+        let workspaceID: UUID
+        let tabID: UUID
+        let rootNodeID: UUID
+    }
+
     struct WorkspaceTabChromeSpec {
         let background: Color
         let text: Color
@@ -64,6 +77,10 @@ struct WorkspaceView: View {
     @State private var lastHandledPanelFlashRequestID: UUID?
     @State private var panelFlashClearWorkItem: DispatchWorkItem?
     @State private var panelFlashResetWorkItem: DispatchWorkItem?
+    @State private var transientUnfocusHighlight: TransientUnfocusHighlightRequest?
+    @State private var transientUnfocusHighlightOpacity = 0.0
+    @State private var transientUnfocusHighlightFadeWorkItem: DispatchWorkItem?
+    @State private var transientUnfocusHighlightResetWorkItem: DispatchWorkItem?
 
     private static let focusedUnreadClearDelayNanoseconds: UInt64 = 300_000_000
     private static let workspaceTitleToTabsSpacing: CGFloat = 18
@@ -132,6 +149,8 @@ struct WorkspaceView: View {
 
     private static let panelFlashPeakDuration: Double = 0.18
     private static let panelFlashSettleDuration: Double = 0.28
+    private static let transientUnfocusHighlightHoldDuration: Double = 0.55
+    private static let transientUnfocusHighlightFadeDuration: Double = 0.2
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
@@ -328,6 +347,7 @@ struct WorkspaceView: View {
             pruneTransientTabRenameState()
             prunePendingWorkspaceTabCloseState()
             pruneTransientPanelFlashState()
+            pruneTransientUnfocusHighlightState()
         }
         .onChange(of: store.pendingRenameWorkspaceTabRequest) { _, _ in
             consumePendingWorkspaceTabRenameRequestIfNeeded()
@@ -335,10 +355,14 @@ struct WorkspaceView: View {
         .onChange(of: store.pendingPanelFlashRequest) { _, _ in
             handlePendingPanelFlashRequest()
         }
+        .onChange(of: selectedWorkspaceFocusModePresentationState) { oldValue, newValue in
+            handleFocusModePresentationChange(from: oldValue, to: newValue)
+        }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             pruneTransientTabRenameState()
             prunePendingWorkspaceTabCloseState()
             pruneTransientPanelFlashState()
+            pruneTransientUnfocusHighlightState()
         }
         .onDisappear {
             focusedUnreadClearTask?.cancel()
@@ -347,6 +371,7 @@ struct WorkspaceView: View {
             panelFlashResetWorkItem?.cancel()
             panelFlashClearWorkItem = nil
             panelFlashResetWorkItem = nil
+            clearTransientUnfocusHighlight()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
@@ -671,6 +696,25 @@ struct WorkspaceView: View {
                    tab.focusedPanelModeActive {
                     FocusModeViewportChrome()
                         .allowsHitTesting(false)
+                } else if isWorkspaceSelected,
+                          isTabSelected,
+                          let frame = transientUnfocusHighlightFrame(
+                              workspaceID: workspace.id,
+                              tabID: tab.id,
+                              layoutTree: tab.layoutTree,
+                              projection: projection
+                          ) {
+                    FocusModeViewportChrome(fillOpacity: 0.04)
+                        .opacity(transientUnfocusHighlightOpacity)
+                        .frame(
+                            width: CGFloat(frame.width),
+                            height: CGFloat(frame.height)
+                        )
+                        .offset(
+                            x: CGFloat(frame.minX),
+                            y: CGFloat(frame.minY)
+                        )
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -726,6 +770,29 @@ struct WorkspaceView: View {
             workspaceID: workspace.id,
             focusedPanelID: workspace.focusedPanelID,
             unreadPanelIDs: workspace.unreadPanelIDs
+        )
+    }
+
+    private var selectedWorkspaceFocusModePresentationState: FocusModePresentationState? {
+        guard let workspace = selectedWorkspace,
+              let tab = workspace.selectedTab else {
+            return nil
+        }
+
+        let effectiveRootNodeID: UUID? = if tab.focusedPanelModeActive {
+            WorkspaceSplitTree(root: tab.layoutTree).effectiveFocusModeRootNodeID(
+                preferredRootNodeID: tab.focusModeRootNodeID,
+                focusedPanelID: tab.focusedPanelID
+            )
+        } else {
+            nil
+        }
+
+        return FocusModePresentationState(
+            workspaceID: workspace.id,
+            tabID: tab.id,
+            focusedPanelModeActive: tab.focusedPanelModeActive,
+            effectiveRootNodeID: effectiveRootNodeID
         )
     }
 
@@ -827,6 +894,161 @@ struct WorkspaceView: View {
         panelFlashResetWorkItem?.cancel()
         panelFlashClearWorkItem = nil
         panelFlashResetWorkItem = nil
+    }
+
+    private func handleFocusModePresentationChange(
+        from previous: FocusModePresentationState?,
+        to current: FocusModePresentationState?
+    ) {
+        guard let request = Self.transientUnfocusHighlightRequest(from: previous, to: current) else {
+            if Self.shouldClearTransientUnfocusHighlight(from: previous, to: current) {
+                clearTransientUnfocusHighlight()
+            }
+            return
+        }
+
+        showTransientUnfocusHighlight(request)
+    }
+
+    private func showTransientUnfocusHighlight(_ request: TransientUnfocusHighlightRequest) {
+        transientUnfocusHighlightFadeWorkItem?.cancel()
+        transientUnfocusHighlightResetWorkItem?.cancel()
+        transientUnfocusHighlightFadeWorkItem = nil
+        transientUnfocusHighlightResetWorkItem = nil
+
+        // Leave one brief visual breadcrumb after unfocus so the restored subtree
+        // is easy to locate in the full layout.
+        transientUnfocusHighlight = request
+        transientUnfocusHighlightOpacity = 1
+
+        let fadeWorkItem = DispatchWorkItem {
+            transientUnfocusHighlightFadeWorkItem = nil
+            withAnimation(.easeOut(duration: Self.transientUnfocusHighlightFadeDuration)) {
+                transientUnfocusHighlightOpacity = 0
+            }
+        }
+        transientUnfocusHighlightFadeWorkItem = fadeWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.transientUnfocusHighlightHoldDuration,
+            execute: fadeWorkItem
+        )
+
+        let resetWorkItem = DispatchWorkItem {
+            transientUnfocusHighlightResetWorkItem = nil
+            transientUnfocusHighlight = nil
+            transientUnfocusHighlightOpacity = 0
+        }
+        transientUnfocusHighlightResetWorkItem = resetWorkItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.transientUnfocusHighlightHoldDuration + Self.transientUnfocusHighlightFadeDuration,
+            execute: resetWorkItem
+        )
+    }
+
+    private func clearTransientUnfocusHighlight() {
+        transientUnfocusHighlight = nil
+        transientUnfocusHighlightOpacity = 0
+        transientUnfocusHighlightFadeWorkItem?.cancel()
+        transientUnfocusHighlightResetWorkItem?.cancel()
+        transientUnfocusHighlightFadeWorkItem = nil
+        transientUnfocusHighlightResetWorkItem = nil
+    }
+
+    private func pruneTransientUnfocusHighlightState() {
+        guard let transientUnfocusHighlight else { return }
+        guard let workspace = selectedWorkspace,
+              workspace.id == transientUnfocusHighlight.workspaceID,
+              let tab = workspace.tab(id: transientUnfocusHighlight.tabID),
+              tab.layoutTree.findSubtree(nodeID: transientUnfocusHighlight.rootNodeID) != nil else {
+            clearTransientUnfocusHighlight()
+            return
+        }
+    }
+
+    private func transientUnfocusHighlightFrame(
+        workspaceID: UUID,
+        tabID: UUID,
+        layoutTree: LayoutNode,
+        projection: LayoutProjection
+    ) -> LayoutFrame? {
+        guard let transientUnfocusHighlight,
+              transientUnfocusHighlight.workspaceID == workspaceID,
+              transientUnfocusHighlight.tabID == tabID else {
+            return nil
+        }
+
+        return Self.focusModeHighlightFrame(
+            rootNodeID: transientUnfocusHighlight.rootNodeID,
+            layoutTree: layoutTree,
+            projection: projection
+        )
+    }
+
+    nonisolated static func transientUnfocusHighlightRequest(
+        from previous: FocusModePresentationState?,
+        to current: FocusModePresentationState?
+    ) -> TransientUnfocusHighlightRequest? {
+        guard let previous,
+              previous.focusedPanelModeActive,
+              let rootNodeID = previous.effectiveRootNodeID,
+              let current,
+              current.focusedPanelModeActive == false,
+              previous.workspaceID == current.workspaceID,
+              previous.tabID == current.tabID else {
+            return nil
+        }
+
+        return TransientUnfocusHighlightRequest(
+            workspaceID: previous.workspaceID,
+            tabID: previous.tabID,
+            rootNodeID: rootNodeID
+        )
+    }
+
+    nonisolated static func shouldClearTransientUnfocusHighlight(
+        from previous: FocusModePresentationState?,
+        to current: FocusModePresentationState?
+    ) -> Bool {
+        if current?.focusedPanelModeActive == true {
+            return true
+        }
+
+        return previous?.workspaceID != current?.workspaceID || previous?.tabID != current?.tabID
+    }
+
+    nonisolated static func focusModeHighlightFrame(
+        rootNodeID: UUID,
+        layoutTree: LayoutNode,
+        projection: LayoutProjection
+    ) -> LayoutFrame? {
+        guard let subtree = layoutTree.findSubtree(nodeID: rootNodeID) else {
+            return nil
+        }
+
+        let slotIDs = Set(subtree.allSlotInfos.map(\.slotID))
+        guard let firstFrame = projection.slots.first(where: { slotIDs.contains($0.slotID) })?.frame else {
+            return nil
+        }
+
+        return projection.slots.reduce(firstFrame) { partialFrame, slot in
+            guard slotIDs.contains(slot.slotID) else {
+                return partialFrame
+            }
+            return union(partialFrame, slot.frame)
+        }
+    }
+
+    nonisolated private static func union(_ lhs: LayoutFrame, _ rhs: LayoutFrame) -> LayoutFrame {
+        let minX = min(lhs.minX, rhs.minX)
+        let minY = min(lhs.minY, rhs.minY)
+        let maxX = max(lhs.maxX, rhs.maxX)
+        let maxY = max(lhs.maxY, rhs.maxY)
+        return LayoutFrame(
+            minX: minX,
+            minY: minY,
+            width: maxX - minX,
+            height: maxY - minY
+        )
     }
 
     private var selectedWorkspace: WorkspaceState? {
@@ -1342,14 +1564,21 @@ private struct PendingWorkspaceTabClose: Identifiable {
 }
 
 private struct FocusModeViewportChrome: View {
+    let fillOpacity: Double
+
+    init(fillOpacity: Double = 0.05) {
+        self.fillOpacity = fillOpacity
+    }
+
     var body: some View {
         Rectangle()
             .strokeBorder(ToastyTheme.focusModeAccent.opacity(0.95), lineWidth: 1.5)
             .background {
                 Rectangle()
-                    .fill(ToastyTheme.focusModeAccent.opacity(0.05))
+                    .fill(ToastyTheme.focusModeAccent.opacity(fillOpacity))
             }
             .padding(1)
+            .accessibilityHidden(true)
     }
 }
 

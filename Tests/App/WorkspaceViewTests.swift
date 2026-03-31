@@ -222,6 +222,146 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertNil(WorkspaceView.focusedPanelToggleTitle(isActive: false))
     }
 
+    func testTransientUnfocusHighlightRequestReturnsPreviousFocusedSubtreeForSameTab() {
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let rootNodeID = UUID()
+
+        let request = WorkspaceView.transientUnfocusHighlightRequest(
+            from: .init(
+                workspaceID: workspaceID,
+                tabID: tabID,
+                focusedPanelModeActive: true,
+                effectiveRootNodeID: rootNodeID
+            ),
+            to: .init(
+                workspaceID: workspaceID,
+                tabID: tabID,
+                focusedPanelModeActive: false,
+                effectiveRootNodeID: nil
+            )
+        )
+
+        XCTAssertEqual(
+            request,
+            .init(workspaceID: workspaceID, tabID: tabID, rootNodeID: rootNodeID)
+        )
+    }
+
+    func testTransientUnfocusHighlightRequestIgnoresTabSwitches() {
+        let request = WorkspaceView.transientUnfocusHighlightRequest(
+            from: .init(
+                workspaceID: UUID(),
+                tabID: UUID(),
+                focusedPanelModeActive: true,
+                effectiveRootNodeID: UUID()
+            ),
+            to: .init(
+                workspaceID: UUID(),
+                tabID: UUID(),
+                focusedPanelModeActive: false,
+                effectiveRootNodeID: nil
+            )
+        )
+
+        XCTAssertNil(request)
+    }
+
+    func testShouldClearTransientUnfocusHighlightWhenSwitchingTabs() {
+        let workspaceID = UUID()
+
+        XCTAssertTrue(
+            WorkspaceView.shouldClearTransientUnfocusHighlight(
+                from: .init(
+                    workspaceID: workspaceID,
+                    tabID: UUID(),
+                    focusedPanelModeActive: false,
+                    effectiveRootNodeID: nil
+                ),
+                to: .init(
+                    workspaceID: workspaceID,
+                    tabID: UUID(),
+                    focusedPanelModeActive: false,
+                    effectiveRootNodeID: nil
+                )
+            )
+        )
+    }
+
+    func testFocusModeHighlightFrameReturnsLeafSlotFrame() {
+        let topLeftPanelID = UUID()
+        let bottomLeftPanelID = UUID()
+        let rightPanelID = UUID()
+        let topLeftSlotID = UUID()
+        let bottomLeftSlotID = UUID()
+        let rightSlotID = UUID()
+        let leftBranchNodeID = UUID()
+        let rootNodeID = UUID()
+        let layoutTree = LayoutNode.split(
+            nodeID: rootNodeID,
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .split(
+                nodeID: leftBranchNodeID,
+                orientation: .vertical,
+                ratio: 0.5,
+                first: .slot(slotID: topLeftSlotID, panelID: topLeftPanelID),
+                second: .slot(slotID: bottomLeftSlotID, panelID: bottomLeftPanelID)
+            ),
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
+        )
+        let projection = layoutTree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 100, height: 80),
+            dividerThickness: 0
+        )
+
+        XCTAssertEqual(
+            WorkspaceView.focusModeHighlightFrame(
+                rootNodeID: bottomLeftSlotID,
+                layoutTree: layoutTree,
+                projection: projection
+            ),
+            LayoutFrame(minX: 0, minY: 40, width: 50, height: 40)
+        )
+    }
+
+    func testFocusModeHighlightFrameReturnsBoundingFrameForSplitSubtree() {
+        let topLeftPanelID = UUID()
+        let bottomLeftPanelID = UUID()
+        let rightPanelID = UUID()
+        let topLeftSlotID = UUID()
+        let bottomLeftSlotID = UUID()
+        let rightSlotID = UUID()
+        let leftBranchNodeID = UUID()
+        let rootNodeID = UUID()
+        let layoutTree = LayoutNode.split(
+            nodeID: rootNodeID,
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .split(
+                nodeID: leftBranchNodeID,
+                orientation: .vertical,
+                ratio: 0.5,
+                first: .slot(slotID: topLeftSlotID, panelID: topLeftPanelID),
+                second: .slot(slotID: bottomLeftSlotID, panelID: bottomLeftPanelID)
+            ),
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
+        )
+        let projection = layoutTree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 100, height: 80),
+            dividerThickness: 0
+        )
+
+        XCTAssertEqual(
+            WorkspaceView.focusModeHighlightFrame(
+                rootNodeID: leftBranchNodeID,
+                layoutTree: layoutTree,
+                projection: projection
+            ),
+            LayoutFrame(minX: 0, minY: 0, width: 50, height: 80)
+        )
+    }
+
     func testWorkspaceHeaderTitleColumnPreferredWidthUsesWidestLine() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
