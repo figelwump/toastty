@@ -66,9 +66,11 @@ struct AppWindowView: View {
             Button("Cancel", role: .cancel) {
                 pendingWorkspaceClose = nil
             }
+            .keyboardShortcut(.cancelAction)
             Button("Close", role: .destructive) {
                 confirmWorkspaceClose(closeTarget)
             }
+            .keyboardShortcut(.defaultAction)
         } message: { _ in
             Text("Closing this workspace will close all terminals and panels within it.")
         }

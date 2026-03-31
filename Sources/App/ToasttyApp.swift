@@ -63,8 +63,8 @@ private enum ToasttyMenuActions {
         confirmationAlert.messageText = "Install Shell Integration?"
         confirmationAlert.informativeText = ProfileShellIntegrationMessaging.installationPlanSummary(for: status)
         confirmationAlert.alertStyle = .informational
-        confirmationAlert.addButton(withTitle: "Install")
-        confirmationAlert.addButton(withTitle: "Cancel")
+        confirmationAlert.addConfiguredButton(withTitle: "Install", behavior: .defaultAction)
+        confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
 
         guard confirmationAlert.runModal() == .alertFirstButtonReturn else {
             return
@@ -261,8 +261,12 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         confirmationAlert.messageText = "Quit Toastty?"
         confirmationAlert.informativeText = "Are you sure you want to quit?"
         confirmationAlert.alertStyle = .informational
-        confirmationAlert.addButton(withTitle: "Cancel")
-        confirmationAlert.addButton(withTitle: "Quit")
+        confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+        confirmationAlert.addConfiguredButton(
+            withTitle: "Quit",
+            behavior: .defaultAction,
+            isDestructive: true
+        )
 
         let response = confirmationAlert.runModal()
         return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel

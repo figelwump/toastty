@@ -462,8 +462,12 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         Closing this window will close all terminals, tabs, and workspaces in this window.
         """
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Close Window")
+        alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+        alert.addConfiguredButton(
+            withTitle: "Close Window",
+            behavior: .defaultAction,
+            isDestructive: true
+        )
         alert.beginSheetModal(for: window) { response in
             Task { @MainActor in
                 completion(response == .alertSecondButtonReturn)

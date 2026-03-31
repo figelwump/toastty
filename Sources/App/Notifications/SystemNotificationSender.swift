@@ -254,8 +254,11 @@ final class NotificationAccessGuidancePresenter {
                 """
             }
             alert.alertStyle = .informational
-            alert.addButton(withTitle: "Open System Settings")
-            alert.addButton(withTitle: "Not Now")
+            alert.addConfiguredButton(
+                withTitle: "Open System Settings",
+                behavior: .defaultAction
+            )
+            alert.addConfiguredButton(withTitle: "Not Now", behavior: .cancelAction)
             return alert.runModal() == .alertFirstButtonReturn
         },
         openSystemSettings: @escaping @MainActor () -> Void = {
