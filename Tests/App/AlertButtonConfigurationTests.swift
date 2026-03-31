@@ -4,18 +4,17 @@ import XCTest
 
 @MainActor
 final class AlertButtonConfigurationTests: XCTestCase {
-    func testDefaultActionButtonUsesReturnAndDestructiveStyling() {
+    func testDefaultActionButtonUsesReturnShortcutWithoutDestructiveStyling() {
         let alert = NSAlert()
 
         let button = alert.addConfiguredButton(
             withTitle: "Quit",
-            behavior: .defaultAction,
-            isDestructive: true
+            behavior: .defaultAction
         )
 
         XCTAssertEqual(button.keyEquivalent, "\r")
         XCTAssertEqual(button.keyEquivalentModifierMask, [])
-        XCTAssertTrue(button.hasDestructiveAction)
+        XCTAssertFalse(button.hasDestructiveAction)
     }
 
     func testCancelActionButtonUsesEscapeShortcut() {

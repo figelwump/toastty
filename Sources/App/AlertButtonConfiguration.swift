@@ -9,8 +9,7 @@ extension NSAlert {
     @discardableResult
     func addConfiguredButton(
         withTitle title: String,
-        behavior: AlertButtonBehavior,
-        isDestructive: Bool = false
+        behavior: AlertButtonBehavior
     ) -> NSButton {
         let button = addButton(withTitle: title)
         // Keep Toastty's existing visual button order while explicitly assigning
@@ -23,7 +22,6 @@ extension NSAlert {
         case .cancelAction:
             button.keyEquivalent = "\u{1B}"
         }
-        button.hasDestructiveAction = isDestructive
         return button
     }
 }

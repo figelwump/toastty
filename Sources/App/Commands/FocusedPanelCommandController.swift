@@ -204,8 +204,7 @@ final class FocusedPanelCommandController {
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
         confirmationAlert.addConfiguredButton(
             withTitle: "Close",
-            behavior: .defaultAction,
-            isDestructive: true
+            behavior: .defaultAction
         )
 
         let response = confirmationAlert.runModal()

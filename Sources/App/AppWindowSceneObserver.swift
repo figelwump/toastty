@@ -465,8 +465,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
         alert.addConfiguredButton(
             withTitle: "Close Window",
-            behavior: .defaultAction,
-            isDestructive: true
+            behavior: .defaultAction
         )
         alert.beginSheetModal(for: window) { response in
             Task { @MainActor in

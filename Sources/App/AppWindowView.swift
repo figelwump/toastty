@@ -67,7 +67,7 @@ struct AppWindowView: View {
                 pendingWorkspaceClose = nil
             }
             .keyboardShortcut(.cancelAction)
-            Button("Close", role: .destructive) {
+            Button("Close") {
                 confirmWorkspaceClose(closeTarget)
             }
             .keyboardShortcut(.defaultAction)

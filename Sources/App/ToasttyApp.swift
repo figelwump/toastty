@@ -264,8 +264,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
         confirmationAlert.addConfiguredButton(
             withTitle: "Quit",
-            behavior: .defaultAction,
-            isDestructive: true
+            behavior: .defaultAction
         )
 
         let response = confirmationAlert.runModal()

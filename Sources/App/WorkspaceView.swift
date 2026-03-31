@@ -311,7 +311,7 @@ struct WorkspaceView: View {
                 pendingWorkspaceTabClose = nil
             }
             .keyboardShortcut(.cancelAction)
-            Button("Close Tab", role: .destructive) {
+            Button("Close Tab") {
                 confirmWorkspaceTabClose(closeTarget)
             }
             .keyboardShortcut(.defaultAction)
