@@ -47,7 +47,7 @@ struct WorkspaceView: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfiguration: () -> Void
+    let showAgentGetStartedFlow: () -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -430,7 +430,7 @@ struct WorkspaceView: View {
         HStack(spacing: 6) {
             if agentTopBarModel.showsAddAgentsButton {
                 topBarFlashTextButton(title: WorkspaceAgentTopBarModel.addAgentsTitle) {
-                    openAgentProfilesConfiguration()
+                    showAgentGetStartedFlow()
                 }
                 .accessibilityIdentifier("topbar.agent.add")
             } else {
@@ -1514,7 +1514,7 @@ private struct WorkspaceTabStripLayout: Layout {
 }
 
 struct WorkspaceAgentTopBarModel: Equatable {
-    static let addAgentsTitle = "Add Agents…"
+    static let addAgentsTitle = "Get Started…"
 
     struct Action: Equatable, Identifiable {
         let profileID: String

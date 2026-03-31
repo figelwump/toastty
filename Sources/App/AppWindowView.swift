@@ -10,9 +10,10 @@ struct AppWindowView: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfiguration: () -> Void
+    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
+    @State private var showsAgentGetStartedSheet = false
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
@@ -45,7 +46,9 @@ struct AppWindowView: View {
                     sessionRuntimeStore: sessionRuntimeStore,
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
-                    openAgentProfilesConfiguration: openAgentProfilesConfiguration,
+                    showAgentGetStartedFlow: {
+                        showsAgentGetStartedSheet = true
+                    },
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible
                 )
@@ -68,6 +71,11 @@ struct AppWindowView: View {
             }
         } message: { _ in
             Text("Closing this workspace will close all terminals and panels within it.")
+        }
+        .sheet(isPresented: $showsAgentGetStartedSheet) {
+            AgentGetStartedSheet(
+                openAgentProfilesConfiguration: openAgentProfilesConfigurationResult
+            )
         }
         .onAppear {
             scheduleWindowFocusRestore()

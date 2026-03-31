@@ -57,7 +57,7 @@ final class WorkspaceViewTests: XCTestCase {
 
         XCTAssertTrue(model.actions.isEmpty)
         XCTAssertTrue(model.showsAddAgentsButton)
-        XCTAssertEqual(WorkspaceAgentTopBarModel.addAgentsTitle, "Add Agents…")
+        XCTAssertEqual(WorkspaceAgentTopBarModel.addAgentsTitle, "Get Started…")
     }
 
     func testWorkspaceTabTrailingAccessoryUsesCloseButtonWhenHovered() {
@@ -475,7 +475,7 @@ final class WorkspaceViewTests: XCTestCase {
             sessionRuntimeStore: sessionRuntimeStore,
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
             agentLaunchService: agentLaunchService,
-            openAgentProfilesConfiguration: {},
+            showAgentGetStartedFlow: {},
             terminalRuntimeContext: TerminalWindowRuntimeContext(
                 windowID: windowID,
                 runtimeRegistry: registry

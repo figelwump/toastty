@@ -2,7 +2,7 @@
 
 Toastty's shell integration emits `OSC 2` title sequences so that panel headers show live working directories and running commands, even inside multiplexers like `tmux` or `zmx`. For `zsh` and `bash`, it also switches each pane to its own shell history file so restored panes can recall their own commands with `Up`.
 
-The easiest way to install is `Toastty > Install Shell Integration…` in Toastty — it writes the snippet and sources it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
+The easiest way to install is either `Toastty > Install Shell Integration…` or the top-bar `Get Started…` flow in Toastty — both write the snippet and source it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.
 

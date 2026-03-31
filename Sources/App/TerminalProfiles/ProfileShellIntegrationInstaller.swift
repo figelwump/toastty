@@ -2,7 +2,7 @@ import CoreState
 import Darwin
 import Foundation
 
-enum ProfileShellIntegrationShell: CaseIterable, Equatable {
+enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
     static let defaultPaneHistoryEntryCount = 5_000
 
     case zsh
@@ -248,7 +248,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable {
     }
 }
 
-struct ProfileShellIntegrationInstallPlan: Equatable {
+struct ProfileShellIntegrationInstallPlan: Equatable, Sendable {
     let shell: ProfileShellIntegrationShell
     let initFileURL: URL
     let managedSnippetURL: URL
@@ -258,7 +258,7 @@ struct ProfileShellIntegrationInstallPlan: Equatable {
     }
 }
 
-struct ProfileShellIntegrationInstallStatus: Equatable {
+struct ProfileShellIntegrationInstallStatus: Equatable, Sendable {
     let plan: ProfileShellIntegrationInstallPlan
     let needsManagedSnippetWrite: Bool
     let needsInitFileUpdate: Bool
@@ -269,14 +269,14 @@ struct ProfileShellIntegrationInstallStatus: Equatable {
     }
 }
 
-struct ProfileShellIntegrationInstallResult: Equatable {
+struct ProfileShellIntegrationInstallResult: Equatable, Sendable {
     let plan: ProfileShellIntegrationInstallPlan
     let updatedManagedSnippet: Bool
     let updatedInitFile: Bool
     let createdInitFile: Bool
 }
 
-enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable {
+enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable, Sendable {
     case unsupportedShell(shellPath: String?)
     case runtimeHomeUnsupported(path: String)
     case unableToReadFile(path: String, reason: String)

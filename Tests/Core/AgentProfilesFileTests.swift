@@ -26,6 +26,13 @@ struct AgentProfilesFileTests {
     }
 
     @Test
+    func templateContentsIncludesReloadConfigurationReminder() {
+        let contents = AgentProfilesFile.templateContents()
+
+        #expect(contents.contains("# After saving, use Toastty > Reload Configuration"))
+    }
+
+    @Test
     func loadParsesProfilesInFileOrder() throws {
         let contents = """
         [codex]

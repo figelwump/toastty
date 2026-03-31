@@ -4,9 +4,11 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 
 ## Quick start
 
-1. Open `Agent > Manage Agents...` (creates `~/.toastty/agents.toml` if it does not exist)
-2. Uncomment or add a profile
-3. Click the agent name in the `Agent` menu or press its keyboard shortcut
+1. If you want to type `codex`, `claude`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
+2. If you want dedicated header buttons, Agent menu entries, and optional keyboard shortcuts, open `Agent > Manage Agents...` or choose `Open agents.toml` from `Get Started…`
+3. Uncomment or add a profile in `~/.toastty/agents.toml`
+4. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
+5. Click the agent name in the `Agent` menu or press its keyboard shortcut
 
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
@@ -167,6 +169,10 @@ Outside the Agent menu, Toastty can also track manual `codex` and `claude`
 invocations typed directly into Toastty terminals. By default, Toastty prepends
 managed wrappers for those commands into the terminal `PATH`, and those wrappers
 prepare the same managed-session context before handing off to the real binary.
+
+If you are setting this up from inside the app, the top-bar `Get Started…`
+button routes to the same shell-integration flow as `Toastty > Install Shell
+Integration…`.
 
 If a built-in `[codex]` or `[claude]` profile uses extra wrapper executables for
 typed launches, list those wrapper basenames in `manualCommandNames`. Entries

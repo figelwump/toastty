@@ -6,28 +6,33 @@ import SwiftUI
 @MainActor
 private enum ToasttyMenuActions {
     static func openTerminalProfilesConfiguration() {
-        do {
-            try TerminalProfilesFile.ensureTemplateExists()
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Terminal Profiles"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+        switch openTerminalProfilesConfigurationResult() {
+        case .success:
             return
+        case .failure(let error):
+            presentWarningAlert(
+                title: "Unable to Open Terminal Profiles",
+                message: error.localizedDescription
+            )
         }
+    }
 
-        let fileURL = TerminalProfilesFile.fileURL()
-        guard NSWorkspace.shared.open(fileURL) else {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Terminal Profiles"
-            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
-        }
+    static func openTerminalProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            ensureTemplate: {
+                try TerminalProfilesFile.ensureTemplateExists()
+            },
+            fileURL: TerminalProfilesFile.fileURL()
+        )
+    }
+
+    static func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            ensureTemplate: {
+                try AgentProfilesFile.ensureTemplateExists()
+            },
+            fileURL: AgentProfilesFile.fileURL()
+        )
     }
 
     static func installShellIntegration() {
@@ -37,24 +42,17 @@ private enum ToasttyMenuActions {
         do {
             status = try installer.installationStatus()
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Install Shell Integration"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            presentWarningAlert(
+                title: "Unable to Install Shell Integration",
+                message: error.localizedDescription
+            )
             return
         }
 
         if status.isInstalled {
             let alert = NSAlert()
             alert.messageText = "Shell Integration Already Installed"
-            alert.informativeText = """
-            Toastty shell integration is already installed for \(status.plan.shell.displayName).
-
-            Init file: \(status.plan.initFileURL.path)
-            Managed snippet: \(status.plan.managedSnippetURL.path)
-            """
+            alert.informativeText = ProfileShellIntegrationMessaging.alreadyInstalledSummary(for: status)
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -63,24 +61,7 @@ private enum ToasttyMenuActions {
 
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Install Shell Integration?"
-        let snippetAction = status.needsManagedSnippetWrite
-            ? "write the managed snippet to \(status.plan.managedSnippetURL.path)"
-            : "use the existing managed snippet at \(status.plan.managedSnippetURL.path)"
-        let initFileAction: String
-        if status.needsInitFileUpdate {
-            initFileAction = status.createsInitFile
-                ? "create \(status.plan.initFileURL.path) and add one source line to it"
-                : "add one source line to \(status.plan.initFileURL.path)"
-        } else {
-            initFileAction = "\(status.plan.initFileURL.path) already references that snippet"
-        }
-        confirmationAlert.informativeText = """
-        Toastty detected \(status.plan.shell.displayName). It will \(snippetAction).
-
-        It will \(initFileAction).
-
-        New profiled shells will pick it up automatically. Existing zmx or tmux sessions may need to restart or re-source that init file before live titles update. Pane-local history applies to shells launched after Toastty injects the pane history environment, so older multiplexer sessions usually need a restart.
-        """
+        confirmationAlert.informativeText = ProfileShellIntegrationMessaging.installationPlanSummary(for: status)
         confirmationAlert.alertStyle = .informational
         confirmationAlert.addButton(withTitle: "Install")
         confirmationAlert.addButton(withTitle: "Cancel")
@@ -93,37 +74,43 @@ private enum ToasttyMenuActions {
             let result = try installer.install(plan: status.plan)
             let alert = NSAlert()
             alert.messageText = "Shell Integration Installed"
-
-            let snippetMessage = result.updatedManagedSnippet
-                ? "Wrote \(result.plan.managedSnippetURL.path)."
-                : "\(result.plan.managedSnippetURL.path) was already up to date."
-
-            let initFileMessage: String
-            if result.updatedInitFile {
-                initFileMessage = result.createdInitFile
-                    ? "Created \(result.plan.initFileURL.path)."
-                    : "Updated \(result.plan.initFileURL.path)."
-            } else {
-                initFileMessage = "\(result.plan.initFileURL.path) already referenced the managed snippet."
-            }
-
-            alert.informativeText = """
-            \(snippetMessage)
-            \(initFileMessage)
-
-            New shells will pick it up automatically. Existing profiled sessions may need to restart or re-source that init file before live titles update. Pane-local history applies to shells launched after Toastty injects the pane history environment, so older multiplexer sessions usually need a restart.
-            """
+            alert.informativeText = ProfileShellIntegrationMessaging.installationCompletionSummary(for: result)
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Install Shell Integration"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            presentWarningAlert(
+                title: "Unable to Install Shell Integration",
+                message: error.localizedDescription
+            )
         }
+    }
+
+    private static func openConfigurationFile(
+        ensureTemplate: () throws -> Void,
+        fileURL: URL
+    ) -> Result<Void, AgentGetStartedActionError> {
+        do {
+            try ensureTemplate()
+        } catch {
+            return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+        }
+
+        guard NSWorkspace.shared.open(fileURL) else {
+            return .failure(
+                AgentGetStartedActionError(message: "Toastty couldn't open \(fileURL.path).")
+            )
+        }
+        return .success(())
+    }
+
+    private static func presentWarningAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 
@@ -1127,7 +1114,7 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 agentLaunchService: agentLaunchService,
-                openAgentProfilesConfiguration: openAgentProfilesConfiguration,
+                openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
@@ -1262,10 +1249,10 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openAgentProfilesConfiguration() {
-        do {
-            try AgentProfilesFile.ensureTemplateExists()
-            NSWorkspace.shared.open(AgentProfilesFile.fileURL())
-        } catch {
+        switch openAgentProfilesConfigurationResult() {
+        case .success:
+            return
+        case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Agent Profiles"
             alert.informativeText = error.localizedDescription
@@ -1273,6 +1260,11 @@ struct ToasttyApp: App {
             alert.addButton(withTitle: "OK")
             alert.runModal()
         }
+    }
+
+    @MainActor
+    private func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+        ToasttyMenuActions.openAgentProfilesConfigurationResult()
     }
 
     @MainActor

@@ -85,7 +85,7 @@ For full details see [docs/running-agents.md](docs/running-agents.md).
 
 ### Agent profiles
 
-Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file from `Agent > Manage Agents…`; Toastty creates a commented template automatically if the file does not exist yet.
+Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file from `Agent > Manage Agents…`, or use the top-bar `Get Started…` button when no agent profiles are configured; Toastty creates a commented template automatically if the file does not exist yet. After editing `agents.toml`, use `Toastty > Reload Configuration` to pick up new buttons and shortcuts without relaunching.
 
 Each profile defines the menu label and the exact command Toastty should launch:
 
@@ -220,7 +220,7 @@ their current profile bindings.
 
 #### Shell integration
 
-Use `Toastty > Install Shell Integration…` to set up live pane titles and pane-local command history for `zsh` and `bash` automatically.
+Use `Toastty > Install Shell Integration…` to set up live pane titles and pane-local command history for `zsh` and `bash` automatically. If you have not configured any agent profiles yet, the top-bar `Get Started…` flow also offers shell integration alongside `agents.toml` setup.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:

@@ -62,6 +62,8 @@ public enum AgentProfilesFile {
         # https://github.com/figelwump/toastty/blob/main/docs/running-agents.md
         #
         # Uncomment and edit profiles below to make them available in Toastty UI.
+        # After saving, use Toastty > Reload Configuration to pick up new
+        # buttons and shortcuts without relaunching.
         #
         # Fields:
         #   displayName  — shown in menus and toolbar buttons.
