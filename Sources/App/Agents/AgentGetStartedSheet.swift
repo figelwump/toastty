@@ -139,7 +139,6 @@ struct AgentGetStartedSheet: View {
                     step = .shellIntegration
                     loadShellIntegrationStatus()
                 }
-                .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("sheet.agent.get-started.typed-commands")
             }
 
@@ -192,9 +191,10 @@ struct AgentGetStartedSheet: View {
             case .chooser:
                 Spacer(minLength: 0)
 
-                Button("Not now") {
+                Button("Done") {
                     dismiss()
                 }
+                .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("sheet.agent.get-started.not-now")
 
             case .shellIntegration:
