@@ -373,6 +373,7 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertEqual(activationCount, 0)
         XCTAssertNil(window.firstResponder)
+        XCTAssertFalse(hostView.forwardsPrimaryMouseDrag)
     }
 
     func testRightMouseDownActivatesPanelBeforeFocusingHostView() throws {

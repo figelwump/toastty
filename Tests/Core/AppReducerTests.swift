@@ -2442,12 +2442,63 @@ struct AppReducerTests {
         )
         let reducer = AppReducer()
 
+        #expect(reducer.send(.togglePanelSelection(workspaceID: workspaceID, panelID: topRightPanelID), state: &state))
         #expect(reducer.send(.togglePanelSelection(workspaceID: workspaceID, panelID: bottomRightPanelID), state: &state))
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(updatedWorkspace.focusedPanelModeActive)
         #expect(updatedWorkspace.focusModeRootNodeID == rightBranchNodeID)
+        #expect(updatedWorkspace.selectedPanelIDs.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func explicitSinglePanelSelectionRetargetsFocusModeToSelectedPanel() throws {
+        let leftPanelID = UUID()
+        let rightPanelID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Workspace 1",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+                second: .slot(slotID: rightSlotID, panelID: rightPanelID)
+            ),
+            panels: [
+                leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp/left")),
+                rightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp/right")),
+            ],
+            focusedPanelID: leftPanelID
+        )
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.togglePanelSelection(workspaceID: workspaceID, panelID: rightPanelID), state: &state))
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.focusedPanelModeActive)
+        #expect(updatedWorkspace.focusedPanelID == rightPanelID)
+        #expect(updatedWorkspace.focusModeRootNodeID == rightSlotID)
         #expect(updatedWorkspace.selectedPanelIDs.isEmpty)
 
         try StateValidator.validate(state)
@@ -2489,6 +2540,7 @@ struct AppReducerTests {
         )
         let reducer = AppReducer()
 
+        #expect(reducer.send(.togglePanelSelection(workspaceID: workspaceID, panelID: leftPanelID), state: &state))
         #expect(reducer.send(.togglePanelSelection(workspaceID: workspaceID, panelID: rightPanelID), state: &state))
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state) == false)
 
@@ -2647,6 +2699,7 @@ struct AppReducerTests {
         )
         let reducer = AppReducer()
 
+        #expect(reducer.send(.togglePanelSelection(workspaceID: workspaceID, panelID: leftPanelID), state: &state))
         #expect(reducer.send(.togglePanelSelection(workspaceID: workspaceID, panelID: rightPanelID), state: &state))
         #expect(reducer.send(.closePanel(panelID: rightPanelID), state: &state))
 

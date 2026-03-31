@@ -527,11 +527,16 @@ public struct AppReducer {
 
             if selectedTab.selectedPanelIDs.isEmpty == false {
                 let slotIDs = Set(selectedTab.selectedPanelIDs.compactMap { selectedTab.layoutTree.slotContaining(panelID: $0)?.slotID })
+                let selectionFocusedPanelID = selectedTab.resolvedFocusedPanelID
+                    .flatMap { selectedTab.selectedPanelIDs.contains($0) ? $0 : nil }
+                    ?? selectedTab.layoutTree.allSlotInfos.first(where: { selectedTab.selectedPanelIDs.contains($0.panelID) })?.panelID
                 guard slotIDs.count == selectedTab.selectedPanelIDs.count,
+                      let selectionFocusedPanelID,
                       let focusRootNodeID = selectedTab.layoutTree.lowestCommonAncestor(containing: slotIDs),
                       focusRootNodeID != selectedTab.layoutTree.resolvedNodeID else {
                     return false
                 }
+                selectedTab.focusedPanelID = selectionFocusedPanelID
                 selectedTab.focusedPanelModeActive = true
                 selectedTab.focusModeRootNodeID = focusRootNodeID
                 selectedTab.selectedPanelIDs.removeAll()
@@ -561,13 +566,6 @@ public struct AppReducer {
                 return false
             }
             guard workspace.updateTab(id: tabID, { tab in
-                if tab.selectedPanelIDs.isEmpty,
-                   let focusedPanelID = tab.focusedPanelID,
-                   tab.panels[focusedPanelID] != nil,
-                   focusedPanelID != panelID {
-                    tab.selectedPanelIDs.insert(focusedPanelID)
-                }
-
                 if tab.selectedPanelIDs.contains(panelID) {
                     tab.selectedPanelIDs.remove(panelID)
                 } else {

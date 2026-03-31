@@ -38,6 +38,9 @@ final class TerminalHostView: NSView {
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
     private var leftMousePressWasForwarded = false
+    var forwardsPrimaryMouseDrag: Bool {
+        leftMousePressWasForwarded
+    }
 
     private static let imageFileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
         .urlReadingFileURLsOnly: true,
@@ -783,6 +786,10 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        guard leftMousePressWasForwarded else {
+            super.mouseDragged(with: event)
+            return
+        }
         guard forwardMousePosition(event) else {
             super.mouseDragged(with: event)
             return

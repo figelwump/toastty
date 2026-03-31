@@ -83,6 +83,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isFocusNextUnreadOrActiveShortcut(repeatedEvent))
     }
 
+    func testToggleFocusedPanelShortcutMatchesCommandShiftFOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "F", modifiers: [.command, .shift], keyCode: 0x03)
+        let plainCommandEvent = try makeKeyEvent(characters: "f", modifiers: [.command], keyCode: 0x03)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "F",
+            modifiers: [.command, .shift],
+            keyCode: 0x03,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isToggleFocusedPanelShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isToggleFocusedPanelShortcut(plainCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isToggleFocusedPanelShortcut(repeatedEvent))
+    }
+
     func testRenameTabShortcutMatchesOptionShiftPhysicalEOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "E", modifiers: [.option, .shift], keyCode: 0x0E)
         let wrongKeyEvent = try makeKeyEvent(characters: "I", modifiers: [.option, .shift], keyCode: 0x22)

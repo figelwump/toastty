@@ -222,6 +222,74 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertNil(WorkspaceView.focusedPanelToggleTitle(isActive: false))
     }
 
+    func testFocusModeReferenceFrameMatchesSingleSlotBounds() throws {
+        let leftPanelID = UUID()
+        let rightPanelID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
+        let layoutTree = LayoutNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+            second: .slot(slotID: rightSlotID, panelID: rightPanelID)
+        )
+        let projection = layoutTree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 200, height: 100),
+            dividerThickness: 1
+        )
+
+        let frame = try XCTUnwrap(
+            WorkspaceView.focusModeReferenceFrame(
+            nodeID: rightSlotID,
+            layoutTree: layoutTree,
+            projection: projection
+            )
+        )
+
+        XCTAssertEqual(frame.minX, 100.5, accuracy: 0.001)
+        XCTAssertEqual(frame.minY, 0, accuracy: 0.001)
+        XCTAssertEqual(frame.width, 99.5, accuracy: 0.001)
+        XCTAssertEqual(frame.height, 100, accuracy: 0.001)
+    }
+
+    func testFocusModeReferenceFrameIncludesInternalDividerForSplitSubtree() throws {
+        let leftPanelID = UUID()
+        let topRightPanelID = UUID()
+        let bottomRightPanelID = UUID()
+        let rightBranchNodeID = UUID()
+        let layoutTree = LayoutNode.split(
+            nodeID: UUID(),
+            orientation: .horizontal,
+            ratio: 0.5,
+            first: .slot(slotID: UUID(), panelID: leftPanelID),
+            second: .split(
+                nodeID: rightBranchNodeID,
+                orientation: .vertical,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: topRightPanelID),
+                second: .slot(slotID: UUID(), panelID: bottomRightPanelID)
+            )
+        )
+        let projection = layoutTree.projectLayout(
+            in: LayoutFrame(minX: 0, minY: 0, width: 200, height: 100),
+            dividerThickness: 1
+        )
+
+        let frame = try XCTUnwrap(
+            WorkspaceView.focusModeReferenceFrame(
+            nodeID: rightBranchNodeID,
+            layoutTree: layoutTree,
+            projection: projection
+            )
+        )
+
+        XCTAssertEqual(frame.minX, 100.5, accuracy: 0.001)
+        XCTAssertEqual(frame.minY, 0, accuracy: 0.001)
+        XCTAssertEqual(frame.width, 99.5, accuracy: 0.001)
+        XCTAssertEqual(frame.height, 100, accuracy: 0.001)
+    }
+
     func testWorkspaceHeaderTitleColumnPreferredWidthUsesWidestLine() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
