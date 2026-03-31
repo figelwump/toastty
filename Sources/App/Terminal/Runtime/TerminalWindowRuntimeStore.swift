@@ -108,11 +108,6 @@ final class TerminalWindowRuntimeStore {
         }
     }
 
-    @discardableResult
-    func cancelTrackedGhosttyMouseInteractionForLayoutTransition(workspaceID: UUID) -> Int {
-        existingRuntime(for: workspaceID)?.cancelTrackedGhosttyMouseInteractionForLayoutTransition() ?? 0
-    }
-
     func applyGhosttyFontChange(windowID: UUID, from previousPoints: Double, to nextPoints: Double) {
         guard previousPoints != nextPoints,
               let runtime = windowRuntimesByID[windowID] else {

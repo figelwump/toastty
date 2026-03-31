@@ -326,9 +326,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
 
     @discardableResult
     func toggleFocusedPanelMode(workspaceID: UUID) -> Bool {
-        guard let store else { return false }
-        _ = runtimeStore.cancelTrackedGhosttyMouseInteractionForLayoutTransition(workspaceID: workspaceID)
-        return store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+        store?.send(.toggleFocusedPanelMode(workspaceID: workspaceID)) ?? false
     }
 
     func synchronize(with state: AppState) {

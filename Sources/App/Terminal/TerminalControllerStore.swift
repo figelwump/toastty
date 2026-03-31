@@ -88,15 +88,6 @@ final class TerminalControllerStore {
         return removedPanelIDs
     }
 
-    @discardableResult
-    func cancelTrackedGhosttyMouseInteractionForLayoutTransition() -> Int {
-        var releasedButtonCount = 0
-        forEachController { controller in
-            releasedButtonCount += controller.cancelTrackedGhosttyMouseInteractionForLayoutTransition()
-        }
-        return releasedButtonCount
-    }
-
     #if TOASTTY_HAS_GHOSTTY_KIT
     @discardableResult
     func synchronizeLivePanels(_ livePanelIDs: Set<UUID>) -> Set<UUID> {

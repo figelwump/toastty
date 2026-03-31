@@ -341,41 +341,6 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === hostView)
     }
 
-    func testPrimaryMouseDownActivationSkipsShiftClickSelection() {
-        XCTAssertFalse(
-            TerminalHostView.shouldActivatePanelForPrimaryMouseDown(modifierFlags: [.shift])
-        )
-        XCTAssertTrue(
-            TerminalHostView.shouldActivatePanelForPrimaryMouseDown(modifierFlags: [.command])
-        )
-    }
-
-    func testShiftMouseDownSkipsPanelActivationAndFocus() throws {
-        let hostView = TerminalHostView()
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        var activationCount = 0
-
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        hostView.activatePanelIfNeeded = {
-            activationCount += 1
-            return true
-        }
-
-        hostView.mouseDown(
-            with: try makeMouseEvent(
-                type: .leftMouseDown,
-                window: window,
-                modifierFlags: [.shift]
-            )
-        )
-
-        XCTAssertEqual(activationCount, 0)
-        XCTAssertNil(window.firstResponder)
-        XCTAssertFalse(hostView.forwardsPrimaryMouseDrag)
-    }
-
     func testRightMouseDownActivatesPanelBeforeFocusingHostView() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -641,110 +606,6 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(keyRecorder.events.count, eventCountAfterFirstReset)
     }
 
-    func testCancelTrackedGhosttyMouseInteractionForLayoutTransitionReleasesForwardedPrimaryPress() throws {
-        let hostView = TerminalHostView()
-        let window = TestWindow()
-        let contentView = NSView(frame: window.frame)
-        let mouseRecorder = GhosttyMouseEventRecorder()
-
-        hostView.frame = contentView.bounds
-        hostView.activatePanelIfNeeded = { true }
-        hostView.ghosttySurfaceHooks = .init(
-            setFocus: { _, _ in },
-            setOcclusion: { _, _ in },
-            refresh: { _ in },
-            sendMouseButton: { _, state, button, mods in
-                mouseRecorder.recordButton(
-                    state: state.rawValue,
-                    button: button.rawValue,
-                    mods: mods.rawValue
-                )
-                return true
-            },
-            sendMousePosition: { _, x, y, mods in
-                mouseRecorder.recordPosition(x: x, y: y, mods: mods.rawValue)
-            },
-            sendMousePressure: { _, stage, pressure in
-                mouseRecorder.recordPressure(stage: stage, pressure: pressure)
-            }
-        )
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1239))
-
-        hostView.mouseDown(
-            with: try makeMouseEvent(
-                type: .leftMouseDown,
-                window: window,
-                location: NSPoint(x: 20, y: 20)
-            )
-        )
-        XCTAssertTrue(hostView.forwardsPrimaryMouseDrag)
-
-        let releasedCount = hostView.cancelTrackedGhosttyMouseInteractionForLayoutTransition()
-
-        XCTAssertEqual(releasedCount, 1)
-        XCTAssertFalse(hostView.forwardsPrimaryMouseDrag)
-        let buttonEvents = mouseRecorder.buttonEvents
-        let pressureEvents = mouseRecorder.pressureEvents
-        XCTAssertEqual(
-            buttonEvents.map(\.state),
-            [GHOSTTY_MOUSE_PRESS.rawValue, GHOSTTY_MOUSE_RELEASE.rawValue]
-        )
-        XCTAssertEqual(
-            buttonEvents.map(\.button),
-            [GHOSTTY_MOUSE_LEFT.rawValue, GHOSTTY_MOUSE_LEFT.rawValue]
-        )
-        XCTAssertEqual(buttonEvents.last?.mods, GHOSTTY_MODS_NONE.rawValue)
-        XCTAssertEqual(mouseRecorder.positionEvents.last?.x, -1)
-        XCTAssertEqual(mouseRecorder.positionEvents.last?.y, -1)
-        XCTAssertEqual(pressureEvents.map(\.stage), [0])
-        XCTAssertEqual(pressureEvents.map(\.pressure), [0])
-    }
-
-    func testCancelTrackedGhosttyMouseInteractionForLayoutTransitionSuppressesSyntheticMouseRefreshUntilMouseMoves() throws {
-        let hostView = TerminalHostView()
-        let window = TestWindow()
-        let contentView = NSView(frame: CGRect(x: 0, y: 0, width: 120, height: 80))
-        let mouseRecorder = GhosttyMouseEventRecorder()
-
-        hostView.frame = contentView.bounds
-        hostView.ghosttySurfaceHooks = .init(
-            setFocus: { _, _ in },
-            setOcclusion: { _, _ in },
-            refresh: { _ in },
-            sendMousePosition: { _, x, y, mods in
-                mouseRecorder.recordPosition(x: x, y: y, mods: mods.rawValue)
-            },
-            sendMousePressure: { _, stage, pressure in
-                mouseRecorder.recordPressure(stage: stage, pressure: pressure)
-            }
-        )
-        window.contentView = contentView
-        contentView.addSubview(hostView)
-        hostView.setGhosttySurface(fakeSurfaceHandle(0x1240))
-
-        let resetCount = hostView.cancelTrackedGhosttyMouseInteractionForLayoutTransition()
-
-        XCTAssertEqual(resetCount, 0)
-        XCTAssertEqual(mouseRecorder.positionEvents.count, 1)
-        XCTAssertEqual(mouseRecorder.positionEvents.first?.x, -1)
-        XCTAssertEqual(mouseRecorder.positionEvents.first?.y, -1)
-
-        let pointerEvent = try makeMouseEvent(
-            type: .mouseMoved,
-            window: window,
-            location: NSPoint(x: 24, y: 18)
-        )
-        hostView.mouseEntered(with: pointerEvent)
-        XCTAssertEqual(mouseRecorder.positionEvents.count, 1)
-
-        hostView.mouseMoved(with: pointerEvent)
-        XCTAssertEqual(mouseRecorder.positionEvents.count, 2)
-        XCTAssertEqual(mouseRecorder.positionEvents.last?.x, 24)
-        XCTAssertEqual(mouseRecorder.positionEvents.last?.y, 62)
-    }
-
     func testSetGhosttySurfaceSkipsRepeatedAssignmentForSameSurface() {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -876,55 +737,6 @@ private final class GhosttyKeyEventRecorder: @unchecked Sendable {
             lock.unlock()
         }
         return storage
-    }
-}
-
-private final class GhosttyMouseEventRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buttonStorage: [(state: UInt32, button: UInt32, mods: UInt32)] = []
-    private var positionStorage: [(x: CGFloat, y: CGFloat, mods: UInt32)] = []
-    private var pressureStorage: [(stage: UInt32, pressure: Double)] = []
-
-    func recordButton(state: UInt32, button: UInt32, mods: UInt32) {
-        lock.lock()
-        buttonStorage.append((state, button, mods))
-        lock.unlock()
-    }
-
-    func recordPosition(x: CGFloat, y: CGFloat, mods: UInt32) {
-        lock.lock()
-        positionStorage.append((x, y, mods))
-        lock.unlock()
-    }
-
-    func recordPressure(stage: UInt32, pressure: Double) {
-        lock.lock()
-        pressureStorage.append((stage, pressure))
-        lock.unlock()
-    }
-
-    var buttonEvents: [(state: UInt32, button: UInt32, mods: UInt32)] {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        return buttonStorage
-    }
-
-    var pressureEvents: [(stage: UInt32, pressure: Double)] {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        return pressureStorage
-    }
-
-    var positionEvents: [(x: CGFloat, y: CGFloat, mods: UInt32)] {
-        lock.lock()
-        defer {
-            lock.unlock()
-        }
-        return positionStorage
     }
 }
 

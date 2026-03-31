@@ -50,7 +50,6 @@ struct WorkspaceView: View {
     let openAgentProfilesConfiguration: () -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
     @State private var focusedUnreadClearTask: Task<Void, Never>?
     @State private var appIsActive = NSApplication.shared.isActive
@@ -72,39 +71,6 @@ struct WorkspaceView: View {
     private static let workspaceTabStripSpacing: CGFloat = -1.5
     private static let workspaceTabAccessorySpacing: CGFloat = 10
     private static let workspaceNewTabButtonSize: CGFloat = 20
-    fileprivate nonisolated static let focusModeTransitionResponse = 0.32
-    fileprivate nonisolated static func focusModeTransitionAnimation(reduceMotion: Bool) -> Animation? {
-        guard reduceMotion == false else { return nil }
-        return .spring(
-            response: focusModeTransitionResponse,
-            dampingFraction: 0.86,
-            blendDuration: 0.12
-        )
-    }
-
-    nonisolated static func focusModeReferenceFrame(
-        nodeID: UUID,
-        layoutTree: LayoutNode,
-        projection: LayoutProjection
-    ) -> CGRect? {
-        guard let subtree = layoutTree.findSubtree(nodeID: nodeID) else {
-            return nil
-        }
-
-        let slotIDs = Set(subtree.allSlotInfos.map(\.slotID))
-        let subtreeNodeIDs = Set(subtree.allNodeIDs)
-        var resolvedFrame: CGRect?
-
-        for slot in projection.slots where slotIDs.contains(slot.slotID) {
-            resolvedFrame = resolvedFrame?.union(CGRect(layoutFrame: slot.frame)) ?? CGRect(layoutFrame: slot.frame)
-        }
-
-        for divider in projection.dividers where subtreeNodeIDs.contains(divider.nodeID) {
-            resolvedFrame = resolvedFrame?.union(CGRect(layoutFrame: divider.frame)) ?? CGRect(layoutFrame: divider.frame)
-        }
-
-        return resolvedFrame
-    }
 
     nonisolated static func resolvedWorkspaceTitleWidth(
         preferredWidth: CGFloat,
@@ -679,8 +645,7 @@ struct WorkspaceView: View {
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
                         panelSessionStatusesByPanelID: panelSessionStatusesByPanelID,
-                        panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0,
-                        isSelectedForFocusMode: tab.selectedPanelIDs.contains(placement.panelID)
+                        panelFlashOverlayOpacity: flashingPanelID == placement.panelID ? flashingPanelOverlayOpacity : 0
                     )
                 }
 
@@ -698,13 +663,6 @@ struct WorkspaceView: View {
                         .allowsHitTesting(false)
                 }
             }
-            .animation(
-                Self.focusModeTransitionAnimation(reduceMotion: reduceMotion),
-                value: FocusModeLayoutAnimationKey(
-                    isActive: tab.focusedPanelModeActive,
-                    zoomedNodeID: renderedLayout.identity.zoomedNodeID
-                )
-            )
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .clipped()
             .overlay {
@@ -1383,11 +1341,6 @@ private struct PendingWorkspaceTabClose: Identifiable {
     var id: UUID { tabID }
 }
 
-private struct FocusModeLayoutAnimationKey: Equatable {
-    let isActive: Bool
-    let zoomedNodeID: UUID?
-}
-
 private struct FocusModeViewportChrome: View {
     var body: some View {
         Rectangle()
@@ -1397,17 +1350,6 @@ private struct FocusModeViewportChrome: View {
                     .fill(ToastyTheme.focusModeAccent.opacity(0.05))
             }
             .padding(1)
-    }
-}
-
-private extension CGRect {
-    init(layoutFrame: LayoutFrame) {
-        self.init(
-            x: layoutFrame.minX,
-            y: layoutFrame.minY,
-            width: layoutFrame.width,
-            height: layoutFrame.height
-        )
     }
 }
 
@@ -1672,7 +1614,6 @@ private struct SlotPlacementView: View {
     let terminalShortcutNumbersByPanelID: [UUID: Int]
     let panelSessionStatusesByPanelID: [UUID: WorkspaceSessionStatus]
     let panelFlashOverlayOpacity: Double
-    let isSelectedForFocusMode: Bool
 
     var body: some View {
         Group {
@@ -1692,7 +1633,6 @@ private struct SlotPlacementView: View {
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     panelFlashOverlayOpacity: panelFlashOverlayOpacity,
-                    isSelectedForFocusMode: isSelectedForFocusMode,
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1732,7 +1672,6 @@ private struct PanelCardView: View {
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let panelFlashOverlayOpacity: Double
-    let isSelectedForFocusMode: Bool
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
@@ -1857,28 +1796,9 @@ private struct PanelCardView: View {
                 .fill(ToastyTheme.hairline)
                 .frame(height: 1)
         }
-        .overlay {
-            if isSelectedForFocusMode {
-                Rectangle()
-                    .strokeBorder(ToastyTheme.focusModeAccent, lineWidth: 1.5)
-                    .padding(1)
-                    .allowsHitTesting(false)
-            }
-        }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {
-            handlePanelClick(
-                modifierFlags: NSApp.currentEvent?.modifierFlags ?? []
-            )
-        }
-    }
-
-    private func handlePanelClick(modifierFlags: NSEvent.ModifierFlags) {
-        let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if relevantModifiers.contains(.shift) {
-            store.send(.togglePanelSelection(workspaceID: workspaceID, panelID: panelID))
-        } else {
             store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
         }
     }

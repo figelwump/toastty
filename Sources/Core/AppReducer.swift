@@ -524,67 +524,18 @@ public struct AppReducer {
             let splitTree = WorkspaceSplitTree(root: selectedTab.layoutTree)
             let resolvedFocusedPanelID = selectedTab.resolvedFocusedPanelID
             selectedTab.focusedPanelID = resolvedFocusedPanelID
-
-            if selectedTab.selectedPanelIDs.isEmpty == false {
-                let slotIDs = Set(selectedTab.selectedPanelIDs.compactMap { selectedTab.layoutTree.slotContaining(panelID: $0)?.slotID })
-                let selectionFocusedPanelID = selectedTab.resolvedFocusedPanelID
-                    .flatMap { selectedTab.selectedPanelIDs.contains($0) ? $0 : nil }
-                    ?? selectedTab.layoutTree.allSlotInfos.first(where: { selectedTab.selectedPanelIDs.contains($0.panelID) })?.panelID
-                guard slotIDs.count == selectedTab.selectedPanelIDs.count,
-                      let selectionFocusedPanelID,
-                      let focusRootNodeID = selectedTab.layoutTree.lowestCommonAncestor(containing: slotIDs),
-                      focusRootNodeID != selectedTab.layoutTree.resolvedNodeID else {
-                    return false
-                }
-                selectedTab.focusedPanelID = selectionFocusedPanelID
-                selectedTab.focusedPanelModeActive = true
-                selectedTab.focusModeRootNodeID = focusRootNodeID
-                selectedTab.selectedPanelIDs.removeAll()
-            } else {
-                guard let focusedPanelID = resolvedFocusedPanelID,
-                      let focusedSlot = selectedTab.layoutTree.slotContaining(panelID: focusedPanelID) else {
-                    return false
-                }
-                selectedTab.focusedPanelModeActive = true
-                selectedTab.focusModeRootNodeID = splitTree.effectiveFocusModeRootNodeID(
-                    preferredRootNodeID: focusedSlot.slotID,
-                    focusedPanelID: focusedPanelID
-                )
+            selectedTab.selectedPanelIDs.removeAll()
+            guard let focusedPanelID = resolvedFocusedPanelID,
+                  let focusedSlot = selectedTab.layoutTree.slotContaining(panelID: focusedPanelID) else {
+                return false
             }
+            selectedTab.focusedPanelModeActive = true
+            selectedTab.focusModeRootNodeID = splitTree.effectiveFocusModeRootNodeID(
+                preferredRootNodeID: focusedSlot.slotID,
+                focusedPanelID: focusedPanelID
+            )
 
             workspace.tabsByID[selectedTabID] = selectedTab
-            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-            return true
-
-        case .togglePanelSelection(let workspaceID, let panelID):
-            guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let tabID = workspace.tabID(containingPanelID: panelID),
-                  workspace.resolvedSelectedTabID == tabID else {
-                return false
-            }
-            guard workspace.tab(id: tabID)?.focusedPanelModeActive == false else {
-                return false
-            }
-            guard workspace.updateTab(id: tabID, { tab in
-                if tab.selectedPanelIDs.contains(panelID) {
-                    tab.selectedPanelIDs.remove(panelID)
-                } else {
-                    tab.selectedPanelIDs.insert(panelID)
-                }
-            }) else {
-                return false
-            }
-            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-            return true
-
-        case .clearPanelSelection(let workspaceID):
-            guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let selectedTabID = workspace.resolvedSelectedTabID else { return false }
-            guard workspace.updateTab(id: selectedTabID, { tab in
-                tab.selectedPanelIDs.removeAll()
-            }) else {
-                return false
-            }
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
