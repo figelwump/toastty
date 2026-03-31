@@ -202,6 +202,77 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
     }
 
+    func testFocusPanelForImageDropActivatesAppAndRoutesToTargetWindow() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let leftPanelID = UUID()
+        let rightPanelID = UUID()
+        let secondWorkspace = WorkspaceState(
+            id: UUID(),
+            title: "Two",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: UUID(), panelID: leftPanelID),
+                second: .slot(slotID: UUID(), panelID: rightPanelID)
+            ),
+            panels: [
+                leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/repo/left")),
+                rightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/repo/right")),
+            ],
+            focusedPanelID: leftPanelID
+        )
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        var activatedWindowIDs: [UUID] = []
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: firstWindowID,
+                        frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                        workspaceIDs: [firstWorkspace.id],
+                        selectedWorkspaceID: firstWorkspace.id
+                    ),
+                    WindowState(
+                        id: secondWindowID,
+                        frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                        workspaceIDs: [secondWorkspace.id],
+                        selectedWorkspaceID: secondWorkspace.id
+                    ),
+                ],
+                workspacesByID: [
+                    firstWorkspace.id: firstWorkspace,
+                    secondWorkspace.id: secondWorkspace,
+                ],
+                selectedWindowID: firstWindowID
+            ),
+            persistTerminalFontPreference: false,
+            windowActivationHandler: { activatedWindowIDs.append($0) }
+        )
+        let focusCoordinator = TerminalFocusCoordinator(
+            maxAttempts: 1,
+            retryDelayNanoseconds: 1,
+            isApplicationActive: { false },
+            shouldAvoidStealingKeyboardFocus: { false }
+        )
+        var appActivationCount = 0
+        let registry = TerminalRuntimeRegistry(
+            focusCoordinator: focusCoordinator,
+            activateApp: { appActivationCount += 1 }
+        )
+        registry.bind(store: store)
+
+        XCTAssertTrue(registry.focusPanelForImageDropIfPossible(rightPanelID))
+
+        XCTAssertEqual(store.state.selectedWindowID, secondWindowID)
+        XCTAssertEqual(activatedWindowIDs, [secondWindowID])
+        XCTAssertEqual(appActivationCount, 1)
+        let updatedWorkspace = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
+        XCTAssertEqual(updatedWorkspace.focusedPanelID, rightPanelID)
+        XCTAssertNil(store.pendingPanelFlashRequest)
+    }
+
     func testReleaseInactiveSearchFieldFocusClearsBackgroundSearchFieldFocus() {
         let registry = TerminalRuntimeRegistry()
         let searchPanelID = UUID()

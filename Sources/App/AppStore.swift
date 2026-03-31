@@ -436,6 +436,21 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
+    func focusDroppedImagePanel(
+        windowID: UUID,
+        workspaceID: UUID,
+        panelID: UUID
+    ) -> Bool {
+        focusPanel(
+            windowID: windowID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            flashPanelOnSuccess: false,
+            alwaysActivateWindow: true
+        )
+    }
+
+    @discardableResult
     func confirmWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
         let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
         if pendingCloseWorkspaceRequest == request {
@@ -767,7 +782,8 @@ final class AppStore: ObservableObject {
         windowID: UUID,
         workspaceID: UUID,
         panelID: UUID,
-        flashPanelOnSuccess: Bool
+        flashPanelOnSuccess: Bool,
+        alwaysActivateWindow: Bool = false
     ) -> Bool {
         let previousSelectedWindowID = state.selectedWindowID
         let requiresWorkspaceSelection = state.selectedWorkspaceID(in: windowID) != workspaceID
@@ -783,7 +799,7 @@ final class AppStore: ObservableObject {
         }
 
         if let selectedWindowID = state.selectedWindowID,
-           selectedWindowID != previousSelectedWindowID {
+           alwaysActivateWindow || selectedWindowID != previousSelectedWindowID {
             windowActivationHandler(selectedWindowID)
         }
 
