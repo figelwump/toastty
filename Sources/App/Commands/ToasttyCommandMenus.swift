@@ -266,7 +266,7 @@ struct ToasttyCommandMenus: Commands {
             }
             Divider()
 
-            Button("Get Started with Agents…") {
+            Button("Get Started with Toastty…") {
                 showAgentGetStartedFlow()
             }
             .disabled(agentGetStartedTargetWindowID == nil)

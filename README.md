@@ -222,7 +222,7 @@ their current profile bindings.
 
 #### Shell integration
 
-Use `Toastty > Install Shell Integration…` to set up live pane titles and pane-local command history for `zsh` and `bash` automatically. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Agents…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
+Use `Toastty > Install Shell Integration…` to set up live pane titles and pane-local command history for `zsh` and `bash` automatically. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Toastty…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:

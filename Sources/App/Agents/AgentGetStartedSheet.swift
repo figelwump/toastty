@@ -316,7 +316,7 @@ struct AgentGetStartedSheet: View {
     private var headerTitle: String {
         switch step {
         case .chooser:
-            return "Get Started with Agents"
+            return "Get started with Toastty"
         case .shellIntegration:
             return "Set Up Typed Commands"
         case .keyboardShortcuts:
