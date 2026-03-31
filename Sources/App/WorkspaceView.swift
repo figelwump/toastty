@@ -1761,9 +1761,13 @@ private struct PanelCardView: View {
                 shortcutBadge(shortcutLabel)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: PanelHeaderSearchLayout.headerHeight,
+            maxHeight: PanelHeaderSearchLayout.headerHeight,
+            alignment: .leading
+        )
         .padding(.horizontal, PanelHeaderSearchLayout.horizontalPadding)
-        .padding(.vertical, 5)
         .background(panelHeaderBackgroundColor)
         .overlay(alignment: .bottom) {
             Rectangle()

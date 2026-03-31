@@ -20,21 +20,23 @@ struct TerminalPanelHeaderSearchBar: View {
     var body: some View {
         Group {
             if let searchState, searchState.isPresented {
-                HStack(spacing: 6) {
+                HStack(spacing: PanelHeaderSearchLayout.searchControlsSpacing) {
                     TextField("Search", text: searchBinding)
                         .textFieldStyle(.plain)
                         .font(ToastyTheme.fontBody)
                         .foregroundStyle(ToastyTheme.primaryText)
                         .padding(.leading, 8)
-                        .padding(.trailing, layout.showsMatchLabel ? 40 : 8)
-                        .padding(.vertical, 4)
-                        .frame(width: layout.fieldWidth)
+                        .padding(.trailing, layout.showsMatchLabel ? 36 : 8)
+                        .frame(
+                            width: layout.fieldWidth,
+                            height: PanelHeaderSearchLayout.searchFieldHeight
+                        )
                         .background(
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(ToastyTheme.surfaceBackground.opacity(0.96))
                         )
                         .overlay {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
                         }
                         .focused($isFieldFocused)
@@ -53,12 +55,12 @@ struct TerminalPanelHeaderSearchBar: View {
                                     .font(ToastyTheme.fontWorkspaceTabBadge)
                                     .foregroundStyle(ToastyTheme.inactiveText)
                                     .monospacedDigit()
-                                    .padding(.trailing, 8)
+                                    .padding(.trailing, 7)
                             }
                         }
                         .accessibilityIdentifier("panel.header.search.field.\(panelID.uuidString)")
 
-                    HStack(spacing: 3) {
+                    HStack(spacing: PanelHeaderSearchLayout.searchButtonSpacing) {
                         searchButton(
                             systemImage: "chevron.up",
                             accessibilityIdentifier: "panel.header.search.previous.\(panelID.uuidString)",
@@ -142,9 +144,12 @@ struct TerminalPanelHeaderSearchBar: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(ToastyTheme.primaryText)
-                .frame(width: 18, height: 18)
+                .frame(
+                    width: PanelHeaderSearchLayout.searchButtonSize,
+                    height: PanelHeaderSearchLayout.searchButtonSize
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

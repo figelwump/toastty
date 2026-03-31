@@ -31,7 +31,7 @@ final class PanelHeaderSearchLayoutTests: XCTestCase {
 
     func testTightModeHidesMatchLabelAndPreservesMinimumFieldWidth() {
         let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: 300,
+            availableWidth: 292,
             hasProfileBadge: true,
             showsIndicator: true
         )
