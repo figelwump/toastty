@@ -64,6 +64,11 @@ final class TerminalWorkspaceRuntime {
         #endif
     }
 
+    @discardableResult
+    func cancelTrackedGhosttyMouseInteractionForLayoutTransition() -> Int {
+        controllerStore.cancelTrackedGhosttyMouseInteractionForLayoutTransition()
+    }
+
     func applyGhosttyGlobalFontChange(from previousPoints: Double, to nextPoints: Double) {
         #if TOASTTY_HAS_GHOSTTY_KIT
         controllerStore.applyGhosttyGlobalFontChange(from: previousPoints, to: nextPoints)

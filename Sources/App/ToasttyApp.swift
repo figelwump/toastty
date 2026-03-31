@@ -349,6 +349,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
+    private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
@@ -369,10 +370,12 @@ final class DisplayShortcutInterceptor {
 
     init(
         store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController
     ) {
         self.store = store
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -637,7 +640,7 @@ final class DisplayShortcutInterceptor {
             return false
         }
 
-        _ = store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+        _ = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: workspaceID)
         // Cmd+Shift+F is app-owned for normal workspace windows. If the
         // selection does not produce a valid focus root, still swallow the
         // shortcut so the terminal does not interpret it as raw input.
@@ -942,6 +945,7 @@ struct ToasttyApp: App {
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController
         )

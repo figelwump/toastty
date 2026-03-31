@@ -324,6 +324,13 @@ final class TerminalRuntimeRegistry: ObservableObject {
         runtimeStore.resetTrackedGhosttyModifiersForApplicationDeactivation()
     }
 
+    @discardableResult
+    func toggleFocusedPanelMode(workspaceID: UUID) -> Bool {
+        guard let store else { return false }
+        _ = runtimeStore.cancelTrackedGhosttyMouseInteractionForLayoutTransition(workspaceID: workspaceID)
+        return store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+    }
+
     func synchronize(with state: AppState) {
         let removedPanelIDs = runtimeStore.synchronize(with: state)
         let livePanelIDs = liveTerminalPanelIDs(in: state)

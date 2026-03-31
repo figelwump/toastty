@@ -1409,6 +1409,11 @@ extension TerminalSurfaceController {
         terminalHostView.resetTrackedGhosttyModifiersForApplicationDeactivation()
     }
 
+    @discardableResult
+    func cancelTrackedGhosttyMouseInteractionForLayoutTransition() -> Int {
+        terminalHostView.cancelTrackedGhosttyMouseInteractionForLayoutTransition()
+    }
+
     private func recordLatestViewportUpdate(
         terminalState: TerminalPanelState,
         focused: Bool,

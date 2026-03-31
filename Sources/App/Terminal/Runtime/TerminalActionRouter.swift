@@ -88,7 +88,7 @@ final class TerminalActionRouter {
             handled = store.send(.equalizeLayoutSplits(workspaceID: resolution.workspaceID))
 
         case .toggleFocusedPanelMode:
-            handled = store.send(.toggleFocusedPanelMode(workspaceID: resolution.workspaceID))
+            handled = registry.toggleFocusedPanelMode(workspaceID: resolution.workspaceID)
 
         case .startSearch, .endSearch, .searchTotal, .searchSelected:
             handled = false

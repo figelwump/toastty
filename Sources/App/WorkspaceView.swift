@@ -742,7 +742,7 @@ struct WorkspaceView: View {
         let isOn = isFocusedPanelModeActive
         styledTopBarButton(active: isOn) {
             guard let workspaceID = selectedWorkspace?.id else { return }
-            store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+            _ = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: workspaceID)
         } label: {
             HStack(spacing: 5) {
                 FocusIconView(color: isOn ? ToastyTheme.focusModeAccent : ToastyTheme.inactiveText)
