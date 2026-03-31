@@ -72,6 +72,21 @@ final class AgentGetStartedSheetTests: XCTestCase {
         XCTAssertFalse(dismissDisabled)
     }
 
+    func testDismissIsAllowedFromKeyboardShortcutsEvenWhenShellStateIsInstalling() {
+        let status = makeStatus(
+            needsManagedSnippetWrite: true,
+            needsInitFileUpdate: true,
+            createsInitFile: false
+        )
+
+        let dismissDisabled = AgentGetStartedSheetBehavior.dismissDisabled(
+            step: .keyboardShortcuts,
+            shellIntegrationState: .installing(status)
+        )
+
+        XCTAssertFalse(dismissDisabled)
+    }
+
     func testDismissIsBlockedWhileShellIntegrationInstalls() {
         let status = makeStatus(
             needsManagedSnippetWrite: true,
@@ -103,13 +118,13 @@ final class AgentGetStartedSheetTests: XCTestCase {
     }
 
     func testOpenAgentProfilesSuccessProducesNoInlineError() {
-        let errorMessage = AgentGetStartedSheetBehavior.openAgentProfilesErrorMessage(for: .success(()))
+        let errorMessage = AgentGetStartedSheetBehavior.actionErrorMessage(for: .success(()))
 
         XCTAssertNil(errorMessage)
     }
 
     func testOpenAgentProfilesFailureUsesLocalizedDescription() {
-        let errorMessage = AgentGetStartedSheetBehavior.openAgentProfilesErrorMessage(
+        let errorMessage = AgentGetStartedSheetBehavior.actionErrorMessage(
             for: .failure(AgentGetStartedActionError(message: "Unable to open ~/.toastty/agents.toml"))
         )
 

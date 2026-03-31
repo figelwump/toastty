@@ -12,6 +12,7 @@ struct AppWindowSceneView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let onWindowCloseInitiated: @MainActor () -> Void
     let disableAnimations: Bool
 
@@ -61,6 +62,7 @@ struct AppWindowSceneView: View {
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
                     openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
+                    openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {

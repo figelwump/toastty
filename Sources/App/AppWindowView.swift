@@ -11,6 +11,7 @@ struct AppWindowView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
     @State private var showsAgentGetStartedSheet = false
@@ -46,9 +47,7 @@ struct AppWindowView: View {
                     sessionRuntimeStore: sessionRuntimeStore,
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
-                    showAgentGetStartedFlow: {
-                        showsAgentGetStartedSheet = true
-                    },
+                    showAgentGetStartedFlow: presentAgentGetStartedFlow,
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible
                 )
@@ -76,7 +75,8 @@ struct AppWindowView: View {
         }
         .sheet(isPresented: $showsAgentGetStartedSheet) {
             AgentGetStartedSheet(
-                openAgentProfilesConfiguration: openAgentProfilesConfigurationResult
+                openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
+                openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult
             )
         }
         .onAppear {
@@ -101,6 +101,13 @@ struct AppWindowView: View {
                 workspaceID: request.workspaceID
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
+            guard Self.shouldPresentAgentGetStartedFlow(
+                windowID: windowID,
+                notificationObject: notification.object
+            ) else { return }
+            presentAgentGetStartedFlow()
+        }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
     }
 
@@ -108,6 +115,13 @@ struct AppWindowView: View {
         hasEverLaunchedAgent: Bool
     ) -> CGFloat {
         hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
+    }
+
+    static func shouldPresentAgentGetStartedFlow(windowID: UUID, notificationObject: Any?) -> Bool {
+        guard let targetWindowID = notificationObject as? UUID else {
+            return false
+        }
+        return targetWindowID == windowID
     }
 
     private var sidebarToggleButton: some View {
@@ -148,6 +162,11 @@ struct AppWindowView: View {
         Self.effectiveSidebarWidth(
             hasEverLaunchedAgent: store.hasEverLaunchedAgent
         )
+    }
+
+    @MainActor
+    private func presentAgentGetStartedFlow() {
+        showsAgentGetStartedSheet = true
     }
 
     private func scheduleWindowFocusRestore(avoidStealingKeyboardFocus: Bool = true) {

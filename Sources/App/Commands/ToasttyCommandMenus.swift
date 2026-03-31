@@ -134,6 +134,13 @@ struct ToasttyCommandMenus: Commands {
         )
     }
 
+    private var agentGetStartedTargetWindowID: UUID? {
+        Self.agentGetStartedTargetWindowID(
+            store: store,
+            preferredWindowID: preferredCommandWindowID
+        )
+    }
+
     private var commandSelection: WindowCommandSelection? {
         store.commandSelection(preferredWindowID: preferredCommandWindowID)
     }
@@ -257,6 +264,12 @@ struct ToasttyCommandMenus: Commands {
             Button("Install Shell Integration…") {
                 terminalProfilesMenuController.installShellIntegration()
             }
+            Divider()
+
+            Button("Get Started with Agents…") {
+                showAgentGetStartedFlow()
+            }
+            .disabled(agentGetStartedTargetWindowID == nil)
         }
 
         CommandGroup(after: .pasteboard) {
@@ -515,6 +528,11 @@ struct ToasttyCommandMenus: Commands {
         )
     }
 
+    private func showAgentGetStartedFlow() {
+        guard let windowID = agentGetStartedTargetWindowID else { return }
+        NotificationCenter.default.post(name: .toasttyShowAgentGetStartedFlow, object: windowID)
+    }
+
     @ViewBuilder
     private func workspaceSelectionMenuButton(
         title: String,
@@ -664,6 +682,13 @@ struct ToasttyCommandMenus: Commands {
 
     nonisolated static func resolvedCommandWindowID(focusedWindowID: UUID?, keyWindowID: UUID?) -> UUID? {
         keyWindowID ?? focusedWindowID
+    }
+
+    static func agentGetStartedTargetWindowID(store: AppStore, preferredWindowID: UUID?) -> UUID? {
+        // Follow the same command-window resolution contract as other
+        // window-targeted actions so stale focused-scene state disables the
+        // command instead of rerouting it to another window.
+        store.commandWindowID(preferredWindowID: preferredWindowID)
     }
 }
 

@@ -62,6 +62,7 @@ struct AppWindowSceneHostView: View {
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let sceneCoordinator: AppWindowSceneCoordinator
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
@@ -98,6 +99,7 @@ struct AppWindowSceneHostView: View {
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
                     openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
+                    openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
                     onWindowCloseInitiated: handleWindowCloseInitiated,
                     disableAnimations: disableAnimations
                 )

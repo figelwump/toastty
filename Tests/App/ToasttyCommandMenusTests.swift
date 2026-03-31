@@ -237,6 +237,64 @@ final class ToasttyCommandMenusTests: XCTestCase {
         XCTAssertEqual(updatedSecondWindow.selectedWorkspaceID, updatedSecondWindow.workspaceIDs.last)
     }
 
+    @MainActor
+    func testAgentGetStartedTargetWindowIDDisablesForStalePreferredWindow() {
+        let selectedWindowID = UUID()
+        let fallbackWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: selectedWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [],
+                    selectedWorkspaceID: nil
+                ),
+                WindowState(
+                    id: fallbackWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [],
+                    selectedWorkspaceID: nil
+                ),
+            ],
+            workspacesByID: [:],
+            selectedWindowID: selectedWindowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertNil(
+            ToasttyCommandMenus.agentGetStartedTargetWindowID(
+                store: store,
+                preferredWindowID: UUID()
+            )
+        )
+    }
+
+    @MainActor
+    func testAgentGetStartedTargetWindowIDFallsBackToSelectedWindowWithoutPreferredWindow() {
+        let selectedWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: selectedWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [],
+                    selectedWorkspaceID: nil
+                ),
+            ],
+            workspacesByID: [:],
+            selectedWindowID: selectedWindowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertEqual(
+            ToasttyCommandMenus.agentGetStartedTargetWindowID(
+                store: store,
+                preferredWindowID: nil
+            ),
+            selectedWindowID
+        )
+    }
+
     func testResolvedCommandWindowIDFallsBackToFocusedSceneWindowWithoutAppKitKeyWindow() {
         let focusedWindowID = UUID()
 

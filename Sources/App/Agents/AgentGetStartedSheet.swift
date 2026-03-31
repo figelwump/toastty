@@ -46,6 +46,7 @@ enum AgentGetStartedShellIntegrationStepResolver {
 enum AgentGetStartedStep: Equatable {
     case chooser
     case shellIntegration
+    case keyboardShortcuts
 }
 
 enum AgentGetStartedSheetBehavior {
@@ -56,7 +57,7 @@ enum AgentGetStartedSheetBehavior {
         step == .shellIntegration && shellIntegrationState.blocksNavigation
     }
 
-    static func openAgentProfilesErrorMessage(
+    static func actionErrorMessage(
         for result: Result<Void, AgentGetStartedActionError>
     ) -> String? {
         switch result {
@@ -70,11 +71,13 @@ enum AgentGetStartedSheetBehavior {
 
 struct AgentGetStartedSheet: View {
     let openAgentProfilesConfiguration: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openKeyboardShortcutsReference: @MainActor () -> Result<Void, AgentGetStartedActionError>
 
     @Environment(\.dismiss) private var dismiss
     @State private var step: AgentGetStartedStep = .chooser
     @State private var shellIntegrationState: AgentGetStartedShellIntegrationStepState = .loading
     @State private var openAgentProfilesErrorMessage: String?
+    @State private var openKeyboardShortcutsReferenceErrorMessage: String?
     @State private var shellIntegrationTask: Task<Void, Never>?
 
     var body: some View {
@@ -123,6 +126,8 @@ struct AgentGetStartedSheet: View {
             chooserContent
         case .shellIntegration:
             shellIntegrationContent
+        case .keyboardShortcuts:
+            keyboardShortcutsContent
         }
     }
 
@@ -135,14 +140,13 @@ struct AgentGetStartedSheet: View {
                 """
             ) {
                 Button("Set Up Typed Commands") {
-                    openAgentProfilesErrorMessage = nil
-                    step = .shellIntegration
-                    loadShellIntegrationStatus()
+                    showShellIntegrationStep()
                 }
                 .accessibilityIdentifier("sheet.agent.get-started.typed-commands")
             }
 
             quickLaunchButtonsCard
+            keyboardShortcutsCard()
         }
         .padding(24)
     }
@@ -158,6 +162,66 @@ struct AgentGetStartedSheet: View {
             }
 
             quickLaunchButtonsCard
+            keyboardShortcutsCard(isDisabled: shellIntegrationState.blocksNavigation)
+        }
+        .padding(24)
+    }
+
+    private var keyboardShortcutsContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionCard(
+                title: "Keyboard Shortcuts",
+                body: "Start with the core workspace, split, focus, and close shortcuts, then open the full reference when you want the complete list."
+            ) {
+                VStack(alignment: .leading, spacing: 12) {
+                    shortcutReferenceRow(
+                        title: "Show or hide the sidebar",
+                        shortcut: ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel
+                    )
+                    shortcutReferenceRow(
+                        title: "Create a new workspace",
+                        shortcut: ToasttyKeyboardShortcuts.newWorkspace.symbolLabel
+                    )
+                    shortcutReferenceRow(
+                        title: "Split horizontally",
+                        shortcut: ToasttyKeyboardShortcuts.splitHorizontal.symbolLabel
+                    )
+                    shortcutReferenceRow(
+                        title: "Split vertically",
+                        shortcut: ToasttyKeyboardShortcuts.splitVertical.symbolLabel
+                    )
+                    shortcutReferenceRow(
+                        title: "Focus the previous or next pane",
+                        shortcut: "\(ToasttyKeyboardShortcuts.focusPreviousPane.symbolLabel) / \(ToasttyKeyboardShortcuts.focusNextPane.symbolLabel)"
+                    )
+                    shortcutReferenceRow(
+                        title: "Jump to the next active or unread panel",
+                        shortcut: ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.symbolLabel
+                    )
+                    shortcutReferenceRow(
+                        title: "Close the focused panel",
+                        shortcut: ToasttyKeyboardShortcuts.closePanel.symbolLabel
+                    )
+                    shortcutReferenceRow(
+                        title: "Toggle focused panel mode",
+                        shortcut: ToasttyKeyboardShortcuts.toggleFocusedPanel.symbolLabel
+                    )
+                }
+
+                if let openKeyboardShortcutsReferenceErrorMessage {
+                    inlineMessage(
+                        openKeyboardShortcutsReferenceErrorMessage,
+                        textColor: ToastyTheme.sessionErrorText,
+                        backgroundColor: ToastyTheme.sessionErrorBackground,
+                        identifier: "sheet.agent.get-started.error.shortcuts-reference"
+                    )
+                }
+
+                Button("Open Full Shortcut Reference") {
+                    openShortcutReference()
+                }
+                .accessibilityIdentifier("sheet.agent.get-started.open-shortcuts-reference")
+            }
         }
         .padding(24)
     }
@@ -185,6 +249,19 @@ struct AgentGetStartedSheet: View {
         }
     }
 
+    private func keyboardShortcutsCard(isDisabled: Bool = false) -> some View {
+        sectionCard(
+            title: "Keyboard Shortcuts",
+            body: "Review the primary workspace, split, focus, and close shortcuts so you can drive Toastty faster from the keyboard."
+        ) {
+            Button("View Keyboard Shortcuts") {
+                showKeyboardShortcutsStep()
+            }
+            .disabled(isDisabled)
+            .accessibilityIdentifier("sheet.agent.get-started.keyboard-shortcuts")
+        }
+    }
+
     private var buttonBar: some View {
         HStack(spacing: 10) {
             switch step {
@@ -195,13 +272,14 @@ struct AgentGetStartedSheet: View {
                     dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
-                .accessibilityIdentifier("sheet.agent.get-started.not-now")
+                .accessibilityIdentifier("sheet.agent.get-started.done")
 
             case .shellIntegration:
                 Button("Back") {
                     shellIntegrationTask?.cancel()
                     shellIntegrationTask = nil
                     openAgentProfilesErrorMessage = nil
+                    openKeyboardShortcutsReferenceErrorMessage = nil
                     step = .chooser
                 }
                 .disabled(shellIntegrationState.blocksNavigation)
@@ -213,6 +291,21 @@ struct AgentGetStartedSheet: View {
                     dismiss()
                 }
                 .disabled(shellIntegrationState.blocksNavigation)
+                .accessibilityIdentifier("sheet.agent.get-started.done")
+
+            case .keyboardShortcuts:
+                Button("Back") {
+                    openKeyboardShortcutsReferenceErrorMessage = nil
+                    step = .chooser
+                }
+                .accessibilityIdentifier("sheet.agent.get-started.back")
+
+                Spacer(minLength: 0)
+
+                Button("Done") {
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("sheet.agent.get-started.done")
             }
         }
@@ -226,6 +319,8 @@ struct AgentGetStartedSheet: View {
             return "Get Started with Agents"
         case .shellIntegration:
             return "Set Up Typed Commands"
+        case .keyboardShortcuts:
+            return "Keyboard Shortcuts"
         }
     }
 
@@ -389,6 +484,20 @@ struct AgentGetStartedSheet: View {
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
+    private func shortcutReferenceRow(title: String, shortcut: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(shortcut)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(ToastyTheme.primaryText)
+                .frame(width: 112, alignment: .leading)
+
+            Text(title)
+                .font(.system(size: 12, weight: .regular))
+                .foregroundStyle(ToastyTheme.inactiveText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func inlineMessage(
         _ message: String,
         textColor: Color,
@@ -417,9 +526,29 @@ struct AgentGetStartedSheet: View {
         }
     }
 
+    private func showShellIntegrationStep() {
+        openAgentProfilesErrorMessage = nil
+        openKeyboardShortcutsReferenceErrorMessage = nil
+        step = .shellIntegration
+        loadShellIntegrationStatus()
+    }
+
+    private func showKeyboardShortcutsStep() {
+        openAgentProfilesErrorMessage = nil
+        openKeyboardShortcutsReferenceErrorMessage = nil
+        step = .keyboardShortcuts
+    }
+
     private func openAgentProfiles() {
         let result = openAgentProfilesConfiguration()
-        openAgentProfilesErrorMessage = AgentGetStartedSheetBehavior.openAgentProfilesErrorMessage(for: result)
+        openAgentProfilesErrorMessage = AgentGetStartedSheetBehavior.actionErrorMessage(for: result)
+    }
+
+    private func openShortcutReference() {
+        let result = openKeyboardShortcutsReference()
+        openKeyboardShortcutsReferenceErrorMessage = AgentGetStartedSheetBehavior.actionErrorMessage(
+            for: result
+        )
     }
 
     private func loadShellIntegrationStatus() {

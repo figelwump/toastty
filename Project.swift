@@ -292,7 +292,10 @@ let project = Project(
                 "SUPublicEDKey": .string(sparklePublicEDKey),
             ]),
             sources: ["Sources/App/**"],
-            resources: ["Sources/App/Resources/**"],
+            resources: [
+                "Sources/App/Resources/**",
+                "docs/keyboard-shortcuts.md",
+            ],
             dependencies: appDependencies,
             settings: appTargetSettings
         ),

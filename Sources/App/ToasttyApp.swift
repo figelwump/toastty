@@ -3,6 +3,60 @@ import Carbon.HIToolbox
 import CoreState
 import SwiftUI
 
+enum KeyboardShortcutsReferenceLocator {
+    private static let fileName = "keyboard-shortcuts"
+    private static let fileExtension = "md"
+
+    static func bundledReferenceURL(bundle: Bundle = .main) -> URL? {
+        bundle.url(forResource: fileName, withExtension: fileExtension)
+    }
+
+    static func referenceURL(
+        worktreeRootURL: URL?,
+        bundledReferenceURL: URL?,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        if let worktreeRootURL {
+            let localReferenceURL = worktreeRootURL
+                .appending(path: "docs", directoryHint: .isDirectory)
+                .appending(path: "\(fileName).\(fileExtension)", directoryHint: .notDirectory)
+            if fileManager.fileExists(atPath: localReferenceURL.path) {
+                return localReferenceURL
+            }
+        }
+
+        return bundledReferenceURL
+    }
+
+    static func openReferenceResult(
+        runtimePaths: ToasttyRuntimePaths = .resolve(),
+        fileManager: FileManager = .default,
+        bundledReferenceURL: URL? = bundledReferenceURL(),
+        openURL: (URL) -> Bool
+    ) -> Result<Void, AgentGetStartedActionError> {
+        guard let referenceURL = referenceURL(
+            worktreeRootURL: runtimePaths.worktreeRootURL,
+            bundledReferenceURL: bundledReferenceURL,
+            fileManager: fileManager
+        ) else {
+            return .failure(
+                AgentGetStartedActionError(
+                    message: "Toastty couldn't find the keyboard shortcuts reference."
+                )
+            )
+        }
+
+        guard openURL(referenceURL) else {
+            return .failure(
+                AgentGetStartedActionError(
+                    message: "Toastty couldn't open the keyboard shortcuts reference."
+                )
+            )
+        }
+        return .success(())
+    }
+}
+
 @MainActor
 private enum ToasttyMenuActions {
     static func openTerminalProfilesConfiguration() {
@@ -32,6 +86,19 @@ private enum ToasttyMenuActions {
                 try AgentProfilesFile.ensureTemplateExists()
             },
             fileURL: AgentProfilesFile.fileURL()
+        )
+    }
+
+    static func openKeyboardShortcutsReferenceResult(
+        runtimePaths: ToasttyRuntimePaths = .resolve(),
+        fileManager: FileManager = .default,
+        bundledReferenceURL: URL? = KeyboardShortcutsReferenceLocator.bundledReferenceURL()
+    ) -> Result<Void, AgentGetStartedActionError> {
+        KeyboardShortcutsReferenceLocator.openReferenceResult(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager,
+            bundledReferenceURL: bundledReferenceURL,
+            openURL: { NSWorkspace.shared.open($0) }
         )
     }
 
@@ -96,6 +163,10 @@ private enum ToasttyMenuActions {
             return .failure(AgentGetStartedActionError(message: error.localizedDescription))
         }
 
+        return openExistingFile(fileURL)
+    }
+
+    private static func openExistingFile(_ fileURL: URL) -> Result<Void, AgentGetStartedActionError> {
         guard NSWorkspace.shared.open(fileURL) else {
             return .failure(
                 AgentGetStartedActionError(message: "Toastty couldn't open \(fileURL.path).")
@@ -1118,6 +1189,7 @@ struct ToasttyApp: App {
                 profileShortcutRegistry: profileShortcutRegistry,
                 agentLaunchService: agentLaunchService,
                 openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
+                openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
@@ -1268,6 +1340,11 @@ struct ToasttyApp: App {
     @MainActor
     private func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
         ToasttyMenuActions.openAgentProfilesConfigurationResult()
+    }
+
+    @MainActor
+    private func openKeyboardShortcutsReferenceResult() -> Result<Void, AgentGetStartedActionError> {
+        ToasttyMenuActions.openKeyboardShortcutsReferenceResult()
     }
 
     @MainActor

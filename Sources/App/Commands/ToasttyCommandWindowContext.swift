@@ -11,3 +11,7 @@ extension FocusedValues {
 private struct ToasttyCommandWindowIDKey: FocusedValueKey {
     typealias Value = UUID
 }
+
+extension Notification.Name {
+    static let toasttyShowAgentGetStartedFlow = Notification.Name("ToasttyShowAgentGetStartedFlow")
+}
