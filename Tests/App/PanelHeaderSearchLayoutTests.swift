@@ -13,6 +13,7 @@ final class PanelHeaderSearchLayoutTests: XCTestCase {
         XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
         XCTAssertTrue(layout.showsProfileBadge)
         XCTAssertTrue(layout.showsMatchLabel)
+        XCTAssertTrue(layout.showsTitle)
     }
 
     func testCompactModeDropsProfileBadgeBeforeShrinkingBelowRegularFieldWidth() {
@@ -27,11 +28,12 @@ final class PanelHeaderSearchLayoutTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(layout.fieldWidth, PanelHeaderSearchLayout.matchLabelWidthThreshold)
         XCTAssertLessThan(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
         XCTAssertTrue(layout.showsMatchLabel)
+        XCTAssertTrue(layout.showsTitle)
     }
 
     func testTightModeHidesMatchLabelAndPreservesMinimumFieldWidth() {
         let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: 292,
+            availableWidth: 295,
             hasProfileBadge: true,
             showsIndicator: true
         )
@@ -40,6 +42,21 @@ final class PanelHeaderSearchLayoutTests: XCTestCase {
         XCTAssertFalse(layout.showsProfileBadge)
         XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.minimumFieldWidth)
         XCTAssertFalse(layout.showsMatchLabel)
+        XCTAssertTrue(layout.showsTitle)
+    }
+
+    func testUltraTightWidthHidesTitleBeforeSearchOverflows() {
+        let layout = PanelHeaderSearchLayout.resolve(
+            availableWidth: 294,
+            hasProfileBadge: true,
+            showsIndicator: true
+        )
+
+        XCTAssertEqual(layout.mode, .compact)
+        XCTAssertFalse(layout.showsProfileBadge)
+        XCTAssertFalse(layout.showsTitle)
+        XCTAssertGreaterThan(layout.fieldWidth, PanelHeaderSearchLayout.minimumFieldWidth)
+        XCTAssertTrue(layout.showsMatchLabel)
     }
 
     func testRegularModeStillAppliesWithoutProfileBadge() {
@@ -52,6 +69,7 @@ final class PanelHeaderSearchLayoutTests: XCTestCase {
         XCTAssertEqual(layout.mode, .regular)
         XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
         XCTAssertFalse(layout.showsProfileBadge)
+        XCTAssertTrue(layout.showsTitle)
     }
 
     func testSentinelWidthResolvesToRegularLayout() {
@@ -65,5 +83,6 @@ final class PanelHeaderSearchLayoutTests: XCTestCase {
         XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
         XCTAssertTrue(layout.showsProfileBadge)
         XCTAssertTrue(layout.showsMatchLabel)
+        XCTAssertTrue(layout.showsTitle)
     }
 }

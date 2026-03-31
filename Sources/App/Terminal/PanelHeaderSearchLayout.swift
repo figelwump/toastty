@@ -28,6 +28,7 @@ struct PanelHeaderSearchLayout: Equatable, Sendable {
     let fieldWidth: CGFloat
     let showsMatchLabel: Bool
     let showsProfileBadge: Bool
+    let showsTitle: Bool
 
     static func resolve(
         availableWidth: CGFloat,
@@ -35,14 +36,20 @@ struct PanelHeaderSearchLayout: Equatable, Sendable {
         showsIndicator: Bool
     ) -> Self {
         let contentWidth = max(availableWidth - (horizontalPadding * 2), 0)
-        let leadingReserve = titleMinimumWidth
-            + (showsIndicator ? indicatorReservedWidth : 0)
         let searchChromeWidth = searchButtonsReservedWidth + searchClusterSpacing
+        let indicatorReserve = showsIndicator ? indicatorReservedWidth : 0
         let profileReserve = hasProfileBadge
             ? profileBadgeReservedWidth + interItemSpacing
             : 0
+        let titleReserve = titleMinimumWidth
+        let minimumSearchClusterWidth = searchChromeWidth + minimumFieldWidth
         let showsProfileBadge = hasProfileBadge
-            && contentWidth >= leadingReserve + profileReserve + searchChromeWidth + regularFieldWidth
+            && contentWidth >= indicatorReserve + titleReserve + profileReserve + searchChromeWidth + regularFieldWidth
+        let showsTitle = contentWidth >= indicatorReserve
+            + (showsProfileBadge ? profileReserve : 0)
+            + titleReserve
+            + minimumSearchClusterWidth
+        let leadingReserve = indicatorReserve + (showsTitle ? titleReserve : 0)
         let availableFieldWidth = contentWidth
             - leadingReserve
             - (showsProfileBadge ? profileReserve : 0)
@@ -66,7 +73,8 @@ struct PanelHeaderSearchLayout: Equatable, Sendable {
             mode: mode,
             fieldWidth: fieldWidth,
             showsMatchLabel: showsMatchLabel,
-            showsProfileBadge: showsProfileBadge
+            showsProfileBadge: showsProfileBadge,
+            showsTitle: showsTitle
         )
     }
 }

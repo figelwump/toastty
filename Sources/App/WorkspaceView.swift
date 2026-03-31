@@ -1737,17 +1737,21 @@ private struct PanelCardView: View {
                 profileBadge(terminalProfileBadge)
             }
 
-            Text(panelLabel)
-                .font(panelTitleFont)
-                .foregroundStyle(panelTitleTextColor)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .frame(
-                    minWidth: PanelHeaderSearchLayout.titleMinimumWidth,
-                    maxWidth: .infinity,
-                    alignment: .leading
-                )
-                .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
+            if showsHeaderSearch, panelHeaderSearchLayout.showsTitle == false {
+                Spacer(minLength: 0)
+            } else {
+                Text(panelLabel)
+                    .font(panelTitleFont)
+                    .foregroundStyle(panelTitleTextColor)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(
+                        minWidth: PanelHeaderSearchLayout.titleMinimumWidth,
+                        maxWidth: .infinity,
+                        alignment: .leading
+                    )
+                    .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
+            }
 
             if showsHeaderSearch {
                 TerminalPanelHeaderSearchBar(
