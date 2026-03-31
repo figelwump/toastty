@@ -29,6 +29,8 @@ enum ToastyTheme {
     static let accent = Color(hex: 0xF5A623)
     static let accentDark = Color(hex: 0x0D0D0D)
     static let badgeBlue = Color(hex: 0x5BA08A)
+    static let focusModeAccent = Color(hex: 0x6FD7C2)
+    static let focusModeAccentText = Color(hex: 0x0C1A17)
     static let sessionIndicatorSpinnerColor = Color(hex: 0xF5A623)
     static let sessionIdleText = Color(hex: 0xC1AA8A)
     static let sessionIdleBackground = Color(hex: 0xC1AA8A, alpha: 0.1)

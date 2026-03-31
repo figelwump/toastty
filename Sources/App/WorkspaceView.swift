@@ -693,14 +693,26 @@ struct WorkspaceView: View {
             guard let workspaceID = selectedWorkspace?.id else { return }
             store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
         } label: {
-            FocusIconView(color: isOn ? ToastyTheme.accent : ToastyTheme.inactiveText)
+            HStack(spacing: 5) {
+                FocusIconView(color: isOn ? ToastyTheme.focusModeAccent : ToastyTheme.inactiveText)
+                if let title = Self.focusedPanelToggleTitle(isActive: isOn) {
+                    Text(title)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.focusModeAccent)
+                }
+            }
         }
         .help(
             ToasttyKeyboardShortcuts.toggleFocusedPanel.helpText(
-                isOn ? "Restore Layout" : "Focus Panel"
+                isOn ? "Unfocus Panel" : "Focus Panel"
             )
         )
+        .accessibilityLabel(isOn ? "Unfocus Panel" : "Focus Panel")
         .accessibilityIdentifier(identifier)
+    }
+
+    static func focusedPanelToggleTitle(isActive: Bool) -> String? {
+        isActive ? "Unfocus" : nil
     }
 
     private var isFocusedPanelModeActive: Bool {
@@ -954,10 +966,10 @@ struct WorkspaceView: View {
             if tab.focusedPanelModeActive {
                 Text("Focused")
                     .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(ToastyTheme.accentDark)
+                    .foregroundStyle(ToastyTheme.focusModeAccentText)
                     .padding(.horizontal, 5)
                     .padding(.vertical, 2)
-                    .background(ToastyTheme.accent, in: Capsule())
+                    .background(ToastyTheme.focusModeAccent, in: Capsule())
             }
         }
     }
@@ -1337,14 +1349,14 @@ private struct FocusModeViewportChrome: View {
     @State private var lastAnimatedNodeID: UUID?
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 10)
-            .strokeBorder(ToastyTheme.accent.opacity(isActive ? 0.95 : 0), lineWidth: 1.5)
+        Rectangle()
+            .strokeBorder(ToastyTheme.focusModeAccent.opacity(isActive ? 0.95 : 0), lineWidth: 1.5)
             .background {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(ToastyTheme.accent.opacity(isActive ? 0.05 * highlightOpacity : 0))
+                Rectangle()
+                    .fill(ToastyTheme.focusModeAccent.opacity(isActive ? 0.05 * highlightOpacity : 0))
             }
             .scaleEffect(highlightScale)
-            .padding(3)
+            .padding(1)
             .onAppear {
                 guard isActive else { return }
                 highlightOpacity = 1
@@ -1835,8 +1847,8 @@ private struct PanelCardView: View {
         }
         .overlay {
             if isSelectedForFocusMode {
-                RoundedRectangle(cornerRadius: 7)
-                    .stroke(ToastyTheme.badgeBlue, lineWidth: 1.5)
+                Rectangle()
+                    .strokeBorder(ToastyTheme.focusModeAccent, lineWidth: 1.5)
                     .padding(1)
                     .allowsHitTesting(false)
             }
@@ -1844,12 +1856,18 @@ private struct PanelCardView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .contentShape(Rectangle())
         .onTapGesture {
-            let modifierFlags = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
-            if modifierFlags.contains(.shift) {
-                store.send(.togglePanelSelection(workspaceID: workspaceID, panelID: panelID))
-            } else {
-                store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
-            }
+            handlePanelClick(
+                modifierFlags: NSApp.currentEvent?.modifierFlags ?? []
+            )
+        }
+    }
+
+    private func handlePanelClick(modifierFlags: NSEvent.ModifierFlags) {
+        let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if relevantModifiers.contains(.shift) {
+            store.send(.togglePanelSelection(workspaceID: workspaceID, panelID: panelID))
+        } else {
+            store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
         }
     }
 

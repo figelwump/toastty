@@ -37,6 +37,7 @@ final class TerminalHostView: NSView {
     private var trackedPressedModifierKeyCodes: [UInt16] = []
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
+    private var leftMousePressWasForwarded = false
 
     private static let imageFileURLReadOptions: [NSPasteboard.ReadingOptionKey: Any] = [
         .urlReadingFileURLsOnly: true,
@@ -651,19 +652,31 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        guard Self.shouldActivatePanelForPrimaryMouseDown(modifierFlags: event.modifierFlags) else {
+            leftMousePressWasForwarded = false
+            super.mouseDown(with: event)
+            return
+        }
         _ = activatePanelIfNeeded?()
         focusHostViewIfNeeded()
-        guard forwardMouseButton(
+        let handled = forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_PRESS,
             button: GHOSTTY_MOUSE_LEFT
-        ) else {
+        )
+        leftMousePressWasForwarded = handled
+        guard handled else {
             super.mouseDown(with: event)
             return
         }
     }
 
     override func mouseUp(with event: NSEvent) {
+        defer { leftMousePressWasForwarded = false }
+        guard leftMousePressWasForwarded else {
+            super.mouseUp(with: event)
+            return
+        }
         let handled = forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_RELEASE,
@@ -1381,6 +1394,13 @@ final class TerminalHostView: NSView {
             return nil
         }
         return .controlC
+    }
+
+    static func shouldActivatePanelForPrimaryMouseDown(
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        let relevantModifiers = modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return relevantModifiers.contains(.shift) == false
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT

@@ -341,6 +341,40 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === hostView)
     }
 
+    func testPrimaryMouseDownActivationSkipsShiftClickSelection() {
+        XCTAssertFalse(
+            TerminalHostView.shouldActivatePanelForPrimaryMouseDown(modifierFlags: [.shift])
+        )
+        XCTAssertTrue(
+            TerminalHostView.shouldActivatePanelForPrimaryMouseDown(modifierFlags: [.command])
+        )
+    }
+
+    func testShiftMouseDownSkipsPanelActivationAndFocus() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var activationCount = 0
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.activatePanelIfNeeded = {
+            activationCount += 1
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.shift]
+            )
+        )
+
+        XCTAssertEqual(activationCount, 0)
+        XCTAssertNil(window.firstResponder)
+    }
+
     func testRightMouseDownActivatesPanelBeforeFocusingHostView() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -665,12 +699,13 @@ private func fakeSurfaceHandle(_ rawValue: UInt) -> ghostty_surface_t {
 private func makeMouseEvent(
     type: NSEvent.EventType,
     window: NSWindow,
-    location: NSPoint = NSPoint(x: 12, y: 12)
+    location: NSPoint = NSPoint(x: 12, y: 12),
+    modifierFlags: NSEvent.ModifierFlags = []
 ) throws -> NSEvent {
     guard let event = NSEvent.mouseEvent(
         with: type,
         location: location,
-        modifierFlags: [],
+        modifierFlags: modifierFlags,
         timestamp: 0,
         windowNumber: window.windowNumber,
         context: nil,

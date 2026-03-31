@@ -217,6 +217,11 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
     }
 
+    func testFocusedPanelToggleTitleShowsUnfocusOnlyWhenActive() {
+        XCTAssertEqual(WorkspaceView.focusedPanelToggleTitle(isActive: true), "Unfocus")
+        XCTAssertNil(WorkspaceView.focusedPanelToggleTitle(isActive: false))
+    }
+
     func testWorkspaceHeaderTitleColumnPreferredWidthUsesWidestLine() {
         XCTAssertEqual(
             WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
