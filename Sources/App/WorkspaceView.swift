@@ -1566,18 +1566,30 @@ private struct PendingWorkspaceTabClose: Identifiable {
 private struct FocusModeViewportChrome: View {
     let fillOpacity: Double
 
-    init(fillOpacity: Double = 0.05) {
+    init(fillOpacity: Double = 0.03) {
         self.fillOpacity = fillOpacity
     }
 
+    /// Approximate macOS window corner geometry so the glow hugs the
+    /// rounded window frame instead of fighting the system mask.
+    private static let windowCornerRadius: CGFloat = 10
+
     var body: some View {
-        Rectangle()
-            .strokeBorder(ToastyTheme.focusModeAccent.opacity(0.95), lineWidth: 1.5)
-            .background {
-                Rectangle()
-                    .fill(ToastyTheme.focusModeAccent.opacity(fillOpacity))
+        let color = ToastyTheme.focusModeAccent
+        let shape = RoundedRectangle(cornerRadius: Self.windowCornerRadius, style: .continuous)
+        shape
+            .fill(color.opacity(fillOpacity))
+            .overlay {
+                // Soft inner glow — blurred stroke clipped to bounds
+                shape
+                    .stroke(color.opacity(0.5), lineWidth: 5)
+                    .blur(radius: 4)
             }
-            .padding(1)
+            .overlay {
+                // Crisp thin edge on top of the glow
+                shape
+                    .strokeBorder(color.opacity(0.6), lineWidth: 1)
+            }
             .accessibilityHidden(true)
     }
 }
