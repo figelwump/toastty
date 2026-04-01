@@ -1635,9 +1635,6 @@ private struct PanelCardView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
-    // Geometry updates arrive after the first header layout pass. Start wide so
-    // a presented search bar does not briefly flash through the tight layout.
-    @State private var panelHeaderWidth: CGFloat = .greatestFiniteMagnitude
 
     private var isFocused: Bool {
         // Only the selected workspace may present a focused terminal host.
@@ -1728,41 +1725,32 @@ private struct PanelCardView: View {
 
     private var panelHeader: some View {
         HStack(spacing: 8) {
-            let indicatorState = panelHeaderIndicatorState
-            if indicatorState != .hidden {
-                SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
-            }
-
-            if let terminalProfileBadge, showsProfileBadgeInHeader {
-                profileBadge(terminalProfileBadge)
-            }
-
-            if showsHeaderSearch, panelHeaderSearchLayout.showsTitle == false {
-                Spacer(minLength: 0)
-            } else {
-                Text(panelLabel)
-                    .font(panelTitleFont)
-                    .foregroundStyle(panelTitleTextColor)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(
-                        minWidth: PanelHeaderSearchLayout.titleMinimumWidth,
-                        maxWidth: .infinity,
-                        alignment: .leading
-                    )
-                    .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
-            }
-
             if showsHeaderSearch {
+                panelHeaderLeadingItems
+
+                panelHeaderTitle
+                    .frame(minWidth: 0, alignment: .leading)
+
+                Spacer(minLength: 0)
+
                 TerminalPanelHeaderSearchBar(
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     panelID: panelID,
-                    isActivePanel: isFocused,
-                    layout: panelHeaderSearchLayout
+                    isActivePanel: isFocused
                 )
                 .layoutPriority(1)
             } else if let shortcutLabel {
+                panelHeaderLeadingItems
+
+                panelHeaderTitle
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
                 shortcutBadge(shortcutLabel)
+            } else {
+                panelHeaderLeadingItems
+
+                panelHeaderTitle
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .frame(
@@ -1778,18 +1766,27 @@ private struct PanelCardView: View {
                 .fill(panelHeaderDividerColor)
                 .frame(height: panelHeaderDividerHeight)
         }
-        .background {
-            GeometryReader { geometry in
-                Color.clear
-                    .preference(key: PanelHeaderWidthPreferenceKey.self, value: geometry.size.width)
-            }
+    }
+
+    @ViewBuilder
+    private var panelHeaderLeadingItems: some View {
+        let indicatorState = panelHeaderIndicatorState
+        if indicatorState != .hidden {
+            SessionStatusIndicator(state: indicatorState, size: 8, lineWidth: 1.4)
         }
-        .onPreferenceChange(PanelHeaderWidthPreferenceKey.self) { nextWidth in
-            guard abs(nextWidth - panelHeaderWidth) > 0.5 else {
-                return
-            }
-            panelHeaderWidth = nextWidth
+
+        if let terminalProfileBadge, showsProfileBadgeInHeader {
+            profileBadge(terminalProfileBadge)
         }
+    }
+
+    private var panelHeaderTitle: some View {
+        Text(panelLabel)
+            .font(panelTitleFont)
+            .foregroundStyle(panelTitleTextColor)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
     }
 
     private var panelLabel: String {
@@ -1837,22 +1834,11 @@ private struct PanelCardView: View {
         return terminalRuntimeRegistry.searchState(for: panelID)?.isPresented == true
     }
 
-    private var panelHeaderSearchLayout: PanelHeaderSearchLayout {
-        PanelHeaderSearchLayout.resolve(
-            availableWidth: panelHeaderWidth,
-            hasProfileBadge: terminalProfileBadge != nil,
-            showsIndicator: panelHeaderIndicatorState != .hidden
-        )
-    }
-
     private var showsProfileBadgeInHeader: Bool {
         guard terminalProfileBadge != nil else {
             return false
         }
-        guard showsHeaderSearch else {
-            return true
-        }
-        return panelHeaderSearchLayout.showsProfileBadge
+        return showsHeaderSearch == false
     }
 
     private var panelTitleFont: Font {
@@ -1960,14 +1946,6 @@ private struct PanelCardView: View {
 private struct TerminalProfileBadge {
     let label: String
     let isAvailable: Bool
-}
-
-private struct PanelHeaderWidthPreferenceKey: PreferenceKey {
-    static let defaultValue: CGFloat = 0
-
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
 }
 
 // MARK: - Top Bar Icons

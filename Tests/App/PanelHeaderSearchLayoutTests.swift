@@ -2,87 +2,47 @@
 import XCTest
 
 final class PanelHeaderSearchLayoutTests: XCTestCase {
-    func testRegularModeKeepsProfileBadgeWhenHeaderIsWide() {
-        let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: 520,
-            hasProfileBadge: true,
-            showsIndicator: true
+    func testWideClusterShowsRegularChrome() {
+        let chrome = PanelHeaderSearchLayout.resolveSearchChrome(
+            availableWidth: .greatestFiniteMagnitude
         )
 
-        XCTAssertEqual(layout.mode, .regular)
-        XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
-        XCTAssertTrue(layout.showsProfileBadge)
-        XCTAssertTrue(layout.showsMatchLabel)
-        XCTAssertTrue(layout.showsTitle)
+        XCTAssertEqual(chrome.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
+        XCTAssertTrue(chrome.showsMatchLabel)
+        XCTAssertTrue(chrome.showsNavigationButtons)
     }
 
-    func testCompactModeDropsProfileBadgeBeforeShrinkingBelowRegularFieldWidth() {
-        let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: 360,
-            hasProfileBadge: true,
-            showsIndicator: true
-        )
+    func testMediumClusterHidesMatchLabelBeforeDroppingNavigationButtons() {
+        let chrome = PanelHeaderSearchLayout.resolveSearchChrome(availableWidth: 240)
 
-        XCTAssertEqual(layout.mode, .compact)
-        XCTAssertFalse(layout.showsProfileBadge)
-        XCTAssertGreaterThanOrEqual(layout.fieldWidth, PanelHeaderSearchLayout.matchLabelWidthThreshold)
-        XCTAssertLessThan(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
-        XCTAssertTrue(layout.showsMatchLabel)
-        XCTAssertTrue(layout.showsTitle)
+        XCTAssertEqual(chrome.fieldWidth, 181)
+        XCTAssertFalse(chrome.showsMatchLabel)
+        XCTAssertTrue(chrome.showsNavigationButtons)
     }
 
-    func testTightModeHidesMatchLabelAndPreservesMinimumFieldWidth() {
-        let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: 295,
-            hasProfileBadge: true,
-            showsIndicator: true
-        )
+    func testNarrowClusterDropsNavigationButtonsBeforeSearchFieldCollapses() {
+        let chrome = PanelHeaderSearchLayout.resolveSearchChrome(availableWidth: 180)
 
-        XCTAssertEqual(layout.mode, .tight)
-        XCTAssertFalse(layout.showsProfileBadge)
-        XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.minimumFieldWidth)
-        XCTAssertFalse(layout.showsMatchLabel)
-        XCTAssertTrue(layout.showsTitle)
+        XCTAssertEqual(chrome.fieldWidth, 159)
+        XCTAssertFalse(chrome.showsMatchLabel)
+        XCTAssertFalse(chrome.showsNavigationButtons)
     }
 
-    func testUltraTightWidthHidesTitleBeforeSearchOverflows() {
-        let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: 294,
-            hasProfileBadge: true,
-            showsIndicator: true
+    func testMinimumSearchBarWidthKeepsCloseOnlyFieldReadable() {
+        let chrome = PanelHeaderSearchLayout.resolveSearchChrome(
+            availableWidth: PanelHeaderSearchLayout.minimumSearchBarWidth
         )
 
-        XCTAssertEqual(layout.mode, .compact)
-        XCTAssertFalse(layout.showsProfileBadge)
-        XCTAssertFalse(layout.showsTitle)
-        XCTAssertGreaterThan(layout.fieldWidth, PanelHeaderSearchLayout.minimumFieldWidth)
-        XCTAssertTrue(layout.showsMatchLabel)
+        XCTAssertEqual(chrome.fieldWidth, PanelHeaderSearchLayout.minimumCloseOnlyFieldWidth)
+        XCTAssertFalse(chrome.showsMatchLabel)
+        XCTAssertFalse(chrome.showsNavigationButtons)
     }
 
-    func testRegularModeStillAppliesWithoutProfileBadge() {
-        let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: 420,
-            hasProfileBadge: false,
-            showsIndicator: false
-        )
+    func testUltraTightClusterUsesAllRemainingWidthForCloseOnlyField() {
+        let chrome = PanelHeaderSearchLayout.resolveSearchChrome(availableWidth: 80)
 
-        XCTAssertEqual(layout.mode, .regular)
-        XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
-        XCTAssertFalse(layout.showsProfileBadge)
-        XCTAssertTrue(layout.showsTitle)
-    }
-
-    func testSentinelWidthResolvesToRegularLayout() {
-        let layout = PanelHeaderSearchLayout.resolve(
-            availableWidth: .greatestFiniteMagnitude,
-            hasProfileBadge: true,
-            showsIndicator: true
-        )
-
-        XCTAssertEqual(layout.mode, .regular)
-        XCTAssertEqual(layout.fieldWidth, PanelHeaderSearchLayout.regularFieldWidth)
-        XCTAssertTrue(layout.showsProfileBadge)
-        XCTAssertTrue(layout.showsMatchLabel)
-        XCTAssertTrue(layout.showsTitle)
+        XCTAssertEqual(chrome.fieldWidth, 59)
+        XCTAssertFalse(chrome.showsMatchLabel)
+        XCTAssertFalse(chrome.showsNavigationButtons)
     }
 }

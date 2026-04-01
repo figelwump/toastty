@@ -4,7 +4,6 @@ struct TerminalPanelHeaderSearchBar: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let panelID: UUID
     let isActivePanel: Bool
-    let layout: PanelHeaderSearchLayout
 
     @State private var draftNeedle = ""
     @FocusState private var isFieldFocused: Bool
@@ -20,68 +19,84 @@ struct TerminalPanelHeaderSearchBar: View {
     var body: some View {
         Group {
             if let searchState, searchState.isPresented {
-                HStack(spacing: PanelHeaderSearchLayout.searchControlsSpacing) {
-                    TextField("Search", text: searchBinding)
-                        .textFieldStyle(.plain)
-                        .font(ToastyTheme.fontBody)
-                        .foregroundStyle(ToastyTheme.primaryText)
-                        .padding(.leading, 8)
-                        .padding(.trailing, layout.showsMatchLabel ? 36 : 8)
-                        .frame(
-                            width: layout.fieldWidth,
-                            height: PanelHeaderSearchLayout.searchFieldHeight
-                        )
-                        .background(
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .fill(ToastyTheme.surfaceBackground.opacity(0.96))
-                        )
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
-                        }
-                        .focused($isFieldFocused)
-                        .onSubmit {
-                            _ = terminalRuntimeRegistry.findNext(panelID: panelID)
-                        }
-#if canImport(AppKit)
-                        .onExitCommand {
-                            closeSearch()
-                        }
-#endif
-                        .overlay(alignment: .trailing) {
-                            if layout.showsMatchLabel,
-                               let matchLabel = matchLabel(for: searchState) {
-                                Text(matchLabel)
-                                    .font(ToastyTheme.fontWorkspaceTabBadge)
-                                    .foregroundStyle(ToastyTheme.inactiveText)
-                                    .monospacedDigit()
-                                    .padding(.trailing, 7)
+                GeometryReader { geometry in
+                    let chrome = PanelHeaderSearchLayout.resolveSearchChrome(
+                        availableWidth: geometry.size.width
+                    )
+
+                    HStack(spacing: PanelHeaderSearchLayout.searchControlsSpacing) {
+                        TextField("Search", text: searchBinding)
+                            .textFieldStyle(.plain)
+                            .font(ToastyTheme.fontBody)
+                            .foregroundStyle(ToastyTheme.primaryText)
+                            .padding(.leading, 8)
+                            .padding(.trailing, chrome.showsMatchLabel ? 36 : 8)
+                            .frame(
+                                width: chrome.fieldWidth,
+                                height: PanelHeaderSearchLayout.searchFieldHeight
+                            )
+                            .background(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .fill(ToastyTheme.surfaceBackground.opacity(0.96))
+                            )
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
                             }
+                            .focused($isFieldFocused)
+                            .onSubmit {
+                                _ = terminalRuntimeRegistry.findNext(panelID: panelID)
+                            }
+#if canImport(AppKit)
+                            .onExitCommand {
+                                closeSearch()
+                            }
+#endif
+                            .overlay(alignment: .trailing) {
+                                if chrome.showsMatchLabel,
+                                   let matchLabel = matchLabel(for: searchState) {
+                                    Text(matchLabel)
+                                        .font(ToastyTheme.fontWorkspaceTabBadge)
+                                        .foregroundStyle(ToastyTheme.inactiveText)
+                                        .monospacedDigit()
+                                        .padding(.trailing, 7)
+                                }
+                            }
+                            .accessibilityIdentifier("panel.header.search.field.\(panelID.uuidString)")
+
+                        HStack(spacing: PanelHeaderSearchLayout.searchButtonSpacing) {
+                            if chrome.showsNavigationButtons {
+                                searchButton(
+                                    systemImage: "chevron.up",
+                                    accessibilityIdentifier: "panel.header.search.previous.\(panelID.uuidString)",
+                                    action: { _ = terminalRuntimeRegistry.findPrevious(panelID: panelID) }
+                                )
+
+                                searchButton(
+                                    systemImage: "chevron.down",
+                                    accessibilityIdentifier: "panel.header.search.next.\(panelID.uuidString)",
+                                    action: { _ = terminalRuntimeRegistry.findNext(panelID: panelID) }
+                                )
+                            }
+
+                            searchButton(
+                                systemImage: "xmark",
+                                accessibilityIdentifier: "panel.header.search.close.\(panelID.uuidString)",
+                                action: closeSearch
+                            )
                         }
-                        .accessibilityIdentifier("panel.header.search.field.\(panelID.uuidString)")
-
-                    HStack(spacing: PanelHeaderSearchLayout.searchButtonSpacing) {
-                        searchButton(
-                            systemImage: "chevron.up",
-                            accessibilityIdentifier: "panel.header.search.previous.\(panelID.uuidString)",
-                            action: { _ = terminalRuntimeRegistry.findPrevious(panelID: panelID) }
-                        )
-
-                        searchButton(
-                            systemImage: "chevron.down",
-                            accessibilityIdentifier: "panel.header.search.next.\(panelID.uuidString)",
-                            action: { _ = terminalRuntimeRegistry.findNext(panelID: panelID) }
-                        )
-
-                        searchButton(
-                            systemImage: "xmark",
-                            accessibilityIdentifier: "panel.header.search.close.\(panelID.uuidString)",
-                            action: closeSearch
-                        )
                     }
-                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                .fixedSize(horizontal: true, vertical: false)
+                .frame(
+                    minWidth: PanelHeaderSearchLayout.minimumSearchBarWidth,
+                    idealWidth: PanelHeaderSearchLayout.maximumSearchBarWidth,
+                    maxWidth: PanelHeaderSearchLayout.maximumSearchBarWidth,
+                    minHeight: PanelHeaderSearchLayout.searchFieldHeight,
+                    idealHeight: PanelHeaderSearchLayout.searchFieldHeight,
+                    maxHeight: PanelHeaderSearchLayout.searchFieldHeight,
+                    alignment: .trailing
+                )
                 .onAppear {
                     syncDraft(with: searchState)
                     guard isActivePanel else {
