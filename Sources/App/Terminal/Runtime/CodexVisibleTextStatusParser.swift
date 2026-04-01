@@ -2,6 +2,15 @@ import CoreState
 import Foundation
 
 enum CodexVisibleTextStatusParser {
+    static func fatalErrorStatus(from visibleText: String) -> SessionStatus? {
+        let visibleLines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
+        guard let detail = usageLimitErrorDetail(from: visibleLines) else {
+            return nil
+        }
+
+        return SessionStatus(kind: .error, summary: "Error", detail: detail)
+    }
+
     static func workingStatus(from visibleText: String) -> SessionStatus? {
         guard let detail = workingDetail(from: visibleText) else {
             return nil
@@ -12,6 +21,9 @@ enum CodexVisibleTextStatusParser {
 }
 
 private extension CodexVisibleTextStatusParser {
+    static let usageLimitPrefix = "you've hit your usage limit."
+    static let usageLimitURLFragment = "chatgpt.com/codex/settings/usage"
+    static let fatalErrorWindowLineCount = 2
     static let actionableBulletPrefixes: [String] = [
         "Applying ",
         "Applied ",
@@ -38,6 +50,26 @@ private extension CodexVisibleTextStatusParser {
         "Wrote ",
         "Writing ",
     ]
+
+    static func usageLimitErrorDetail(from visibleLines: [String]) -> String? {
+        guard visibleLines.isEmpty == false else {
+            return nil
+        }
+
+        for lineIndex in stride(from: visibleLines.count - 1, through: 0, by: -1) {
+            let windowEndIndex = min(visibleLines.count, lineIndex + fatalErrorWindowLineCount)
+            let candidate = collapsedWhitespace(visibleLines[lineIndex..<windowEndIndex].joined(separator: " "))
+            let normalizedCandidate = normalizedForMatching(candidate)
+            guard normalizedCandidate.contains(usageLimitPrefix),
+                  normalizedCandidate.contains(usageLimitURLFragment) else {
+                continue
+            }
+
+            return candidate
+        }
+
+        return nil
+    }
 
     static func workingDetail(from visibleText: String) -> String? {
         let visibleLines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
@@ -102,5 +134,11 @@ private extension CodexVisibleTextStatusParser {
             .components(separatedBy: .whitespacesAndNewlines)
             .filter { $0.isEmpty == false }
             .joined(separator: " ")
+    }
+
+    static func normalizedForMatching(_ value: String) -> String {
+        collapsedWhitespace(value)
+            .replacingOccurrences(of: "’", with: "'")
+            .lowercased()
     }
 }

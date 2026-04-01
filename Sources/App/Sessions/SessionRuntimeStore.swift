@@ -17,6 +17,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     private weak var store: AppStore?
     private var storeActionObserverToken: UUID?
+    private var suppressedCodexVisibleErrorDetailBySessionID: [String: String] = [:]
     private let sendSessionStatusNotification: SessionStatusNotificationHandler
     private let isApplicationActive: ApplicationActiveHandler
 
@@ -45,6 +46,7 @@ final class SessionRuntimeStore: ObservableObject {
 
     func reset() {
         sessionRegistry = SessionRegistry()
+        suppressedCodexVisibleErrorDetailBySessionID = [:]
     }
 
     func startSession(
@@ -58,6 +60,7 @@ final class SessionRuntimeStore: ObservableObject {
         repoRoot: String?,
         at now: Date
     ) {
+        suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         var nextRegistry = sessionRegistry
         nextRegistry.startSession(
             sessionID: sessionID,
@@ -114,6 +117,11 @@ final class SessionRuntimeStore: ObservableObject {
             previousRecord: previousRecord,
             state: store?.state
         )
+        updateSuppressedCodexVisibleErrorDetailIfNeeded(
+            previousRecord: previousRecord,
+            sessionID: sessionID,
+            nextStatus: storedStatus
+        )
         var nextRegistry = sessionRegistry
         nextRegistry.updateStatus(sessionID: sessionID, status: storedStatus, at: now)
         if let currentRecord = nextRegistry.sessionsByID[sessionID] {
@@ -149,6 +157,7 @@ final class SessionRuntimeStore: ObservableObject {
         if let record = sessionRegistry.sessionsByID[sessionID], record.isActive {
             logSessionStop(record, reason: reason, at: now)
         }
+        suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
         var nextRegistry = sessionRegistry
         nextRegistry.stopSession(sessionID: sessionID, at: now)
         publish(nextRegistry)
@@ -161,6 +170,7 @@ final class SessionRuntimeStore: ObservableObject {
     ) {
         if let record = sessionRegistry.activeSession(for: panelID) {
             logSessionStop(record, reason: reason, at: now)
+            suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: record.sessionID)
         }
         var nextRegistry = sessionRegistry
         nextRegistry.stopSessionForPanel(panelID: panelID, at: now)
@@ -234,6 +244,46 @@ final class SessionRuntimeStore: ObservableObject {
     private func publish(_ nextRegistry: SessionRegistry) {
         guard nextRegistry != sessionRegistry else { return }
         sessionRegistry = nextRegistry
+    }
+
+    private func updateSuppressedCodexVisibleErrorDetailIfNeeded(
+        previousRecord: SessionRecord?,
+        sessionID: String,
+        nextStatus: SessionStatus
+    ) {
+        guard previousRecord?.agent == .codex else {
+            suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+            return
+        }
+
+        guard let previousStatus = previousRecord?.status else {
+            suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+            return
+        }
+
+        if nextStatus.kind == .error {
+            suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+            return
+        }
+
+        guard previousStatus.kind == .error,
+              let previousDetail = normalizedNonEmpty(previousStatus.detail) else {
+            return
+        }
+
+        suppressedCodexVisibleErrorDetailBySessionID[sessionID] = previousDetail
+    }
+
+    private func clearSuppressedCodexVisibleErrorDetail(sessionID: String) {
+        suppressedCodexVisibleErrorDetailBySessionID.removeValue(forKey: sessionID)
+    }
+
+    private func isSuppressedCodexVisibleError(_ status: SessionStatus, sessionID: String) -> Bool {
+        guard let detail = normalizedNonEmpty(status.detail),
+              let suppressedDetail = suppressedCodexVisibleErrorDetailBySessionID[sessionID] else {
+            return false
+        }
+        return detail == suppressedDetail
     }
 
     private func logSessionStop(
@@ -613,10 +663,33 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         guard let record = sessionRegistry.activeSession(for: panelID),
               record.agent == .codex,
               record.usesSessionStatusNotifications,
-              let currentStatus = record.status,
-              currentStatus.kind == .working,
-              let nextStatus = CodexVisibleTextStatusParser.workingStatus(from: visibleText),
-              nextStatus != currentStatus else {
+              let currentStatus = record.status else {
+            return false
+        }
+
+        if let nextStatus = CodexVisibleTextStatusParser.fatalErrorStatus(from: visibleText) {
+            guard currentStatus.kind == .working || currentStatus.kind == .error,
+                  isSuppressedCodexVisibleError(nextStatus, sessionID: record.sessionID) == false,
+                  nextStatus != currentStatus else {
+                return false
+            }
+
+            updateStatus(sessionID: record.sessionID, status: nextStatus, at: now)
+            return true
+        }
+
+        guard currentStatus.kind == .working,
+              let nextStatus = CodexVisibleTextStatusParser.workingStatus(from: visibleText) else {
+            return false
+        }
+
+        // Keep suppressing a recovered fatal banner until Codex surfaces a
+        // recognizable working detail again. Generic non-error text can be a
+        // transient scroll or render gap, not evidence that the stale banner
+        // is truly gone.
+        clearSuppressedCodexVisibleErrorDetail(sessionID: record.sessionID)
+
+        guard nextStatus != currentStatus else {
             return false
         }
 
