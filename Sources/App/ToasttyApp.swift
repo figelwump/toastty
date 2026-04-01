@@ -402,6 +402,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
+    private let terminalRuntimeRegistry: TerminalRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
@@ -410,6 +411,7 @@ final class DisplayShortcutInterceptor {
         case closePanel
         case createWorkspaceTab
         case focusNextUnreadOrActivePanel
+        case toggleFocusedPanelMode
         case renameSelectedTab
         case selectWorkspaceTab(Int)
         case selectAdjacentTab(TabNavigationDirection)
@@ -421,10 +423,12 @@ final class DisplayShortcutInterceptor {
 
     init(
         store: AppStore,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController
     ) {
         self.store = store
+        self.terminalRuntimeRegistry = terminalRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -471,6 +475,11 @@ final class DisplayShortcutInterceptor {
             return .focusNextUnreadOrActivePanel
         }
 
+        if Self.isToggleFocusedPanelShortcut(event),
+           appOwnedShortcutWindowID() != nil {
+            return .toggleFocusedPanelMode
+        }
+
         if Self.isRenameTabShortcut(event),
            appOwnedShortcutWindowID() != nil {
             return .renameSelectedTab
@@ -498,6 +507,8 @@ final class DisplayShortcutInterceptor {
             createWorkspaceTab()
         case .focusNextUnreadOrActivePanel:
             focusNextUnreadOrActivePanel()
+        case .toggleFocusedPanelMode:
+            toggleFocusedPanelMode()
         case .renameSelectedTab:
             renameSelectedTab()
         case .selectWorkspaceTab(let shortcutNumber):
@@ -597,6 +608,16 @@ final class DisplayShortcutInterceptor {
         return modifiers == [.command, .shift]
     }
 
+    static func isToggleFocusedPanelShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "f" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
+    }
+
     static func isRenameTabShortcut(_ event: NSEvent) -> Bool {
         guard event.type == .keyDown, event.isARepeat == false else { return false }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -662,6 +683,20 @@ final class DisplayShortcutInterceptor {
         // Cmd+Shift+A is app-owned for normal workspace windows. If there is no
         // next unread or active target, swallow the shortcut rather than
         // passing it to the embedded terminal or default responder.
+        return true
+    }
+
+    private func toggleFocusedPanelMode() -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        _ = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: workspaceID)
+        // Cmd+Shift+F is app-owned for normal workspace windows. If the
+        // selection does not produce a valid focus root, still swallow the
+        // shortcut so the terminal does not interpret it as raw input.
         return true
     }
 
@@ -971,6 +1006,7 @@ struct ToasttyApp: App {
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController
         )

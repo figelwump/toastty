@@ -5,8 +5,31 @@ public extension WorkspaceState {
         splitTree.renderedLayout(
             workspaceID: id,
             focusedPanelModeActive: focusedPanelModeActive,
+            focusedPanelID: focusedPanelID,
+            focusModeRootNodeID: focusModeRootNodeID
+        )
+    }
+
+    var effectiveFocusModeRootNodeID: UUID? {
+        guard focusedPanelModeActive else { return nil }
+        return splitTree.effectiveFocusModeRootNodeID(
+            preferredRootNodeID: focusModeRootNodeID,
             focusedPanelID: focusedPanelID
         )
+    }
+
+    var focusModeSubtree: WorkspaceSplitTree? {
+        guard let effectiveFocusModeRootNodeID else { return nil }
+        return splitTree.focusedSubtree(rootNodeID: effectiveFocusModeRootNodeID)
+    }
+
+    func panelIsVisibleInFocusMode(_ panelID: UUID) -> Bool {
+        guard focusedPanelModeActive else { return true }
+        guard let effectiveFocusModeRootNodeID,
+              let subtree = layoutTree.findSubtree(nodeID: effectiveFocusModeRootNodeID) else {
+            return false
+        }
+        return subtree.slotContaining(panelID: panelID) != nil
     }
 }
 
@@ -26,6 +49,14 @@ extension WorkspaceState {
 
     func focusTargetSlotID(from sourceSlotID: UUID, direction: SlotFocusDirection) -> UUID? {
         splitTree.focusTarget(from: sourceSlotID, direction: direction)
+    }
+
+    func focusTargetSlotIDWithinVisibleRoot(
+        from sourceSlotID: UUID,
+        direction: SlotFocusDirection
+    ) -> UUID? {
+        let scopedTree = focusModeSubtree ?? splitTree
+        return scopedTree.focusTarget(from: sourceSlotID, direction: direction)
     }
 
     func panelID(forSlotID slotID: UUID) -> UUID? {
@@ -88,6 +119,39 @@ extension WorkspaceState {
         }
 
         return resolvedFocusedPanel?.panelID
+    }
+
+    mutating func repairTransientTabState() {
+        for tabID in tabIDs {
+            guard var tab = tabsByID[tabID] else { continue }
+
+            let livePanelIDs = Set(tab.panels.keys)
+            if let focusedPanelID = tab.focusedPanelID,
+               tab.panels[focusedPanelID] == nil || tab.layoutTree.slotContaining(panelID: focusedPanelID) == nil {
+                tab.focusedPanelID = tab.resolvedFocusedPanelID
+            } else if tab.focusedPanelID == nil {
+                tab.focusedPanelID = tab.resolvedFocusedPanelID
+            }
+
+            tab.selectedPanelIDs.formIntersection(livePanelIDs)
+
+            if tab.focusedPanelModeActive {
+                let effectiveRootNodeID = WorkspaceSplitTree(root: tab.layoutTree).effectiveFocusModeRootNodeID(
+                    preferredRootNodeID: tab.focusModeRootNodeID,
+                    focusedPanelID: tab.focusedPanelID
+                )
+                if let effectiveRootNodeID {
+                    tab.focusModeRootNodeID = effectiveRootNodeID
+                } else {
+                    tab.focusedPanelModeActive = false
+                    tab.focusModeRootNodeID = nil
+                }
+            } else {
+                tab.focusModeRootNodeID = nil
+            }
+
+            tabsByID[tabID] = tab
+        }
     }
 }
 

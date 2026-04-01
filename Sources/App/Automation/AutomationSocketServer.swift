@@ -1488,7 +1488,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .scratchpad))
 
         case "topbar.toggle.focused-panel":
-            didMutate = store.send(.toggleFocusedPanelMode(workspaceID: try workspaceID()))
+            didMutate = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: try workspaceID())
 
         case "app.font.increase":
             didMutate = store.send(.increaseWindowTerminalFont(windowID: try resolveWindowID(args: args)))

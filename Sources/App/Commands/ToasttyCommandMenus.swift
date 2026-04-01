@@ -485,7 +485,7 @@ struct ToasttyCommandMenus: Commands {
 
     private func toggleFocusedPanelFromCommandSelection() {
         guard let workspaceID = commandWorkspace?.id else { return }
-        store.send(.toggleFocusedPanelMode(workspaceID: workspaceID))
+        _ = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: workspaceID)
     }
 
     private func closeFocusedPanelFromCommandSelection() {

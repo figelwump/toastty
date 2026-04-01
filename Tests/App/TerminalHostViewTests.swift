@@ -750,12 +750,13 @@ private func fakeSurfaceHandle(_ rawValue: UInt) -> ghostty_surface_t {
 private func makeMouseEvent(
     type: NSEvent.EventType,
     window: NSWindow,
-    location: NSPoint = NSPoint(x: 12, y: 12)
+    location: NSPoint = NSPoint(x: 12, y: 12),
+    modifierFlags: NSEvent.ModifierFlags = []
 ) throws -> NSEvent {
     guard let event = NSEvent.mouseEvent(
         with: type,
         location: location,
-        modifierFlags: [],
+        modifierFlags: modifierFlags,
         timestamp: 0,
         windowNumber: window.windowNumber,
         context: nil,

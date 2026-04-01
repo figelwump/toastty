@@ -8,6 +8,8 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     public var focusedPanelID: UUID?
     public var auxPanelVisibility: Set<PanelKind>
     public var focusedPanelModeActive: Bool
+    public var focusModeRootNodeID: UUID?
+    public var selectedPanelIDs: Set<UUID>
     public var unreadPanelIDs: Set<UUID>
     public var recentlyClosedPanels: [ClosedPanelRecord]
 
@@ -19,6 +21,8 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind> = [],
         focusedPanelModeActive: Bool = false,
+        focusModeRootNodeID: UUID? = nil,
+        selectedPanelIDs: Set<UUID> = [],
         unreadPanelIDs: Set<UUID> = [],
         recentlyClosedPanels: [ClosedPanelRecord] = []
     ) {
@@ -29,6 +33,8 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         self.focusedPanelID = focusedPanelID
         self.auxPanelVisibility = auxPanelVisibility
         self.focusedPanelModeActive = focusedPanelModeActive
+        self.focusModeRootNodeID = focusModeRootNodeID
+        self.selectedPanelIDs = selectedPanelIDs.intersection(Set(panels.keys))
         self.unreadPanelIDs = unreadPanelIDs.intersection(Set(panels.keys))
         self.recentlyClosedPanels = recentlyClosedPanels
     }
@@ -135,6 +141,8 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         recentlyClosedPanels = try container.decodeIfPresent([ClosedPanelRecord].self, forKey: .recentlyClosedPanels) ?? []
         // Focus mode is a transient UI/runtime flag and should never persist across decode boundaries.
         focusedPanelModeActive = false
+        focusModeRootNodeID = nil
+        selectedPanelIDs = []
     }
 
     public func encode(to encoder: any Encoder) throws {

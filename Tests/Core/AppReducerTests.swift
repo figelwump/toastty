@@ -2193,16 +2193,22 @@ struct AppReducerTests {
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(workspaceBefore.focusedPanelID)
+        let focusedSlotID = try #require(
+            workspaceBefore.layoutTree.slotContaining(panelID: focusedPanelID)?.slotID
+        )
 
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
         let focusedModeWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(focusedModeWorkspace.focusedPanelModeActive)
+        #expect(focusedModeWorkspace.focusModeRootNodeID == focusedSlotID)
         #expect(focusedModeWorkspace.layoutTree == workspaceBefore.layoutTree)
         #expect(focusedModeWorkspace.focusedPanelID == workspaceBefore.focusedPanelID)
 
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
         let restoredWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(restoredWorkspace.focusedPanelModeActive == false)
+        #expect(restoredWorkspace.focusModeRootNodeID == nil)
         #expect(restoredWorkspace.layoutTree == workspaceBefore.layoutTree)
         #expect(restoredWorkspace.focusedPanelID == workspaceBefore.focusedPanelID)
 
@@ -2225,24 +2231,33 @@ struct AppReducerTests {
         let focusedPanelID = try #require(updatedWorkspace.focusedPanelID)
         #expect(updatedWorkspace.focusedPanelModeActive)
         #expect(updatedWorkspace.panels[focusedPanelID] != nil)
+        #expect(updatedWorkspace.focusModeRootNodeID == updatedWorkspace.layoutTree.slotContaining(panelID: focusedPanelID)?.slotID)
 
         try StateValidator.validate(state)
     }
 
     @Test
-    func splitAndAuxToggleAreBlockedWhileFocusedModeActive() throws {
+    func splitInFocusModeUpdatesFocusModeRootNodeIDWhileAuxToggleStaysBlocked() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
 
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
         let workspaceInFocusMode = try #require(state.workspacesByID[workspaceID])
+        let previousRootNodeID = workspaceInFocusMode.focusModeRootNodeID
 
-        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state) == false)
+        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
         #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state) == false)
 
-        let workspaceAfterBlockedActions = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfterBlockedActions == workspaceInFocusMode)
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.focusedPanelModeActive)
+        #expect(updatedWorkspace.panels.count == 2)
+        #expect(updatedWorkspace.focusModeRootNodeID != previousRootNodeID)
+        guard case .split(let splitNodeID, _, _, _, _) = updatedWorkspace.layoutTree else {
+            Issue.record("expected bootstrap workspace to split in focus mode")
+            return
+        }
+        #expect(updatedWorkspace.focusModeRootNodeID == splitNodeID)
 
         try StateValidator.validate(state)
     }
@@ -2270,7 +2285,117 @@ struct AppReducerTests {
     }
 
     @Test
-    func resizeAndEqualizeAreBlockedWhileFocusedModeActive() throws {
+    func focusPanelInFocusModeRetargetsRootWhenTargetWouldBeHidden() throws {
+        let leftPanelID = UUID()
+        let rightPanelID = UUID()
+        let leftSlotID = UUID()
+        let rightSlotID = UUID()
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Workspace 1",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+                second: .slot(slotID: rightSlotID, panelID: rightPanelID)
+            ),
+            panels: [
+                leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp/left")),
+                rightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp/right")),
+            ],
+            focusedPanelID: leftPanelID,
+            focusedPanelModeActive: true,
+            focusModeRootNodeID: leftSlotID
+        )
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: rightPanelID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.focusedPanelModeActive)
+        #expect(updatedWorkspace.focusedPanelID == rightPanelID)
+        #expect(updatedWorkspace.focusModeRootNodeID == rightSlotID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func focusPanelInFocusModePreservesRootWhenTargetRemainsVisible() throws {
+        let leftPanelID = UUID()
+        let topRightPanelID = UUID()
+        let bottomRightPanelID = UUID()
+        let leftSlotID = UUID()
+        let topRightSlotID = UUID()
+        let bottomRightSlotID = UUID()
+        let rightBranchNodeID = UUID()
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Workspace 1",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+                second: .split(
+                    nodeID: rightBranchNodeID,
+                    orientation: .vertical,
+                    ratio: 0.5,
+                    first: .slot(slotID: topRightSlotID, panelID: topRightPanelID),
+                    second: .slot(slotID: bottomRightSlotID, panelID: bottomRightPanelID)
+                )
+            ),
+            panels: [
+                leftPanelID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp/left")),
+                topRightPanelID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp/top")),
+                bottomRightPanelID: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp/bottom")),
+            ],
+            focusedPanelID: topRightPanelID,
+            focusedPanelModeActive: true,
+            focusModeRootNodeID: rightBranchNodeID
+        )
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: bottomRightPanelID), state: &state))
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.focusedPanelModeActive)
+        #expect(updatedWorkspace.focusedPanelID == bottomRightPanelID)
+        #expect(updatedWorkspace.focusModeRootNodeID == rightBranchNodeID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func resizeAndEqualizeMutateFocusedSubtreeWhenFocusedModeIsActive() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -2287,21 +2412,24 @@ struct AppReducerTests {
             first: first,
             second: second
         )
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.resolvedNodeID
         state.workspacesByID[workspaceID] = workspace
-
-        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
-        let focusedModeWorkspace = try #require(state.workspacesByID[workspaceID])
 
         #expect(
             reducer.send(
                 .resizeFocusedSlotSplit(workspaceID: workspaceID, direction: .right, amount: 1),
                 state: &state
-            ) == false
+            )
         )
-        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state) == false)
+        #expect(reducer.send(.equalizeLayoutSplits(workspaceID: workspaceID), state: &state))
 
-        let workspaceAfterBlockedActions = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfterBlockedActions == focusedModeWorkspace)
+        let workspaceAfterMutations = try #require(state.workspacesByID[workspaceID])
+        guard case .split(_, _, let equalizedRatio, _, _) = workspaceAfterMutations.layoutTree else {
+            Issue.record("expected split root after focus-mode resize/equalize")
+            return
+        }
+        #expect(abs(equalizedRatio - 0.5) < 0.0001)
 
         try StateValidator.validate(state)
     }

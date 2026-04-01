@@ -59,6 +59,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
         focusedPanelID: UUID?,
         auxPanelVisibility: Set<PanelKind> = [],
         focusedPanelModeActive: Bool = false,
+        focusModeRootNodeID: UUID? = nil,
+        selectedPanelIDs: Set<UUID> = [],
         unreadPanelIDs: Set<UUID> = [],
         unreadWorkspaceNotificationCount: Int = 0,
         recentlyClosedPanels: [ClosedPanelRecord] = []
@@ -70,6 +72,8 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
             focusedPanelID: focusedPanelID,
             auxPanelVisibility: auxPanelVisibility,
             focusedPanelModeActive: focusedPanelModeActive,
+            focusModeRootNodeID: focusModeRootNodeID,
+            selectedPanelIDs: selectedPanelIDs,
             unreadPanelIDs: unreadPanelIDs,
             recentlyClosedPanels: recentlyClosedPanels
         )
@@ -147,6 +151,16 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     public var focusedPanelModeActive: Bool {
         get { requiredSelectedTab.focusedPanelModeActive }
         set { updateSelectedTab { $0.focusedPanelModeActive = newValue } }
+    }
+
+    public var focusModeRootNodeID: UUID? {
+        get { requiredSelectedTab.focusModeRootNodeID }
+        set { updateSelectedTab { $0.focusModeRootNodeID = newValue } }
+    }
+
+    public var selectedPanelIDs: Set<UUID> {
+        get { requiredSelectedTab.selectedPanelIDs }
+        set { updateSelectedTab { $0.selectedPanelIDs = newValue } }
     }
 
     public var unreadPanelIDs: Set<UUID> {

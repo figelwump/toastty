@@ -1346,6 +1346,38 @@ final class WindowCommandControllerTests: XCTestCase {
         )
     }
 
+    func testSplitLayoutCommandControllerCanAdjustSplitLayoutInFocusModeWhenFocusedSubtreeHasMultipleSlots() throws {
+        var state = try XCTUnwrap(AutomationFixtureLoader.load(named: "split-workspace"))
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.resolvedNodeID
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let controller = SplitLayoutCommandController(store: store)
+
+        XCTAssertTrue(controller.canAdjustSplitLayout(preferredWindowID: windowID))
+    }
+
+    func testSplitLayoutCommandControllerCannotAdjustSplitLayoutInFocusModeForSingleSlotSubtree() throws {
+        var state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+
+        workspace.focusedPanelModeActive = true
+        workspace.focusModeRootNodeID = workspace.layoutTree.allSlotInfos.first?.slotID
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let controller = SplitLayoutCommandController(store: store)
+
+        XCTAssertFalse(controller.canAdjustSplitLayout(preferredWindowID: windowID))
+    }
+
     func testSplitLayoutCommandControllerResizeUsesAppOwnedStepAmount() throws {
         let state = try XCTUnwrap(AutomationFixtureLoader.load(named: "split-workspace"))
         let store = AppStore(state: state, persistTerminalFontPreference: false)

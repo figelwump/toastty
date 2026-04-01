@@ -9,17 +9,20 @@ final class TerminalStoreActionCoordinator {
     private let metadataService: TerminalMetadataService
     private let registerPendingSplitSourceIfNeeded: (UUID, AppState, AppState) -> Void
     private let armCloseTransitionViewportDeferral: (UUID, Set<UUID>) -> Void
+    private let armFocusedPanelResizeTrace: (UUID, UUID) -> Void
     private let requestWorkspaceFocusRestore: (UUID) -> Void
 
     init(
         metadataService: TerminalMetadataService,
         registerPendingSplitSourceIfNeeded: @escaping (UUID, AppState, AppState) -> Void,
         armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void,
+        armFocusedPanelResizeTrace: @escaping (UUID, UUID) -> Void,
         requestWorkspaceFocusRestore: @escaping (UUID) -> Void
     ) {
         self.metadataService = metadataService
         self.registerPendingSplitSourceIfNeeded = registerPendingSplitSourceIfNeeded
         self.armCloseTransitionViewportDeferral = armCloseTransitionViewportDeferral
+        self.armFocusedPanelResizeTrace = armFocusedPanelResizeTrace
         self.requestWorkspaceFocusRestore = requestWorkspaceFocusRestore
     }
 
@@ -74,6 +77,10 @@ final class TerminalStoreActionCoordinator {
                 nextState: nextState
             )
         case .toggleFocusedPanelMode(workspaceID: let workspaceID):
+            armFocusedPanelResizeTraceIfNeeded(
+                workspaceID: workspaceID,
+                nextState: nextState
+            )
             // Let Ghostty's normal relayout handle focus-mode resizes. An
             // explicit scroll-to-bottom correction makes TUIs like Claude Code
             // redraw their entire scrollback on both enter and exit, so do
@@ -125,6 +132,18 @@ final class TerminalStoreActionCoordinator {
         armCloseTransitionViewportDeferral(workspaceID, liveTerminalPanelIDs)
     }
 
+    private func armFocusedPanelResizeTraceIfNeeded(
+        workspaceID: UUID,
+        nextState: AppState
+    ) {
+        guard nextState.selectedWorkspaceSelection()?.workspaceID == workspaceID,
+              let nextWorkspace = nextState.workspacesByID[workspaceID],
+              let panelID = Self.resolvedFocusedTerminalPanelID(in: nextWorkspace) else {
+            return
+        }
+        armFocusedPanelResizeTrace(workspaceID, panelID)
+    }
+
     private func scheduleFocusedPanelFocusRestoreIfNeeded(
         workspaceID: UUID,
         previousState: AppState,
@@ -157,6 +176,15 @@ final class TerminalStoreActionCoordinator {
         }
 
         return nil
+    }
+
+    private static func resolvedFocusedTerminalPanelID(in workspace: WorkspaceState) -> UUID? {
+        guard let panelID = resolvedActionPanelID(in: workspace),
+              let panelState = workspace.panels[panelID],
+              case .terminal = panelState else {
+            return nil
+        }
+        return panelID
     }
 
     private static func workspaceID(containing panelID: UUID, state: AppState) -> UUID? {

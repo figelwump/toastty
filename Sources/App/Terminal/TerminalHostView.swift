@@ -1529,7 +1529,6 @@ final class TerminalHostView: NSView {
         }
         return .controlC
     }
-
     #if TOASTTY_HAS_GHOSTTY_KIT
     static func ghosttyModifierActionForFlagsChanged(
         keyCode: UInt16,

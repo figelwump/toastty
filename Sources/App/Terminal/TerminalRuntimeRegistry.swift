@@ -133,6 +133,12 @@ final class TerminalRuntimeRegistry: ObservableObject {
                     panelIDs: panelIDs
                 )
             },
+            armFocusedPanelResizeTrace: { [weak self] workspaceID, panelID in
+                self?.armFocusedPanelResizeTrace(
+                    workspaceID: workspaceID,
+                    panelID: panelID
+                )
+            },
             requestWorkspaceFocusRestore: { [weak self] workspaceID in
                 self?.scheduleWorkspaceFocusRestore(workspaceID: workspaceID)
             }
@@ -323,6 +329,25 @@ final class TerminalRuntimeRegistry: ObservableObject {
     @discardableResult
     func resetTrackedGhosttyModifiersForApplicationDeactivation() -> Int {
         runtimeStore.resetTrackedGhosttyModifiersForApplicationDeactivation()
+    }
+
+    @discardableResult
+    func toggleFocusedPanelMode(workspaceID: UUID) -> Bool {
+        store?.send(.toggleFocusedPanelMode(workspaceID: workspaceID)) ?? false
+    }
+
+    func armFocusedPanelResizeTrace(
+        workspaceID: UUID,
+        panelID: UUID
+    ) {
+        guard let store else { return }
+        guard store.state.selectedWorkspaceSelection()?.workspaceID == workspaceID,
+              store.state.workspacesByID[workspaceID]?.focusedPanelID == panelID else {
+            return
+        }
+        runtimeStore.existingController(for: panelID)?.armFocusModeResizeTrace(
+            workspaceID: workspaceID
+        )
     }
 
     func synchronize(with state: AppState) {

@@ -39,12 +39,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
     private var closeTransitionViewportDeferralArmed = false
     private var closeTransitionViewportUpdatePending = false
     private var closeTransitionViewportReplayTask: Task<Void, Never>?
+    private var focusModeResizeTrace: FocusModeResizeTrace?
     private var diagnostics = SurfaceDiagnostics()
 
     private let minimumSurfaceHostDimension = 48
     private let requiredStableSurfaceCreationPasses = 2
     private let requiredStableViewportResumePasses = 2
     private let requiredAutomationInputStabilityInterval: TimeInterval = 0.5
+    private let focusModeResizeTraceDuration: TimeInterval = 1.5
 
     private struct GhosttyRenderMetrics: Equatable {
         let viewportWidth: Int
@@ -115,6 +117,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         var surfaceFailureCount = 0
         var surfaceDeferredCount = 0
         var viewportDeferredCount = 0
+    }
+
+    private struct FocusModeResizeTrace {
+        let id: UUID
+        let workspaceID: UUID
+        let startedAt: Date
+        let expiresAt: Date
+        var eventCount = 0
     }
 
     #endif
@@ -431,6 +441,14 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
                     ]
                 )
             }
+            logFocusModeResizeTrace(
+                event: "viewport_deferred",
+                extra: [
+                    "reason": viewportDeferralReason.rawValue,
+                    "logical_width": String(logicalWidth),
+                    "logical_height": String(logicalHeight),
+                ]
+            )
             return
         }
         let resumedFromViewportDeferral = lastViewportDeferralReason != nil
@@ -580,6 +598,20 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         let presentationChanged = presentationSignature != lastPresentationSignature
         lastPresentationSignature = presentationSignature
 
+        if presentationChanged {
+            logFocusModeResizeTrace(
+                event: "presentation_changed",
+                extra: [
+                    "logical_width": String(logicalWidth),
+                    "logical_height": String(logicalHeight),
+                    "pixel_width": String(pixelWidth),
+                    "pixel_height": String(pixelHeight),
+                    "focused": effectiveFocused ? "true" : "false",
+                    "host_visible": hostView.isEffectivelyVisible ? "true" : "false",
+                ]
+            )
+        }
+
         if hostView.isEffectivelyVisible && (resumedFromViewportDeferral || presentationChanged) {
             requestImmediateSurfaceRefresh(ghosttySurface)
         }
@@ -627,6 +659,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         closeTransitionViewportReplayTask = nil
         closeTransitionViewportDeferralArmed = false
         closeTransitionViewportUpdatePending = false
+        finishFocusModeResizeTrace(reason: "invalidate")
         diagnostics = SurfaceDiagnostics()
         #endif
         activeSourceContainer = nil
@@ -1177,6 +1210,92 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         ToasttyLog.debug(message, category: .ghostty, metadata: metadata)
     }
 
+    func armFocusModeResizeTrace(workspaceID: UUID) {
+        finishFocusModeResizeTrace(reason: "superseded")
+        let now = Date()
+        focusModeResizeTrace = FocusModeResizeTrace(
+            id: UUID(),
+            workspaceID: workspaceID,
+            startedAt: now,
+            expiresAt: now.addingTimeInterval(focusModeResizeTraceDuration)
+        )
+        logFocusModeResizeTrace(
+            event: "armed",
+            extra: [
+                "requested_focus": requestedFocus ? "true" : "false",
+                "has_surface": ghosttySurface == nil ? "false" : "true",
+            ]
+        )
+    }
+
+    private func logFocusModeResizeTrace(event: String, extra: [String: String] = [:]) {
+        guard var trace = focusModeResizeTrace else { return }
+        let now = Date()
+        guard now <= trace.expiresAt else {
+            finishFocusModeResizeTrace(reason: "expired")
+            return
+        }
+        trace.eventCount += 1
+        focusModeResizeTrace = trace
+
+        var metadata: [String: String] = [
+            "trace_id": trace.id.uuidString,
+            "workspace_id": trace.workspaceID.uuidString,
+            "panel_id": panelID.uuidString,
+            "event": event,
+            "event_index": String(trace.eventCount),
+            "elapsed_ms": String(Int(now.timeIntervalSince(trace.startedAt) * 1000)),
+        ]
+        if let lastPresentationSignature {
+            metadata["last_logical_width"] = String(lastPresentationSignature.logicalWidth)
+            metadata["last_logical_height"] = String(lastPresentationSignature.logicalHeight)
+            metadata["last_pixel_width"] = String(lastPresentationSignature.pixelWidth)
+            metadata["last_pixel_height"] = String(lastPresentationSignature.pixelHeight)
+            metadata["last_focused"] = lastPresentationSignature.focused ? "true" : "false"
+        }
+        if let lastRenderMetrics {
+            metadata["last_columns"] = String(lastRenderMetrics.columns)
+            metadata["last_rows"] = String(lastRenderMetrics.rows)
+        }
+        for (key, value) in extra {
+            metadata[key] = value
+        }
+        ToasttyLog.info(
+            "Focus-mode resize trace",
+            category: .ghostty,
+            metadata: metadata
+        )
+    }
+
+    private func finishFocusModeResizeTrace(reason: String) {
+        guard let trace = focusModeResizeTrace else { return }
+        let now = Date()
+        var metadata: [String: String] = [
+            "trace_id": trace.id.uuidString,
+            "workspace_id": trace.workspaceID.uuidString,
+            "panel_id": panelID.uuidString,
+            "reason": reason,
+            "event_count": String(trace.eventCount),
+            "elapsed_ms": String(Int(now.timeIntervalSince(trace.startedAt) * 1000)),
+        ]
+        if let lastPresentationSignature {
+            metadata["final_logical_width"] = String(lastPresentationSignature.logicalWidth)
+            metadata["final_logical_height"] = String(lastPresentationSignature.logicalHeight)
+            metadata["final_pixel_width"] = String(lastPresentationSignature.pixelWidth)
+            metadata["final_pixel_height"] = String(lastPresentationSignature.pixelHeight)
+        }
+        if let lastRenderMetrics {
+            metadata["final_columns"] = String(lastRenderMetrics.columns)
+            metadata["final_rows"] = String(lastRenderMetrics.rows)
+        }
+        ToasttyLog.info(
+            "Completed focus-mode resize trace",
+            category: .ghostty,
+            metadata: metadata
+        )
+        focusModeResizeTrace = nil
+    }
+
     #endif
 }
 
@@ -1389,6 +1508,24 @@ extension TerminalSurfaceController {
                 "reported_cell_height_px": String(measuredSize.cell_height_px),
                 "attachment_id": attachment.rawValue.uuidString,
                 "source_container_id": describeObjectIdentity(sourceContainer),
+                "resumed_from_viewport_deferral": resumedFromViewportDeferral ? "true" : "false",
+                "presentation_changed_estimate": presentationChangedEstimate ? "true" : "false",
+            ]
+        )
+        logFocusModeResizeTrace(
+            event: "surface_size_dispatched",
+            extra: [
+                "requested_units": reason.usesPixelUnits ? "pixels" : "logical",
+                "requested_width": String(requestedWidth),
+                "requested_height": String(requestedHeight),
+                "logical_width": String(logicalWidth),
+                "logical_height": String(logicalHeight),
+                "pixel_width": String(pixelWidth),
+                "pixel_height": String(pixelHeight),
+                "reported_columns": String(measuredSize.columns),
+                "reported_rows": String(measuredSize.rows),
+                "reported_width_px": String(measuredSize.width_px),
+                "reported_height_px": String(measuredSize.height_px),
                 "resumed_from_viewport_deferral": resumedFromViewportDeferral ? "true" : "false",
                 "presentation_changed_estimate": presentationChangedEstimate ? "true" : "false",
             ]

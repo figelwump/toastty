@@ -44,6 +44,22 @@ public indirect enum LayoutNode: Equatable, Sendable {
     case split(nodeID: UUID, orientation: SplitOrientation, ratio: Double, first: LayoutNode, second: LayoutNode)
 }
 
+public struct PanelRemovalResult: Equatable, Sendable {
+    public let node: LayoutNode?
+    public let removed: Bool
+    public let trackedAncestorReplacementNodeID: UUID?
+
+    public init(
+        node: LayoutNode?,
+        removed: Bool,
+        trackedAncestorReplacementNodeID: UUID?
+    ) {
+        self.node = node
+        self.removed = removed
+        self.trackedAncestorReplacementNodeID = trackedAncestorReplacementNodeID
+    }
+}
+
 extension LayoutNode: Codable {
     private enum CodingKeys: String, CodingKey {
         case type
@@ -102,6 +118,15 @@ extension LayoutNode: Codable {
 }
 
 public extension LayoutNode {
+    var resolvedNodeID: UUID {
+        switch self {
+        case .slot(let slotID, _):
+            return slotID
+        case .split(let nodeID, _, _, _, _):
+            return nodeID
+        }
+    }
+
     var structuralIdentity: LayoutStructuralIdentity {
         switch self {
         case .slot(let slotID, _):
@@ -162,6 +187,19 @@ public extension LayoutNode {
         }
     }
 
+    func findSubtree(nodeID: UUID) -> LayoutNode? {
+        switch self {
+        case .slot(let slotID, _):
+            guard slotID == nodeID else { return nil }
+            return self
+        case .split(let currentNodeID, _, _, let first, let second):
+            if currentNodeID == nodeID {
+                return self
+            }
+            return first.findSubtree(nodeID: nodeID) ?? second.findSubtree(nodeID: nodeID)
+        }
+    }
+
     func rightColumnSlotID() -> UUID? {
         switch self {
         case .slot(let slotID, _):
@@ -198,31 +236,200 @@ public extension LayoutNode {
     }
 
     func removingPanel(_ panelID: UUID) -> (node: LayoutNode?, removed: Bool) {
+        let result = removingPanel(panelID, trackingAncestorNodeID: nil)
+        return (result.node, result.removed)
+    }
+
+    mutating func replaceNode(nodeID: UUID, with replacement: LayoutNode) -> Bool {
+        switch self {
+        case .slot(let currentSlotID, _):
+            guard currentSlotID == nodeID else { return false }
+            self = replacement
+            return true
+        case .split(let currentNodeID, let orientation, let ratio, let first, let second):
+            guard currentNodeID != nodeID else {
+                self = replacement
+                return true
+            }
+
+            var updatedFirst = first
+            if updatedFirst.replaceNode(nodeID: nodeID, with: replacement) {
+                self = .split(
+                    nodeID: currentNodeID,
+                    orientation: orientation,
+                    ratio: ratio,
+                    first: updatedFirst,
+                    second: second
+                )
+                return true
+            }
+
+            var updatedSecond = second
+            if updatedSecond.replaceNode(nodeID: nodeID, with: replacement) {
+                self = .split(
+                    nodeID: currentNodeID,
+                    orientation: orientation,
+                    ratio: ratio,
+                    first: first,
+                    second: updatedSecond
+                )
+                return true
+            }
+
+            return false
+        }
+    }
+
+    func removingPanel(
+        _ panelID: UUID,
+        trackingAncestorNodeID: UUID?
+    ) -> PanelRemovalResult {
+        let result = traversingRemovalOfPanel(panelID, trackingAncestorNodeID: trackingAncestorNodeID)
+        return PanelRemovalResult(
+            node: result.node,
+            removed: result.removed,
+            trackedAncestorReplacementNodeID: result.trackedAncestorReplacementNodeID
+        )
+    }
+
+    func lowestCommonAncestor(containing slotIDs: Set<UUID>) -> UUID? {
+        guard slotIDs.isEmpty == false else { return nil }
+        let result = lowestCommonAncestor(containing: slotIDs, targetCount: slotIDs.count)
+        guard result.matchCount == slotIDs.count else {
+            return nil
+        }
+        return result.nodeID
+    }
+
+    private func traversingRemovalOfPanel(
+        _ panelID: UUID,
+        trackingAncestorNodeID: UUID?
+    ) -> PanelRemovalTraversalResult {
         switch self {
         case .slot(_, let currentPanelID):
             guard currentPanelID == panelID else {
-                return (self, false)
+                let isTrackedAncestor = trackingAncestorNodeID == resolvedNodeID
+                return PanelRemovalTraversalResult(
+                    node: self,
+                    removed: false,
+                    trackedAncestorReplacementNodeID: isTrackedAncestor ? resolvedNodeID : nil,
+                    trackedAncestorFound: isTrackedAncestor
+                )
             }
-            return (nil, true)
+            let isTrackedAncestor = trackingAncestorNodeID == resolvedNodeID
+            return PanelRemovalTraversalResult(
+                node: nil,
+                removed: true,
+                trackedAncestorReplacementNodeID: nil,
+                trackedAncestorFound: isTrackedAncestor
+            )
 
         case .split(let nodeID, let orientation, let ratio, let first, let second):
-            let firstResult = first.removingPanel(panelID)
-            if firstResult.removed {
+            let isTrackedAncestor = trackingAncestorNodeID == nodeID
+            let firstResult = first.traversingRemovalOfPanel(panelID, trackingAncestorNodeID: trackingAncestorNodeID)
+            let secondResult = second.traversingRemovalOfPanel(panelID, trackingAncestorNodeID: trackingAncestorNodeID)
+
+            let updatedNode: LayoutNode?
+            let removed = firstResult.removed || secondResult.removed
+            switch (firstResult.removed, secondResult.removed) {
+            case (true, false):
                 guard let updatedFirst = firstResult.node else {
-                    return (second, true)
+                    updatedNode = secondResult.node
+                    break
                 }
-                return (.split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: updatedFirst, second: second), true)
-            }
-
-            let secondResult = second.removingPanel(panelID)
-            if secondResult.removed {
+                updatedNode = .split(
+                    nodeID: nodeID,
+                    orientation: orientation,
+                    ratio: ratio,
+                    first: updatedFirst,
+                    second: secondResult.node ?? second
+                )
+            case (false, true):
                 guard let updatedSecond = secondResult.node else {
-                    return (first, true)
+                    updatedNode = firstResult.node
+                    break
                 }
-                return (.split(nodeID: nodeID, orientation: orientation, ratio: ratio, first: first, second: updatedSecond), true)
+                updatedNode = .split(
+                    nodeID: nodeID,
+                    orientation: orientation,
+                    ratio: ratio,
+                    first: firstResult.node ?? first,
+                    second: updatedSecond
+                )
+            case (false, false):
+                updatedNode = self
+            case (true, true):
+                updatedNode = nil
             }
 
-            return (self, false)
+            let trackedAncestorFound = isTrackedAncestor
+                || firstResult.trackedAncestorFound
+                || secondResult.trackedAncestorFound
+            let trackedAncestorReplacementNodeID: UUID?
+            if isTrackedAncestor {
+                trackedAncestorReplacementNodeID = updatedNode?.resolvedNodeID
+            } else if firstResult.trackedAncestorFound {
+                trackedAncestorReplacementNodeID = firstResult.trackedAncestorReplacementNodeID
+            } else if secondResult.trackedAncestorFound {
+                trackedAncestorReplacementNodeID = secondResult.trackedAncestorReplacementNodeID
+            } else {
+                trackedAncestorReplacementNodeID = nil
+            }
+
+            return PanelRemovalTraversalResult(
+                node: updatedNode,
+                removed: removed,
+                trackedAncestorReplacementNodeID: trackedAncestorReplacementNodeID,
+                trackedAncestorFound: trackedAncestorFound
+            )
         }
     }
+
+    private func lowestCommonAncestor(
+        containing slotIDs: Set<UUID>,
+        targetCount: Int
+    ) -> LowestCommonAncestorResult {
+        switch self {
+        case .slot(let slotID, _):
+            let matched = slotIDs.contains(slotID) ? 1 : 0
+            return LowestCommonAncestorResult(
+                matchCount: matched,
+                nodeID: matched == 1 ? slotID : nil
+            )
+        case .split(let nodeID, _, _, let first, let second):
+            let firstResult = first.lowestCommonAncestor(
+                containing: slotIDs,
+                targetCount: targetCount
+            )
+            if firstResult.matchCount == targetCount {
+                return firstResult
+            }
+
+            let secondResult = second.lowestCommonAncestor(
+                containing: slotIDs,
+                targetCount: targetCount
+            )
+            if secondResult.matchCount == targetCount {
+                return secondResult
+            }
+
+            let combinedMatchCount = firstResult.matchCount + secondResult.matchCount
+            return LowestCommonAncestorResult(
+                matchCount: combinedMatchCount,
+                nodeID: combinedMatchCount == targetCount ? nodeID : nil
+            )
+        }
+    }
+}
+
+private struct PanelRemovalTraversalResult {
+    let node: LayoutNode?
+    let removed: Bool
+    let trackedAncestorReplacementNodeID: UUID?
+    let trackedAncestorFound: Bool
+}
+
+private struct LowestCommonAncestorResult {
+    let matchCount: Int
+    let nodeID: UUID?
 }

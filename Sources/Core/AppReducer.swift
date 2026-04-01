@@ -44,8 +44,13 @@ public struct AppReducer {
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard workspace.tabsByID[tabID] != nil else { return false }
             guard workspace.selectedTabID != tabID else { return false }
+            if let sourceTabID = workspace.resolvedSelectedTabID {
+                _ = workspace.updateTab(id: sourceTabID) { tab in
+                    tab.selectedPanelIDs.removeAll()
+                }
+            }
             workspace.selectedTabID = tabID
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .createWorkspace(let windowID, let title):
@@ -57,7 +62,7 @@ public struct AppReducer {
                 initialTerminalProfileBinding: state.defaultTerminalProfileBinding
             )
 
-            state.workspacesByID[workspace.id] = workspace
+            commitWorkspace(workspace, workspaceID: workspace.id, state: &state)
             state.windows[windowIndex].workspaceIDs.append(workspace.id)
             state.windows[windowIndex].selectedWorkspaceID = workspace.id
             return true
@@ -69,7 +74,7 @@ public struct AppReducer {
                 initialTerminalProfileBinding: seed?.terminalProfileBinding ?? state.defaultTerminalProfileBinding
             )
             workspace.appendTab(tab, select: true)
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .createWindow(let seed, let initialFrame):
@@ -86,7 +91,7 @@ public struct AppReducer {
                 terminalFontSizePointsOverride: seed?.windowTerminalFontSizePointsOverride
             )
 
-            state.workspacesByID[workspace.id] = workspace
+            commitWorkspace(workspace, workspaceID: workspace.id, state: &state)
             state.windows.append(window)
             state.selectedWindowID = window.id
             return true
@@ -100,7 +105,7 @@ public struct AppReducer {
             guard trimmedTitle.isEmpty == false else { return false }
             guard workspace.title != trimmedTitle else { return false }
             workspace.title = trimmedTitle
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .setWorkspaceTabCustomTitle(let workspaceID, let tabID, let title):
@@ -114,7 +119,7 @@ public struct AppReducer {
             }) else {
                 return false
             }
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .closeWorkspace(let workspaceID):
@@ -140,10 +145,32 @@ public struct AppReducer {
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
             guard let tabID = workspace.tabID(containingPanelID: panelID) else { return false }
             workspace.selectedTabID = tabID
-            workspace.focusedPanelID = panelID
+            guard workspace.updateTab(id: tabID, { tab in
+                tab.focusedPanelID = panelID
+                tab.selectedPanelIDs.removeAll()
+
+                guard tab.focusedPanelModeActive else {
+                    return
+                }
+
+                let splitTree = WorkspaceSplitTree(root: tab.layoutTree)
+                let currentRootNodeID = splitTree.effectiveFocusModeRootNodeID(
+                    preferredRootNodeID: tab.focusModeRootNodeID,
+                    focusedPanelID: tab.focusedPanelID
+                )
+                if let currentRootNodeID,
+                   let currentSubtree = tab.layoutTree.findSubtree(nodeID: currentRootNodeID),
+                   currentSubtree.slotContaining(panelID: panelID) != nil {
+                    tab.focusModeRootNodeID = currentRootNodeID
+                } else {
+                    tab.focusModeRootNodeID = tab.layoutTree.slotContaining(panelID: panelID)?.slotID
+                }
+            }) else {
+                return false
+            }
             _ = workspace.unreadPanelIDs.remove(panelID)
             workspace.unreadWorkspaceNotificationCount = 0
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .movePanelToSlot(let panelID, let targetSlotID):
@@ -167,7 +194,7 @@ public struct AppReducer {
             }
             workspace.layoutTree = updatedTree
             workspace.focusedPanelID = panelID
-            state.workspacesByID[sourceLocation.workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: sourceLocation.workspaceID, state: &state)
             return true
 
         case .movePanelToWorkspace(let panelID, let targetWorkspaceID, let targetSlotID):
@@ -224,7 +251,7 @@ public struct AppReducer {
             }
 
             if shouldRemoveSourceTab {
-                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
+                commitWorkspace(sourceWorkspace, workspaceID: sourceLocation.workspaceID, state: &state)
                 guard removeWorkspaceTab(
                     sourceLocation.tabID,
                     workspaceID: sourceLocation.workspaceID,
@@ -235,9 +262,9 @@ public struct AppReducer {
                     return false
                 }
             } else {
-                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
+                commitWorkspace(sourceWorkspace, workspaceID: sourceLocation.workspaceID, state: &state)
             }
-            state.workspacesByID[targetWorkspaceID] = targetWorkspace
+            commitWorkspace(targetWorkspace, workspaceID: targetWorkspaceID, state: &state)
             return true
 
         case .detachPanelToNewWindow(let panelID):
@@ -253,9 +280,9 @@ public struct AppReducer {
             if let updatedSourceTree = sourceRemoval.node {
                 sourceWorkspace.layoutTree = updatedSourceTree
                 _ = sourceWorkspace.synchronizeFocusedPanelToLayout()
-                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
+                commitWorkspace(sourceWorkspace, workspaceID: sourceLocation.workspaceID, state: &state)
             } else {
-                state.workspacesByID[sourceLocation.workspaceID] = sourceWorkspace
+                commitWorkspace(sourceWorkspace, workspaceID: sourceLocation.workspaceID, state: &state)
                 removeWorkspaceTab(
                     sourceLocation.tabID,
                     workspaceID: sourceLocation.workspaceID,
@@ -287,7 +314,7 @@ public struct AppReducer {
                 )
             )
 
-            state.workspacesByID[detachedWorkspaceID] = detachedWorkspace
+            commitWorkspace(detachedWorkspace, workspaceID: detachedWorkspaceID, state: &state)
             state.windows.append(detachedWindow)
             state.selectedWindowID = detachedWindowID
             return true
@@ -299,8 +326,9 @@ public struct AppReducer {
             workspace.selectedTabID = sourceLocation.tabID
             let wasFocusedPanel = workspace.focusedPanelID == panelID
             let previousSlotIDBeforeRemoval = wasFocusedPanel
-                ? workspace.focusTargetSlotID(from: sourceLocation.slotID, direction: .previous)
+                ? workspace.focusTargetSlotIDWithinVisibleRoot(from: sourceLocation.slotID, direction: .previous)
                 : nil
+            let trackedFocusModeRootNodeID = workspace.effectiveFocusModeRootNodeID
 
             workspace.recentlyClosedPanels.append(
                 ClosedPanelRecord(
@@ -313,23 +341,35 @@ public struct AppReducer {
                 workspace.recentlyClosedPanels.removeFirst(workspace.recentlyClosedPanels.count - 10)
             }
 
-            let removal = workspace.layoutTree.removingPanel(panelID)
+            let removal = workspace.layoutTree.removingPanel(
+                panelID,
+                trackingAncestorNodeID: trackedFocusModeRootNodeID
+            )
             guard removal.removed else { return false }
 
             workspace.panels.removeValue(forKey: panelID)
             workspace.unreadPanelIDs.remove(panelID)
             workspace.auxPanelVisibility.remove(panelState.kind)
+            _ = workspace.updateTab(id: sourceLocation.tabID) { tab in
+                _ = tab.selectedPanelIDs.remove(panelID)
+            }
 
             if let updatedTree = removal.node {
                 workspace.layoutTree = updatedTree
+                if workspace.focusedPanelModeActive {
+                    workspace.focusModeRootNodeID = removal.trackedAncestorReplacementNodeID
+                }
                 workspace.focusedPanelID = workspace.focusedPanelIDAfterClosing(
                     closedPanelID: panelID,
                     closedPanelWasFocused: wasFocusedPanel,
                     previousSlotIDBeforeRemoval: previousSlotIDBeforeRemoval
                 )
-                state.workspacesByID[sourceLocation.workspaceID] = workspace
+                if wasFocusedPanel, workspace.focusedPanelID != nil {
+                    workspace.selectedPanelIDs.removeAll()
+                }
+                commitWorkspace(workspace, workspaceID: sourceLocation.workspaceID, state: &state)
             } else {
-                state.workspacesByID[sourceLocation.workspaceID] = workspace
+                commitWorkspace(workspace, workspaceID: sourceLocation.workspaceID, state: &state)
                 removeWorkspaceTab(
                     sourceLocation.tabID,
                     workspaceID: sourceLocation.workspaceID,
@@ -348,7 +388,8 @@ public struct AppReducer {
                let existingAuxPanelID = workspace.panels.first(where: { $0.value.kind == closedRecord.panelState.kind })?.key {
                 workspace.focusedPanelID = existingAuxPanelID
                 workspace.recentlyClosedPanels.removeLast()
-                state.workspacesByID[workspaceID] = workspace
+                workspace.selectedPanelIDs.removeAll()
+                commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
                 return true
             }
 
@@ -375,8 +416,9 @@ public struct AppReducer {
                 workspace.auxPanelVisibility.insert(closedRecord.panelState.kind)
             }
             workspace.recentlyClosedPanels.removeLast()
+            workspace.selectedPanelIDs.removeAll()
 
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .toggleAuxPanel(let workspaceID, let kind):
@@ -398,10 +440,10 @@ public struct AppReducer {
                     if workspace.focusedPanelID == existingPanelID {
                         _ = workspace.synchronizeFocusedPanelToLayout()
                     }
-                    state.workspacesByID[workspaceID] = workspace
+                    commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
                 } else if let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) {
                     guard let selectedTabID else { return false }
-                    state.workspacesByID[workspaceID] = workspace
+                    commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
                     removeWorkspaceTab(
                         selectedTabID,
                         workspaceID: workspaceID,
@@ -460,16 +502,41 @@ public struct AppReducer {
             }
 
             workspace.auxPanelVisibility.insert(kind)
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .toggleFocusedPanelMode(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.synchronizeFocusedPanelToLayout() != nil else {
+            guard let selectedTabID = workspace.resolvedSelectedTabID,
+                  var selectedTab = workspace.tab(id: selectedTabID) else {
                 return false
             }
-            workspace.focusedPanelModeActive.toggle()
-            state.workspacesByID[workspaceID] = workspace
+
+            if selectedTab.focusedPanelModeActive {
+                selectedTab.focusedPanelModeActive = false
+                selectedTab.focusModeRootNodeID = nil
+                selectedTab.selectedPanelIDs.removeAll()
+                workspace.tabsByID[selectedTabID] = selectedTab
+                commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+                return true
+            }
+
+            let splitTree = WorkspaceSplitTree(root: selectedTab.layoutTree)
+            let resolvedFocusedPanelID = selectedTab.resolvedFocusedPanelID
+            selectedTab.focusedPanelID = resolvedFocusedPanelID
+            selectedTab.selectedPanelIDs.removeAll()
+            guard let focusedPanelID = resolvedFocusedPanelID,
+                  let focusedSlot = selectedTab.layoutTree.slotContaining(panelID: focusedPanelID) else {
+                return false
+            }
+            selectedTab.focusedPanelModeActive = true
+            selectedTab.focusModeRootNodeID = splitTree.effectiveFocusModeRootNodeID(
+                preferredRootNodeID: focusedSlot.slotID,
+                focusedPanelID: focusedPanelID
+            )
+
+            workspace.tabsByID[selectedTabID] = selectedTab
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .setConfiguredTerminalFont(let points):
@@ -553,7 +620,8 @@ public struct AppReducer {
             }
 
             workspace.focusedPanelID = panelID
-            state.workspacesByID[workspaceID] = workspace
+            workspace.selectedPanelIDs.removeAll()
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .updateTerminalPanelMetadata(let panelID, let title, let cwd):
@@ -580,7 +648,7 @@ public struct AppReducer {
             _ = workspace.updateTab(id: tabID) { tab in
                 tab.panels[panelID] = .terminal(terminalState)
             }
-            state.workspacesByID[location.workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
             return true
 
         case .recordDesktopNotification(let workspaceID, let panelID):
@@ -593,7 +661,7 @@ public struct AppReducer {
             } else {
                 workspace.unreadWorkspaceNotificationCount += 1
             }
-            state.workspacesByID[workspaceID] = workspace
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
         case .markPanelNotificationsRead(let workspaceID, let panelID):
@@ -603,7 +671,7 @@ public struct AppReducer {
                 _ = tab.unreadPanelIDs.remove(panelID)
             }
             if didMutate {
-                state.workspacesByID[workspaceID] = workspace
+                commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             }
             return true
 
@@ -648,7 +716,6 @@ public struct AppReducer {
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
-        guard workspace.focusedPanelModeActive == false else { return false }
         guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             return false
         }
@@ -673,7 +740,9 @@ public struct AppReducer {
             )
         )
 
-        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).splitting(
+        let trackedRootNodeID = workspace.effectiveFocusModeRootNodeID
+
+        guard let splitResult = WorkspaceSplitTree(root: workspace.layoutTree).splitting(
             slotID: focusResolution.slot.slotID,
             direction: direction,
             newPanelID: newPanelID,
@@ -682,9 +751,14 @@ public struct AppReducer {
             return false
         }
 
-        workspace.apply(splitTree: updatedSplitTree)
+        workspace.apply(splitTree: splitResult.tree)
+        if workspace.focusedPanelModeActive,
+           trackedRootNodeID == focusResolution.slot.slotID {
+            workspace.focusModeRootNodeID = splitResult.newSplitNodeID
+        }
         workspace.focusedPanelID = newPanelID
-        state.workspacesByID[workspaceID] = workspace
+        workspace.selectedPanelIDs.removeAll()
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
 
     }
@@ -696,12 +770,14 @@ public struct AppReducer {
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
-        guard workspace.focusedPanelModeActive == false else { return false }
         guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             return false
         }
 
-        guard let targetSlotID = workspace.focusTargetSlotID(from: focusResolution.slot.slotID, direction: direction) else {
+        guard let targetSlotID = workspace.focusTargetSlotIDWithinVisibleRoot(
+            from: focusResolution.slot.slotID,
+            direction: direction
+        ) else {
             return false
         }
         guard targetSlotID != focusResolution.slot.slotID else {
@@ -715,9 +791,10 @@ public struct AppReducer {
         }
 
         workspace.focusedPanelID = targetPanelID
+        workspace.selectedPanelIDs.removeAll()
         _ = workspace.unreadPanelIDs.remove(targetPanelID)
         workspace.unreadWorkspaceNotificationCount = 0
-        state.workspacesByID[workspaceID] = workspace
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
     }
 
@@ -725,7 +802,7 @@ public struct AppReducer {
         guard var workspace = state.workspacesByID[workspaceID] else { return }
         guard workspace.unreadWorkspaceNotificationCount > 0 else { return }
         workspace.unreadWorkspaceNotificationCount = 0
-        state.workspacesByID[workspaceID] = workspace
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
     }
 
     private static func resizeFocusedSlotSplit(
@@ -742,14 +819,6 @@ public struct AppReducer {
             )
             return false
         }
-        guard workspace.focusedPanelModeActive == false else {
-            ToasttyLog.debug(
-                "Resize split rejected: focused panel mode active",
-                category: .reducer,
-                metadata: ["workspace_id": workspaceID.uuidString]
-            )
-            return false
-        }
         guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
             ToasttyLog.debug(
                 "Resize split rejected: no focused panel",
@@ -759,11 +828,39 @@ public struct AppReducer {
             return false
         }
 
-        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).resized(
+        let updatedLayoutTree: LayoutNode
+        if workspace.focusedPanelModeActive {
+            guard let rootNodeID = workspace.effectiveFocusModeRootNodeID,
+                  let focusModeSubtree = WorkspaceSplitTree(root: workspace.layoutTree).focusedSubtree(rootNodeID: rootNodeID),
+                  let resizedSubtree = focusModeSubtree.resized(
+                    focusedSlotID: focusResolution.slot.slotID,
+                    direction: direction,
+                    amount: amount
+                  ) else {
+                ToasttyLog.debug(
+                    "Resize split rejected: no matching split orientation",
+                    category: .reducer,
+                    metadata: [
+                        "workspace_id": workspaceID.uuidString,
+                        "direction": direction.rawValue,
+                        "amount": String(amount),
+                    ]
+                )
+                return false
+            }
+
+            var replacedLayoutTree = workspace.layoutTree
+            guard replacedLayoutTree.replaceNode(nodeID: rootNodeID, with: resizedSubtree.root) else {
+                return false
+            }
+            updatedLayoutTree = replacedLayoutTree
+        } else if let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).resized(
             focusedSlotID: focusResolution.slot.slotID,
             direction: direction,
             amount: amount
-        ) else {
+        ) {
+            updatedLayoutTree = updatedSplitTree.root
+        } else {
             ToasttyLog.debug(
                 "Resize split rejected: no matching split orientation",
                 category: .reducer,
@@ -776,8 +873,8 @@ public struct AppReducer {
             return false
         }
 
-        workspace.apply(splitTree: updatedSplitTree)
-        state.workspacesByID[workspaceID] = workspace
+        workspace.layoutTree = updatedLayoutTree
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         ToasttyLog.debug(
             "Resize split applied",
             category: .reducer,
@@ -799,16 +896,28 @@ public struct AppReducer {
             )
             return false
         }
-        guard workspace.focusedPanelModeActive == false else {
-            ToasttyLog.debug(
-                "Equalize splits rejected: focused panel mode active",
-                category: .reducer,
-                metadata: ["workspace_id": workspaceID.uuidString]
-            )
-            return false
-        }
 
-        guard let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).equalized() else {
+        let updatedLayoutTree: LayoutNode
+        if workspace.focusedPanelModeActive {
+            guard let rootNodeID = workspace.effectiveFocusModeRootNodeID,
+                  let focusModeSubtree = WorkspaceSplitTree(root: workspace.layoutTree).focusedSubtree(rootNodeID: rootNodeID),
+                  let equalizedSubtree = focusModeSubtree.equalized() else {
+                ToasttyLog.debug(
+                    "Equalize splits rejected: tree already equalized",
+                    category: .reducer,
+                    metadata: ["workspace_id": workspaceID.uuidString]
+                )
+                return false
+            }
+
+            var replacedLayoutTree = workspace.layoutTree
+            guard replacedLayoutTree.replaceNode(nodeID: rootNodeID, with: equalizedSubtree.root) else {
+                return false
+            }
+            updatedLayoutTree = replacedLayoutTree
+        } else if let updatedSplitTree = WorkspaceSplitTree(root: workspace.layoutTree).equalized() {
+            updatedLayoutTree = updatedSplitTree.root
+        } else {
             ToasttyLog.debug(
                 "Equalize splits rejected: tree already equalized",
                 category: .reducer,
@@ -817,8 +926,8 @@ public struct AppReducer {
             return false
         }
 
-        workspace.apply(splitTree: updatedSplitTree)
-        state.workspacesByID[workspaceID] = workspace
+        workspace.layoutTree = updatedLayoutTree
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         ToasttyLog.debug(
             "Equalized layout splits",
             category: .reducer,
@@ -906,6 +1015,16 @@ public struct AppReducer {
         return layoutTree.replaceSlot(slotID: slotID, with: splitNode)
     }
 
+    private static func commitWorkspace(
+        _ workspace: WorkspaceState,
+        workspaceID: UUID,
+        state: inout AppState
+    ) {
+        var repairedWorkspace = workspace
+        repairedWorkspace.repairTransientTabState()
+        state.workspacesByID[workspaceID] = repairedWorkspace
+    }
+
     @discardableResult
     private static func removeWorkspace(
         _ workspaceID: UUID,
@@ -979,7 +1098,7 @@ public struct AppReducer {
             }
         }
 
-        state.workspacesByID[workspaceID] = workspace
+        commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
     }
 
