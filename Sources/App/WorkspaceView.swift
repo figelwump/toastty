@@ -149,8 +149,8 @@ struct WorkspaceView: View {
 
     private static let panelFlashPeakDuration: Double = 0.18
     private static let panelFlashSettleDuration: Double = 0.28
-    private static let transientUnfocusHighlightHoldDuration: Double = 0.55
-    private static let transientUnfocusHighlightFadeDuration: Double = 0.2
+    private static let transientUnfocusHighlightHoldDuration: Double = 1.0
+    private static let transientUnfocusHighlightFadeDuration: Double = 0.3
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
@@ -1188,11 +1188,14 @@ struct WorkspaceView: View {
 
             if tab.focusedPanelModeActive {
                 Text("Focused")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(ToastyTheme.focusModeAccentText)
-                    .padding(.horizontal, 5)
+                    .font(ToastyTheme.fontWorkspaceSessionChip)
+                    .foregroundStyle(ToastyTheme.focusModeAccent)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(ToastyTheme.focusModeAccent, in: Capsule())
+                    .background(
+                        ToastyTheme.focusModeAccent.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
             }
         }
     }
