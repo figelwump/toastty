@@ -42,7 +42,7 @@ struct AppWindowSceneObserver: NSViewRepresentable {
         context.coordinator.onWindowCloseInitiated = onWindowCloseInitiated
         context.coordinator.onWindowWillClose = onWindowWillClose
         context.coordinator.attach(to: nsView.window)
-        context.coordinator.applyDesiredFrameIfNeeded()
+        context.coordinator.applyDesiredFrameIfNeeded(clampToVisibleScreens: false)
         // attach(to:) handles the first window binding; keep reapplying here so
         // workspace selection and rename changes update the already attached window.
         context.coordinator.applyWindowTitleIfNeeded()
@@ -240,7 +240,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
             }
         )
 
-        applyDesiredFrameIfNeeded()
+        applyDesiredFrameIfNeeded(clampToVisibleScreens: true)
 
         if window.isKeyWindow {
             scheduleOnMainActor { [weak self] in
@@ -274,7 +274,7 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         closeButton.action = #selector(handleNativeCloseButton(_:))
     }
 
-    func applyDesiredFrameIfNeeded() {
+    func applyDesiredFrameIfNeeded(clampToVisibleScreens: Bool = false) {
         guard let observedWindow, let desiredFrame else { return }
         // Preserve the live-drag suppression from raw AppKit frames before any
         // display-aware clamping. Straddling two screens is valid while the user
@@ -283,7 +283,8 @@ final class AppWindowSceneObserverCoordinator: NSObject {
            framesEqual(lastPublishedWindowFrame, desiredFrame) {
             return
         }
-        let resolvedDesiredFrame = adjustedFrameForVisibleScreens(desiredFrame)
+        let shouldClampToVisibleScreens = clampToVisibleScreens || lastPublishedWindowFrame == nil
+        let resolvedDesiredFrame = shouldClampToVisibleScreens ? adjustedFrameForVisibleScreens(desiredFrame) : desiredFrame
         guard framesEqual(observedWindow.frame, resolvedDesiredFrame) == false else { return }
         // Window move/resize notifications publish the live AppKit frame back
         // into app state. Ignore that immediate state echo so SwiftUI updates do
@@ -462,8 +463,11 @@ final class AppWindowSceneObserverCoordinator: NSObject {
         Closing this window will close all terminals, tabs, and workspaces in this window.
         """
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Close Window")
+        alert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+        alert.addConfiguredButton(
+            withTitle: "Close Window",
+            behavior: .defaultAction
+        )
         alert.beginSheetModal(for: window) { response in
             Task { @MainActor in
                 completion(response == .alertSecondButtonReturn)

@@ -35,6 +35,8 @@ final class TerminalHostView: NSView {
     private var windowOcclusionObserver: NSObjectProtocol?
     private var lastKnownSurfaceVisibility: Bool?
     private var trackedPressedModifierKeyCodes: [UInt16] = []
+    private var markedText = NSMutableAttributedString(string: "")
+    private var keyTextAccumulator: [String]?
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
@@ -121,6 +123,8 @@ final class TerminalHostView: NSView {
         var refresh: @Sendable (ghostty_surface_t) -> Void
         var keyTranslationMods: @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e
         var sendKey: @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool
+        var setPreedit: @Sendable (ghostty_surface_t, UnsafePointer<CChar>?, uintptr_t) -> Void
+        var sendText: @Sendable (ghostty_surface_t, UnsafePointer<CChar>, uintptr_t) -> Void
 
         init(
             setFocus: @escaping @Sendable (ghostty_surface_t, Bool) -> Void,
@@ -131,6 +135,12 @@ final class TerminalHostView: NSView {
             },
             sendKey: @escaping @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool = { surface, keyEvent in
                 ghostty_surface_key(surface, keyEvent)
+            },
+            setPreedit: @escaping @Sendable (ghostty_surface_t, UnsafePointer<CChar>?, uintptr_t) -> Void = { surface, text, length in
+                ghostty_surface_preedit(surface, text, length)
+            },
+            sendText: @escaping @Sendable (ghostty_surface_t, UnsafePointer<CChar>, uintptr_t) -> Void = { surface, text, length in
+                ghostty_surface_text(surface, text, length)
             }
         ) {
             self.setFocus = setFocus
@@ -138,6 +148,8 @@ final class TerminalHostView: NSView {
             self.refresh = refresh
             self.keyTranslationMods = keyTranslationMods
             self.sendKey = sendKey
+            self.setPreedit = setPreedit
+            self.sendText = sendText
         }
 
         static let live = GhosttySurfaceHooks(
@@ -155,6 +167,12 @@ final class TerminalHostView: NSView {
             },
             sendKey: { surface, keyEvent in
                 ghostty_surface_key(surface, keyEvent)
+            },
+            setPreedit: { surface, text, length in
+                ghostty_surface_preedit(surface, text, length)
+            },
+            sendText: { surface, text, length in
+                ghostty_surface_text(surface, text, length)
             }
         )
     }
@@ -882,11 +900,44 @@ final class TerminalHostView: NSView {
     override func keyDown(with event: NSEvent) {
         let action = event.isARepeat ? GHOSTTY_ACTION_REPEAT : GHOSTTY_ACTION_PRESS
         notifyLocalInterruptIfNeeded(event, action: action)
-        let handled = handleKeyEvent(event, action: action)
-        if handled {
+        guard let ghosttySurface else {
+            super.keyDown(with: event)
             return
         }
-        super.keyDown(with: event)
+
+        let translationEvent = translatedKeyEvent(for: event, on: ghosttySurface)
+        let markedTextBefore = markedText.length > 0
+        keyTextAccumulator = []
+        defer {
+            keyTextAccumulator = nil
+        }
+
+        interpretKeyEvents([translationEvent])
+        syncPreedit(clearIfNeeded: markedTextBefore)
+
+        if let keyTextAccumulator, keyTextAccumulator.isEmpty == false {
+            for text in keyTextAccumulator {
+                _ = forwardGhosttyKeyEvent(
+                    keyCode: event.keyCode,
+                    modifierFlags: event.modifierFlags,
+                    action: action,
+                    text: text,
+                    unshiftedCodepoint: Self.ghosttyUnshiftedCodepoint(for: event),
+                    translationModifierFlags: translationEvent.modifierFlags
+                )
+            }
+            return
+        }
+
+        _ = forwardGhosttyKeyEvent(
+            keyCode: event.keyCode,
+            modifierFlags: event.modifierFlags,
+            action: action,
+            text: Self.ghosttyText(for: translationEvent),
+            unshiftedCodepoint: Self.ghosttyUnshiftedCodepoint(for: event),
+            translationModifierFlags: translationEvent.modifierFlags,
+            composing: markedText.length > 0 || markedTextBefore
+        )
     }
 
     override func keyUp(with event: NSEvent) {
@@ -898,6 +949,9 @@ final class TerminalHostView: NSView {
 
     override func flagsChanged(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        if hasMarkedText() {
+            return
+        }
         guard let action = Self.ghosttyModifierActionForFlagsChanged(
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags
@@ -925,6 +979,12 @@ final class TerminalHostView: NSView {
         #endif
     }
 
+    override func doCommand(by selector: Selector) {
+        _ = selector
+        // Swallow AppKit text commands after interpretKeyEvents dispatches them.
+        // The follow-up Ghostty key event handling runs in keyDown.
+    }
+
     private func handleKeyEvent(_ event: NSEvent, action: ghostty_input_action_e) -> Bool {
         let text = Self.ghosttyText(for: event)
         return forwardGhosttyKeyEvent(
@@ -941,7 +1001,9 @@ final class TerminalHostView: NSView {
         modifierFlags: NSEvent.ModifierFlags,
         action: ghostty_input_action_e,
         text: String?,
-        unshiftedCodepoint: UInt32
+        unshiftedCodepoint: UInt32,
+        translationModifierFlags: NSEvent.ModifierFlags? = nil,
+        composing: Bool = false
     ) -> Bool {
         guard let ghosttySurface else {
             ToasttyLog.debug(
@@ -957,7 +1019,11 @@ final class TerminalHostView: NSView {
         let mods = Self.ghosttyModifierFlags(for: modifierFlags)
         // Translation mods are only for keyboard-layout text translation (for example
         // option-as-alt) and should not strip control/command from the actual key event.
-        let translationMods = ghosttySurfaceHooks.keyTranslationMods(ghosttySurface, mods)
+        let translationMods = if let translationModifierFlags {
+            Self.ghosttyModifierFlags(for: translationModifierFlags)
+        } else {
+            ghosttySurfaceHooks.keyTranslationMods(ghosttySurface, mods)
+        }
         var keyEvent = ghostty_input_key_s(
             action: action,
             mods: mods,
@@ -965,7 +1031,7 @@ final class TerminalHostView: NSView {
             keycode: UInt32(keyCode),
             text: nil,
             unshifted_codepoint: unshiftedCodepoint,
-            composing: false
+            composing: composing
         )
 
         let handled: Bool
@@ -1055,6 +1121,7 @@ final class TerminalHostView: NSView {
 
     private func notifyLocalInterruptIfNeeded(_ event: NSEvent, action: ghostty_input_action_e) {
         guard action == GHOSTTY_ACTION_PRESS else { return }
+        guard markedText.length == 0 else { return }
         guard let kind = Self.localInterruptKind(
             keyCode: event.keyCode,
             modifierFlags: event.modifierFlags,
@@ -1159,6 +1226,75 @@ final class TerminalHostView: NSView {
         return true
     }
 
+    private func translatedKeyEvent(for event: NSEvent, on surface: ghostty_surface_t) -> NSEvent {
+        let translationMods = Self.modifierFlags(
+            forGhosttyModifiers: ghosttySurfaceHooks.keyTranslationMods(
+                surface,
+                Self.ghosttyModifierFlags(for: event.modifierFlags)
+            )
+        )
+        var translatedFlags = event.modifierFlags
+        for flag in [NSEvent.ModifierFlags.shift, .control, .option, .command] {
+            if translationMods.contains(flag) {
+                translatedFlags.insert(flag)
+            } else {
+                translatedFlags.remove(flag)
+            }
+        }
+
+        guard translatedFlags != event.modifierFlags else {
+            return event
+        }
+
+        return NSEvent.keyEvent(
+            with: event.type,
+            location: event.locationInWindow,
+            modifierFlags: translatedFlags,
+            timestamp: event.timestamp,
+            windowNumber: event.windowNumber,
+            context: nil,
+            characters: event.characters(byApplyingModifiers: translatedFlags) ?? "",
+            charactersIgnoringModifiers: event.charactersIgnoringModifiers ?? "",
+            isARepeat: event.isARepeat,
+            keyCode: event.keyCode
+        ) ?? event
+    }
+
+    private func syncPreedit(clearIfNeeded: Bool = true) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else { return }
+        if markedText.length > 0 {
+            let preedit = markedText.string
+            let cString = preedit.utf8CString
+            cString.withUnsafeBufferPointer { buffer in
+                guard let baseAddress = buffer.baseAddress else { return }
+                let byteCount = max(buffer.count - 1, 0)
+                guard byteCount > 0 else { return }
+                ghosttySurfaceHooks.setPreedit(ghosttySurface, baseAddress, uintptr_t(byteCount))
+            }
+        } else if clearIfNeeded {
+            ghosttySurfaceHooks.setPreedit(ghosttySurface, nil, 0)
+        }
+        #else
+        _ = clearIfNeeded
+        #endif
+    }
+
+    private func sendSurfaceText(_ text: String, to surface: ghostty_surface_t) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        let cString = text.utf8CString
+        cString.withUnsafeBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else { return }
+            let byteCount = max(buffer.count - 1, 0)
+            guard byteCount > 0 else { return }
+            ghosttySurfaceHooks.sendText(surface, baseAddress, uintptr_t(byteCount))
+        }
+        #else
+        _ = text
+        _ = surface
+        #endif
+    }
+
     @discardableResult
     private func invokeGhosttyBindingAction(_ action: String, on surface: ghostty_surface_t) -> Bool {
         let cString = action.utf8CString
@@ -1222,6 +1358,17 @@ final class TerminalHostView: NSView {
         raw &= ~GHOSTTY_MODS_SUPER.rawValue
         raw &= ~GHOSTTY_MODS_SUPER_RIGHT.rawValue
         return ghostty_input_mods_e(rawValue: raw)
+    }
+
+    private static func modifierFlags(forGhosttyModifiers mods: ghostty_input_mods_e) -> NSEvent.ModifierFlags {
+        var result: NSEvent.ModifierFlags = []
+        if mods.rawValue & GHOSTTY_MODS_SHIFT.rawValue != 0 { result.insert(.shift) }
+        if mods.rawValue & GHOSTTY_MODS_CTRL.rawValue != 0 { result.insert(.control) }
+        if mods.rawValue & GHOSTTY_MODS_ALT.rawValue != 0 { result.insert(.option) }
+        if mods.rawValue & GHOSTTY_MODS_SUPER.rawValue != 0 { result.insert(.command) }
+        if mods.rawValue & GHOSTTY_MODS_CAPS.rawValue != 0 { result.insert(.capsLock) }
+        if mods.rawValue & GHOSTTY_MODS_NUM.rawValue != 0 { result.insert(.numericPad) }
+        return result
     }
 
     private static func ghosttyMouseButton(for buttonNumber: Int) -> ghostty_input_mouse_button_e {
@@ -1537,5 +1684,140 @@ final class TerminalHostView: NSView {
             ?? NSScreen.main?.backingScaleFactor
             ?? 1
         layer?.contentsScale = max(scale, 1)
+    }
+}
+
+extension TerminalHostView: @preconcurrency NSTextInputClient {
+    func hasMarkedText() -> Bool {
+        markedText.length > 0
+    }
+
+    func markedRange() -> NSRange {
+        guard markedText.length > 0 else {
+            return NSRange()
+        }
+        return NSRange(location: 0, length: markedText.length)
+    }
+
+    func selectedRange() -> NSRange {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else {
+            return NSRange()
+        }
+        var textPayload = ghostty_text_s()
+        guard ghostty_surface_read_selection(ghosttySurface, &textPayload) else {
+            return NSRange()
+        }
+        defer {
+            ghostty_surface_free_text(ghosttySurface, &textPayload)
+        }
+        return NSRange(location: Int(textPayload.offset_start), length: Int(textPayload.offset_len))
+        #else
+        return NSRange()
+        #endif
+    }
+
+    func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        _ = selectedRange
+        _ = replacementRange
+        switch string {
+        case let string as NSAttributedString:
+            markedText = NSMutableAttributedString(attributedString: string)
+        case let string as String:
+            markedText = NSMutableAttributedString(string: string)
+        default:
+            return
+        }
+
+        if keyTextAccumulator == nil {
+            syncPreedit()
+        }
+    }
+
+    func unmarkText() {
+        guard markedText.length > 0 else {
+            return
+        }
+        markedText.mutableString.setString("")
+        syncPreedit()
+    }
+
+    func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        []
+    }
+
+    func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+        _ = actualRange
+        guard range.length > 0 else {
+            return nil
+        }
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface,
+              let selection = selectedText(from: ghosttySurface),
+              selection.isEmpty == false else {
+            return nil
+        }
+        return NSAttributedString(string: selection)
+        #else
+        return nil
+        #endif
+    }
+
+    func characterIndex(for point: NSPoint) -> Int {
+        _ = point
+        return 0
+    }
+
+    func firstRect(forCharacterRange range: NSRange, actualRange: NSRangePointer?) -> NSRect {
+        _ = actualRange
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else {
+            return NSRect(x: frame.origin.x, y: frame.origin.y, width: 0, height: 0)
+        }
+        var x: Double = 0
+        var y: Double = 0
+        var width: Double = 0
+        var height: Double = 0
+        ghostty_surface_ime_point(ghosttySurface, &x, &y, &width, &height)
+        let viewRect = NSRect(
+            x: x,
+            y: frame.size.height - y,
+            width: width,
+            height: max(height, 1)
+        )
+        let windowRect = convert(viewRect, to: nil)
+        guard let window else {
+            return windowRect
+        }
+        return window.convertToScreen(windowRect)
+        #else
+        _ = range
+        return NSRect(x: frame.origin.x, y: frame.origin.y, width: 0, height: 0)
+        #endif
+    }
+
+    func insertText(_ string: Any, replacementRange: NSRange) {
+        _ = replacementRange
+        let committedText: String
+        switch string {
+        case let string as NSAttributedString:
+            committedText = string.string
+        case let string as String:
+            committedText = string
+        default:
+            return
+        }
+
+        unmarkText()
+        if var keyTextAccumulator {
+            keyTextAccumulator.append(committedText)
+            self.keyTextAccumulator = keyTextAccumulator
+            return
+        }
+
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else { return }
+        sendSurfaceText(committedText, to: ghosttySurface)
+        #endif
     }
 }

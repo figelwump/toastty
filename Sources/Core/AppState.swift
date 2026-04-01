@@ -183,6 +183,12 @@ public struct AppState: Codable, Equatable, Sendable {
         return workspaceSelection(in: selectedWindowID)
     }
 
+    public var allTerminalPanelIDs: Set<UUID> {
+        workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
+            result.formUnion(workspace.allTerminalPanelIDs)
+        }
+    }
+
     public func soleWorkspaceSelection() -> WindowWorkspaceSelection? {
         guard windows.count == 1,
               let windowID = windows.first?.id else {

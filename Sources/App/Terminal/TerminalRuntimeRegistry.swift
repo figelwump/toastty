@@ -55,7 +55,8 @@ struct TerminalPanelRenderAttachmentSnapshot {
 
 @MainActor
 final class TerminalRuntimeRegistry: ObservableObject {
-    private let focusCoordinator = TerminalFocusCoordinator()
+    private let focusCoordinator: TerminalFocusCoordinator
+    private let activateApp: @MainActor () -> Void
     private let runtimeStore = TerminalWindowRuntimeStore()
     private weak var store: AppStore?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
@@ -425,6 +426,21 @@ final class TerminalRuntimeRegistry: ObservableObject {
         }
     }
 
+    convenience init() {
+        self.init(
+            focusCoordinator: TerminalFocusCoordinator(),
+            activateApp: { NSApp.activate(ignoringOtherApps: true) }
+        )
+    }
+
+    init(
+        focusCoordinator: TerminalFocusCoordinator,
+        activateApp: @escaping @MainActor () -> Void
+    ) {
+        self.focusCoordinator = focusCoordinator
+        self.activateApp = activateApp
+    }
+
     func terminalCloseConfirmationAssessment(panelID: UUID) -> TerminalCloseConfirmationAssessment? {
         if exitedTerminalPanelIDs.contains(panelID) {
             return TerminalCloseConfirmationAssessment(requiresConfirmation: false)
@@ -585,6 +601,30 @@ final class TerminalRuntimeRegistry: ObservableObject {
             panelID: panelID,
             avoidStealingKeyboardFocus: false
         )
+    }
+
+    @discardableResult
+    func focusPanelForImageDropIfPossible(_ panelID: UUID) -> Bool {
+        guard let store else { return false }
+        guard let selection = store.state.workspaceSelection(containingPanelID: panelID) else {
+            return false
+        }
+        guard store.focusDroppedImagePanel(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            panelID: panelID
+        ) else {
+            return false
+        }
+
+        // External file drops are an explicit focus transfer from Finder into
+        // Toastty, so restore both app activation and terminal keyboard focus.
+        activateApp()
+        schedulePanelFocusRestore(
+            panelID: panelID,
+            avoidStealingKeyboardFocus: false
+        )
+        return true
     }
 
     func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop? {
@@ -1045,16 +1085,6 @@ private extension TerminalRuntimeRegistry {
             return false
         }
         return true
-    }
-
-    @discardableResult
-    func focusPanelForImageDropIfPossible(_ panelID: UUID) -> Bool {
-        guard let store else { return false }
-        let state = store.state
-        guard let workspaceID = workspaceID(containing: panelID, state: state) else {
-            return false
-        }
-        return store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
     }
 
     func register(surface: ghostty_surface_t, for panelID: UUID) {

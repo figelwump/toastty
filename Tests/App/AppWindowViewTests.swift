@@ -32,4 +32,38 @@ final class AppWindowViewTests: XCTestCase {
             280
         )
     }
+
+    func testShouldPresentAgentGetStartedFlowMatchesWindowID() {
+        let windowID = UUID()
+
+        XCTAssertTrue(
+            AppWindowView.shouldPresentAgentGetStartedFlow(
+                windowID: windowID,
+                notificationObject: windowID
+            )
+        )
+    }
+
+    func testShouldPresentAgentGetStartedFlowIgnoresMismatchedOrMissingWindowIDs() {
+        let windowID = UUID()
+
+        XCTAssertFalse(
+            AppWindowView.shouldPresentAgentGetStartedFlow(
+                windowID: windowID,
+                notificationObject: UUID()
+            )
+        )
+        XCTAssertFalse(
+            AppWindowView.shouldPresentAgentGetStartedFlow(
+                windowID: windowID,
+                notificationObject: "not-a-window-id"
+            )
+        )
+        XCTAssertFalse(
+            AppWindowView.shouldPresentAgentGetStartedFlow(
+                windowID: windowID,
+                notificationObject: nil
+            )
+        )
+    }
 }

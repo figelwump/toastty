@@ -113,6 +113,8 @@ struct ToasttyCommandMenus: Commands {
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let terminalProfilesMenuController: TerminalProfilesMenuController
+    let canCheckForUpdates: Bool
+    let checkForUpdates: @MainActor () -> Void
     let supportsConfigurationReload: Bool
     let reloadConfiguration: () -> Void
     let openManageConfig: () -> Void
@@ -129,6 +131,13 @@ struct ToasttyCommandMenus: Commands {
         Self.resolvedCommandWindowID(
             focusedWindowID: focusedWindowID,
             keyWindowID: currentToasttyKeyWindowID(in: store)
+        )
+    }
+
+    private var agentGetStartedTargetWindowID: UUID? {
+        Self.agentGetStartedTargetWindowID(
+            store: store,
+            preferredWindowID: preferredCommandWindowID
         )
     }
 
@@ -192,7 +201,7 @@ struct ToasttyCommandMenus: Commands {
         }
         return Self.textInputOwnsFindCommands(
             modalWindowPresent: keyWindow.sheetParent != nil || NSApp.modalWindow != nil,
-            firstResponderIsTextInput: keyWindow.firstResponder is NSTextInputClient,
+            firstResponderIsTextInput: toasttyResponderUsesReservedTextInput(keyWindow.firstResponder),
             terminalSearchFieldIsFocused: commandFocusedTerminalSearchFieldFocused
         )
     }
@@ -234,6 +243,11 @@ struct ToasttyCommandMenus: Commands {
         }
 
         CommandGroup(after: .appInfo) {
+            Button("Check for Updates...") {
+                checkForUpdates()
+            }
+            .disabled(canCheckForUpdates == false)
+
             Divider()
 
             Button("Manage Config…", action: openManageConfig)
@@ -250,6 +264,12 @@ struct ToasttyCommandMenus: Commands {
             Button("Install Shell Integration…") {
                 terminalProfilesMenuController.installShellIntegration()
             }
+            Divider()
+
+            Button("Get Started with Toastty…") {
+                showAgentGetStartedFlow()
+            }
+            .disabled(agentGetStartedTargetWindowID == nil)
         }
 
         CommandGroup(after: .pasteboard) {
@@ -508,6 +528,11 @@ struct ToasttyCommandMenus: Commands {
         )
     }
 
+    private func showAgentGetStartedFlow() {
+        guard let windowID = agentGetStartedTargetWindowID else { return }
+        NotificationCenter.default.post(name: .toasttyShowAgentGetStartedFlow, object: windowID)
+    }
+
     @ViewBuilder
     private func workspaceSelectionMenuButton(
         title: String,
@@ -657,6 +682,13 @@ struct ToasttyCommandMenus: Commands {
 
     nonisolated static func resolvedCommandWindowID(focusedWindowID: UUID?, keyWindowID: UUID?) -> UUID? {
         keyWindowID ?? focusedWindowID
+    }
+
+    static func agentGetStartedTargetWindowID(store: AppStore, preferredWindowID: UUID?) -> UUID? {
+        // Follow the same command-window resolution contract as other
+        // window-targeted actions so stale focused-scene state disables the
+        // command instead of rerouting it to another window.
+        store.commandWindowID(preferredWindowID: preferredWindowID)
     }
 }
 

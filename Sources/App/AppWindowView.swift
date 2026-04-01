@@ -10,9 +10,11 @@ struct AppWindowView: View {
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
-    let openAgentProfilesConfiguration: () -> Void
+    let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let terminalRuntimeContext: TerminalWindowRuntimeContext
     @State private var pendingWorkspaceClose: PendingWorkspaceClose?
+    @State private var showsAgentGetStartedSheet = false
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
@@ -45,7 +47,7 @@ struct AppWindowView: View {
                     sessionRuntimeStore: sessionRuntimeStore,
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,
-                    openAgentProfilesConfiguration: openAgentProfilesConfiguration,
+                    showAgentGetStartedFlow: presentAgentGetStartedFlow,
                     terminalRuntimeContext: terminalRuntimeContext,
                     sidebarVisible: sidebarVisible
                 )
@@ -63,11 +65,19 @@ struct AppWindowView: View {
             Button("Cancel", role: .cancel) {
                 pendingWorkspaceClose = nil
             }
-            Button("Close", role: .destructive) {
+            .keyboardShortcut(.cancelAction)
+            Button("Close") {
                 confirmWorkspaceClose(closeTarget)
             }
+            .keyboardShortcut(.defaultAction)
         } message: { _ in
             Text("Closing this workspace will close all terminals and panels within it.")
+        }
+        .sheet(isPresented: $showsAgentGetStartedSheet) {
+            AgentGetStartedSheet(
+                openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
+                openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult
+            )
         }
         .onAppear {
             scheduleWindowFocusRestore()
@@ -91,6 +101,13 @@ struct AppWindowView: View {
                 workspaceID: request.workspaceID
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
+            guard Self.shouldPresentAgentGetStartedFlow(
+                windowID: windowID,
+                notificationObject: notification.object
+            ) else { return }
+            presentAgentGetStartedFlow()
+        }
         .focusedSceneValue(\.toasttyCommandWindowID, windowID)
     }
 
@@ -98,6 +115,13 @@ struct AppWindowView: View {
         hasEverLaunchedAgent: Bool
     ) -> CGFloat {
         hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
+    }
+
+    static func shouldPresentAgentGetStartedFlow(windowID: UUID, notificationObject: Any?) -> Bool {
+        guard let targetWindowID = notificationObject as? UUID else {
+            return false
+        }
+        return targetWindowID == windowID
     }
 
     private var sidebarToggleButton: some View {
@@ -138,6 +162,11 @@ struct AppWindowView: View {
         Self.effectiveSidebarWidth(
             hasEverLaunchedAgent: store.hasEverLaunchedAgent
         )
+    }
+
+    @MainActor
+    private func presentAgentGetStartedFlow() {
+        showsAgentGetStartedSheet = true
     }
 
     private func scheduleWindowFocusRestore(avoidStealingKeyboardFocus: Bool = true) {

@@ -1,9 +1,10 @@
 import SwiftUI
 
-struct TerminalSearchOverlay: View {
+struct TerminalPanelHeaderSearchBar: View {
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let panelID: UUID
     let isActivePanel: Bool
+    let layout: PanelHeaderSearchLayout
 
     @State private var draftNeedle = ""
     @FocusState private var isFieldFocused: Bool
@@ -19,20 +20,23 @@ struct TerminalSearchOverlay: View {
     var body: some View {
         Group {
             if let searchState, searchState.isPresented {
-                HStack(spacing: 6) {
+                HStack(spacing: PanelHeaderSearchLayout.searchControlsSpacing) {
                     TextField("Search", text: searchBinding)
                         .textFieldStyle(.plain)
-                        .font(ToastyTheme.fontTitle)
+                        .font(ToastyTheme.fontBody)
                         .foregroundStyle(ToastyTheme.primaryText)
-                        .frame(width: 280)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
+                        .padding(.leading, 8)
+                        .padding(.trailing, layout.showsMatchLabel ? 36 : 8)
+                        .frame(
+                            width: layout.fieldWidth,
+                            height: PanelHeaderSearchLayout.searchFieldHeight
+                        )
                         .background(
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .fill(ToastyTheme.surfaceBackground.opacity(0.96))
                         )
                         .overlay {
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
                                 .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
                         }
                         .focused($isFieldFocused)
@@ -45,44 +49,39 @@ struct TerminalSearchOverlay: View {
                         }
 #endif
                         .overlay(alignment: .trailing) {
-                            if let matchLabel = matchLabel(for: searchState) {
+                            if layout.showsMatchLabel,
+                               let matchLabel = matchLabel(for: searchState) {
                                 Text(matchLabel)
                                     .font(ToastyTheme.fontWorkspaceTabBadge)
                                     .foregroundStyle(ToastyTheme.inactiveText)
                                     .monospacedDigit()
-                                    .padding(.trailing, 12)
+                                    .padding(.trailing, 7)
                             }
                         }
+                        .accessibilityIdentifier("panel.header.search.field.\(panelID.uuidString)")
 
-                    HStack(spacing: 3) {
-                        overlayButton(
+                    HStack(spacing: PanelHeaderSearchLayout.searchButtonSpacing) {
+                        searchButton(
                             systemImage: "chevron.up",
+                            accessibilityIdentifier: "panel.header.search.previous.\(panelID.uuidString)",
                             action: { _ = terminalRuntimeRegistry.findPrevious(panelID: panelID) }
                         )
 
-                        overlayButton(
+                        searchButton(
                             systemImage: "chevron.down",
+                            accessibilityIdentifier: "panel.header.search.next.\(panelID.uuidString)",
                             action: { _ = terminalRuntimeRegistry.findNext(panelID: panelID) }
                         )
 
-                        overlayButton(
+                        searchButton(
                             systemImage: "xmark",
+                            accessibilityIdentifier: "panel.header.search.close.\(panelID.uuidString)",
                             action: closeSearch
                         )
                     }
+                    .fixedSize(horizontal: true, vertical: false)
                 }
-                .padding(.leading, 5)
-                .padding(.trailing, 7)
-                .padding(.vertical, 4)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(ToastyTheme.elevatedBackground.opacity(0.98))
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
-                }
-                .shadow(color: Color.black.opacity(0.22), radius: 10, y: 3)
+                .fixedSize(horizontal: true, vertical: false)
                 .onAppear {
                     syncDraft(with: searchState)
                     guard isActivePanel else {
@@ -138,18 +137,23 @@ struct TerminalSearchOverlay: View {
     }
 
     @ViewBuilder
-    private func overlayButton(
+    private func searchButton(
         systemImage: String,
+        accessibilityIdentifier: String,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(ToastyTheme.primaryText)
-                .frame(width: 18, height: 18)
+                .frame(
+                    width: PanelHeaderSearchLayout.searchButtonSize,
+                    height: PanelHeaderSearchLayout.searchButtonSize
+                )
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private func matchLabel(for searchState: TerminalSearchState) -> String? {

@@ -3,31 +3,103 @@ import Carbon.HIToolbox
 import CoreState
 import SwiftUI
 
+enum KeyboardShortcutsReferenceLocator {
+    private static let fileName = "keyboard-shortcuts"
+    private static let fileExtension = "md"
+
+    static func bundledReferenceURL(bundle: Bundle = .main) -> URL? {
+        bundle.url(forResource: fileName, withExtension: fileExtension)
+    }
+
+    static func referenceURL(
+        worktreeRootURL: URL?,
+        bundledReferenceURL: URL?,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        if let worktreeRootURL {
+            let localReferenceURL = worktreeRootURL
+                .appending(path: "docs", directoryHint: .isDirectory)
+                .appending(path: "\(fileName).\(fileExtension)", directoryHint: .notDirectory)
+            if fileManager.fileExists(atPath: localReferenceURL.path) {
+                return localReferenceURL
+            }
+        }
+
+        return bundledReferenceURL
+    }
+
+    static func openReferenceResult(
+        runtimePaths: ToasttyRuntimePaths = .resolve(),
+        fileManager: FileManager = .default,
+        bundledReferenceURL: URL? = bundledReferenceURL(),
+        openURL: (URL) -> Bool
+    ) -> Result<Void, AgentGetStartedActionError> {
+        guard let referenceURL = referenceURL(
+            worktreeRootURL: runtimePaths.worktreeRootURL,
+            bundledReferenceURL: bundledReferenceURL,
+            fileManager: fileManager
+        ) else {
+            return .failure(
+                AgentGetStartedActionError(
+                    message: "Toastty couldn't find the keyboard shortcuts reference."
+                )
+            )
+        }
+
+        guard openURL(referenceURL) else {
+            return .failure(
+                AgentGetStartedActionError(
+                    message: "Toastty couldn't open the keyboard shortcuts reference."
+                )
+            )
+        }
+        return .success(())
+    }
+}
+
 @MainActor
 private enum ToasttyMenuActions {
     static func openTerminalProfilesConfiguration() {
-        do {
-            try TerminalProfilesFile.ensureTemplateExists()
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Terminal Profiles"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+        switch openTerminalProfilesConfigurationResult() {
+        case .success:
             return
+        case .failure(let error):
+            presentWarningAlert(
+                title: "Unable to Open Terminal Profiles",
+                message: error.localizedDescription
+            )
         }
+    }
 
-        let fileURL = TerminalProfilesFile.fileURL()
-        guard NSWorkspace.shared.open(fileURL) else {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Terminal Profiles"
-            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
-        }
+    static func openTerminalProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            ensureTemplate: {
+                try TerminalProfilesFile.ensureTemplateExists()
+            },
+            fileURL: TerminalProfilesFile.fileURL()
+        )
+    }
+
+    static func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            ensureTemplate: {
+                try AgentProfilesFile.ensureTemplateExists()
+            },
+            fileURL: AgentProfilesFile.fileURL()
+        )
+    }
+
+    static func openKeyboardShortcutsReferenceResult(
+        runtimePaths: ToasttyRuntimePaths = .resolve(),
+        fileManager: FileManager = .default,
+        bundledReferenceURL: URL? = KeyboardShortcutsReferenceLocator.bundledReferenceURL()
+    ) -> Result<Void, AgentGetStartedActionError> {
+        KeyboardShortcutsReferenceLocator.openReferenceResult(
+            runtimePaths: runtimePaths,
+            fileManager: fileManager,
+            bundledReferenceURL: bundledReferenceURL,
+            openURL: { NSWorkspace.shared.open($0) }
+        )
     }
 
     static func installShellIntegration() {
@@ -37,24 +109,17 @@ private enum ToasttyMenuActions {
         do {
             status = try installer.installationStatus()
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Install Shell Integration"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            presentWarningAlert(
+                title: "Unable to Install Shell Integration",
+                message: error.localizedDescription
+            )
             return
         }
 
         if status.isInstalled {
             let alert = NSAlert()
             alert.messageText = "Shell Integration Already Installed"
-            alert.informativeText = """
-            Toastty shell integration is already installed for \(status.plan.shell.displayName).
-
-            Init file: \(status.plan.initFileURL.path)
-            Managed snippet: \(status.plan.managedSnippetURL.path)
-            """
+            alert.informativeText = ProfileShellIntegrationMessaging.alreadyInstalledSummary(for: status)
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -63,27 +128,10 @@ private enum ToasttyMenuActions {
 
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Install Shell Integration?"
-        let snippetAction = status.needsManagedSnippetWrite
-            ? "write the managed snippet to \(status.plan.managedSnippetURL.path)"
-            : "use the existing managed snippet at \(status.plan.managedSnippetURL.path)"
-        let initFileAction: String
-        if status.needsInitFileUpdate {
-            initFileAction = status.createsInitFile
-                ? "create \(status.plan.initFileURL.path) and add one source line to it"
-                : "add one source line to \(status.plan.initFileURL.path)"
-        } else {
-            initFileAction = "\(status.plan.initFileURL.path) already references that snippet"
-        }
-        confirmationAlert.informativeText = """
-        Toastty detected \(status.plan.shell.displayName). It will \(snippetAction).
-
-        It will \(initFileAction).
-
-        New profiled shells will pick it up automatically. Existing zmx or tmux sessions may need to restart or re-source that init file before live titles update. Pane-local history applies to shells launched after Toastty injects the pane history environment, so older multiplexer sessions usually need a restart.
-        """
+        confirmationAlert.informativeText = ProfileShellIntegrationMessaging.installationPlanSummary(for: status)
         confirmationAlert.alertStyle = .informational
-        confirmationAlert.addButton(withTitle: "Install")
-        confirmationAlert.addButton(withTitle: "Cancel")
+        confirmationAlert.addConfiguredButton(withTitle: "Install", behavior: .defaultAction)
+        confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
 
         guard confirmationAlert.runModal() == .alertFirstButtonReturn else {
             return
@@ -93,37 +141,47 @@ private enum ToasttyMenuActions {
             let result = try installer.install(plan: status.plan)
             let alert = NSAlert()
             alert.messageText = "Shell Integration Installed"
-
-            let snippetMessage = result.updatedManagedSnippet
-                ? "Wrote \(result.plan.managedSnippetURL.path)."
-                : "\(result.plan.managedSnippetURL.path) was already up to date."
-
-            let initFileMessage: String
-            if result.updatedInitFile {
-                initFileMessage = result.createdInitFile
-                    ? "Created \(result.plan.initFileURL.path)."
-                    : "Updated \(result.plan.initFileURL.path)."
-            } else {
-                initFileMessage = "\(result.plan.initFileURL.path) already referenced the managed snippet."
-            }
-
-            alert.informativeText = """
-            \(snippetMessage)
-            \(initFileMessage)
-
-            New shells will pick it up automatically. Existing profiled sessions may need to restart or re-source that init file before live titles update. Pane-local history applies to shells launched after Toastty injects the pane history environment, so older multiplexer sessions usually need a restart.
-            """
+            alert.informativeText = ProfileShellIntegrationMessaging.installationCompletionSummary(for: result)
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             alert.runModal()
         } catch {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Install Shell Integration"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
+            presentWarningAlert(
+                title: "Unable to Install Shell Integration",
+                message: error.localizedDescription
+            )
         }
+    }
+
+    private static func openConfigurationFile(
+        ensureTemplate: () throws -> Void,
+        fileURL: URL
+    ) -> Result<Void, AgentGetStartedActionError> {
+        do {
+            try ensureTemplate()
+        } catch {
+            return .failure(AgentGetStartedActionError(message: error.localizedDescription))
+        }
+
+        return openExistingFile(fileURL)
+    }
+
+    private static func openExistingFile(_ fileURL: URL) -> Result<Void, AgentGetStartedActionError> {
+        guard NSWorkspace.shared.open(fileURL) else {
+            return .failure(
+                AgentGetStartedActionError(message: "Toastty couldn't open \(fileURL.path).")
+            )
+        }
+        return .success(())
+    }
+
+    private static func presentWarningAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
 
@@ -170,16 +228,13 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private var workspaceMenuBridge: WorkspaceMenuBridge?
     private var helpMenuBridge: HelpMenuBridge?
     private var hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge?
-    private var sparkleMenuBridge: SparkleMenuBridge?
     private var hasCompletedLaunch = false
     private var menuBridgeInstallationTask: Task<Void, Never>?
-    let sparkleUpdaterBridge: SparkleUpdaterBridge
 
     override init() {
         let processInfo = ProcessInfo.processInfo
         let isInteractiveSession = Self.isInteractiveSession(processInfo)
         shouldConfirmQuit = isInteractiveSession
-        sparkleUpdaterBridge = SparkleUpdaterBridge(startingUpdater: isInteractiveSession)
         super.init()
     }
 
@@ -221,10 +276,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         }
         hiddenSystemMenuItemsBridge.setOnDynamicMenuBridgeRefreshRequested { [weak self] in
             self?.installDynamicMenuBridges()
-        }
-
-        if sparkleMenuBridge == nil {
-            sparkleMenuBridge = SparkleMenuBridge(sparkleUpdaterBridge: sparkleUpdaterBridge)
         }
 
         guard hasCompletedLaunch else { return }
@@ -281,8 +332,11 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         confirmationAlert.messageText = "Quit Toastty?"
         confirmationAlert.informativeText = "Are you sure you want to quit?"
         confirmationAlert.alertStyle = .informational
-        confirmationAlert.addButton(withTitle: "Cancel")
-        confirmationAlert.addButton(withTitle: "Quit")
+        confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+        confirmationAlert.addConfiguredButton(
+            withTitle: "Quit",
+            behavior: .defaultAction
+        )
 
         let response = confirmationAlert.runModal()
         return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
@@ -322,7 +376,6 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private func installDynamicMenuBridges() {
         workspaceMenuBridge?.installIfNeeded()
         helpMenuBridge?.installIfNeeded()
-        sparkleMenuBridge?.installIfNeeded()
     }
 
     private func scheduleMenuBridgeInstallations() {
@@ -578,7 +631,7 @@ final class DisplayShortcutInterceptor {
         guard keyWindow.sheetParent == nil else { return nil }
         // Be conservative around active text input so Cmd+W stays with the
         // field editor or text control rather than being reclaimed by Toastty.
-        if keyWindow.firstResponder is NSTextInputClient {
+        if toasttyResponderUsesReservedTextInput(keyWindow.firstResponder) {
             return nil
         }
         guard let rawWindowID = keyWindow.identifier?.rawValue else { return nil }
@@ -746,6 +799,7 @@ struct ToasttyApp: App {
     @StateObject private var store: AppStore
     @StateObject private var agentCatalogStore: AgentCatalogStore
     @StateObject private var terminalProfileStore: TerminalProfileStore
+    @StateObject private var sparkleUpdaterBridge: SparkleUpdaterBridge
     private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
@@ -783,6 +837,7 @@ struct ToasttyApp: App {
     init() {
         let processInfo = ProcessInfo.processInfo
         let runtimePaths = ToasttyRuntimePaths.resolve(environment: processInfo.environment)
+        let isInteractiveSession = AppLifecycleDelegate.isInteractiveSession(processInfo)
         Self.prepareRuntimeEnvironment(processInfo: processInfo)
         Self.ensureTerminalProfilesTemplateExists()
         Self.refreshManagedShellIntegrationSnippetIfInstalled(processInfo: processInfo)
@@ -808,6 +863,12 @@ struct ToasttyApp: App {
             processInfo: processInfo,
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
+        if usesPersistentPreferences {
+            Self.prunePaneHistoryFiles(
+                runtimePaths: runtimePaths,
+                liveTerminalPanelIDs: bootstrap.state.allTerminalPanelIDs
+            )
+        }
         let preferredSocketPath = bootstrap.automationConfig?.socketPath
             ?? AutomationConfig.resolveServerSocketPath(environment: processInfo.environment)
         let socketPath = AutomationSocketServer.recommendedSocketPath(
@@ -952,6 +1013,9 @@ struct ToasttyApp: App {
         _store = StateObject(wrappedValue: store)
         _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
         _terminalProfileStore = StateObject(wrappedValue: terminalProfileStore)
+        _sparkleUpdaterBridge = StateObject(
+            wrappedValue: SparkleUpdaterBridge(startingUpdater: isInteractiveSession)
+        )
         appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
@@ -1160,7 +1224,8 @@ struct ToasttyApp: App {
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 agentLaunchService: agentLaunchService,
-                openAgentProfilesConfiguration: openAgentProfilesConfiguration,
+                openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
+                openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
@@ -1183,6 +1248,8 @@ struct ToasttyApp: App {
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 terminalProfilesMenuController: terminalProfilesMenuController,
+                canCheckForUpdates: sparkleUpdaterBridge.canCheckForUpdates,
+                checkForUpdates: sparkleUpdaterBridge.checkForUpdates,
                 supportsConfigurationReload: supportsConfigurationReload,
                 reloadConfiguration: reloadConfiguration,
                 openManageConfig: openManageConfig,
@@ -1293,10 +1360,10 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openAgentProfilesConfiguration() {
-        do {
-            try AgentProfilesFile.ensureTemplateExists()
-            NSWorkspace.shared.open(AgentProfilesFile.fileURL())
-        } catch {
+        switch openAgentProfilesConfigurationResult() {
+        case .success:
+            return
+        case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Agent Profiles"
             alert.informativeText = error.localizedDescription
@@ -1304,6 +1371,16 @@ struct ToasttyApp: App {
             alert.addButton(withTitle: "OK")
             alert.runModal()
         }
+    }
+
+    @MainActor
+    private func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+        ToasttyMenuActions.openAgentProfilesConfigurationResult()
+    }
+
+    @MainActor
+    private func openKeyboardShortcutsReferenceResult() -> Result<Void, AgentGetStartedActionError> {
+        ToasttyMenuActions.openKeyboardShortcutsReferenceResult()
     }
 
     @MainActor
@@ -1508,6 +1585,38 @@ struct ToasttyApp: App {
             automationConfig: automationConfig,
             socketPathOverride: socketPathOverride
         )
+    }
+
+    private static func prunePaneHistoryFiles(
+        runtimePaths: ToasttyRuntimePaths,
+        liveTerminalPanelIDs: Set<UUID>
+    ) {
+        let result = PaneHistoryStore(runtimePaths: runtimePaths)
+            .pruneUnreferencedHistoryFiles(keepingPanelIDs: liveTerminalPanelIDs)
+
+        if result.removedFileCount > 0 {
+            ToasttyLog.info(
+                "Pruned stale pane history files",
+                category: .bootstrap,
+                metadata: [
+                    "directory": runtimePaths.paneHistoryDirectoryURL.path,
+                    "removed_count": String(result.removedFileCount),
+                    "live_panel_count": String(liveTerminalPanelIDs.count),
+                ]
+            )
+        }
+
+        if result.failedRemovalCount > 0 {
+            ToasttyLog.warning(
+                "Failed removing some stale pane history files",
+                category: .bootstrap,
+                metadata: [
+                    "directory": runtimePaths.paneHistoryDirectoryURL.path,
+                    "failed_removal_count": String(result.failedRemovalCount),
+                    "live_panel_count": String(liveTerminalPanelIDs.count),
+                ]
+            )
+        }
     }
 
     private static func ensureTerminalProfilesTemplateExists() {

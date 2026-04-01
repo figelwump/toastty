@@ -606,6 +606,90 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(keyRecorder.events.count, eventCountAfterFirstReset)
     }
 
+    func testSetMarkedTextSyncsGhosttyPreeditImmediately() {
+        let hostView = TerminalHostView()
+        let preeditRecorder = GhosttyPreeditRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            setPreedit: { _, text, length in
+                preeditRecorder.record(text, length: length)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1240))
+
+        hostView.setMarkedText(
+            "你好",
+            selectedRange: NSRange(location: 0, length: 2),
+            replacementRange: NSRange()
+        )
+
+        XCTAssertTrue(hostView.hasMarkedText())
+        XCTAssertEqual(hostView.markedRange(), NSRange(location: 0, length: 2))
+        XCTAssertEqual(preeditRecorder.values, ["你好"])
+    }
+
+    func testInsertTextSendsCommittedTextAndClearsPreedit() {
+        let hostView = TerminalHostView()
+        let preeditRecorder = GhosttyPreeditRecorder()
+        let textRecorder = GhosttyTextRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            setPreedit: { _, text, length in
+                preeditRecorder.record(text, length: length)
+            },
+            sendText: { _, text, length in
+                textRecorder.record(text, length: length)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1241))
+        hostView.setMarkedText(
+            "你好",
+            selectedRange: NSRange(location: 0, length: 2),
+            replacementRange: NSRange()
+        )
+
+        hostView.insertText("你", replacementRange: NSRange())
+
+        XCTAssertFalse(hostView.hasMarkedText())
+        XCTAssertEqual(textRecorder.values, ["你"])
+        XCTAssertEqual(preeditRecorder.values, ["你好", nil])
+    }
+
+    func testFlagsChangedIgnoresModifierTransitionsDuringMarkedTextComposition() throws {
+        let hostView = TerminalHostView()
+        let keyRecorder = GhosttyKeyEventRecorder()
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendKey: { _, keyEvent in
+                keyRecorder.record(keyEvent)
+                return true
+            },
+            setPreedit: { _, _, _ in }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1242))
+        hostView.setMarkedText(
+            "n",
+            selectedRange: NSRange(location: 0, length: 1),
+            replacementRange: NSRange()
+        )
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x3B,
+                modifierFlags: [.control]
+            )
+        )
+
+        XCTAssertTrue(keyRecorder.events.isEmpty)
+    }
+
     func testSetGhosttySurfaceSkipsRepeatedAssignmentForSameSurface() {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -713,6 +797,8 @@ private struct RecordedGhosttyKeyEvent: Equatable {
     let actionRawValue: UInt32
     let modsRawValue: UInt32
     let keyCode: UInt32
+    let text: String?
+    let composing: Bool
 }
 
 private final class GhosttyKeyEventRecorder: @unchecked Sendable {
@@ -725,13 +811,61 @@ private final class GhosttyKeyEventRecorder: @unchecked Sendable {
             RecordedGhosttyKeyEvent(
                 actionRawValue: keyEvent.action.rawValue,
                 modsRawValue: keyEvent.mods.rawValue,
-                keyCode: keyEvent.keycode
+                keyCode: keyEvent.keycode,
+                text: keyEvent.text.flatMap { String(cString: $0) },
+                composing: keyEvent.composing
             )
         )
         lock.unlock()
     }
 
     var events: [RecordedGhosttyKeyEvent] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
+    }
+}
+
+private final class GhosttyPreeditRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String?] = []
+
+    func record(_ text: UnsafePointer<CChar>?, length: uintptr_t) {
+        lock.lock()
+        if let text {
+            let bytePointer = UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self)
+            let buffer = UnsafeBufferPointer(start: bytePointer, count: Int(length))
+            storage.append(String(decoding: buffer, as: UTF8.self))
+        } else {
+            storage.append(nil)
+        }
+        lock.unlock()
+    }
+
+    var values: [String?] {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage
+    }
+}
+
+private final class GhosttyTextRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func record(_ text: UnsafePointer<CChar>, length: uintptr_t) {
+        lock.lock()
+        let bytePointer = UnsafeRawPointer(text).assumingMemoryBound(to: UInt8.self)
+        let buffer = UnsafeBufferPointer(start: bytePointer, count: Int(length))
+        storage.append(String(decoding: buffer, as: UTF8.self))
+        lock.unlock()
+    }
+
+    var values: [String] {
         lock.lock()
         defer {
             lock.unlock()

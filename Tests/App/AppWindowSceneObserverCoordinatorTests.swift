@@ -526,6 +526,72 @@ final class AppWindowSceneObserverCoordinatorTests: XCTestCase {
         XCTAssertEqual(window.frame, externallyRequestedFrame)
     }
 
+    func testApplyDesiredFrameDoesNotClampOrdinaryDesiredFrameUpdates() {
+        let recorder = ScheduledCallbackRecorder()
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 700)
+        let liveFrame = CGRect(x: 120, y: 140, width: 640, height: 480)
+        let externallyRequestedFrame = CGRect(x: 1_400, y: 100, width: 900, height: 600)
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [visibleFrame]
+            },
+            scheduleOnMainActor: { operation in
+                recorder.callbacks.append(operation)
+            }
+        )
+        let window = TestWindow()
+
+        coordinator.attach(to: window)
+        window.setFrame(liveFrame, display: false)
+        NotificationCenter.default.post(name: NSWindow.didMoveNotification, object: window)
+        while recorder.callbacks.isEmpty == false {
+            recorder.callbacks.removeFirst()()
+        }
+        window.resetSetFrameTracking()
+        coordinator.desiredFrame = externallyRequestedFrame
+
+        coordinator.applyDesiredFrameIfNeeded()
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, externallyRequestedFrame)
+        XCTAssertEqual(window.frame, externallyRequestedFrame)
+    }
+
+    func testInitialClampedAttachDoesNotReplayRawDesiredFrameOnImmediateUpdate() {
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_000, height: 700)
+        let restoredFrame = CGRect(x: 1_400, y: 100, width: 900, height: 600)
+        let clampedFrame = CGRect(x: 100, y: 100, width: 900, height: 600)
+        let coordinator = AppWindowSceneObserverCoordinator(
+            windowID: UUID(),
+            onWindowDidBecomeKey: {},
+            onWindowFrameChange: { _ in },
+            onWindowWillClose: {},
+            screenVisibleFramesProvider: {
+                [visibleFrame]
+            },
+            scheduleOnMainActor: { _ in }
+        )
+        let window = TestWindow()
+        coordinator.desiredFrame = restoredFrame
+
+        coordinator.attach(to: window)
+
+        XCTAssertEqual(window.setFrameCallCount, 1)
+        XCTAssertEqual(window.lastSetFrame, clampedFrame)
+        XCTAssertEqual(window.frame, clampedFrame)
+
+        window.resetSetFrameTracking()
+        coordinator.applyDesiredFrameIfNeeded(clampToVisibleScreens: false)
+
+        XCTAssertEqual(window.setFrameCallCount, 0)
+        XCTAssertNil(window.lastSetFrame)
+        XCTAssertEqual(window.frame, clampedFrame)
+    }
+
     func testApplyDesiredFrameRecoversAfterSuppressingOlderPublishedFrameEcho() {
         let recorder = ScheduledCallbackRecorder()
         var publishedFrame: CGRectCodable?

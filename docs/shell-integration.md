@@ -2,9 +2,11 @@
 
 Toastty's shell integration emits `OSC 2` title sequences so that panel headers show live working directories and running commands, even inside multiplexers like `tmux` or `zmx`. For `zsh` and `bash`, it also switches each pane to its own shell history file so restored panes can recall their own commands with `Up`.
 
-The easiest way to install is `Toastty > Install Shell Integration…` in Toastty — it writes the snippet and sources it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
+The easiest way to install is either `Toastty > Install Shell Integration…` or the top-bar `Get Started…` flow in Toastty — both write the snippet and source it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.
+
+When the managed snippets do not see a useful shell-provided history-file limit, Toastty falls back to a per-pane cap of 5,000 entries. Explicit positive shell settings still win.
 
 The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `claude`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
 
@@ -38,8 +40,29 @@ _toastty_configure_pane_history() {
 	local pane_history_dir="${pane_history_file:h}"
 	command mkdir -p "$pane_history_dir" 2>/dev/null || return
 
+	local configured_history_size="${HISTSIZE:-}"
+	local configured_save_history_size="${SAVEHIST:-}"
+	local save_history_size=""
+	if [[ "$configured_save_history_size" == <-> && "$configured_save_history_size" -gt 0 ]]; then
+		save_history_size="$configured_save_history_size"
+	elif [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
+		# Fresh interactive zsh shells default to HISTSIZE=30/SAVEHIST=0 even when
+		# the user has not configured history. That default is too small to be useful
+		# for restored pane-local history, so treat it as "unset" here.
+		save_history_size="$configured_history_size"
+	else
+		save_history_size="5000"
+	fi
+
+	local history_size=""
+	if [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
+		history_size="$configured_history_size"
+	else
+		history_size="$save_history_size"
+	fi
+
 	if [[ -z ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
-		fc -p "$pane_history_file" 2>/dev/null || return
+		fc -p "$pane_history_file" "$history_size" "$save_history_size" 2>/dev/null || return
 		typeset -g _TOASTTY_PANE_HISTORY_INITIALIZED=1
 	fi
 }
@@ -120,7 +143,24 @@ _toastty_configure_pane_history() {
 	local pane_history_dir="${pane_history_file%/*}"
 	command mkdir -p "$pane_history_dir" 2>/dev/null || return
 
+	_toastty_resolved_history_limit() {
+		local configured_limit="$1"
+		local default_limit="$2"
+		if [[ "$configured_limit" =~ ^[0-9]+$ ]] && (( configured_limit > 0 )); then
+			printf '%s\n' "$configured_limit"
+		else
+			printf '%s\n' "$default_limit"
+		fi
+	}
+
+	local history_size="$(_toastty_resolved_history_limit "${HISTSIZE:-}" "5000")"
+	local history_file_size="$(_toastty_resolved_history_limit "${HISTFILESIZE:-}" "$history_size")"
+
 	if [[ -z "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
+		HISTSIZE="$history_size"
+		HISTFILESIZE="$history_file_size"
+		export HISTSIZE
+		export HISTFILESIZE
 		HISTFILE="$pane_history_file"
 		export HISTFILE
 		history -c

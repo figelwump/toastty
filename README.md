@@ -77,6 +77,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 
 `Cmd+W` and `File > Close` use Toastty's panel-close behavior. The native red close button instead asks for confirmation before closing all terminals, tabs, and workspaces in that window.
 
+For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md).
+
 ## Running Agents
 
 Toastty can launch coding agents directly into terminal panels from the `Agent` menu or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
@@ -85,7 +87,7 @@ For full details see [docs/running-agents.md](docs/running-agents.md).
 
 ### Agent profiles
 
-Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file from `Agent > Manage Agents…`; Toastty creates a commented template automatically if the file does not exist yet.
+Toastty loads launchable agent profiles from `~/.toastty/agents.toml`. Open the file from `Agent > Manage Agents…`, or use the top-bar `Get Started…` button when no agent profiles are configured; Toastty creates a commented template automatically if the file does not exist yet. After editing `agents.toml`, use `Toastty > Reload Configuration` to pick up new buttons and shortcuts without relaunching.
 
 Each profile defines the menu label and the exact command Toastty should launch:
 
@@ -220,7 +222,7 @@ their current profile bindings.
 
 #### Shell integration
 
-Use `Toastty > Install Shell Integration…` to set up live pane titles and pane-local command history for `zsh` and `bash` automatically.
+Use `Toastty > Install Shell Integration…` to set up live pane titles and pane-local command history for `zsh` and `bash` automatically. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Toastty…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:
@@ -300,6 +302,7 @@ Logs may contain local file paths, config paths, working directories, panel/work
 
 - [Configuration](docs/configuration.md) — `~/.toastty/config`, `config-reference`, menu actions, and Toastty-owned config keys
 - [Running Agents](docs/running-agents.md) — agents.toml configuration, profile IDs, instrumentation, launch flow, and manual integration
+- [Keyboard Shortcuts](docs/keyboard-shortcuts.md) — workspace, pane, tab, agent, and profile shortcuts
 - [CLI Reference](docs/cli-reference.md) — `toastty` CLI commands, flags, environment variables, and integration examples
 - [Building and Releasing](docs/building-and-releasing.md) — build from source, validation, signed DMGs, and GitHub release publishing
 - [Ghostty Integration](docs/ghostty-integration.md) — XCFramework setup, config bridging, action parity

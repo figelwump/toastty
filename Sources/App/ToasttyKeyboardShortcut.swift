@@ -82,6 +82,11 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let closePanel = ToasttyKeyboardShortcut(
+        "w",
+        modifiers: [.command]
+    )
+
     static let toggleFocusedPanel = ToasttyKeyboardShortcut(
         "f",
         modifiers: [.command, .shift]

@@ -31,7 +31,7 @@ enum AppBootstrap {
             if let restored = layoutPersistenceContext.loadState() {
                 state = restored.state
                 state.defaultTerminalProfileID = AppState.normalizedTerminalProfileID(defaultTerminalProfileID)
-                restoredTerminalPanelIDs = Self.restoredTerminalPanelIDs(in: state)
+                restoredTerminalPanelIDs = state.allTerminalPanelIDs
                 ToasttyLog.info(
                     "Restored workspace layout state",
                     category: .bootstrap,
@@ -125,16 +125,6 @@ enum AppBootstrap {
                     "error": error.localizedDescription,
                 ]
             )
-        }
-    }
-
-    private static func restoredTerminalPanelIDs(in state: AppState) -> Set<UUID> {
-        state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
-            for (panelID, panelState) in workspace.panels {
-                if case .terminal = panelState {
-                    result.insert(panelID)
-                }
-            }
         }
     }
 }
