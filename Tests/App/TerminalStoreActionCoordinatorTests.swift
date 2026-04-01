@@ -59,6 +59,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
                 )
             },
             armCloseTransitionViewportDeferral: { _, _ in },
+            armFocusedPanelResizeTrace: { _, _ in },
             requestWorkspaceFocusRestore: { _ in }
         )
         coordinator.bind(store: store)
@@ -107,7 +108,11 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 
     func testBindRequestsFocusRestoreWhenSelectedWorkspaceFocusedModeToggles() throws {
         var restoredWorkspaceIDs: [UUID] = []
+        var tracedPanels: [(workspaceID: UUID, panelID: UUID)] = []
         let fixture = try makeStoreActionFixture(
+            armFocusedPanelResizeTrace: { workspaceID, panelID in
+                tracedPanels.append((workspaceID, panelID))
+            },
             requestWorkspaceFocusRestore: { workspaceID in
                 restoredWorkspaceIDs.append(workspaceID)
             }
@@ -115,6 +120,9 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 
         XCTAssertTrue(fixture.store.send(.toggleFocusedPanelMode(workspaceID: fixture.workspaceID)))
         XCTAssertEqual(restoredWorkspaceIDs, [fixture.workspaceID])
+        XCTAssertEqual(tracedPanels.count, 1)
+        XCTAssertEqual(tracedPanels.first?.workspaceID, fixture.workspaceID)
+        XCTAssertEqual(tracedPanels.first?.panelID, fixture.sourcePanelID)
     }
 
     func testBindRequestsWorkspaceFocusRestoreWhenFocusedPanelIDIsNil() throws {
@@ -124,6 +132,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         let metadataService = TerminalMetadataService(store: store, registry: registry)
         let controllerStore = TerminalControllerStore()
         var restoredWorkspaceIDs: [UUID] = []
+        var tracedPanels: [(workspaceID: UUID, panelID: UUID)] = []
         let coordinator = TerminalStoreActionCoordinator(
             metadataService: metadataService,
             registerPendingSplitSourceIfNeeded: { workspaceID, previousState, nextState in
@@ -134,6 +143,9 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
                 )
             },
             armCloseTransitionViewportDeferral: { _, _ in },
+            armFocusedPanelResizeTrace: { workspaceID, panelID in
+                tracedPanels.append((workspaceID, panelID))
+            },
             requestWorkspaceFocusRestore: { workspaceID in
                 restoredWorkspaceIDs.append(workspaceID)
             }
@@ -143,6 +155,9 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
         let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
         XCTAssertTrue(store.send(.toggleFocusedPanelMode(workspaceID: workspaceID)))
         XCTAssertEqual(restoredWorkspaceIDs, [workspaceID])
+        XCTAssertEqual(tracedPanels.count, 1)
+        XCTAssertEqual(tracedPanels.first?.workspaceID, workspaceID)
+        XCTAssertNotNil(tracedPanels.first?.panelID)
     }
 
     func testBindReplacesPreviousObserverRegistration() throws {
@@ -177,6 +192,7 @@ final class TerminalStoreActionCoordinatorTests: XCTestCase {
 @MainActor
 private func makeStoreActionFixture(
     armCloseTransitionViewportDeferral: @escaping (UUID, Set<UUID>) -> Void = { _, _ in },
+    armFocusedPanelResizeTrace: @escaping (UUID, UUID) -> Void = { _, _ in },
     requestWorkspaceFocusRestore: @escaping (UUID) -> Void = { _ in }
 ) throws -> (
     store: AppStore,
@@ -200,6 +216,7 @@ private func makeStoreActionFixture(
             )
         },
         armCloseTransitionViewportDeferral: armCloseTransitionViewportDeferral,
+        armFocusedPanelResizeTrace: armFocusedPanelResizeTrace,
         requestWorkspaceFocusRestore: requestWorkspaceFocusRestore
     )
     coordinator.bind(store: store)
