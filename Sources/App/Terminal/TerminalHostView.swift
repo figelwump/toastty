@@ -626,6 +626,22 @@ final class TerminalHostView: NSView {
         return ghosttyMouseCursorStyle
     }
 
+    func setGhosttyScrollbar(
+        totalRows: Int,
+        offsetRows: Int,
+        visibleRows: Int
+    ) {
+        assert(Thread.isMainThread)
+        guard let terminalSurfaceScrollView = enclosingScrollView as? TerminalSurfaceScrollView else {
+            return
+        }
+        terminalSurfaceScrollView.applyScrollbar(
+            totalRows: totalRows,
+            offsetRows: offsetRows,
+            visibleRows: visibleRows
+        )
+    }
+
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
         let imageFileURLs = Self.imageFileURLs(from: sender.draggingPasteboard)
         guard imageFileURLs.isEmpty == false else {

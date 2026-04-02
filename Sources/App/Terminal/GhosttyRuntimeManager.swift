@@ -83,6 +83,7 @@ private enum GhosttyDirectHostViewAction: Sendable {
     case mouseShape(surfaceHandle: UInt, shape: ghostty_action_mouse_shape_e)
     case mouseVisibility(surfaceHandle: UInt, visibility: ghostty_action_mouse_visibility_e)
     case mouseOverLink(surfaceHandle: UInt, url: String?)
+    case scrollbar(surfaceHandle: UInt, totalRows: Int, offsetRows: Int, visibleRows: Int)
 
     var logIntentName: String {
         switch self {
@@ -92,6 +93,8 @@ private enum GhosttyDirectHostViewAction: Sendable {
             return "mouse_visibility"
         case .mouseOverLink:
             return "mouse_over_link"
+        case .scrollbar:
+            return "scrollbar"
         }
     }
 }
@@ -293,6 +296,18 @@ private func makeGhosttyDirectHostViewAction(
         return .mouseOverLink(
             surfaceHandle: UInt(bitPattern: surface),
             url: ghosttyString(pointer: hoverLink.url, length: Int(hoverLink.len))
+        )
+    case GHOSTTY_ACTION_SCROLLBAR:
+        guard target.tag == GHOSTTY_TARGET_SURFACE,
+              let surface = target.target.surface else {
+            return nil
+        }
+        let scrollbar = action.action.scrollbar
+        return .scrollbar(
+            surfaceHandle: UInt(bitPattern: surface),
+            totalRows: Int(scrollbar.total),
+            offsetRows: Int(scrollbar.offset),
+            visibleRows: Int(scrollbar.len)
         )
     default:
         return nil
@@ -1062,6 +1077,16 @@ final class GhosttyRuntimeManager {
                 return false
             }
             hostView.setGhosttyMouseOverLink(url)
+            return true
+        case .scrollbar(let surfaceHandle, let totalRows, let offsetRows, let visibleRows):
+            guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
+                return false
+            }
+            hostView.setGhosttyScrollbar(
+                totalRows: totalRows,
+                offsetRows: offsetRows,
+                visibleRows: visibleRows
+            )
             return true
         }
     }

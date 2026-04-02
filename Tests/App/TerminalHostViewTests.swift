@@ -203,19 +203,170 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
     }
 
-    func testSurfaceScrollViewDisablesNativeScrollbars() {
+    func testSurfaceScrollViewDisablesNativeScrollbarsByDefault() {
         let scrollView = TerminalSurfaceScrollView()
 
         XCTAssertFalse(scrollView.hasVerticalScroller)
         XCTAssertFalse(scrollView.hasHorizontalScroller)
     }
 
-    func testSurfaceScrollViewKeepsDocumentViewSizedToClipViewBounds() {
+    func testSurfaceScrollViewKeepsHostViewSizedToClipViewBounds() {
         let scrollView = TerminalSurfaceScrollView()
         scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 90)
         scrollView.layoutSubtreeIfNeeded()
 
         XCTAssertEqual(scrollView.terminalHostView.frame.size, scrollView.contentView.bounds.size)
+    }
+
+    func testSurfaceScrollViewShowsVerticalScrollerWhenScrollbackExists() {
+        let scrollView = TerminalSurfaceScrollView()
+
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 70, visibleRows: 20)
+
+        XCTAssertTrue(scrollView.hasVerticalScroller)
+        XCTAssertFalse(scrollView.hasHorizontalScroller)
+    }
+
+    func testSurfaceScrollViewHidesVerticalScrollerWhenScrollbarStateClears() {
+        let scrollView = TerminalSurfaceScrollView()
+
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 70, visibleRows: 20)
+        scrollView.clearScrollbarState()
+
+        XCTAssertFalse(scrollView.hasVerticalScroller)
+    }
+
+    func testSurfaceScrollViewSizesDocumentAndViewportFromScrollbarState() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(Double(scrollView.documentView?.frame.height ?? 0), 1_000, accuracy: 0.001)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 400, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 400, accuracy: 0.001)
+    }
+
+    func testSurfaceScrollViewSupportsFractionalCellHeights() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 210)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10.5)
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(Double(scrollView.documentView?.frame.height ?? 0), 1_050, accuracy: 0.001)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 420, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 420, accuracy: 0.001)
+    }
+
+    func testSurfaceScrollViewLiveScrollSendsScrollToRowRequest() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        var receivedRow: Int?
+        scrollView.requestScrollToRow = { row in
+            receivedRow = row
+            return true
+        }
+
+        scrollView.setLiveScrollingForTesting(true)
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: 500))
+        scrollView.performLiveScrollWritebackForTesting()
+
+        XCTAssertEqual(receivedRow, 30)
+    }
+
+    func testSurfaceScrollViewSuppressesProgrammaticSyncDuringLiveScroll() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        scrollView.setLiveScrollingForTesting(true)
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: 500))
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 20, visibleRows: 20)
+
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 500, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 500, accuracy: 0.001)
+    }
+
+    func testSurfaceScrollViewResumesProgrammaticSyncAfterLiveScrollEnds() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        scrollView.setLiveScrollingForTesting(true)
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: 500))
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 20, visibleRows: 20)
+        scrollView.setLiveScrollingForTesting(false)
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 600, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 600, accuracy: 0.001)
+    }
+
+    func testSurfaceScrollViewKeepsDraggedOffsetUntilScrollbarFeedbackArrives() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        var receivedRow: Int?
+        scrollView.requestScrollToRow = { row in
+            receivedRow = row
+            return true
+        }
+
+        scrollView.setLiveScrollingForTesting(true)
+        scrollView.contentView.scroll(to: CGPoint(x: 0, y: 500))
+        scrollView.performLiveScrollWritebackForTesting()
+        scrollView.setLiveScrollingForTesting(false)
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(receivedRow, 30)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 500, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 500, accuracy: 0.001)
+
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 30, visibleRows: 20)
+
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 500, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 500, accuracy: 0.001)
+    }
+
+    func testHostViewForwardsGhosttyScrollbarUpdatesToEnclosingScrollView() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        hostView.setGhosttyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+
+        XCTAssertTrue(scrollView.hasVerticalScroller)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 400, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 400, accuracy: 0.001)
+    }
+
+    func testSurfaceScrollViewClearScrollbarStateRestoresDocumentHeightToContentHeight() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        scrollView.clearScrollbarState()
+
+        XCTAssertFalse(scrollView.hasVerticalScroller)
+        XCTAssertEqual(scrollView.documentView?.frame.height ?? 0, 200, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 0, accuracy: 0.001)
     }
 
     func testHostViewRequestsFirstResponderRestorationWhenAttachedToWindow() {
