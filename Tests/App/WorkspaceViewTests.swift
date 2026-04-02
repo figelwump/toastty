@@ -605,6 +605,8 @@ final class WorkspaceViewTests: XCTestCase {
             homeDirectoryPath: tempHomeDirectory.path,
             environment: [:]
         )
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        webPanelRuntimeRegistry.bind(store: store)
         let agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: registry,
@@ -617,6 +619,7 @@ final class WorkspaceViewTests: XCTestCase {
             agentCatalogStore: agentCatalogStore,
             terminalProfileStore: terminalProfileStore,
             terminalRuntimeRegistry: registry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
             agentLaunchService: agentLaunchService,

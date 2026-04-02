@@ -31,16 +31,33 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         url: String? = nil
     ) {
         self.definition = definition
-        self.title = Self.normalizedTitle(title) ?? definition.defaultTitle
-        self.url = Self.normalizedValue(url)
+        self.title = Self.resolvedTitle(
+            definition: definition,
+            title: title
+        )
+        self.url = Self.normalizedURL(url)
     }
 
     public var displayPanelLabel: String {
         title
     }
 
-    private static func normalizedTitle(_ value: String?) -> String? {
+    public static func resolvedTitle(definition: WebPanelDefinition, title: String?) -> String {
+        normalizedTitle(title) ?? definition.defaultTitle
+    }
+
+    public static func normalizedTitle(_ value: String?) -> String? {
         normalizedValue(value)
+    }
+
+    public static func normalizedURL(_ value: String?) -> String? {
+        guard let normalized = normalizedValue(value) else {
+            return nil
+        }
+        if normalized.caseInsensitiveCompare("about:blank") == .orderedSame {
+            return nil
+        }
+        return normalized
     }
 
     private static func normalizedValue(_ value: String?) -> String? {

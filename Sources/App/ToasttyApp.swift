@@ -802,6 +802,7 @@ struct ToasttyApp: App {
     @StateObject private var sparkleUpdaterBridge: SparkleUpdaterBridge
     private let appWindowSceneCoordinator: AppWindowSceneCoordinator
     @StateObject private var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @StateObject private var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @StateObject private var sessionRuntimeStore: SessionRuntimeStore
     private let automationLifecycle: AutomationLifecycle?
     private let automationSocketServer: AutomationSocketServer?
@@ -896,6 +897,7 @@ struct ToasttyApp: App {
         )
         Self.logProfileShortcutWarnings(initialProfileShortcutRegistry.warningMessages)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
         let cliExecutablePath = AgentLaunchService.defaultCLIExecutablePath()
         let shimDirectoryPath: String?
         do {
@@ -932,6 +934,7 @@ struct ToasttyApp: App {
             restoredTerminalPanelIDs: bootstrap.restoredTerminalPanelIDs
         )
         terminalRuntimeRegistry.bind(store: store)
+        webPanelRuntimeRegistry.bind(store: store)
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry
@@ -1018,6 +1021,7 @@ struct ToasttyApp: App {
         )
         appWindowSceneCoordinator = AppWindowSceneCoordinator()
         _terminalRuntimeRegistry = StateObject(wrappedValue: terminalRuntimeRegistry)
+        _webPanelRuntimeRegistry = StateObject(wrappedValue: webPanelRuntimeRegistry)
         _sessionRuntimeStore = StateObject(wrappedValue: sessionRuntimeStore)
         automationLifecycle = bootstrap.automationLifecycle
         disableAnimations = bootstrap.disableAnimations
@@ -1221,6 +1225,7 @@ struct ToasttyApp: App {
                 agentCatalogStore: agentCatalogStore,
                 terminalProfileStore: terminalProfileStore,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 agentLaunchService: agentLaunchService,

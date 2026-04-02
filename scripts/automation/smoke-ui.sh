@@ -30,6 +30,8 @@ TERMINAL_PROFILES_PATH="$TOASTTY_RUNTIME_HOME/terminal-profiles.toml"
 PROFILE_SMOKE_PROFILE_ID="smoke-profile"
 PROFILE_SMOKE_TITLE="Profile Ready"
 PROFILE_SMOKE_VISIBLE_MARKER="PROFILE:${PROFILE_SMOKE_PROFILE_ID}:create"
+BROWSER_SMOKE_PRIMARY_URL='data:text/html,%3Chtml%3E%3Chead%3E%3Ctitle%3ESmoke%20Browser%3C%2Ftitle%3E%3C%2Fhead%3E%3Cbody%20style%3D%22font-family%3A%20-ui-sans-serif%2C%20system-ui%3B%20padding%3A%2024px%3B%22%3E%3Ch1%3ESmoke%20Browser%3C%2Fh1%3E%3Cp%3EPrimary%20browser%20runtime%20check.%3C%2Fp%3E%3C%2Fbody%3E%3C%2Fhtml%3E'
+BROWSER_SMOKE_SECONDARY_URL='data:text/html,%3Chtml%3E%3Chead%3E%3Ctitle%3ESmoke%20Docs%3C%2Ftitle%3E%3C%2Fhead%3E%3Cbody%20style%3D%22font-family%3A%20-ui-sans-serif%2C%20system-ui%3B%20padding%3A%2024px%3B%22%3E%3Ch1%3ESmoke%20Docs%3C%2Fh1%3E%3Cp%3ESecondary%20browser%20tab%20check.%3C%2Fp%3E%3C%2Fbody%3E%3C%2Fhtml%3E'
 PREVIOUS_FRONT_BUNDLE_ID=""
 FRONT_APP_RESTORE_DONE=0
 
@@ -240,6 +242,63 @@ json_escape_string() {
   value="${value//$'\n'/\\n}"
   value="${value//$'\r'/\\r}"
   printf '%s' "$value"
+}
+
+state_dump_has_browser_panel() {
+  local state_path="$1"
+  local expected_title="$2"
+  local expected_url="$3"
+
+  if command -v jq >/dev/null 2>&1; then
+    jq -e \
+      --arg title "$expected_title" \
+      --arg url "$expected_url" '
+        def dict_values:
+          . as $dictionary
+          | [range(1; ($dictionary | length); 2) | $dictionary[.]];
+
+        .workspacesByID
+        | dict_values
+        | any(
+            .panels
+            | dict_values
+            | any(
+                .kind == "web"
+                and .web.definition == "browser"
+                and .web.title == $title
+                and .web.url == $url
+            )
+          )
+      ' "$state_path" >/dev/null
+    return
+  fi
+
+  grep -F "\"title\":\"${expected_title}\"" "$state_path" >/dev/null &&
+    grep -F "\"url\":\"${expected_url}\"" "$state_path" >/dev/null
+}
+
+wait_for_browser_panel_title() {
+  local expected_title="$1"
+  local expected_url="$2"
+  local last_state_response=""
+  local last_state_path=""
+
+  for _ in $(seq 1 60); do
+    last_state_response="$(send_request "automation.dump_state" '{}')"
+    last_state_path="$(extract_string_field "$last_state_response" "path")"
+    if [[ -n "$last_state_path" && -f "$last_state_path" ]] &&
+      state_dump_has_browser_panel "$last_state_path" "$expected_title" "$expected_url"; then
+      printf '%s' "$last_state_path"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "error: timed out waiting for browser panel metadata" >&2
+  echo "expected title: ${expected_title}" >&2
+  echo "expected url: ${expected_url}" >&2
+  echo "last state path: ${last_state_path:-missing}" >&2
+  exit 1
 }
 
 canonicalize_path() {
@@ -932,12 +991,17 @@ send_request "automation.perform_action" '{"action":"app.font.increase"}'
 FONT_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"font-hud-smoke"}')"
 send_request "automation.perform_action" '{"action":"app.font.reset"}'
 send_request "automation.perform_action" '{"action":"workspace.split.vertical"}'
-send_request "automation.perform_action" '{"action":"panel.create.browser","args":{"placement":"splitRight","url":"https://example.com"}}'
+send_request "automation.perform_action" "{\"action\":\"panel.create.browser\",\"args\":{\"placement\":\"splitRight\",\"url\":\"$(json_escape_string "$BROWSER_SMOKE_PRIMARY_URL")\"}}"
+wait_for_browser_panel_title "Smoke Browser" "$BROWSER_SMOKE_PRIMARY_URL" >/dev/null
 send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}'
 
 FOCUSED_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"focused-panel-smoke"}')"
 send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}'
-send_request "automation.perform_action" '{"action":"panel.create.browser","args":{"placement":"newTab","url":"https://example.com/docs"}}'
+send_request "automation.perform_action" "{\"action\":\"panel.create.browser\",\"args\":{\"placement\":\"newTab\",\"url\":\"$(json_escape_string "$BROWSER_SMOKE_SECONDARY_URL")\"}}"
+wait_for_browser_panel_title "Smoke Docs" "$BROWSER_SMOKE_SECONDARY_URL" >/dev/null
+send_request "automation.perform_action" '{"action":"workspace.tab.select","args":{"index":1}}' >/dev/null
+send_request "automation.perform_action" '{"action":"workspace.tab.select","args":{"index":2}}' >/dev/null
+wait_for_browser_panel_title "Smoke Docs" "$BROWSER_SMOKE_SECONDARY_URL" >/dev/null
 
 SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"web-panel-smoke"}')"
 STATE_RESPONSE="$(send_request "automation.dump_state" '{}')"

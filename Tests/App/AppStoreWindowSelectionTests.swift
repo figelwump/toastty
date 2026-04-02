@@ -398,6 +398,59 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "zmx"))
     }
 
+    func testCreateBrowserPanelFromCommandCreatesSelectedBrowserTab() throws {
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                placement: .newTab,
+                url: "https://example.com/docs"
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 2)
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be web-backed browser")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.url, "https://example.com/docs")
+    }
+
+    func testCreateBrowserPanelFromCommandCanSplitFocusedPanel() throws {
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                placement: .splitRight
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
+        let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[focusedPanelID] else {
+            XCTFail("expected focused split panel to be browser")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertNil(webState.url)
+    }
+
     func testSelectWorkspaceTabFromCommandUsesFocusedWindowOverGlobalSelection() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

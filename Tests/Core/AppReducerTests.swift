@@ -1403,6 +1403,87 @@ struct AppReducerTests {
     }
 
     @Test
+    func updateWebPanelMetadataRefreshesTitleAndURL() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+
+        let browserPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        #expect(
+            reducer.send(
+                .updateWebPanelMetadata(
+                    panelID: browserPanelID,
+                    title: "Example Domain",
+                    url: "https://example.com"
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterUpdate = try #require(state.workspacesByID[workspaceID])
+        guard case .web(let webState) = workspaceAfterUpdate.panels[browserPanelID] else {
+            Issue.record("expected updated panel to remain web-backed")
+            return
+        }
+
+        #expect(webState.title == "Example Domain")
+        #expect(webState.url == "https://example.com")
+
+        #expect(
+            reducer.send(
+                .updateWebPanelMetadata(
+                    panelID: browserPanelID,
+                    title: nil,
+                    url: "https://example.com/no-title"
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterUntitled = try #require(state.workspacesByID[workspaceID])
+        guard case .web(let untitledWebState) = workspaceAfterUntitled.panels[browserPanelID] else {
+            Issue.record("expected web panel after untitled-title update")
+            return
+        }
+
+        #expect(untitledWebState.title == "Browser")
+        #expect(untitledWebState.url == "https://example.com/no-title")
+
+        #expect(
+            reducer.send(
+                .updateWebPanelMetadata(
+                    panelID: browserPanelID,
+                    title: nil,
+                    url: "about:blank"
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfterBlank = try #require(state.workspacesByID[workspaceID])
+        guard case .web(let blankWebState) = workspaceAfterBlank.panels[browserPanelID] else {
+            Issue.record("expected web panel after blank-url normalization")
+            return
+        }
+
+        #expect(blankWebState.title == "Browser")
+        #expect(blankWebState.url == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func closeAndReopenPanelRestoresPanelState() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

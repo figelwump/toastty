@@ -223,6 +223,28 @@ final class AppStore: ObservableObject {
         )
     }
 
+    @discardableResult
+    func createBrowserPanelFromCommand(
+        preferredWindowID: UUID?,
+        placement: WebPanelPlacement,
+        url: String? = nil
+    ) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        return send(
+            .createWebPanel(
+                workspaceID: selection.workspace.id,
+                panel: WebPanelState(
+                    definition: .browser,
+                    url: url
+                ),
+                placement: placement
+            )
+        )
+    }
+
     func canFocusNextUnreadOrActivePanelFromCommand(
         preferredWindowID: UUID?,
         sessionRuntimeStore: SessionRuntimeStore?

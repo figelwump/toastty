@@ -57,6 +57,7 @@ struct WorkspaceView: View {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
@@ -666,6 +667,7 @@ struct WorkspaceView: View {
                         store: store,
                         terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
                         windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
                         appIsActive: appIsActive,
@@ -1842,6 +1844,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
     let appIsActive: Bool
@@ -1871,6 +1874,7 @@ private struct SlotPlacementView: View {
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
@@ -1910,6 +1914,7 @@ private struct PanelCardView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
 
     private var isFocused: Bool {
@@ -1969,7 +1974,7 @@ private struct PanelCardView: View {
                 }
 
             case .web(let webState):
-                webPanelPlaceholder(state: webState)
+                webPanelBody(state: webState)
             }
         }
         .background(ToastyTheme.surfaceBackground)
@@ -2172,6 +2177,24 @@ private struct PanelCardView: View {
     }
 
     @ViewBuilder
+    private func webPanelBody(state: WebPanelState) -> some View {
+        if state.definition == .browser {
+            BrowserPanelHostView(
+                panelID: panelID,
+                webState: state,
+                webPanelRuntimeRegistry: webPanelRuntimeRegistry
+            )
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: .topLeading
+            )
+        } else {
+            webPanelPlaceholder(state: state)
+        }
+    }
+
+    @ViewBuilder
     private func webPanelPlaceholder(state: WebPanelState) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(state.definition.defaultTitle)
@@ -2184,7 +2207,7 @@ private struct PanelCardView: View {
                     .foregroundStyle(ToastyTheme.mutedText)
                     .textSelection(.enabled)
             } else {
-                Text("Web panel runtime not wired yet.")
+                Text("\(state.definition.defaultTitle) runtime not wired yet.")
                     .font(ToastyTheme.fontWorkspaceSubtitle)
                     .foregroundStyle(ToastyTheme.mutedText)
             }

@@ -380,6 +380,26 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(commandWorkspace == nil)
 
+            Divider()
+
+            Button("New Browser Tab") {
+                store.createBrowserPanelFromCommand(
+                    preferredWindowID: preferredWindowID,
+                    placement: .newTab
+                )
+            }
+            .disabled(commandWorkspace == nil)
+
+            Button("New Browser Beside Current") {
+                store.createBrowserPanelFromCommand(
+                    preferredWindowID: preferredWindowID,
+                    placement: .splitRight
+                )
+            }
+            .disabled(commandWorkspace == nil)
+
+            Divider()
+
             Button("Close Panel") {
                 closeFocusedPanelFromCommandSelection()
             }
