@@ -1102,6 +1102,37 @@ final class GhosttyRuntimeManager {
         return hostView
     }
 
+    #if DEBUG
+    func associateHostViewForTesting(_ hostView: TerminalHostView, surfaceHandle: UInt) {
+        let hostViewHandle = UInt(bitPattern: Unmanaged.passUnretained(hostView).toOpaque())
+        surfaceHandleByHostViewHandle[hostViewHandle] = surfaceHandle
+        hostViewBySurfaceHandle[surfaceHandle] = WeakTerminalHostViewBox(hostView)
+    }
+
+    func removeHostViewAssociationForTesting(_ hostView: TerminalHostView, surfaceHandle: UInt) {
+        let hostViewHandle = UInt(bitPattern: Unmanaged.passUnretained(hostView).toOpaque())
+        surfaceHandleByHostViewHandle.removeValue(forKey: hostViewHandle)
+        hostViewBySurfaceHandle.removeValue(forKey: surfaceHandle)
+    }
+
+    @discardableResult
+    func dispatchScrollbarDirectHostViewActionForTesting(
+        surfaceHandle: UInt,
+        totalRows: Int,
+        offsetRows: Int,
+        visibleRows: Int
+    ) -> Bool {
+        handleDirectHostViewAction(
+            .scrollbar(
+                surfaceHandle: surfaceHandle,
+                totalRows: totalRows,
+                offsetRows: offsetRows,
+                visibleRows: visibleRows
+            )
+        )
+    }
+    #endif
+
     @discardableResult
     func reloadConfiguration() -> Bool {
         guard let app else {

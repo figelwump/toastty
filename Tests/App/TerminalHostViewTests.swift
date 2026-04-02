@@ -355,6 +355,33 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 400, accuracy: 0.001)
     }
 
+    func testGhosttyRuntimeManagerRoutesScrollbarActionToAssociatedHostView() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        let manager = GhosttyRuntimeManager.shared
+        let surfaceHandle = UInt(0xFEEDF00D)
+        manager.associateHostViewForTesting(hostView, surfaceHandle: surfaceHandle)
+        defer {
+            manager.removeHostViewAssociationForTesting(hostView, surfaceHandle: surfaceHandle)
+        }
+
+        let handled = manager.dispatchScrollbarDirectHostViewActionForTesting(
+            surfaceHandle: surfaceHandle,
+            totalRows: 100,
+            offsetRows: 40,
+            visibleRows: 20
+        )
+
+        XCTAssertTrue(handled)
+        XCTAssertTrue(scrollView.hasVerticalScroller)
+        XCTAssertEqual(scrollView.contentView.bounds.origin.y, 400, accuracy: 0.001)
+        XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 400, accuracy: 0.001)
+    }
+
     func testSurfaceScrollViewClearScrollbarStateRestoresDocumentHeightToContentHeight() {
         let scrollView = TerminalSurfaceScrollView()
         scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
