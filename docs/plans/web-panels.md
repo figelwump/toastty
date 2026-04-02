@@ -74,6 +74,8 @@ struct LaunchContext: Codable, Equatable, Sendable {
 }
 ```
 
+`JSONValue` above is intended to be a neutral shared JSON value type in core state. It should not remain coupled to automation/socket naming such as `AutomationJSONValue`, even if the first implementation is extracted from the same underlying code.
+
 `definitionID` identifies the panel definition:
 
 - built-in examples:
@@ -189,8 +191,10 @@ The platform should support a small placement vocabulary:
 
 `splitBesideSource` means:
 
-- if `launchContext.sourcePanelID` resolves to a visible panel, split beside that panel
+- if `launchContext.sourcePanelID` resolves to a visible panel, split to the right of that panel
 - otherwise fall back through the normal placement precedence
+
+For v1, "beside source" means `splitRight`. If later definitions need more control, this can expand to a directional variant without changing the baseline behavior now.
 
 The fallback default is intentionally `newTab` because it is predictable and does not mutate the user's current split layout unless they or the invoking agent explicitly ask for that.
 
@@ -288,6 +292,8 @@ V1 reuse scope:
 
 If a matching keyed instance is found in another tab of the current workspace, Toastty may focus that tab instead of creating a duplicate. This is acceptable even though the command palette is primarily for creation, because the user intent is still "show me this exact keyed resource."
 
+Keyed reuse is intentionally workspace-local in v1. Opening the same keyed resource in a different workspace should create a separate instance so each workspace can maintain its own working context.
+
 The host should not dedupe browser panels by URL in v1.
 
 ## configuration and definition overrides
@@ -315,8 +321,12 @@ Required native pieces:
 
 - `WebPanelRuntime` that owns `WKWebView` lifecycle for a panel instance
 - `WebPanelRuntimeRegistry` or equivalent host that keeps runtimes stable across view remounts and panel moves
-- shared `WKProcessPool` strategy
-- app-owned `WKWebViewConfiguration` selection by capability tier
+- app-owned web profiles / isolation profiles that select:
+  - `WKProcessPool`
+  - `WKWebsiteDataStore`
+  - network policy
+  - storage and cookie sharing behavior
+- app-owned `WKWebViewConfiguration` creation from those profiles
 - JS bridge implementation
 
 Rules:
@@ -325,6 +335,21 @@ Rules:
 - `WebPanelState` remains serializable and resource-free
 - panel moves must preserve `panelID`
 - runtime reattachment must be deterministic after moves, restores, and tab switches
+
+### web profiles
+
+The host should not treat `WKProcessPool` as an isolated one-off choice. What Toastty actually needs is a small set of app-owned web profiles that bundle runtime isolation and policy together.
+
+Examples:
+
+- browser profile:
+  - outbound network allowed
+  - shared browser-like storage/session behavior as appropriate
+- local-only panel profile:
+  - no outbound network
+  - isolated non-browser storage behavior
+
+Built-in definitions should bind to one of these profiles from phase 1. Installed panels should default to a no-network profile unless explicitly elevated later.
 
 ## bridge and capabilities
 
@@ -337,22 +362,44 @@ V1 principles:
 - extension/panel code should not own agent routing logic
 - app routes feedback using launch context and session data
 
-V1 bridge surface should focus on:
+V1 bridge flows should explicitly cover:
 
-- bootstrap payload delivery
+- initial bootstrap payload delivery for first render
+- host-to-panel content updates for an existing panel
+- panel-to-host events
 - title updates
 - state persistence
 - typed feedback submission
 
-Future capabilities can include:
+Examples:
 
-- outbound network
+- markdown:
+  - bootstrap or update the currently shown content after the panel exists
+- scratchpad:
+  - apply repeated content or state updates during a linked session
+- all panels:
+  - emit typed events back to the host
+
+State queries beyond persistence, such as richer inspection or screenshot-style reads, should be treated as follow-up capabilities for specific panel types rather than assumed baseline bridge surface.
+
+### capabilities and network policy
+
+Some capabilities are bridge-level. Others are host/runtime-level. Toastty needs both layers.
+
+Host/runtime-level policy from phase 1:
+
+- outbound network allowed or denied
+- storage, cookie, and data-store sharing policy
+- local-only vs browser-like isolation profile
+
+Bridge-level capabilities can grow later:
+
 - file read
 - file write
 - session read
 - session write
 
-Built-ins can ship with trusted capabilities. Installed panels should be designed so capabilities can be approved explicitly later.
+Built-ins can ship with trusted defaults. Installed panels should be designed so capability approval can be added cleanly later, with outbound network disabled by default.
 
 ## feedback routing
 
@@ -380,7 +427,10 @@ Recommended order:
 - add `PanelState.web(WebPanelState)`
 - remove aux-panel machinery
 - create stable `WKWebView` host/runtime
+- define web profiles / isolation profiles and their network policy
 - prove mobility, focus, persistence, and restore with a minimal browser panel
+
+Browser is the intentional phase-1 substrate test because it proves WebView hosting with the least bridge complexity. Markdown remains the first panel expected to prove the richer collaboration and feedback model.
 
 ### phase 2: creation and placement
 
@@ -416,7 +466,24 @@ to:
 - `terminal`
 - `web`
 
-Old non-terminal persisted states should be migrated into `WebPanelState` with built-in `definitionID` values.
+Old non-terminal persisted states should be migrated into `WebPanelState` with built-in `definitionID` values during decode/load.
+
+Initial mapping direction:
+
+- `.diff(DiffPanelState)`:
+  - `definitionID = "toastty.diff"`
+  - map durable diff inputs such as repo binding or staged/unstaged mode into `creationArguments` or `persistedState`
+  - clearly transient loading state does not need to survive migration
+- `.markdown(MarkdownPanelState)`:
+  - `definitionID = "toastty.markdown"`
+  - `filePath` maps to `creationArguments["filePath"]` when present
+  - `sourcePanelID` maps to `launchContext.sourcePanelID` when present
+  - inline markdown content, if still needed, can map into `persistedState` or a content argument
+- `.scratchpad(ScratchpadPanelState)`:
+  - `definitionID = "toastty.scratchpad"`
+  - existing durable scratchpad content or document identity maps into `persistedState`
+
+The migration goal is semantic continuity, not byte-for-byte preservation of old internal shapes. If old state contains clearly transient UI or runtime details, it is acceptable to drop them during migration.
 
 ## open questions
 
