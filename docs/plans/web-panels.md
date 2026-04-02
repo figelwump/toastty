@@ -2,7 +2,7 @@
 
 Date: 2026-04-02
 
-This is the current spec for browser integration and extensible panels in Toastty. It supersedes older exploratory panel-architecture ideas in `extensibility-architecture.md` and `scratchpad.md` wherever they conflict.
+This is the current spec for browser integration and extensible panels in Toastty. It is the source of truth for shared web-panel architecture.
 
 ## summary
 
