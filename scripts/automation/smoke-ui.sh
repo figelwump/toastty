@@ -932,14 +932,14 @@ send_request "automation.perform_action" '{"action":"app.font.increase"}'
 FONT_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"font-hud-smoke"}')"
 send_request "automation.perform_action" '{"action":"app.font.reset"}'
 send_request "automation.perform_action" '{"action":"workspace.split.vertical"}'
-send_request "automation.perform_action" '{"action":"topbar.toggle.diff"}'
-send_request "automation.perform_action" '{"action":"topbar.toggle.markdown"}'
+send_request "automation.perform_action" '{"action":"panel.create.browser","args":{"placement":"splitRight","url":"https://example.com"}}'
 send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}'
 
 FOCUSED_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"focused-panel-smoke"}')"
 send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}'
+send_request "automation.perform_action" '{"action":"panel.create.browser","args":{"placement":"newTab","url":"https://example.com/docs"}}'
 
-SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"aux-column-smoke"}')"
+SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"web-panel-smoke"}')"
 STATE_RESPONSE="$(send_request "automation.dump_state" '{}')"
 
 FONT_SCREENSHOT_PATH="$(extract_string_field "$FONT_SCREENSHOT_RESPONSE" "path")"

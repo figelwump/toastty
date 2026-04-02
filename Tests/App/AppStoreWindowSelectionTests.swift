@@ -301,10 +301,24 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         state.configuredTerminalFontPoints = 13
         state.windows[0].terminalFontSizePointsOverride = 17
 
-        XCTAssertTrue(reducer.send(.toggleAuxPanel(workspaceID: sourceWorkspaceID, kind: .diff), state: &state))
-        let workspaceWithDiff = try XCTUnwrap(state.workspacesByID[sourceWorkspaceID])
-        let diffPanelID = try XCTUnwrap(workspaceWithDiff.panels.first(where: { $0.value.kind == .diff })?.key)
-        XCTAssertTrue(reducer.send(.focusPanel(workspaceID: sourceWorkspaceID, panelID: diffPanelID), state: &state))
+        XCTAssertTrue(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: sourceWorkspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+        let workspaceWithBrowser = try XCTUnwrap(state.workspacesByID[sourceWorkspaceID])
+        let browserPanelID = try XCTUnwrap(workspaceWithBrowser.panels.first(where: {
+            if case .web = $0.value {
+                return true
+            }
+            return false
+        })?.key)
+        XCTAssertTrue(reducer.send(.focusPanel(workspaceID: sourceWorkspaceID, panelID: browserPanelID), state: &state))
 
         let store = AppStore(
             state: state,

@@ -14,9 +14,7 @@ struct PanelStateCodableTests {
                     profileBinding: TerminalProfileBinding(profileID: "zmx")
                 )
             ),
-            .diff(DiffPanelState(showStaged: true, mode: .followFocusedTerminal, loadingState: .computing)),
-            .markdown(MarkdownPanelState(sourcePanelID: UUID(), filePath: "/tmp/README.md", rawMarkdown: "# title")),
-            .scratchpad(ScratchpadPanelState(documentID: UUID())),
+            .web(WebPanelState(definition: .browser, url: "https://example.com")),
         ]
 
         let encoder = JSONEncoder()

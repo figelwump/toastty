@@ -6,7 +6,6 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
     public var layoutTree: LayoutNode
     public var panels: [UUID: PanelState]
     public var focusedPanelID: UUID?
-    public var auxPanelVisibility: Set<PanelKind>
     public var focusedPanelModeActive: Bool
     public var focusModeRootNodeID: UUID?
     public var selectedPanelIDs: Set<UUID>
@@ -19,7 +18,6 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         layoutTree: LayoutNode,
         panels: [UUID: PanelState],
         focusedPanelID: UUID?,
-        auxPanelVisibility: Set<PanelKind> = [],
         focusedPanelModeActive: Bool = false,
         focusModeRootNodeID: UUID? = nil,
         selectedPanelIDs: Set<UUID> = [],
@@ -31,7 +29,6 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
-        self.auxPanelVisibility = auxPanelVisibility
         self.focusedPanelModeActive = focusedPanelModeActive
         self.focusModeRootNodeID = focusModeRootNodeID
         self.selectedPanelIDs = selectedPanelIDs.intersection(Set(panels.keys))
@@ -123,7 +120,6 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         case layoutTree
         case panels
         case focusedPanelID
-        case auxPanelVisibility
         case unreadPanelIDs
         case recentlyClosedPanels
     }
@@ -135,7 +131,6 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         layoutTree = try container.decode(LayoutNode.self, forKey: .layoutTree)
         panels = try container.decode([UUID: PanelState].self, forKey: .panels)
         focusedPanelID = try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
-        auxPanelVisibility = try container.decodeIfPresent(Set<PanelKind>.self, forKey: .auxPanelVisibility) ?? []
         unreadPanelIDs = (try container.decodeIfPresent(Set<UUID>.self, forKey: .unreadPanelIDs) ?? [])
             .intersection(Set(panels.keys))
         recentlyClosedPanels = try container.decodeIfPresent([ClosedPanelRecord].self, forKey: .recentlyClosedPanels) ?? []
@@ -152,7 +147,6 @@ public struct WorkspaceTabState: Codable, Equatable, Identifiable, Sendable {
         try container.encode(layoutTree, forKey: .layoutTree)
         try container.encode(panels, forKey: .panels)
         try container.encodeIfPresent(focusedPanelID, forKey: .focusedPanelID)
-        try container.encode(auxPanelVisibility, forKey: .auxPanelVisibility)
         try container.encode(unreadPanelIDs, forKey: .unreadPanelIDs)
         try container.encode(recentlyClosedPanels, forKey: .recentlyClosedPanels)
     }

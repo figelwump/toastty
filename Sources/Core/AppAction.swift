@@ -42,7 +42,7 @@ public enum AppAction: Equatable, Sendable {
     case detachPanelToNewWindow(panelID: UUID)
     case closePanel(panelID: UUID)
     case reopenLastClosedPanel(workspaceID: UUID)
-    case toggleAuxPanel(workspaceID: UUID, kind: PanelKind)
+    case createWebPanel(workspaceID: UUID, panel: WebPanelState, placement: WebPanelPlacement)
     case toggleFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
     case setDefaultTerminalProfile(profileID: String?)
@@ -106,8 +106,8 @@ public extension AppAction {
             return "closePanel"
         case .reopenLastClosedPanel:
             return "reopenLastClosedPanel"
-        case .toggleAuxPanel:
-            return "toggleAuxPanel"
+        case .createWebPanel:
+            return "createWebPanel"
         case .toggleFocusedPanelMode:
             return "toggleFocusedPanelMode"
         case .setConfiguredTerminalFont:

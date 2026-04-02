@@ -57,16 +57,21 @@ struct AppReducerTests {
     }
 
     @Test
-    func splitFocusedSlotFallsBackToHomeCWDWhenFocusedPanelIsNonTerminal() throws {
+    func splitFocusedSlotFallsBackToHomeCWDWhenFocusedPanelIsWeb() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-
-        let workspaceWithDiff = try #require(state.workspacesByID[workspaceID])
-        let diffPanelID = try #require(workspaceWithDiff.panels.first(where: { $0.value.kind == .diff })?.key)
-        #expect(reducer.send(.focusPanel(workspaceID: workspaceID, panelID: diffPanelID), state: &state))
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
 
         #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
 
@@ -1287,212 +1292,112 @@ struct AppReducerTests {
     }
 
     @Test
-    func toggleAuxPanelCreatesRightColumnFromSingleLeaf() throws {
+    func createWebPanelInNewTabCreatesSelectedTab() throws {
         var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-        let originalFocusedPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-
-        let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.auxPanelVisibility.contains(.diff))
-
-        let diffPanels = workspace.panels.filter { $0.value.kind == .diff }
-        #expect(diffPanels.count == 1)
-        #expect(workspace.focusedPanelID == originalFocusedPanelID)
-
-        if case .split(_, .horizontal, _, _, _) = workspace.layoutTree {
-            // expected
-        } else {
-            Issue.record("expected horizontal split for first aux panel")
-        }
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func toggleAuxPanelOffRemovesPanelAndVisibility() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
-
-        let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.auxPanelVisibility.contains(.markdown) == false)
-        #expect(workspace.panels.values.contains(where: { $0.kind == .markdown }) == false)
-        #expect(workspace.layoutTree.allSlotInfos.count == 1)
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func toggleAuxPanelAddsSeparateSlotInRightColumn() throws {
-        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
         let workspaceBefore = try #require(state.workspacesByID[workspaceID])
-        let rightSlotIDBefore = try #require(workspaceBefore.layoutTree.rightColumnSlotID())
+        let tabCountBefore = workspaceBefore.tabIDs.count
 
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, url: "https://example.com"),
+                    placement: .newTab
+                ),
+                state: &state
+            )
+        )
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.tabIDs.count == tabCountBefore + 1)
+        let selectedTabID = try #require(workspace.selectedTabID)
+        let selectedTab = try #require(workspace.tab(id: selectedTabID))
+        #expect(selectedTab.panels.count == 1)
+
+        let panelID = try #require(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            Issue.record("expected selected tab panel to be web")
+            return
+        }
+        #expect(webState.definition == .browser)
+        #expect(webState.url == "https://example.com")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func createWebPanelSplitRightAddsPaneAndFocusesIt() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let originalPanelID = try #require(workspaceBefore.focusedPanelID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, url: "https://example.com/docs"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
 
         let workspaceAfter = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfter.layoutTree.allSlotInfos.count == 3)
-        let rightSlotAfter = try #require(workspaceAfter.layoutTree.allSlotInfos.first(where: { $0.slotID == rightSlotIDBefore }))
-        let markdownPanelIDs = workspaceAfter.panels.filter { $0.value.kind == .markdown }.map(\.key)
-        #expect(markdownPanelIDs.count == 1)
-        #expect(rightSlotAfter.panelID != markdownPanelIDs[0])
-        let markdownPane = try #require(
-            workspaceAfter.layoutTree.allSlotInfos.first(where: { $0.panelID == markdownPanelIDs[0] })
+        #expect(workspaceAfter.layoutTree.allSlotInfos.count == 2)
+        let focusedPanelID = try #require(workspaceAfter.focusedPanelID)
+        #expect(focusedPanelID != originalPanelID)
+        guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
+            Issue.record("expected focused panel to be web")
+            return
+        }
+
+        #expect(webState.definition == .browser)
+        #expect(webState.url == "https://example.com/docs")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func repeatedSplitRightWebPanelCreationAddsDistinctPanes() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let leafCountBefore = try #require(state.workspacesByID[workspaceID]?.layoutTree.allSlotInfos.count)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "First Browser"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
         )
-        #expect(markdownPane.panelID == markdownPanelIDs[0])
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Second Browser"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
 
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func toggleAuxPanelsUseSeparatePanesInsteadOfTabs() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
-
-        let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.layoutTree.allSlotInfos.count == 3)
-
-        let diffPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .diff })?.key)
-        let markdownPanelID = try #require(workspace.panels.first(where: { $0.value.kind == .markdown })?.key)
-        let diffPane = try #require(workspace.layoutTree.allSlotInfos.first(where: { $0.panelID == diffPanelID }))
-        let markdownPane = try #require(workspace.layoutTree.allSlotInfos.first(where: { $0.panelID == markdownPanelID }))
-
-        #expect(diffPane.slotID != markdownPane.slotID)
-        #expect(diffPane.panelID == diffPanelID)
-        #expect(markdownPane.panelID == markdownPanelID)
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func toggleAuxPanelOffWithMultipleAuxPanesCollapsesOnlyTargetPane() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
-
-        let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.layoutTree.allSlotInfos.count == 2)
-        #expect(workspace.auxPanelVisibility.contains(.diff))
-        #expect(workspace.auxPanelVisibility.contains(.markdown) == false)
-        #expect(workspace.panels.values.contains(where: { $0.kind == .diff }))
-        #expect(workspace.panels.values.contains(where: { $0.kind == .markdown }) == false)
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func toggleAuxPanelsOnComplexTerminalLayoutDoNotSharePanesWithTerminals() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-
-        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
-        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
-        #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .vertical), state: &state))
-
-        let workspaceBeforeAux = try #require(state.workspacesByID[workspaceID])
-        let terminalPanelIDs = Set(workspaceBeforeAux.panels.compactMap { panelID, panelState in
-            panelState.kind == .terminal ? panelID : nil
-        })
-        let leafCountBeforeAux = workspaceBeforeAux.layoutTree.allSlotInfos.count
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
-
-        let workspaceAfterAux = try #require(state.workspacesByID[workspaceID])
-        #expect(workspaceAfterAux.layoutTree.allSlotInfos.count == leafCountBeforeAux + 2)
-
-        let auxPanelIDs = Set(workspaceAfterAux.panels.compactMap { panelID, panelState in
-            panelState.kind == .terminal ? nil : panelID
-        })
-        #expect(auxPanelIDs.count == 2)
-
-        let auxLeaves = workspaceAfterAux.layoutTree.allSlotInfos.filter { leaf in
-            auxPanelIDs.contains(leaf.panelID)
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.layoutTree.allSlotInfos.count == leafCountBefore + 2)
+        let webPanelIDs = workspaceAfter.panels.compactMap { panelID, panelState -> UUID? in
+            if case .web = panelState {
+                return panelID
+            }
+            return nil
         }
-        #expect(auxLeaves.count == 2)
-        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspaceAfterAux.layoutTree {
-            let terminalSubtreePanelIDs = Set(terminalSubtree.allSlotInfos.map(\.panelID))
-            let auxSubtreePanelIDs = Set(auxSubtree.allSlotInfos.map(\.panelID))
-            #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
-            #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
-        } else {
-            Issue.record("expected root horizontal split with dedicated aux subtree")
-        }
-
-        for leaf in auxLeaves {
-            #expect(terminalPanelIDs.contains(leaf.panelID) == false)
-        }
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func toggleThirdAuxPanelStacksInsideDedicatedAuxColumn() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .markdown), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .scratchpad), state: &state))
-
-        let workspace = try #require(state.workspacesByID[workspaceID])
-        #expect(workspace.layoutTree.allSlotInfos.count == 4)
-
-        let auxPanelIDs = Set(workspace.panels.compactMap { panelID, panelState in
-            panelState.kind == .terminal ? nil : panelID
-        })
-        #expect(auxPanelIDs.count == 3)
-
-        if case .split(_, .horizontal, _, let terminalSubtree, let auxSubtree) = workspace.layoutTree {
-            let terminalSubtreePanelIDs = Set(terminalSubtree.allSlotInfos.map(\.panelID))
-            let auxSubtreePanelIDs = Set(auxSubtree.allSlotInfos.map(\.panelID))
-            #expect(auxSubtreePanelIDs.isSuperset(of: auxPanelIDs))
-            #expect(terminalSubtreePanelIDs.isDisjoint(with: auxPanelIDs))
-        } else {
-            Issue.record("expected root horizontal split with dedicated aux subtree")
-        }
-
-        let auxLeaves = workspace.layoutTree.allSlotInfos.filter { leaf in
-            auxPanelIDs.contains(leaf.panelID)
-        }
-        #expect(auxLeaves.count == 3)
-
-        try StateValidator.validate(state)
-    }
-
-    @Test
-    func togglingSameAuxPanelOnOffOnKeepsSingleInstance() throws {
-        var state = AppState.bootstrap()
-        let reducer = AppReducer()
-        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
-
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-
-        let workspace = try #require(state.workspacesByID[workspaceID])
-        let diffPanels = workspace.panels.values.filter { $0.kind == .diff }
-        #expect(diffPanels.count == 1)
-        #expect(workspace.auxPanelVisibility.contains(.diff))
+        #expect(Set(webPanelIDs).count == 2)
 
         try StateValidator.validate(state)
     }
@@ -1615,25 +1520,71 @@ struct AppReducerTests {
     }
 
     @Test
-    func closeAuxPanelClearsVisibilityAndReopenRestoresIt() throws {
+    func closeAndReopenWebPanelRestoresPanelState() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        let diffPanelID = try #require(
-            state.workspacesByID[workspaceID]?.panels.first(where: { $0.value.kind == .diff })?.key
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Review", url: "https://example.com/review"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
         )
+        let browserPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        let panelStateBeforeClose = try #require(state.workspacesByID[workspaceID]?.panels[browserPanelID])
 
-        #expect(reducer.send(.closePanel(panelID: diffPanelID), state: &state))
+        #expect(reducer.send(.closePanel(panelID: browserPanelID), state: &state))
         let afterClose = try #require(state.workspacesByID[workspaceID])
-        #expect(afterClose.auxPanelVisibility.contains(.diff) == false)
         #expect(afterClose.recentlyClosedPanels.count == 1)
 
         #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
         let afterReopen = try #require(state.workspacesByID[workspaceID])
-        #expect(afterReopen.auxPanelVisibility.contains(.diff))
-        #expect(afterReopen.panels.values.contains(where: { $0.kind == .diff }))
+        let reopenedPanelID = try #require(afterReopen.focusedPanelID)
+        let reopenedPanelState = try #require(afterReopen.panels[reopenedPanelID])
+        #expect(reopenedPanelState == panelStateBeforeClose)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func closeSinglePanelWebTabPreservesReopenHistoryOnRemainingTab() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let originalTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Docs", url: "https://example.com/docs"),
+                    placement: .newTab
+                ),
+                state: &state
+            )
+        )
+
+        let browserPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+        let browserState = try #require(state.workspacesByID[workspaceID]?.panels[browserPanelID])
+
+        #expect(reducer.send(.closePanel(panelID: browserPanelID), state: &state))
+
+        let workspaceAfterClose = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfterClose.tabIDs == [originalTabID])
+        #expect(workspaceAfterClose.recentlyClosedPanels.count == 1)
+
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+
+        let workspaceAfterReopen = try #require(state.workspacesByID[workspaceID])
+        let reopenedPanelID = try #require(workspaceAfterReopen.focusedPanelID)
+        let reopenedPanelState = try #require(workspaceAfterReopen.panels[reopenedPanelID])
+        #expect(reopenedPanelState == browserState)
+        #expect(workspaceAfterReopen.recentlyClosedPanels.isEmpty)
 
         try StateValidator.validate(state)
     }
@@ -1662,29 +1613,47 @@ struct AppReducerTests {
     }
 
     @Test
-    func reopenAuxPanelDoesNotDuplicateWhenSameKindAlreadyVisible() throws {
+    func reopenClosedBrowserCreatesSeparateInstanceWhenAnotherBrowserIsVisible() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
 
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        let originalDiffID = try #require(
-            state.workspacesByID[workspaceID]?.panels.first(where: { $0.value.kind == .diff })?.key
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "Original Browser"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
         )
+        let originalBrowserID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
 
-        #expect(reducer.send(.closePanel(panelID: originalDiffID), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state))
-        let reopenedDiffID = try #require(
-            state.workspacesByID[workspaceID]?.panels.first(where: { $0.value.kind == .diff })?.key
+        #expect(reducer.send(.closePanel(panelID: originalBrowserID), state: &state))
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, title: "New Browser"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
         )
+        let visibleBrowserID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
 
         #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
 
         let workspace = try #require(state.workspacesByID[workspaceID])
-        let diffPanelIDs = workspace.panels.filter { $0.value.kind == .diff }.map(\.key)
-        #expect(diffPanelIDs.count == 1)
-        #expect(diffPanelIDs[0] == reopenedDiffID)
-        #expect(workspace.focusedPanelID == reopenedDiffID)
+        let browserPanelIDs = workspace.panels.compactMap { panelID, panelState -> UUID? in
+            if case .web = panelState {
+                return panelID
+            }
+            return nil
+        }
+        #expect(browserPanelIDs.count == 2)
+        #expect(browserPanelIDs.contains(visibleBrowserID))
         #expect(workspace.recentlyClosedPanels.isEmpty)
 
         try StateValidator.validate(state)
@@ -2237,7 +2206,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func splitInFocusModeUpdatesFocusModeRootNodeIDWhileAuxToggleStaysBlocked() throws {
+    func splitInFocusModeUpdatesFocusModeRootNodeIDWhileWebPanelCreationStillWorks() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
 
@@ -2247,11 +2216,20 @@ struct AppReducerTests {
         let previousRootNodeID = workspaceInFocusMode.focusModeRootNodeID
 
         #expect(reducer.send(.splitFocusedSlot(workspaceID: workspaceID, orientation: .horizontal), state: &state))
-        #expect(reducer.send(.toggleAuxPanel(workspaceID: workspaceID, kind: .diff), state: &state) == false)
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
 
         let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
         #expect(updatedWorkspace.focusedPanelModeActive)
-        #expect(updatedWorkspace.panels.count == 2)
+        #expect(updatedWorkspace.panels.count == 3)
         #expect(updatedWorkspace.focusModeRootNodeID != previousRootNodeID)
         guard case .split(let splitNodeID, _, _, _, _) = updatedWorkspace.layoutTree else {
             Issue.record("expected bootstrap workspace to split in focus mode")

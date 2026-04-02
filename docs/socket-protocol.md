@@ -253,9 +253,9 @@ Supported action IDs:
 - `workspace.resize-split.down`
   - `args.amount` is optional and clamps to at least `1`
 - `workspace.equalize-splits`
-- `topbar.toggle.diff`
-- `topbar.toggle.markdown`
-- `topbar.toggle.scratchpad`
+- `panel.create.browser`
+  - `args.placement` is optional: `newTab` or `splitRight` (defaults to `newTab`)
+  - `args.url` is optional
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist

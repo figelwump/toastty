@@ -723,17 +723,6 @@ struct WorkspaceView: View {
     }
 
     @ViewBuilder
-    private func auxToggle(title: String, systemImage: String, kind: PanelKind, identifier: String) -> some View {
-        let isOn = selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
-        topBarButton(title: title, systemImage: systemImage, active: isOn) {
-            guard let workspaceID = selectedWorkspace?.id else { return }
-            store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: kind))
-        }
-        .disabled(isFocusedPanelModeActive)
-        .accessibilityIdentifier(identifier)
-    }
-
-    @ViewBuilder
     private func focusedPanelToggle(identifier: String) -> some View {
         let isOn = isFocusedPanelModeActive
         styledTopBarButton(active: isOn) {
@@ -1979,12 +1968,8 @@ private struct PanelCardView: View {
                     Color.clear
                 }
 
-            case .diff:
-                auxPanelPlaceholder(title: "Diff Panel")
-            case .markdown:
-                auxPanelPlaceholder(title: "Markdown Panel")
-            case .scratchpad:
-                auxPanelPlaceholder(title: "Scratchpad Panel")
+            case .web(let webState):
+                webPanelPlaceholder(state: webState)
             }
         }
         .background(ToastyTheme.surfaceBackground)
@@ -2083,12 +2068,8 @@ private struct PanelCardView: View {
                 return panelSessionStatus.agent.displayName
             }
             return terminalDisplayTitleOverride ?? terminal.displayPanelLabel
-        case .diff:
-            return "Diff Panel"
-        case .markdown:
-            return "Markdown Panel"
-        case .scratchpad:
-            return "Scratchpad Panel"
+        case .web(let webState):
+            return webState.displayPanelLabel
         }
     }
 
@@ -2191,15 +2172,29 @@ private struct PanelCardView: View {
     }
 
     @ViewBuilder
-    private func auxPanelPlaceholder(title: String) -> some View {
-        Text(title)
-            .font(ToastyTheme.fontMonoHeader)
-            .foregroundStyle(ToastyTheme.mutedText)
-            .frame(
-                maxWidth: .infinity,
-                maxHeight: .infinity,
-                alignment: .leading
-            )
+    private func webPanelPlaceholder(state: WebPanelState) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(state.definition.defaultTitle)
+                .font(ToastyTheme.fontMonoHeader)
+                .foregroundStyle(ToastyTheme.primaryText)
+
+            if let url = state.url {
+                Text(url)
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .textSelection(.enabled)
+            } else {
+                Text("Web panel runtime not wired yet.")
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(ToastyTheme.mutedText)
+            }
+        }
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: .infinity,
+            alignment: .topLeading
+        )
+        .padding(18)
     }
 
     private func shortcutBadge(_ label: String) -> some View {

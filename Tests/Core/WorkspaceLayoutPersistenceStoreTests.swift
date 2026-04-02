@@ -147,8 +147,7 @@ struct WorkspaceLayoutPersistenceStoreTests {
                                         )
                                     ),
                                 ],
-                                focusedPanelID: panelID,
-                                auxPanelVisibility: [.diff]
+                                focusedPanelID: panelID
                             ),
                         ]
                     )
@@ -171,7 +170,6 @@ struct WorkspaceLayoutPersistenceStoreTests {
         #expect(restoredWorkspace.selectedTabID == restoredTabID)
         #expect(restoredWorkspace.title == "Desktop")
         #expect(restoredWorkspace.focusedPanelID == panelID)
-        #expect(restoredWorkspace.auxPanelVisibility == [.diff])
 
         guard case .terminal(let restoredTerminal) = try #require(restoredWorkspace.tab(id: restoredTabID)?.panels[panelID]) else {
             Issue.record("Expected restored legacy layout panel to remain terminal")
@@ -230,5 +228,4 @@ private struct LegacyWorkspaceLayoutWorkspacePayload: Codable {
     let layoutTree: LayoutNode
     let panels: [UUID: WorkspaceLayoutPanelSnapshot]
     let focusedPanelID: UUID?
-    let auxPanelVisibility: Set<PanelKind>
 }

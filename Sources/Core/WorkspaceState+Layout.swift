@@ -90,13 +90,6 @@ extension WorkspaceState {
         return layoutTree.allSlotInfos.first?.slotID
     }
 
-    func auxiliaryColumnSlotID(for auxPanelIDs: Set<UUID>) -> UUID? {
-        guard auxPanelIDs.isEmpty == false else { return nil }
-        return layoutTree.allSlotInfos.last(where: { slot in
-            auxPanelIDs.contains(slot.panelID)
-        })?.slotID
-    }
-
     func focusedPanelIDAfterClosing(
         closedPanelID: UUID,
         closedPanelWasFocused: Bool,

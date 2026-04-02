@@ -1349,6 +1349,17 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return TerminalProfileBinding(profileID: profileID)
         }
 
+        func webPanelPlacement() throws -> WebPanelPlacement {
+            guard let rawValue = args.string("placement")?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  rawValue.isEmpty == false else {
+                return .newTab
+            }
+            guard let placement = WebPanelPlacement(rawValue: rawValue) else {
+                throw AutomationSocketError.invalidPayload("placement must be one of: newTab, splitRight")
+            }
+            return placement
+        }
+
         let didMutate: Bool
         switch actionID {
         case "workspace.tab.new":
@@ -1478,14 +1489,18 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.equalize-splits":
             didMutate = store.send(.equalizeLayoutSplits(workspaceID: try workspaceID()))
 
-        case "topbar.toggle.diff":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .diff))
-
-        case "topbar.toggle.markdown":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .markdown))
-
-        case "topbar.toggle.scratchpad":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .scratchpad))
+        case "panel.create.browser":
+            let url = args.string("url")
+            didMutate = store.send(
+                .createWebPanel(
+                    workspaceID: try workspaceID(),
+                    panel: WebPanelState(
+                        definition: .browser,
+                        url: url
+                    ),
+                    placement: try webPanelPlacement()
+                )
+            )
 
         case "topbar.toggle.focused-panel":
             didMutate = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: try workspaceID())

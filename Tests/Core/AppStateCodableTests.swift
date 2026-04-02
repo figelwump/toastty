@@ -142,7 +142,6 @@ struct AppStateCodableTests {
                         ),
                     ],
                     focusedPanelID: panelID,
-                    auxPanelVisibility: [.diff],
                     unreadPanelIDs: [panelID],
                     unreadNotificationCount: 3,
                     recentlyClosedPanels: [
@@ -179,7 +178,6 @@ struct AppStateCodableTests {
         #expect(decodedWorkspace.tabIDs == [decodedTabID])
         #expect(decodedWorkspace.selectedTabID == decodedTabID)
         #expect(decodedWorkspace.focusedPanelID == panelID)
-        #expect(decodedWorkspace.auxPanelVisibility == [.diff])
         #expect(decodedWorkspace.unreadWorkspaceNotificationCount == 3)
         #expect(decodedWorkspace.unreadPanelIDs == [panelID])
         #expect(decodedWorkspace.focusedPanelModeActive == false)
@@ -273,7 +271,6 @@ private struct LegacyWorkspacePayload: Codable {
     let layoutTree: LayoutNode
     let panels: [UUID: PanelState]
     let focusedPanelID: UUID?
-    let auxPanelVisibility: Set<PanelKind>
     let unreadPanelIDs: Set<UUID>
     let unreadNotificationCount: Int
     let recentlyClosedPanels: [ClosedPanelRecord]
@@ -284,7 +281,6 @@ private struct LegacyWorkspacePayload: Codable {
         layoutTree: LayoutNode,
         panels: [UUID: PanelState],
         focusedPanelID: UUID?,
-        auxPanelVisibility: Set<PanelKind>,
         unreadPanelIDs: Set<UUID>,
         unreadNotificationCount: Int,
         recentlyClosedPanels: [ClosedPanelRecord]
@@ -294,7 +290,6 @@ private struct LegacyWorkspacePayload: Codable {
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
-        self.auxPanelVisibility = auxPanelVisibility
         self.unreadPanelIDs = unreadPanelIDs
         self.unreadNotificationCount = unreadNotificationCount
         self.recentlyClosedPanels = recentlyClosedPanels
@@ -306,7 +301,6 @@ private struct LegacyWorkspacePayload: Codable {
         layoutTree = workspace.layoutTree
         panels = workspace.panels
         focusedPanelID = workspace.focusedPanelID
-        auxPanelVisibility = workspace.auxPanelVisibility
         unreadPanelIDs = workspace.unreadPanelIDs
         unreadNotificationCount = workspace.unreadWorkspaceNotificationCount
         recentlyClosedPanels = workspace.recentlyClosedPanels

@@ -80,8 +80,7 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 
 - window membership and `selectedWindowID` are restored from the snapshot as-is
 - `makeAppState()` itself does not call `StateValidator`
-- workspace titles, layout trees, panel kinds, `focusedPanelID`, and
-  `auxPanelVisibility` are restored
+- workspace titles, layout trees, panel kinds, and `focusedPanelID` are restored
 - `focusedPanelModeActive` is reset to `false`
 - `unreadPanelIDs` is reset to `[]`
 - `unreadWorkspaceNotificationCount` is reset to `0`
@@ -100,9 +99,6 @@ During `WorkspaceLayoutSnapshot.makeAppState()` restore:
 
 These behaviors are current reducer contract, but `StateValidator` does not check them.
 
-- Aux panel uniqueness and toggle consistency are maintained by reducer actions:
-  at most one panel per aux kind, and `auxPanelVisibility` is updated alongside panel
-  creation/removal.
 - Panel removal collapses the layout tree instead of leaving placeholders.
 - Closing the last panel in a workspace removes the workspace, and removing the last
   workspace in a window removes the window for valid reducer-managed state.
