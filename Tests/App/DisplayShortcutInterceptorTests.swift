@@ -1,5 +1,6 @@
 import AppKit
 @testable import ToasttyApp
+import WebKit
 import XCTest
 
 @MainActor
@@ -158,6 +159,26 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let window = ShortcutTestWindow()
         window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
         window.forcedFirstResponder = TerminalHostView()
+
+        XCTAssertEqual(
+            DisplayShortcutInterceptor.closePanelShortcutWindowID(
+                keyWindow: window,
+                modalWindow: nil
+            ),
+            windowID
+        )
+    }
+
+    func testClosePanelShortcutWindowIDAllowsWebKitHostedTextInputResponder() {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+        webView.addSubview(textView)
+        window.contentView = webView
+        window.forcedFirstResponder = textView
 
         XCTAssertEqual(
             DisplayShortcutInterceptor.closePanelShortcutWindowID(

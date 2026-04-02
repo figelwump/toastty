@@ -631,7 +631,7 @@ final class DisplayShortcutInterceptor {
         guard keyWindow.sheetParent == nil else { return nil }
         // Be conservative around active text input so Cmd+W stays with the
         // field editor or text control rather than being reclaimed by Toastty.
-        if toasttyResponderUsesReservedTextInput(keyWindow.firstResponder) {
+        if toasttyResponderUsesReservedClosePanelShortcut(keyWindow.firstResponder) {
             return nil
         }
         guard let rawWindowID = keyWindow.identifier?.rawValue else { return nil }
