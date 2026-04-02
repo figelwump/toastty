@@ -1490,15 +1490,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             didMutate = store.send(.equalizeLayoutSplits(workspaceID: try workspaceID()))
 
         case "panel.create.browser":
-            let url = args.string("url")
-            didMutate = store.send(
-                .createWebPanel(
-                    workspaceID: try workspaceID(),
-                    panel: WebPanelState(
-                        definition: .browser,
-                        url: url
-                    ),
-                    placement: try webPanelPlacement()
+            didMutate = store.createBrowserPanel(
+                workspaceID: try workspaceID(),
+                request: BrowserPanelCreateRequest(
+                    initialURL: args.string("url"),
+                    placementOverride: try webPanelPlacement()
                 )
             )
 

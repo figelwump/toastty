@@ -579,9 +579,9 @@ public struct AppReducer {
                 didMutate = true
             }
 
-            let normalizedURL = WebPanelState.normalizedURL(url)
-            if webState.url != normalizedURL {
-                webState.url = normalizedURL
+            let normalizedCurrentURL = WebPanelState.normalizedCurrentURL(url)
+            if webState.currentURL != normalizedCurrentURL {
+                webState.currentURL = normalizedCurrentURL
                 didMutate = true
             }
 

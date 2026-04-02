@@ -1303,7 +1303,7 @@ struct AppReducerTests {
             reducer.send(
                 .createWebPanel(
                     workspaceID: workspaceID,
-                    panel: WebPanelState(definition: .browser, url: "https://example.com"),
+                    panel: WebPanelState(definition: .browser, initialURL: "https://example.com"),
                     placement: .newTab
                 ),
                 state: &state
@@ -1322,7 +1322,8 @@ struct AppReducerTests {
             return
         }
         #expect(webState.definition == .browser)
-        #expect(webState.url == "https://example.com")
+        #expect(webState.initialURL == "https://example.com")
+        #expect(webState.currentURL == nil)
 
         try StateValidator.validate(state)
     }
@@ -1339,7 +1340,7 @@ struct AppReducerTests {
             reducer.send(
                 .createWebPanel(
                     workspaceID: workspaceID,
-                    panel: WebPanelState(definition: .browser, url: "https://example.com/docs"),
+                    panel: WebPanelState(definition: .browser, initialURL: "https://example.com/docs"),
                     placement: .splitRight
                 ),
                 state: &state
@@ -1356,7 +1357,8 @@ struct AppReducerTests {
         }
 
         #expect(webState.definition == .browser)
-        #expect(webState.url == "https://example.com/docs")
+        #expect(webState.initialURL == "https://example.com/docs")
+        #expect(webState.currentURL == nil)
 
         try StateValidator.validate(state)
     }
@@ -1403,7 +1405,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func updateWebPanelMetadataRefreshesTitleAndURL() throws {
+    func updateWebPanelMetadataRefreshesTitleAndCurrentURLWithoutChangingInitialURL() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -1412,7 +1414,10 @@ struct AppReducerTests {
             reducer.send(
                 .createWebPanel(
                     workspaceID: workspaceID,
-                    panel: WebPanelState(definition: .browser),
+                    panel: WebPanelState(
+                        definition: .browser,
+                        initialURL: "https://example.com/original"
+                    ),
                     placement: .splitRight
                 ),
                 state: &state
@@ -1438,7 +1443,9 @@ struct AppReducerTests {
         }
 
         #expect(webState.title == "Example Domain")
-        #expect(webState.url == "https://example.com")
+        #expect(webState.initialURL == "https://example.com/original")
+        #expect(webState.currentURL == "https://example.com")
+        #expect(webState.restorableURL == "https://example.com")
 
         #expect(
             reducer.send(
@@ -1458,7 +1465,9 @@ struct AppReducerTests {
         }
 
         #expect(untitledWebState.title == "Browser")
-        #expect(untitledWebState.url == "https://example.com/no-title")
+        #expect(untitledWebState.initialURL == "https://example.com/original")
+        #expect(untitledWebState.currentURL == "https://example.com/no-title")
+        #expect(untitledWebState.restorableURL == "https://example.com/no-title")
 
         #expect(
             reducer.send(
@@ -1478,7 +1487,9 @@ struct AppReducerTests {
         }
 
         #expect(blankWebState.title == "Browser")
-        #expect(blankWebState.url == nil)
+        #expect(blankWebState.initialURL == "https://example.com/original")
+        #expect(blankWebState.currentURL == "about:blank")
+        #expect(blankWebState.restorableURL == "about:blank")
 
         try StateValidator.validate(state)
     }
@@ -1610,7 +1621,11 @@ struct AppReducerTests {
             reducer.send(
                 .createWebPanel(
                     workspaceID: workspaceID,
-                    panel: WebPanelState(definition: .browser, title: "Review", url: "https://example.com/review"),
+                    panel: WebPanelState(
+                        definition: .browser,
+                        title: "Review",
+                        initialURL: "https://example.com/review"
+                    ),
                     placement: .splitRight
                 ),
                 state: &state
@@ -1643,7 +1658,11 @@ struct AppReducerTests {
             reducer.send(
                 .createWebPanel(
                     workspaceID: workspaceID,
-                    panel: WebPanelState(definition: .browser, title: "Docs", url: "https://example.com/docs"),
+                    panel: WebPanelState(
+                        definition: .browser,
+                        title: "Docs",
+                        initialURL: "https://example.com/docs"
+                    ),
                     placement: .newTab
                 ),
                 state: &state

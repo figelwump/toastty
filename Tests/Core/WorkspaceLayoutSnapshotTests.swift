@@ -215,7 +215,12 @@ struct WorkspaceLayoutSnapshotTests {
         let workspaceID = UUID()
         let panelID = UUID()
         let slotID = UUID()
-        let webState = WebPanelState(definition: .browser, title: "Docs", url: "https://example.com/docs")
+        let webState = WebPanelState(
+            definition: .browser,
+            title: "Docs",
+            initialURL: "https://example.com",
+            currentURL: "https://example.com/docs"
+        )
         let workspace = WorkspaceState(
             id: workspaceID,
             title: "Browser",

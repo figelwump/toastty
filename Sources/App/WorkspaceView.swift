@@ -2201,7 +2201,7 @@ private struct PanelCardView: View {
                 .font(ToastyTheme.fontMonoHeader)
                 .foregroundStyle(ToastyTheme.primaryText)
 
-            if let url = state.url {
+            if let url = state.restorableURL {
                 Text(url)
                     .font(ToastyTheme.fontWorkspaceSubtitle)
                     .foregroundStyle(ToastyTheme.mutedText)

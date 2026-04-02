@@ -14,7 +14,13 @@ struct PanelStateCodableTests {
                     profileBinding: TerminalProfileBinding(profileID: "zmx")
                 )
             ),
-            .web(WebPanelState(definition: .browser, url: "https://example.com")),
+            .web(
+                WebPanelState(
+                    definition: .browser,
+                    initialURL: "https://example.com",
+                    currentURL: "https://example.com/docs"
+                )
+            ),
         ]
 
         let encoder = JSONEncoder()

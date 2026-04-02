@@ -43,6 +43,25 @@ struct PendingPanelFlashRequest: Equatable {
     let panelID: UUID
 }
 
+struct BrowserPanelCreateRequest: Equatable, Sendable {
+    static let defaultPlacement: WebPanelPlacement = .newTab
+
+    var initialURL: String?
+    var placementOverride: WebPanelPlacement?
+
+    init(
+        initialURL: String? = nil,
+        placementOverride: WebPanelPlacement? = nil
+    ) {
+        self.initialURL = WebPanelState.normalizedInitialURL(initialURL)
+        self.placementOverride = placementOverride
+    }
+
+    var resolvedPlacement: WebPanelPlacement {
+        placementOverride ?? Self.defaultPlacement
+    }
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -224,24 +243,38 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func createBrowserPanelFromCommand(
-        preferredWindowID: UUID?,
-        placement: WebPanelPlacement,
-        url: String? = nil
+    func createBrowserPanel(
+        workspaceID: UUID,
+        request: BrowserPanelCreateRequest
     ) -> Bool {
-        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+        guard state.workspacesByID[workspaceID] != nil else {
             return false
         }
 
         return send(
             .createWebPanel(
-                workspaceID: selection.workspace.id,
+                workspaceID: workspaceID,
                 panel: WebPanelState(
                     definition: .browser,
-                    url: url
+                    initialURL: request.initialURL
                 ),
-                placement: placement
+                placement: request.resolvedPlacement
             )
+        )
+    }
+
+    @discardableResult
+    func createBrowserPanelFromCommand(
+        preferredWindowID: UUID?,
+        request: BrowserPanelCreateRequest
+    ) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        return createBrowserPanel(
+            workspaceID: selection.workspace.id,
+            request: request
         )
     }
 

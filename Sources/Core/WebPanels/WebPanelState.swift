@@ -23,23 +23,32 @@ public enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendabl
 public struct WebPanelState: Codable, Equatable, Sendable {
     public var definition: WebPanelDefinition
     public var title: String
-    public var url: String?
+    // `initialURL` captures creation intent while `currentURL` tracks the
+    // browser's live/restorable location after runtime navigation.
+    public var initialURL: String?
+    public var currentURL: String?
 
     public init(
         definition: WebPanelDefinition,
         title: String? = nil,
-        url: String? = nil
+        initialURL: String? = nil,
+        currentURL: String? = nil
     ) {
         self.definition = definition
         self.title = Self.resolvedTitle(
             definition: definition,
             title: title
         )
-        self.url = Self.normalizedURL(url)
+        self.initialURL = Self.normalizedInitialURL(initialURL)
+        self.currentURL = Self.normalizedCurrentURL(currentURL)
     }
 
     public var displayPanelLabel: String {
         title
+    }
+
+    public var restorableURL: String? {
+        currentURL ?? initialURL
     }
 
     public static func resolvedTitle(definition: WebPanelDefinition, title: String?) -> String {
@@ -50,7 +59,7 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         normalizedValue(value)
     }
 
-    public static func normalizedURL(_ value: String?) -> String? {
+    public static func normalizedInitialURL(_ value: String?) -> String? {
         guard let normalized = normalizedValue(value) else {
             return nil
         }
@@ -58,6 +67,10 @@ public struct WebPanelState: Codable, Equatable, Sendable {
             return nil
         }
         return normalized
+    }
+
+    public static func normalizedCurrentURL(_ value: String?) -> String? {
+        normalizedValue(value)
     }
 
     private static func normalizedValue(_ value: String?) -> String? {

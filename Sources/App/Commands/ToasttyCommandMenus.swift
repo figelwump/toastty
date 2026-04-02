@@ -385,7 +385,9 @@ struct ToasttyCommandMenus: Commands {
             Button("New Browser Tab") {
                 store.createBrowserPanelFromCommand(
                     preferredWindowID: preferredWindowID,
-                    placement: .newTab
+                    request: BrowserPanelCreateRequest(
+                        placementOverride: .newTab
+                    )
                 )
             }
             .disabled(commandWorkspace == nil)
@@ -393,7 +395,9 @@ struct ToasttyCommandMenus: Commands {
             Button("New Browser Beside Current") {
                 store.createBrowserPanelFromCommand(
                     preferredWindowID: preferredWindowID,
-                    placement: .splitRight
+                    request: BrowserPanelCreateRequest(
+                        placementOverride: .splitRight
+                    )
                 )
             }
             .disabled(commandWorkspace == nil)

@@ -117,8 +117,8 @@ final class BrowserPanelRuntime: NSObject, PanelHostLifecycleControlling {
     }
 
     private func synchronizeDisplayedContent(with webState: WebPanelState) {
-        let desiredURLString = WebPanelState.normalizedURL(webState.url)
-        let currentURLString = normalizedObservedURLString()
+        let desiredURLString = webState.restorableURL
+        let currentURLString = reportedCurrentURLString()
 
         if let desiredURLString {
             if desiredURLString == currentURLString {
@@ -165,7 +165,7 @@ final class BrowserPanelRuntime: NSObject, PanelHostLifecycleControlling {
         metadataDidChange(
             panelID,
             normalizedObservedTitle(),
-            normalizedObservedURLString()
+            reportedCurrentURLString()
         )
     }
 
@@ -173,8 +173,16 @@ final class BrowserPanelRuntime: NSObject, PanelHostLifecycleControlling {
         WebPanelState.normalizedTitle(webView.title)
     }
 
-    private func normalizedObservedURLString() -> String? {
-        WebPanelState.normalizedURL(webView.url?.absoluteString)
+    private func reportedCurrentURLString() -> String? {
+        if isShowingStartPage {
+            return nil
+        }
+
+        if let observedURL = WebPanelState.normalizedCurrentURL(webView.url?.absoluteString) {
+            return observedURL
+        }
+
+        return WebPanelState.normalizedCurrentURL(lastRequestedURLString)
     }
 
     private static var defaultStartPageHTML: String {
@@ -307,7 +315,8 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         didFinish navigation: WKNavigation!
     ) {
         _ = navigation
-        if WebPanelState.normalizedURL(webView.url?.absoluteString) != nil {
+        if let observedURL = WebPanelState.normalizedCurrentURL(webView.url?.absoluteString),
+           observedURL.caseInsensitiveCompare("about:blank") != .orderedSame {
             isShowingStartPage = false
         }
         publishObservedMetadata()

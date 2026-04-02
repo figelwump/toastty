@@ -266,15 +266,45 @@ state_dump_has_browser_panel() {
                 .kind == "web"
                 and .web.definition == "browser"
                 and .web.title == $title
-                and .web.url == $url
+                and (.web.currentURL // .web.initialURL) == $url
             )
           )
       ' "$state_path" >/dev/null
     return
   fi
 
-  grep -F "\"title\":\"${expected_title}\"" "$state_path" >/dev/null &&
-    grep -F "\"url\":\"${expected_url}\"" "$state_path" >/dev/null
+  perl -MJSON::PP -e '
+    my ($expected_title, $expected_url, $state_path) = @ARGV;
+
+    open my $fh, "<", $state_path or exit 1;
+    local $/;
+    my $state = decode_json(<$fh>);
+
+    sub dict_values {
+      my ($dictionary) = @_;
+      return () unless ref($dictionary) eq "ARRAY";
+
+      my @values;
+      for (my $index = 1; $index < @$dictionary; $index += 2) {
+        push @values, $dictionary->[$index];
+      }
+      return @values;
+    }
+
+    for my $workspace (dict_values($state->{workspacesByID})) {
+      for my $panel (dict_values($workspace->{panels})) {
+        next unless ($panel->{kind} // q{}) eq "web";
+        my $web = $panel->{web} // {};
+        next unless ($web->{definition} // q{}) eq "browser";
+        next unless ($web->{title} // q{}) eq $expected_title;
+
+        my $restorable_url = defined $web->{currentURL} ? $web->{currentURL} : $web->{initialURL};
+        exit 0 if defined $restorable_url && $restorable_url eq $expected_url;
+      }
+    }
+
+    exit 1;
+  ' "$expected_title" "$expected_url" "$state_path"
 }
 
 wait_for_browser_panel_title() {
