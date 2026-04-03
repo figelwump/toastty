@@ -275,6 +275,51 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
     }
 
+    func testClosePanelShortcutWindowIDAllowsBrowserChromeTextFieldResponder() {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        window.forcedFirstResponder = BrowserChromeTextField()
+
+        XCTAssertEqual(
+            DisplayShortcutInterceptor.closePanelShortcutWindowID(
+                keyWindow: window,
+                modalWindow: nil
+            ),
+            windowID
+        )
+    }
+
+    func testClosePanelShortcutWindowIDAllowsBrowserChromeFieldEditorResponder() throws {
+        let windowID = UUID()
+        let window = ShortcutTestWindow()
+        window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
+        let textField = BrowserChromeTextField()
+        let fieldEditor = NSTextView(frame: NSRect(x: 0, y: 0, width: 120, height: 80))
+        fieldEditor.delegate = textField
+        window.forcedFirstResponder = fieldEditor
+
+        let resolvedWindowID = DisplayShortcutInterceptor.closePanelShortcutWindowID(
+            keyWindow: window,
+            modalWindow: nil
+        )
+        XCTAssertEqual(resolvedWindowID, windowID)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let interceptor = makeInterceptor(store: store)
+        let focusPreviousEvent = try makeKeyEvent(characters: "[", modifiers: [.command], keyCode: 0x21)
+        let closeEvent = try makeKeyEvent(characters: "w", modifiers: [.command], keyCode: 0x0D)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: focusPreviousEvent, appOwnedWindowID: resolvedWindowID),
+            .focusSplit(.previous)
+        )
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: closeEvent, appOwnedWindowID: resolvedWindowID),
+            .closePanel
+        )
+    }
+
     func testClosePanelShortcutWindowIDRejectsModalWindow() {
         let keyWindow = ShortcutTestWindow()
         keyWindow.identifier = NSUserInterfaceItemIdentifier(UUID().uuidString)

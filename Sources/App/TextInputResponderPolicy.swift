@@ -18,10 +18,42 @@ func toasttyResponderUsesReservedClosePanelShortcut(_ responder: NSResponder?) -
         return false
     }
 
+    // Browser chrome text fields should keep browser/panel shortcuts app-owned
+    // even while the AppKit field editor is active.
+    if toasttyResponderBelongsToBrowserChromeTextInput(responder) {
+        return false
+    }
+
     // WebKit-backed browser panels host text-input-capable responder views
     // inside the page. Cmd+W should still close the panel rather than falling
     // through to AppKit's native window-close path.
     return toasttyResponderBelongsToWebView(responder) == false
+}
+
+@MainActor
+private func toasttyResponderBelongsToBrowserChromeTextInput(_ responder: NSResponder?) -> Bool {
+    if responder is BrowserChromeTextField {
+        return true
+    }
+
+    if let textView = responder as? NSTextView,
+       textView.delegate is BrowserChromeTextField {
+        return true
+    }
+
+    var currentResponder = responder?.nextResponder
+    while let responder = currentResponder {
+        if responder is BrowserChromeTextField {
+            return true
+        }
+        if let textView = responder as? NSTextView,
+           textView.delegate is BrowserChromeTextField {
+            return true
+        }
+        currentResponder = responder.nextResponder
+    }
+
+    return false
 }
 
 @MainActor

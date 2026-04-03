@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 
+final class BrowserChromeTextField: NSTextField, NSTextViewDelegate {}
+
 struct BrowserAddressTextField: NSViewRepresentable {
     @Binding var text: String
     let placeholder: String
@@ -19,14 +21,14 @@ struct BrowserAddressTextField: NSViewRepresentable {
         )
     }
 
-    func makeNSView(context: Context) -> NSTextField {
-        let textField = NSTextField(string: text)
+    func makeNSView(context: Context) -> BrowserChromeTextField {
+        let textField = BrowserChromeTextField(string: text)
         textField.delegate = context.coordinator
         configure(textField)
         return textField
     }
 
-    func updateNSView(_ textField: NSTextField, context: Context) {
+    func updateNSView(_ textField: BrowserChromeTextField, context: Context) {
         context.coordinator.update(
             text: $text,
             onSubmit: onSubmit,
@@ -42,11 +44,11 @@ struct BrowserAddressTextField: NSViewRepresentable {
         )
     }
 
-    static func dismantleNSView(_ textField: NSTextField, coordinator: Coordinator) {
+    static func dismantleNSView(_ textField: BrowserChromeTextField, coordinator: Coordinator) {
         coordinator.resetFocusState()
     }
 
-    private func configure(_ textField: NSTextField) {
+    private func configure(_ textField: BrowserChromeTextField) {
         textField.placeholderString = placeholder
         textField.isBordered = false
         textField.isBezeled = false
