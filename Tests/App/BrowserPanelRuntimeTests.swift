@@ -34,6 +34,16 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         )
     }
 
+    func testDefaultStartPageUsesToasttyCopyWithoutExternalDemoLinks() {
+        let html = BrowserPanelRuntime.defaultStartPageHTML
+
+        XCTAssertTrue(html.contains("Toastty Browser"))
+        XCTAssertTrue(html.contains("Cmd+L"))
+        XCTAssertTrue(html.contains("Cmd+R"))
+        XCTAssertFalse(html.contains("example.com"))
+        XCTAssertFalse(html.contains("WebKit docs"))
+    }
+
     func testFaviconCandidateURLsResolveRelativeLinksAndAppendRootFallback() throws {
         let pageURL = try XCTUnwrap(URL(string: "https://www.espn.com/nhl/story"))
 

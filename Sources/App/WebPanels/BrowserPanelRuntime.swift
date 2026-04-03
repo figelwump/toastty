@@ -645,7 +645,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         return FaviconLinkReference(href: href, rel: rel)
     }
 
-    private static var defaultStartPageHTML: String {
+    static var defaultStartPageHTML: String {
         """
         <!doctype html>
         <html lang="en">
@@ -656,12 +656,15 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
           <style>
             :root {
               color-scheme: dark;
-              --bg: #0f1319;
-              --panel: #161d26;
+              --bg: #0d1117;
+              --panel: rgba(19, 25, 34, 0.92);
+              --panel-strong: rgba(24, 31, 42, 0.98);
               --border: #2b3644;
               --text: #eef3f8;
               --muted: #9fb0c3;
-              --accent: #78d6ff;
+              --accent: #f3a43b;
+              --accent-soft: rgba(243, 164, 59, 0.16);
+              --secondary-accent: rgba(120, 214, 255, 0.14);
             }
             * { box-sizing: border-box; }
             body {
@@ -671,47 +674,113 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
               align-items: center;
               justify-content: center;
               background:
-                radial-gradient(circle at top left, rgba(120, 214, 255, 0.18), transparent 28rem),
+                radial-gradient(circle at top left, var(--accent-soft), transparent 24rem),
+                radial-gradient(circle at top right, var(--secondary-accent), transparent 24rem),
                 linear-gradient(180deg, #0f1319 0%, #0a0d12 100%);
               color: var(--text);
               font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
             }
             main {
-              width: min(34rem, calc(100vw - 3rem));
-              padding: 1.4rem;
+              width: min(36rem, calc(100vw - 3rem));
+              padding: 1.5rem;
               border: 1px solid var(--border);
               border-radius: 18px;
-              background: rgba(22, 29, 38, 0.9);
+              background: var(--panel);
               box-shadow: 0 20px 80px rgba(0, 0, 0, 0.32);
             }
+            .eyebrow {
+              display: inline-flex;
+              align-items: center;
+              gap: 0.45rem;
+              margin-bottom: 0.95rem;
+              padding: 0.35rem 0.65rem;
+              border-radius: 999px;
+              border: 1px solid rgba(243, 164, 59, 0.24);
+              background: rgba(243, 164, 59, 0.08);
+              color: #ffd8a6;
+              font-size: 0.76rem;
+              font-weight: 600;
+              letter-spacing: 0.08em;
+              text-transform: uppercase;
+            }
+            .eyebrow-dot {
+              width: 0.45rem;
+              height: 0.45rem;
+              border-radius: 999px;
+              background: var(--accent);
+              box-shadow: 0 0 18px rgba(243, 164, 59, 0.45);
+            }
             h1 {
-              margin: 0 0 0.5rem;
-              font-size: 1.15rem;
-              letter-spacing: 0.02em;
+              margin: 0 0 0.55rem;
+              font-size: 1.55rem;
+              letter-spacing: 0.01em;
             }
             p {
               margin: 0;
               color: var(--muted);
               line-height: 1.5;
             }
-            a {
-              color: var(--accent);
+            .shortcut-grid {
+              margin-top: 1.1rem;
+              display: grid;
+              grid-template-columns: repeat(2, minmax(0, 1fr));
+              gap: 0.7rem;
             }
-            .links {
-              margin-top: 1rem;
-              display: flex;
-              gap: 0.85rem;
-              flex-wrap: wrap;
+            .shortcut-card {
+              padding: 0.85rem 0.95rem;
+              border-radius: 14px;
+              border: 1px solid rgba(255, 255, 255, 0.06);
+              background: var(--panel-strong);
+            }
+            .shortcut-key {
+              display: inline-flex;
+              margin-bottom: 0.35rem;
+              padding: 0.24rem 0.5rem;
+              border-radius: 999px;
+              background: rgba(255, 255, 255, 0.06);
+              color: var(--text);
+              font-size: 0.72rem;
+              font-weight: 600;
+              letter-spacing: 0.05em;
+            }
+            .shortcut-title {
+              display: block;
+              margin-bottom: 0.2rem;
+              color: var(--text);
+              font-size: 0.95rem;
+              font-weight: 600;
+            }
+            .shortcut-copy {
+              color: var(--muted);
+              font-size: 0.84rem;
+              line-height: 1.45;
+            }
+            @media (max-width: 720px) {
+              .shortcut-grid {
+                grid-template-columns: 1fr;
+              }
             }
           </style>
         </head>
         <body>
           <main>
-            <h1>Browser Panel</h1>
-            <p>The browser runtime is live. Use the location field to open a page, or click a link below.</p>
-            <div class="links">
-              <a href="https://example.com">Open example.com</a>
-              <a href="https://developer.apple.com/documentation/webkit">Open WebKit docs</a>
+            <div class="eyebrow">
+              <span class="eyebrow-dot"></span>
+              Toastty Browser
+            </div>
+            <h1>Open a page</h1>
+            <p>Use the location field above to load a URL. New browser panels start here until you navigate somewhere.</p>
+            <div class="shortcut-grid">
+              <section class="shortcut-card">
+                <span class="shortcut-key">Cmd+L</span>
+                <span class="shortcut-title">Focus the location field</span>
+                <div class="shortcut-copy">Jump to the address bar without leaving the keyboard.</div>
+              </section>
+              <section class="shortcut-card">
+                <span class="shortcut-key">Cmd+R</span>
+                <span class="shortcut-title">Reload or stop</span>
+                <div class="shortcut-copy">Refresh the current page, or stop a load that is still in progress.</div>
+              </section>
             </div>
           </main>
         </body>
