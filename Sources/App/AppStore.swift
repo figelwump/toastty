@@ -87,6 +87,7 @@ final class AppStore: ObservableObject {
 
     @Published private(set) var state: AppState
     @Published private(set) var hasEverLaunchedAgent: Bool
+    @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
@@ -656,6 +657,25 @@ final class AppStore: ObservableObject {
         hasEverLaunchedAgent = true
         guard persistUserSettings else { return }
         ToasttySettingsStore.persistHasEverLaunchedAgent(true)
+    }
+
+    func setURLRoutingPreferences(_ preferences: URLRoutingPreferences) {
+        urlRoutingPreferences = preferences
+    }
+
+    @discardableResult
+    func openURLInBrowser(
+        preferredWindowID: UUID?,
+        url: URL,
+        placement: URLBrowserOpenPlacement
+    ) -> Bool {
+        createBrowserPanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            request: BrowserPanelCreateRequest(
+                initialURL: url.absoluteString,
+                placementOverride: placement.webPanelPlacement
+            )
+        )
     }
 
     private func createWorkspaceCommandTarget(preferredWindowID: UUID?) -> WorkspaceCommandTarget? {

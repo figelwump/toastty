@@ -482,6 +482,61 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(webState.currentURL)
     }
 
+    func testOpenURLInBrowserUsesConfiguredRootRightPlacement() throws {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let url = try XCTUnwrap(URL(string: "https://example.com/right"))
+
+        XCTAssertTrue(
+            store.openURLInBrowser(
+                preferredWindowID: windowID,
+                url: url,
+                placement: .rootRight
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[panelID] else {
+            XCTFail("expected focused panel to be browser")
+            return
+        }
+
+        XCTAssertEqual(webState.initialURL, url.absoluteString)
+    }
+
+    func testOpenURLInBrowserUsesConfiguredNewTabPlacement() throws {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let url = try XCTUnwrap(URL(string: "https://example.com/new-tab"))
+
+        XCTAssertTrue(
+            store.openURLInBrowser(
+                preferredWindowID: windowID,
+                url: url,
+                placement: .newTab
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 2)
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected panel to be browser")
+            return
+        }
+
+        XCTAssertEqual(webState.initialURL, url.absoluteString)
+    }
+
     func testFocusedBrowserPanelSelectionReturnsFocusedBrowserInPreferredWindow() throws {
         let state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)

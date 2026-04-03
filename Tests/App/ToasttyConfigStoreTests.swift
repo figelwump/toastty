@@ -17,6 +17,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
         terminal-font-size = 14
         default-terminal-profile = "zmx"
         enable-agent-command-shims = false
+        url-opening-destination = system-browser
+        url-opening-browser-placement = newTab
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
         let config = ToasttyConfigStore.load(
@@ -27,6 +29,13 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.terminalFontSizePoints, 14)
         XCTAssertEqual(config.defaultTerminalProfileID, "zmx")
         XCTAssertFalse(config.enableAgentCommandShims)
+        XCTAssertEqual(
+            config.urlRoutingPreferences,
+            URLRoutingPreferences(
+                destination: .systemBrowser,
+                browserPlacement: .newTab
+            )
+        )
     }
 
     func testLoadStripsInlineCommentsOutsideQuotedProfileIDs() throws {
@@ -52,6 +61,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(config.terminalFontSizePoints, 14)
         XCTAssertEqual(config.defaultTerminalProfileID, "ssh#prod")
         XCTAssertTrue(config.enableAgentCommandShims)
+        XCTAssertEqual(config.urlRoutingPreferences, URLRoutingPreferences())
     }
 
     func testLoadDefaultsAgentCommandShimsToEnabledWhenKeyIsMissing() throws {
@@ -74,6 +84,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         )
 
         XCTAssertTrue(config.enableAgentCommandShims)
+        XCTAssertEqual(config.urlRoutingPreferences, URLRoutingPreferences())
     }
 
     func testEnsureTemplateExistsWritesCommentedExamples() throws {
@@ -110,6 +121,18 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # Set this to false if you do not want Toastty intercepting
             # those commands in Toastty terminals.
             # enable-agent-command-shims = false
+
+            # url-opening-destination controls where Toastty opens app-owned
+            # web URLs such as Toastty Help links.
+            # Supported values: toastty-browser, system-browser.
+            # The default is toastty-browser.
+            # url-opening-destination = toastty-browser
+
+            # url-opening-browser-placement controls how Toastty places those
+            # internally opened browser panels.
+            # Supported values: rootRight, newTab.
+            # The default is rootRight.
+            # url-opening-browser-placement = rootRight
 
             """
         )
@@ -169,6 +192,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertTrue(contents.contains("# Toastty config"))
         XCTAssertTrue(contents.contains("# terminal-font-size"))
         XCTAssertTrue(contents.contains("# default-terminal-profile"))
+        XCTAssertTrue(contents.contains("# url-opening-destination"))
+        XCTAssertTrue(contents.contains("# url-opening-browser-placement"))
     }
 
     func testWriteConfigReferenceOverwritesExistingFile() throws {
@@ -200,6 +225,34 @@ final class ToasttyConfigStoreTests: XCTestCase {
         )
 
         XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config-reference")
+    }
+
+    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserOnRight() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let configURL = ToasttyConfigStore.configFileURL(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+        try FileManager.default.createDirectory(
+            at: configURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try """
+        enable-agent-command-shims = true
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let config = ToasttyConfigStore.load(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:]
+        )
+
+        XCTAssertEqual(
+            config.urlRoutingPreferences,
+            URLRoutingPreferences(
+                destination: .toasttyBrowser,
+                browserPlacement: .rootRight
+            )
+        )
     }
 }
 

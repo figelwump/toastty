@@ -92,13 +92,14 @@ private enum ToasttyMenuActions {
     static func openKeyboardShortcutsReferenceResult(
         runtimePaths: ToasttyRuntimePaths = .resolve(),
         fileManager: FileManager = .default,
-        bundledReferenceURL: URL? = KeyboardShortcutsReferenceLocator.bundledReferenceURL()
+        bundledReferenceURL: URL? = KeyboardShortcutsReferenceLocator.bundledReferenceURL(),
+        openURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) -> Result<Void, AgentGetStartedActionError> {
         KeyboardShortcutsReferenceLocator.openReferenceResult(
             runtimePaths: runtimePaths,
             fileManager: fileManager,
             bundledReferenceURL: bundledReferenceURL,
-            openURL: { NSWorkspace.shared.open($0) }
+            openURL: openURL
         )
     }
 
@@ -1164,7 +1165,14 @@ struct ToasttyApp: App {
             closeWorkspaceCommandController: closeWorkspaceCommandController,
             workspaceTabCommandController: workspaceTabCommandController
         )
-        helpMenuBridge = HelpMenuBridge()
+        helpMenuBridge = HelpMenuBridge { [weak store] url in
+            guard let store else { return }
+            _ = AppURLRouter.open(
+                url,
+                preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
+                appStore: store
+            )
+        }
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
         terminalProfilesMenuController = TerminalProfilesMenuController(
             store: store,
@@ -1455,6 +1463,7 @@ struct ToasttyApp: App {
         }
 
         let toasttyConfig = ToasttyConfigStore.load()
+        store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         do {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
@@ -1552,7 +1561,16 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openKeyboardShortcutsReferenceResult() -> Result<Void, AgentGetStartedActionError> {
-        ToasttyMenuActions.openKeyboardShortcutsReferenceResult()
+        ToasttyMenuActions.openKeyboardShortcutsReferenceResult(
+            runtimePaths: runtimePaths,
+            openURL: { [store] url in
+                AppURLRouter.open(
+                    url,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
+                    appStore: store
+                )
+            }
+        )
     }
 
     @MainActor
@@ -1614,6 +1632,7 @@ struct ToasttyApp: App {
         toasttyConfig: ToasttyConfig,
         legacyTerminalFontSizePoints: Double?
     ) {
+        store.setURLRoutingPreferences(toasttyConfig.urlRoutingPreferences)
         applyConfiguredDefaultTerminalProfile(
             to: store,
             terminalProfileCatalog: terminalProfileCatalog,
