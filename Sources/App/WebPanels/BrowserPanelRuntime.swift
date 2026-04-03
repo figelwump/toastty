@@ -864,7 +864,6 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
               <div class="smile"></div>
             </div>
             <h1 class="quote">Butter your workflow.</h1>
-            <p class="body-copy">Use the location field above to open a page. New browser panels start here until you point them somewhere useful.</p>
             <div class="cta" aria-hidden="true">
               <span class="cta-label">Focus Location</span>
               <span class="cta-badge">⌘L</span>
