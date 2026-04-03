@@ -53,6 +53,15 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+G` | Find next match |
 | `Cmd+Shift+G` | Find previous match |
 
+## Browser
+
+These shortcuts are available when the focused panel is a browser panel:
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+L` | Focus the browser location field |
+| `Cmd+R` | Reload the current page, or stop while a page is loading |
+
 ## Agents and terminal profiles
 
 These shortcuts depend on configured profiles:

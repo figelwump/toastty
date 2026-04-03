@@ -107,6 +107,16 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let browserOpenLocation = ToasttyKeyboardShortcut(
+        "l",
+        modifiers: [.command]
+    )
+
+    static let browserReload = ToasttyKeyboardShortcut(
+        "r",
+        modifiers: [.command]
+    )
+
     static let focusNextUnreadOrActivePanel = ToasttyKeyboardShortcut(
         "a",
         modifiers: [.command, .shift]

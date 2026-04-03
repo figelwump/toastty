@@ -7,6 +7,7 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
     private var stateObservation: AnyCancellable?
     private var browserRuntimeByPanelID: [UUID: BrowserPanelRuntime] = [:]
+    private var browserRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
 
     func bind(store: AppStore) {
         if let existingStore = self.store {
@@ -16,20 +17,26 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         bindStateObservation(to: store)
     }
 
-    func browserRuntime(
-        for panelID: UUID,
-        state: WebPanelState
-    ) -> BrowserPanelRuntime {
-        _ = state
+    func browserRuntime(for panelID: UUID) -> BrowserPanelRuntime {
         if let runtime = browserRuntimeByPanelID[panelID] {
             return runtime
         }
 
-        let runtime = BrowserPanelRuntime(panelID: panelID) { [weak self] panelID, title, url in
-            guard let self else { return }
-            _ = self.store?.send(.updateWebPanelMetadata(panelID: panelID, title: title, url: url))
-        }
+        let runtime = BrowserPanelRuntime(
+            panelID: panelID,
+            metadataDidChange: { [weak self] panelID, title, url in
+                guard let self else { return }
+                _ = self.store?.send(.updateWebPanelMetadata(panelID: panelID, title: title, url: url))
+            },
+            interactionDidRequestFocus: { [weak self] panelID in
+                guard let self else { return }
+                _ = self.store?.focusPanel(containing: panelID)
+            }
+        )
         browserRuntimeByPanelID[panelID] = runtime
+        browserRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
         return runtime
     }
 }
@@ -46,6 +53,9 @@ private extension WebPanelRuntimeRegistry {
     func synchronize(with state: AppState) {
         let liveBrowserPanelIDs = liveBrowserPanelIDs(in: state)
         browserRuntimeByPanelID = browserRuntimeByPanelID.filter { panelID, _ in
+            liveBrowserPanelIDs.contains(panelID)
+        }
+        browserRuntimeObservationByPanelID = browserRuntimeObservationByPanelID.filter { panelID, _ in
             liveBrowserPanelIDs.contains(panelID)
         }
     }

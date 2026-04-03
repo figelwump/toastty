@@ -483,6 +483,70 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(webState.currentURL)
     }
 
+    func testFocusedBrowserPanelSelectionReturnsFocusedBrowserInPreferredWindow() throws {
+        let state = AppState.bootstrap()
+        let windowID = try XCTUnwrap(state.windows.first?.id)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com/docs",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        let selection = try XCTUnwrap(
+            store.focusedBrowserPanelSelection(preferredWindowID: windowID)
+        )
+        let workspace = try XCTUnwrap(store.state.workspacesByID[selection.workspaceID])
+        guard case .web(let webState) = workspace.panels[selection.panelID] else {
+            XCTFail("expected focused browser selection to resolve a browser panel")
+            return
+        }
+
+        XCTAssertEqual(selection.windowID, windowID)
+        XCTAssertEqual(selection.workspaceID, workspace.id)
+        XCTAssertEqual(webState.definition, .browser)
+    }
+
+    func testFocusedBrowserPanelSelectionReturnsNilWhenFocusedPanelIsTerminal() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+
+        XCTAssertNil(store.focusedBrowserPanelSelection(preferredWindowID: nil))
+    }
+
+    func testFocusPanelContainingBrowserSelectsBrowserTab() throws {
+        let initialState = AppState.bootstrap()
+        let windowID = try XCTUnwrap(initialState.windows.first?.id)
+        let workspaceID = try XCTUnwrap(initialState.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: initialState, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspaceAfterCreate = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let browserTabID = try XCTUnwrap(workspaceAfterCreate.resolvedSelectedTabID)
+        let browserPanelID = try XCTUnwrap(workspaceAfterCreate.tab(id: browserTabID)?.focusedPanelID)
+        let originalTabID = try XCTUnwrap(workspaceAfterCreate.tabIDs.first)
+
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID)))
+        XCTAssertTrue(store.focusPanel(containing: browserPanelID))
+
+        let workspaceAfterFocus = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterFocus.resolvedSelectedTabID, browserTabID)
+        XCTAssertEqual(workspaceAfterFocus.focusedPanelID, browserPanelID)
+    }
+
     func testSelectWorkspaceTabFromCommandUsesFocusedWindowOverGlobalSelection() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

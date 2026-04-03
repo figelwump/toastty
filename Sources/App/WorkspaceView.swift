@@ -2179,10 +2179,14 @@ private struct PanelCardView: View {
     @ViewBuilder
     private func webPanelBody(state: WebPanelState) -> some View {
         if state.definition == .browser {
-            BrowserPanelHostView(
+            BrowserPanelView(
                 panelID: panelID,
                 webState: state,
-                webPanelRuntimeRegistry: webPanelRuntimeRegistry
+                runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
+                isActivePanel: isFocused,
+                activatePanel: {
+                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                }
             )
             .frame(
                 maxWidth: .infinity,

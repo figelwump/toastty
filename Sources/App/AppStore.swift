@@ -62,6 +62,12 @@ struct BrowserPanelCreateRequest: Equatable, Sendable {
     }
 }
 
+struct FocusedBrowserPanelCommandSelection: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -226,6 +232,24 @@ final class AppStore: ObservableObject {
 
     func canCreateWorkspaceFromCommand(preferredWindowID: UUID?) -> Bool {
         createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) != nil
+    }
+
+    func focusedBrowserPanelSelection(
+        preferredWindowID: UUID?
+    ) -> FocusedBrowserPanelCommandSelection? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let panelID = selection.workspace.focusedPanelID,
+              selection.workspace.slotID(containingPanelID: panelID) != nil,
+              case .web(let webState) = selection.workspace.panels[panelID],
+              webState.definition == .browser else {
+            return nil
+        }
+
+        return FocusedBrowserPanelCommandSelection(
+            windowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            panelID: panelID
+        )
     }
 
     @discardableResult
@@ -502,6 +526,20 @@ final class AppStore: ObservableObject {
             panelID: panelID,
             flashPanelOnSuccess: false,
             alwaysActivateWindow: true
+        )
+    }
+
+    @discardableResult
+    func focusPanel(containing panelID: UUID) -> Bool {
+        guard let selection = state.workspaceSelection(containingPanelID: panelID) else {
+            return false
+        }
+
+        return focusPanel(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            panelID: panelID,
+            flashPanelOnSuccess: false
         )
     }
 

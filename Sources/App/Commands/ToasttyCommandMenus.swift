@@ -108,6 +108,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -193,6 +194,17 @@ struct ToasttyCommandMenus: Commands {
             return false
         }
         return terminalRuntimeRegistry.isSearchFieldFocused(panelID: panelID)
+    }
+
+    private var commandFocusedBrowserSelection: FocusedBrowserPanelCommandSelection? {
+        store.focusedBrowserPanelSelection(preferredWindowID: preferredCommandWindowID)
+    }
+
+    private var commandFocusedBrowserRuntime: BrowserPanelRuntime? {
+        guard let selection = commandFocusedBrowserSelection else {
+            return nil
+        }
+        return webPanelRuntimeRegistry.browserRuntime(for: selection.panelID)
     }
 
     private var textInputOwnsFindCommands: Bool {
@@ -480,6 +492,37 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(canFocusNextUnreadOrActivePanel == false)
         }
+
+        CommandMenu("Browser") {
+            Button("Open Location") {
+                openFocusedBrowserLocation()
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.browserOpenLocation.key,
+                modifiers: ToasttyKeyboardShortcuts.browserOpenLocation.modifiers
+            )
+            .disabled(commandFocusedBrowserRuntime == nil)
+
+            Button("Back") {
+                goBackInFocusedBrowser()
+            }
+            .disabled(commandFocusedBrowserRuntime?.navigationState.canGoBack != true)
+
+            Button("Forward") {
+                goForwardInFocusedBrowser()
+            }
+            .disabled(commandFocusedBrowserRuntime?.navigationState.canGoForward != true)
+
+            Button(commandFocusedBrowserRuntime?.navigationState.isLoading == true ? "Stop" : "Reload") {
+                reloadFocusedBrowser()
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.browserReload.key,
+                modifiers: ToasttyKeyboardShortcuts.browserReload.modifiers
+            )
+            .disabled(commandFocusedBrowserRuntime?.navigationState.canReloadOrStop != true)
+        }
+
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
                 Button("No Agents Configured") {}
@@ -535,6 +578,26 @@ struct ToasttyCommandMenus: Commands {
         guard let panelID = commandFocusedTerminalPanelID else { return }
         _ = terminalRuntimeRegistry.endSearch(panelID: panelID)
         terminalRuntimeRegistry.restoreTerminalFocusAfterSearch(panelID: panelID)
+    }
+
+    private func openFocusedBrowserLocation() {
+        guard let runtime = commandFocusedBrowserRuntime else { return }
+        runtime.requestLocationFieldFocus()
+    }
+
+    private func goBackInFocusedBrowser() {
+        guard let runtime = commandFocusedBrowserRuntime else { return }
+        _ = runtime.goBack()
+    }
+
+    private func goForwardInFocusedBrowser() {
+        guard let runtime = commandFocusedBrowserRuntime else { return }
+        _ = runtime.goForward()
+    }
+
+    private func reloadFocusedBrowser() {
+        guard let runtime = commandFocusedBrowserRuntime else { return }
+        _ = runtime.reloadOrStop()
     }
 
     private func canLaunchAgent(profileID: String) -> Bool {
