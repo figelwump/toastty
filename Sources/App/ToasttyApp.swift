@@ -403,11 +403,12 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 final class DisplayShortcutInterceptor {
     private weak var store: AppStore?
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     nonisolated(unsafe) private var eventMonitor: Any?
 
-    private enum ShortcutAction {
+    enum ShortcutAction: Equatable {
         case closePanel
         case createWorkspaceTab
         case focusNextUnreadOrActivePanel
@@ -417,6 +418,9 @@ final class DisplayShortcutInterceptor {
         case selectAdjacentTab(TabNavigationDirection)
         case switchWorkspace(Int)
         case focusPanel(Int)
+        case focusSplit(SlotFocusDirection)
+        case browserOpenLocation
+        case browserReload
         case cycleWorkspaceNext
         case cycleWorkspacePrevious
     }
@@ -424,22 +428,27 @@ final class DisplayShortcutInterceptor {
     init(
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
-        focusedPanelCommandController: FocusedPanelCommandController
+        focusedPanelCommandController: FocusedPanelCommandController,
+        installEventMonitor: Bool = true
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else { return event }
-            guard let action = self.shortcutAction(for: event) else { return event }
-            // Keep workspace switching in the local monitor so the embedded
-            // terminal's key handling cannot swallow Option+digit before the
-            // menu-based workspace switch path can run reliably.
-            let didHandleShortcut = self.handle(action)
-            // If no workspace or panel is mapped to this shortcut, keep default key behavior.
-            return didHandleShortcut ? nil : event
+        if installEventMonitor {
+            eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                guard let self else { return event }
+                guard let action = self.shortcutAction(for: event) else { return event }
+                // Keep workspace switching in the local monitor so the embedded
+                // terminal's key handling cannot swallow Option+digit before the
+                // menu-based workspace switch path can run reliably.
+                let didHandleShortcut = self.handle(action)
+                // If no workspace or panel is mapped to this shortcut, keep default key behavior.
+                return didHandleShortcut ? nil : event
+            }
         }
     }
 
@@ -450,39 +459,59 @@ final class DisplayShortcutInterceptor {
     }
 
     private func shortcutAction(for event: NSEvent) -> ShortcutAction? {
+        shortcutAction(for: event, appOwnedWindowID: appOwnedShortcutWindowID())
+    }
+
+    func shortcutAction(for event: NSEvent, appOwnedWindowID: UUID?) -> ShortcutAction? {
+
         if let shortcutNumber = Self.tabSelectionShortcutNumber(for: event),
-           appOwnedShortcutWindowID() != nil {
+           appOwnedWindowID != nil {
             return .selectWorkspaceTab(shortcutNumber)
         }
 
         if let direction = Self.tabNavigationDirection(for: event),
-           appOwnedShortcutWindowID() != nil {
+           appOwnedWindowID != nil {
             return .selectAdjacentTab(direction)
         }
 
         if Self.isNewTabShortcut(event),
-           appOwnedShortcutWindowID() != nil {
+           appOwnedWindowID != nil {
             return .createWorkspaceTab
         }
 
         if Self.isClosePanelShortcut(event),
-           appOwnedShortcutWindowID() != nil {
+           appOwnedWindowID != nil {
             return .closePanel
         }
 
         if Self.isFocusNextUnreadOrActiveShortcut(event),
-           appOwnedShortcutWindowID() != nil {
+           appOwnedWindowID != nil {
             return .focusNextUnreadOrActivePanel
         }
 
         if Self.isToggleFocusedPanelShortcut(event),
-           appOwnedShortcutWindowID() != nil {
+           appOwnedWindowID != nil {
             return .toggleFocusedPanelMode
         }
 
         if Self.isRenameTabShortcut(event),
-           appOwnedShortcutWindowID() != nil {
+           appOwnedWindowID != nil {
             return .renameSelectedTab
+        }
+
+        if let direction = Self.focusSplitDirection(for: event),
+           appOwnedWindowID != nil {
+            return .focusSplit(direction)
+        }
+
+        if Self.isBrowserOpenLocationShortcut(event),
+           appOwnedFocusedBrowserSelection(preferredWindowID: appOwnedWindowID) != nil {
+            return .browserOpenLocation
+        }
+
+        if Self.isBrowserReloadShortcut(event),
+           appOwnedFocusedBrowserSelection(preferredWindowID: appOwnedWindowID) != nil {
+            return .browserReload
         }
 
         switch DisplayShortcutConfig.action(for: event) {
@@ -500,6 +529,10 @@ final class DisplayShortcutInterceptor {
     }
 
     private func handle(_ action: ShortcutAction) -> Bool {
+        handle(action, appOwnedWindowID: appOwnedShortcutWindowID())
+    }
+
+    func handle(_ action: ShortcutAction, appOwnedWindowID: UUID?) -> Bool {
         switch action {
         case .closePanel:
             closeFocusedPanel()
@@ -519,6 +552,12 @@ final class DisplayShortcutInterceptor {
             switchWorkspace(shortcutNumber: shortcutNumber)
         case .focusPanel(let shortcutNumber):
             focusTerminalPanel(shortcutNumber: shortcutNumber)
+        case .focusSplit(let direction):
+            focusSplit(direction: direction, preferredWindowID: appOwnedWindowID)
+        case .browserOpenLocation:
+            openFocusedBrowserLocation(preferredWindowID: appOwnedWindowID)
+        case .browserReload:
+            reloadFocusedBrowser(preferredWindowID: appOwnedWindowID)
         case .cycleWorkspaceNext:
             cycleWorkspace(direction: 1)
         case .cycleWorkspacePrevious:
@@ -623,6 +662,41 @@ final class DisplayShortcutInterceptor {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         guard modifiers == [.option, .shift] else { return false }
         return Int(event.keyCode) == Int(kVK_ANSI_E)
+    }
+
+    static func focusSplitDirection(for event: NSEvent) -> SlotFocusDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_LeftBracket):
+            return .previous
+        case Int(kVK_ANSI_RightBracket):
+            return .next
+        default:
+            return nil
+        }
+    }
+
+    static func isBrowserOpenLocationShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "l" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
+    }
+
+    static func isBrowserReloadShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "r" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
     }
 
     static func closePanelShortcutWindowID(keyWindow: NSWindow?, modalWindow: NSWindow?) -> UUID? {
@@ -763,6 +837,50 @@ final class DisplayShortcutInterceptor {
             return false
         }
         return store.send(.focusPanel(workspaceID: workspace.id, panelID: panelID))
+    }
+
+    private func focusSplit(direction: SlotFocusDirection, preferredWindowID: UUID?) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+        _ = store.send(.focusSlot(workspaceID: workspaceID, direction: direction))
+        // Cmd+[ and Cmd+] are Toastty-owned pane-focus shortcuts. Once the
+        // current workspace window resolves, keep them out of WebKit's back
+        // and forward navigation even if no adjacent split exists.
+        return true
+    }
+
+    private func openFocusedBrowserLocation(preferredWindowID: UUID?) -> Bool {
+        guard let runtime = focusedBrowserRuntime(preferredWindowID: preferredWindowID) else { return false }
+        runtime.requestLocationFieldFocus()
+        return true
+    }
+
+    private func reloadFocusedBrowser(preferredWindowID: UUID?) -> Bool {
+        guard let runtime = focusedBrowserRuntime(preferredWindowID: preferredWindowID) else { return false }
+        _ = runtime.reloadOrStop()
+        return true
+    }
+
+    private func focusedBrowserRuntime(preferredWindowID: UUID?) -> BrowserPanelRuntime? {
+        guard let selection = appOwnedFocusedBrowserSelection(preferredWindowID: preferredWindowID) else {
+            return nil
+        }
+        return webPanelRuntimeRegistry.browserRuntime(for: selection.panelID)
+    }
+
+    private func appOwnedFocusedBrowserSelection(
+        preferredWindowID: UUID?
+    ) -> FocusedBrowserPanelCommandSelection? {
+        guard let preferredWindowID else { return nil }
+        return focusedBrowserSelection(preferredWindowID: preferredWindowID)
+    }
+
+    private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {
+        guard let store else { return nil }
+        return store.focusedBrowserPanelSelection(preferredWindowID: preferredWindowID)
     }
 }
 
@@ -1010,6 +1128,7 @@ struct ToasttyApp: App {
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController
         )

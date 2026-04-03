@@ -116,6 +116,92 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isRenameTabShortcut(repeatedEvent))
     }
 
+    func testFocusSplitDirectionMatchesPlainCommandBrackets() throws {
+        let leftBracket = try makeKeyEvent(characters: "[", modifiers: [.command], keyCode: 0x21)
+        let rightBracket = try makeKeyEvent(characters: "]", modifiers: [.command], keyCode: 0x1E)
+        let shiftedLeftBracket = try makeKeyEvent(characters: "{", modifiers: [.command, .shift], keyCode: 0x21)
+        let repeatedRightBracket = try makeKeyEvent(
+            characters: "]",
+            modifiers: [.command],
+            keyCode: 0x1E,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(DisplayShortcutInterceptor.focusSplitDirection(for: leftBracket), .previous)
+        XCTAssertEqual(DisplayShortcutInterceptor.focusSplitDirection(for: rightBracket), .next)
+        XCTAssertNil(DisplayShortcutInterceptor.focusSplitDirection(for: shiftedLeftBracket))
+        XCTAssertNil(DisplayShortcutInterceptor.focusSplitDirection(for: repeatedRightBracket))
+    }
+
+    func testBrowserOpenLocationShortcutMatchesPlainCommandLOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "l", modifiers: [.command], keyCode: 0x25)
+        let shiftedEvent = try makeKeyEvent(characters: "L", modifiers: [.command, .shift], keyCode: 0x25)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "l",
+            modifiers: [.command],
+            keyCode: 0x25,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isBrowserOpenLocationShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isBrowserOpenLocationShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isBrowserOpenLocationShortcut(repeatedEvent))
+    }
+
+    func testBrowserReloadShortcutMatchesPlainCommandROnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "r", modifiers: [.command], keyCode: 0x0F)
+        let shiftedEvent = try makeKeyEvent(characters: "R", modifiers: [.command, .shift], keyCode: 0x0F)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "r",
+            modifiers: [.command],
+            keyCode: 0x0F,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isBrowserReloadShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isBrowserReloadShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isBrowserReloadShortcut(repeatedEvent))
+    }
+
+    func testBrowserShortcutsRequireAppOwnedWindowSelection() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let interceptor = makeInterceptor(store: store)
+        let openLocationEvent = try makeKeyEvent(characters: "l", modifiers: [.command], keyCode: 0x25)
+        let reloadEvent = try makeKeyEvent(characters: "r", modifiers: [.command], keyCode: 0x0F)
+
+        XCTAssertNotNil(store.focusedBrowserPanelSelection(preferredWindowID: nil))
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: openLocationEvent, appOwnedWindowID: windowID),
+            .browserOpenLocation
+        )
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: reloadEvent, appOwnedWindowID: windowID),
+            .browserReload
+        )
+        XCTAssertNil(interceptor.shortcutAction(for: openLocationEvent, appOwnedWindowID: nil))
+        XCTAssertNil(interceptor.shortcutAction(for: reloadEvent, appOwnedWindowID: nil))
+    }
+
+    func testFocusSplitActionConsumesShortcutWhenWorkspaceWindowResolves() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let originalFocusedPanelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.focusSplit(.previous), appOwnedWindowID: windowID))
+        XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalFocusedPanelID)
+    }
+
     func testClosePanelShortcutWindowIDReturnsKeyWorkspaceWindowIdentifier() {
         let windowID = UUID()
         let window = ShortcutTestWindow()
@@ -247,6 +333,29 @@ private func makeKeyEvent(
         throw NSError(domain: "DisplayShortcutInterceptorTests", code: 1)
     }
     return event
+}
+
+@MainActor
+private func makeInterceptor(store: AppStore) -> DisplayShortcutInterceptor {
+    let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+    terminalRuntimeRegistry.bind(store: store)
+    let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+    webPanelRuntimeRegistry.bind(store: store)
+    let sessionRuntimeStore = SessionRuntimeStore()
+    sessionRuntimeStore.bind(store: store)
+    let focusedPanelCommandController = FocusedPanelCommandController(
+        store: store,
+        runtimeRegistry: terminalRuntimeRegistry,
+        slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+    )
+    return DisplayShortcutInterceptor(
+        store: store,
+        terminalRuntimeRegistry: terminalRuntimeRegistry,
+        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+        sessionRuntimeStore: sessionRuntimeStore,
+        focusedPanelCommandController: focusedPanelCommandController,
+        installEventMonitor: false
+    )
 }
 
 private final class ShortcutTestWindow: NSWindow {
