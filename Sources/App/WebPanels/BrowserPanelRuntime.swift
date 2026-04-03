@@ -657,14 +657,18 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             :root {
               color-scheme: dark;
               --bg: #0d1117;
-              --panel: rgba(19, 25, 34, 0.92);
-              --panel-strong: rgba(24, 31, 42, 0.98);
-              --border: #2b3644;
-              --text: #eef3f8;
-              --muted: #9fb0c3;
-              --accent: #f3a43b;
-              --accent-soft: rgba(243, 164, 59, 0.16);
-              --secondary-accent: rgba(120, 214, 255, 0.14);
+              --panel: transparent;
+              --text: #e8e4df;
+              --muted: #6b5d52;
+              --accent: #f5a623;
+              --accent-dark: #0d0d0d;
+              --accent-soft: rgba(245, 166, 35, 0.12);
+              --toast-crust: #4a3425;
+              --toast-bread: #6b4e38;
+              --toast-highlight: #7d5c42;
+              --toast-face: #2a1a10;
+              --badge-bg: rgba(13, 13, 13, 0.12);
+              --badge-text: rgba(13, 13, 13, 0.72);
             }
             * { box-sizing: border-box; }
             body {
@@ -675,44 +679,124 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
               justify-content: center;
               background:
                 radial-gradient(circle at top left, var(--accent-soft), transparent 24rem),
-                radial-gradient(circle at top right, var(--secondary-accent), transparent 24rem),
                 linear-gradient(180deg, #0f1319 0%, #0a0d12 100%);
               color: var(--text);
               font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
             }
             main {
-              width: min(36rem, calc(100vw - 3rem));
-              padding: 1.5rem;
-              border: 1px solid var(--border);
-              border-radius: 18px;
+              width: min(34rem, calc(100vw - 3rem));
+              padding: 1.5rem 1.25rem 2rem;
               background: var(--panel);
-              box-shadow: 0 20px 80px rgba(0, 0, 0, 0.32);
+              text-align: center;
             }
-            .eyebrow {
-              display: inline-flex;
-              align-items: center;
-              gap: 0.45rem;
-              margin-bottom: 0.95rem;
-              padding: 0.35rem 0.65rem;
-              border-radius: 999px;
-              border: 1px solid rgba(243, 164, 59, 0.24);
-              background: rgba(243, 164, 59, 0.08);
-              color: #ffd8a6;
-              font-size: 0.76rem;
-              font-weight: 600;
-              letter-spacing: 0.08em;
-              text-transform: uppercase;
+            .toast-wrap {
+              position: relative;
+              width: 120px;
+              height: 120px;
+              margin: 0 auto 28px;
             }
-            .eyebrow-dot {
-              width: 0.45rem;
-              height: 0.45rem;
+            .toast-glow {
+              position: absolute;
+              left: 50%;
+              top: 50%;
+              width: 112px;
+              height: 112px;
+              transform: translate(-50%, -44%);
               border-radius: 999px;
+              background: radial-gradient(circle, rgba(245, 166, 35, 0.12) 0%, rgba(245, 166, 35, 0.04) 52%, transparent 72%);
+              filter: blur(1px);
+            }
+            .toast {
+              position: absolute;
+              left: 50%;
+              top: 50%;
+              width: 56px;
+              height: 48px;
+              transform: translate(-50%, -24%);
+              border-radius: 8px;
+              background: var(--toast-crust);
+            }
+            .toast::before {
+              content: "";
+              position: absolute;
+              inset: 4px;
+              border-radius: 5px;
+              background: var(--toast-bread);
+            }
+            .toast::after {
+              content: "";
+              position: absolute;
+              left: 7px;
+              right: 7px;
+              top: 6px;
+              height: 6px;
+              border-radius: 3px;
+              background: var(--toast-highlight);
+            }
+            .butter {
+              position: absolute;
+              left: 50%;
+              top: 50%;
+              width: 16px;
+              height: 10px;
+              transform: translate(-50%, -12px);
+              border-radius: 2px;
               background: var(--accent);
-              box-shadow: 0 0 18px rgba(243, 164, 59, 0.45);
+              z-index: 2;
+            }
+            .eye {
+              position: absolute;
+              top: 63px;
+              width: 5px;
+              height: 2px;
+              border-radius: 999px;
+              background: var(--toast-face);
+              z-index: 3;
+            }
+            .eye.left { left: 46px; }
+            .eye.right { right: 46px; }
+            .smile {
+              position: absolute;
+              left: 50%;
+              top: 69px;
+              width: 14px;
+              height: 7px;
+              transform: translateX(-50%);
+              border: 2px solid var(--toast-face);
+              border-top: 0;
+              border-left-color: transparent;
+              border-right-color: transparent;
+              border-bottom-left-radius: 10px 8px;
+              border-bottom-right-radius: 10px 8px;
+              z-index: 3;
+            }
+            .steam {
+              position: absolute;
+              top: 22px;
+              width: 12px;
+              height: 18px;
+              border: 2px solid rgba(107, 93, 82, 0.35);
+              border-bottom: 0;
+              border-left-color: transparent;
+              border-right-color: transparent;
+              border-radius: 999px;
+            }
+            .steam.left {
+              left: 38px;
+              transform: rotate(-12deg);
+            }
+            .steam.center {
+              left: 54px;
+              top: 18px;
+              height: 20px;
+            }
+            .steam.right {
+              right: 38px;
+              transform: rotate(14deg);
             }
             h1 {
               margin: 0 0 0.55rem;
-              font-size: 1.55rem;
+              font-size: 1.6rem;
               letter-spacing: 0.01em;
             }
             p {
@@ -720,67 +804,70 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
               color: var(--muted);
               line-height: 1.5;
             }
-            .shortcut-grid {
-              margin-top: 1.1rem;
-              display: grid;
-              grid-template-columns: repeat(2, minmax(0, 1fr));
-              gap: 0.7rem;
+            .quote {
+              margin-bottom: 0.55rem;
+              color: var(--text);
+              font-size: 1.7rem;
+              font-weight: 700;
+              line-height: 1.1;
             }
-            .shortcut-card {
-              padding: 0.85rem 0.95rem;
-              border-radius: 14px;
-              border: 1px solid rgba(255, 255, 255, 0.06);
-              background: var(--panel-strong);
+            .body-copy {
+              max-width: 28rem;
+              margin: 0 auto;
             }
-            .shortcut-key {
+            .cta {
               display: inline-flex;
-              margin-bottom: 0.35rem;
-              padding: 0.24rem 0.5rem;
+              align-items: center;
+              gap: 12px;
+              margin-top: 32px;
+              padding: 14px 18px;
               border-radius: 999px;
-              background: rgba(255, 255, 255, 0.06);
-              color: var(--text);
-              font-size: 0.72rem;
-              font-weight: 600;
-              letter-spacing: 0.05em;
+              background: var(--accent);
+              color: var(--accent-dark);
+              text-decoration: none;
+              box-shadow: 0 8px 14px rgba(245, 166, 35, 0.18);
             }
-            .shortcut-title {
-              display: block;
-              margin-bottom: 0.2rem;
-              color: var(--text);
-              font-size: 0.95rem;
+            .cta-label {
+              font-size: 15px;
               font-weight: 600;
             }
-            .shortcut-copy {
-              color: var(--muted);
-              font-size: 0.84rem;
-              line-height: 1.45;
+            .cta-badge {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              padding: 5px 8px;
+              border-radius: 999px;
+              background: var(--badge-bg);
+              color: var(--badge-text);
+              font-size: 12px;
+              font-weight: 600;
+              font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             }
-            @media (max-width: 720px) {
-              .shortcut-grid {
-                grid-template-columns: 1fr;
+            @media (max-width: 560px) {
+              .quote {
+                font-size: 1.45rem;
               }
             }
           </style>
         </head>
         <body>
           <main>
-            <div class="eyebrow">
-              <span class="eyebrow-dot"></span>
-              Toastty Browser
+            <div class="toast-wrap" aria-hidden="true">
+              <div class="toast-glow"></div>
+              <div class="steam left"></div>
+              <div class="steam center"></div>
+              <div class="steam right"></div>
+              <div class="toast"></div>
+              <div class="butter"></div>
+              <div class="eye left"></div>
+              <div class="eye right"></div>
+              <div class="smile"></div>
             </div>
-            <h1>Open a page</h1>
-            <p>Use the location field above to load a URL. New browser panels start here until you navigate somewhere.</p>
-            <div class="shortcut-grid">
-              <section class="shortcut-card">
-                <span class="shortcut-key">Cmd+L</span>
-                <span class="shortcut-title">Focus the location field</span>
-                <div class="shortcut-copy">Jump to the address bar without leaving the keyboard.</div>
-              </section>
-              <section class="shortcut-card">
-                <span class="shortcut-key">Cmd+R</span>
-                <span class="shortcut-title">Reload or stop</span>
-                <div class="shortcut-copy">Refresh the current page, or stop a load that is still in progress.</div>
-              </section>
+            <h1 class="quote">Butter your workflow.</h1>
+            <p class="body-copy">Use the location field above to open a page. New browser panels start here until you point them somewhere useful.</p>
+            <div class="cta" aria-hidden="true">
+              <span class="cta-label">Focus Location</span>
+              <span class="cta-badge">⌘L</span>
             </div>
           </main>
         </body>

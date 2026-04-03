@@ -37,9 +37,10 @@ final class BrowserPanelRuntimeTests: XCTestCase {
     func testDefaultStartPageUsesToasttyCopyWithoutExternalDemoLinks() {
         let html = BrowserPanelRuntime.defaultStartPageHTML
 
-        XCTAssertTrue(html.contains("Toastty Browser"))
-        XCTAssertTrue(html.contains("Cmd+L"))
-        XCTAssertTrue(html.contains("Cmd+R"))
+        XCTAssertTrue(html.contains("Butter your workflow."))
+        XCTAssertTrue(html.contains("Focus Location"))
+        XCTAssertTrue(html.contains("⌘L"))
+        XCTAssertTrue(html.contains("toast-glow"))
         XCTAssertFalse(html.contains("example.com"))
         XCTAssertFalse(html.contains("WebKit docs"))
     }
