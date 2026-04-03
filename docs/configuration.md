@@ -45,7 +45,7 @@ terminal-font-size = 13
 default-terminal-profile = "zmx"
 enable-agent-command-shims = false
 url-opening-destination = toastty-browser
-url-opening-browser-placement = rootRight
+url-opening-browser-placement = newTab
 ```
 
 ## Parameters
@@ -56,7 +56,7 @@ url-opening-browser-placement = rootRight
 | `default-terminal-profile` | string | unset | Applies a profile ID from `terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts such as `Cmd+D` and `Cmd+Shift+D`. Existing panes keep their current profile bindings. If the configured profile is missing, Toastty ignores it and logs a warning. |
 | `enable-agent-command-shims` | boolean | `true` | Controls whether Toastty prepends managed wrappers into terminal `PATH` for manual built-in agent launches inside Toastty terminals. This always covers literal `codex` / `claude` commands, and it also covers wrapper executable basenames declared through `manualCommandNames` in built-in `[codex]` / `[claude]` agent profiles. `manualCommandNames` entries must be basenames only, with no paths or spaces, and must not be `codex` or `claude`. Those wrapper commands still need to leave the real built-in command visible later in `argv`, such as `run-sandboxed.sh codex ...`. Shell functions, aliases, and standalone wrapper executables that hide the real built-in command inside the wrapper are not intercepted because they bypass or obscure the `PATH` shim contract. Set this to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation. New terminals and new shell processes pick up the change immediately after reload; existing shells may need a new shell or pane. |
 | `url-opening-destination` | string | `toastty-browser` | Controls where Toastty opens app-owned web URLs. `toastty-browser` opens `http` and `https` links inside Toastty's built-in browser. `system-browser` sends those URLs to the macOS default browser instead. Local files and non-web schemes remain external either way. |
-| `url-opening-browser-placement` | string | `rootRight` | When `url-opening-destination = toastty-browser`, controls whether those internal opens appear as a new right-side browser column (`rootRight`) or a new browser tab (`newTab`). |
+| `url-opening-browser-placement` | string | `newTab` | When `url-opening-destination = toastty-browser`, controls whether those internal opens appear as a new browser tab (`newTab`) or a new right-side browser column (`rootRight`). |
 
 ## Related behavior
 

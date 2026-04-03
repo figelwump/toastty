@@ -131,8 +131,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # url-opening-browser-placement controls how Toastty places those
             # internally opened browser panels.
             # Supported values: rootRight, newTab.
-            # The default is rootRight.
-            # url-opening-browser-placement = rootRight
+            # The default is newTab.
+            # url-opening-browser-placement = newTab
 
             """
         )
@@ -227,7 +227,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config-reference")
     }
 
-    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserOnRight() throws {
+    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserInNewTab() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let configURL = ToasttyConfigStore.configFileURL(
             homeDirectoryPath: homeDirectoryURL.path,
@@ -250,7 +250,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
             config.urlRoutingPreferences,
             URLRoutingPreferences(
                 destination: .toasttyBrowser,
-                browserPlacement: .rootRight
+                browserPlacement: .newTab
             )
         )
     }

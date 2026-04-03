@@ -23,7 +23,7 @@ enum URLBrowserOpenPlacement: String, Equatable {
 
 struct URLRoutingPreferences: Equatable {
     var destination: URLOpenDestination = .toasttyBrowser
-    var browserPlacement: URLBrowserOpenPlacement = .rootRight
+    var browserPlacement: URLBrowserOpenPlacement = .newTab
 }
 
 enum AppURLRoute: Equatable {

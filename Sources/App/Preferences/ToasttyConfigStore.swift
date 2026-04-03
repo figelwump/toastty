@@ -189,8 +189,8 @@ enum ToasttyConfigStore {
             "# url-opening-browser-placement controls how Toastty places those",
             "# internally opened browser panels.",
             "# Supported values: rootRight, newTab.",
-            "# The default is rootRight.",
-            "# url-opening-browser-placement = rootRight",
+            "# The default is newTab.",
+            "# url-opening-browser-placement = newTab",
         ]
 
         if config.terminalFontSizePoints != nil
@@ -218,7 +218,7 @@ enum ToasttyConfigStore {
             )
         }
 
-        if config.urlRoutingPreferences.browserPlacement != .rootRight {
+        if config.urlRoutingPreferences.browserPlacement != .newTab {
             lines.append(
                 "\(urlOpeningBrowserPlacementKey) = \(config.urlRoutingPreferences.browserPlacement.rawValue)"
             )
