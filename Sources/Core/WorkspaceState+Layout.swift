@@ -148,6 +148,19 @@ extension WorkspaceState {
     }
 }
 
+extension WorkspaceTabState {
+    func reopenSlotID(preferred preferredSlotID: UUID) -> UUID? {
+        if layoutTree.slotNode(slotID: preferredSlotID) != nil {
+            return preferredSlotID
+        }
+        if let focusedPanelID,
+           let focusedSlot = layoutTree.slotContaining(panelID: focusedPanelID) {
+            return focusedSlot.slotID
+        }
+        return layoutTree.allSlotInfos.first?.slotID
+    }
+}
+
 private extension WorkspaceState {
     var livePanelIDs: Set<UUID> {
         Set(panels.keys)

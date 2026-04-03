@@ -4,11 +4,35 @@ public struct ClosedPanelRecord: Codable, Equatable, Sendable {
     public let panelState: PanelState
     public let closedAt: Date
     public let sourceSlotID: UUID
+    public let sourceTabID: UUID?
+    public let sourceTabIndex: Int?
+    public let sourceTabPredecessorID: UUID?
+    public let sourceTabSuccessorID: UUID?
+    public let sourceTabCustomTitle: String?
 
-    public init(panelState: PanelState, closedAt: Date, sourceSlotID: UUID) {
+    public init(
+        panelState: PanelState,
+        closedAt: Date,
+        sourceSlotID: UUID,
+        sourceTabID: UUID? = nil,
+        sourceTabIndex: Int? = nil,
+        sourceTabPredecessorID: UUID? = nil,
+        sourceTabSuccessorID: UUID? = nil,
+        sourceTabCustomTitle: String? = nil
+    ) {
         self.panelState = panelState
         self.closedAt = closedAt
         self.sourceSlotID = sourceSlotID
+        self.sourceTabID = sourceTabID
+        self.sourceTabIndex = sourceTabIndex
+        self.sourceTabPredecessorID = sourceTabPredecessorID
+        self.sourceTabSuccessorID = sourceTabSuccessorID
+        if let sourceTabCustomTitle {
+            let trimmed = sourceTabCustomTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.sourceTabCustomTitle = trimmed.isEmpty ? nil : trimmed
+        } else {
+            self.sourceTabCustomTitle = nil
+        }
     }
 }
 
@@ -249,10 +273,17 @@ public struct WorkspaceState: Codable, Equatable, Identifiable, Sendable {
     }
 
     public mutating func appendTab(_ tab: WorkspaceTabState, select: Bool) {
+        insertTab(tab, at: tabIDs.count, select: select)
+    }
+
+    public mutating func insertTab(_ tab: WorkspaceTabState, at preferredIndex: Int, select: Bool) {
         tabsByID[tab.id] = tab
-        if tabIDs.contains(tab.id) == false {
-            tabIDs.append(tab.id)
+        if let existingIndex = tabIDs.firstIndex(of: tab.id) {
+            tabIDs.remove(at: existingIndex)
         }
+
+        let insertionIndex = min(max(0, preferredIndex), tabIDs.count)
+        tabIDs.insert(tab.id, at: insertionIndex)
         if select || selectedTabID == nil {
             selectedTabID = tab.id
         }

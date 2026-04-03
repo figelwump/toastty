@@ -162,6 +162,70 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func makeAppStatePreservesWebPanelURLsAndTabTitles() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let browserTabID = UUID()
+        let browserPanelID = UUID()
+        let browserSlotID = UUID()
+
+        let browserTab = WorkspaceTabState(
+            id: browserTabID,
+            customTitle: "Pinned Docs",
+            layoutTree: .slot(slotID: browserSlotID, panelID: browserPanelID),
+            panels: [
+                browserPanelID: .web(
+                    WebPanelState(
+                        definition: .browser,
+                        title: "Example Docs",
+                        initialURL: "https://example.com/docs",
+                        currentURL: "https://example.com/docs/latest"
+                    )
+                ),
+            ],
+            focusedPanelID: browserPanelID
+        )
+
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Docs",
+            selectedTabID: browserTabID,
+            tabIDs: [browserTabID],
+            tabsByID: [browserTabID: browserTab]
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        let restoredTab = try #require(restoredWorkspace.tab(id: browserTabID))
+
+        #expect(restoredTab.customTitle == "Pinned Docs")
+        guard case .web(let webState) = restoredTab.panels[browserPanelID] else {
+            Issue.record("Expected browser tab panel to restore as web")
+            return
+        }
+
+        #expect(webState.definition == .browser)
+        #expect(webState.title == "Example Docs")
+        #expect(webState.initialURL == "https://example.com/docs")
+        #expect(webState.currentURL == "https://example.com/docs/latest")
+        #expect(webState.restorableURL == "https://example.com/docs/latest")
+    }
+
+    @Test
     func makeAppStatePreservesTerminalProfileBindingAndPanelIDs() throws {
         let workspaceID = UUID()
         let panelID = UUID()

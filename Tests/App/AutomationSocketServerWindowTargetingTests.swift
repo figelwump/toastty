@@ -203,6 +203,79 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testReopenLastClosedPanelRestoresClosedBrowserTabAsTab() async throws {
+        let fixture = makeSingleWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.browser",
+                    "args": [
+                        "placement": "newTab",
+                        "url": "https://example.com/docs",
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let initialWorkspace = await MainActor.run {
+                harness.store.state.workspacesByID[fixture.workspaceID]
+            }
+            var workspace = try XCTUnwrap(initialWorkspace)
+            let browserTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+            let browserPanelID = try XCTUnwrap(workspace.focusedPanelID)
+            XCTAssertEqual(workspace.tabIDs.count, 2)
+
+            let closeResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.close-focused-panel",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(closeResponse.ok)
+
+            let closedWorkspace = await MainActor.run {
+                harness.store.state.workspacesByID[fixture.workspaceID]
+            }
+            workspace = try XCTUnwrap(closedWorkspace)
+            XCTAssertEqual(workspace.tabIDs.count, 1)
+            XCTAssertEqual(workspace.recentlyClosedPanels.count, 1)
+
+            let reopenResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "workspace.reopen-last-closed-panel",
+                    "args": [:],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(reopenResponse.ok)
+
+            let reopenedWorkspace = await MainActor.run {
+                harness.store.state.workspacesByID[fixture.workspaceID]
+            }
+            workspace = try XCTUnwrap(reopenedWorkspace)
+            XCTAssertEqual(workspace.tabIDs.count, 2)
+            XCTAssertEqual(workspace.resolvedSelectedTabID, browserTabID)
+            XCTAssertTrue(workspace.recentlyClosedPanels.isEmpty)
+
+            let reopenedTab = try XCTUnwrap(workspace.tab(id: browserTabID))
+            XCTAssertEqual(reopenedTab.panels.count, 1)
+            XCTAssertNotEqual(reopenedTab.focusedPanelID, browserPanelID)
+            let reopenedPanelID = try XCTUnwrap(reopenedTab.focusedPanelID)
+            guard case .web(let webState) = reopenedTab.panels[reopenedPanelID] else {
+                XCTFail("expected reopened tab to contain a web panel")
+                return
+            }
+            XCTAssertEqual(webState.definition, .browser)
+            XCTAssertEqual(webState.initialURL, "https://example.com/docs")
+        }
+    }
+
     func testFocusNextUnreadActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
         let fixture = makeSingleWindowUnreadFixture()
 

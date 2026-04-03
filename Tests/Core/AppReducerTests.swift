@@ -1648,7 +1648,7 @@ struct AppReducerTests {
     }
 
     @Test
-    func closeSinglePanelWebTabPreservesReopenHistoryOnRemainingTab() throws {
+    func closeSinglePanelWebTabReopensAsRestoredTab() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
         let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
@@ -1669,6 +1669,17 @@ struct AppReducerTests {
             )
         )
 
+        let browserTabID = try #require(state.workspacesByID[workspaceID]?.resolvedSelectedTabID)
+        #expect(
+            reducer.send(
+                .setWorkspaceTabCustomTitle(
+                    workspaceID: workspaceID,
+                    tabID: browserTabID,
+                    title: "Pinned Docs"
+                ),
+                state: &state
+            )
+        )
         let browserPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
         let browserState = try #require(state.workspacesByID[workspaceID]?.panels[browserPanelID])
 
@@ -1681,10 +1692,95 @@ struct AppReducerTests {
         #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
 
         let workspaceAfterReopen = try #require(state.workspacesByID[workspaceID])
-        let reopenedPanelID = try #require(workspaceAfterReopen.focusedPanelID)
-        let reopenedPanelState = try #require(workspaceAfterReopen.panels[reopenedPanelID])
+        #expect(workspaceAfterReopen.tabIDs.count == 2)
+        #expect(workspaceAfterReopen.tabIDs == [originalTabID, browserTabID])
+        #expect(workspaceAfterReopen.resolvedSelectedTabID == browserTabID)
+
+        let reopenedTab = try #require(workspaceAfterReopen.tab(id: browserTabID))
+        #expect(reopenedTab.customTitle == "Pinned Docs")
+        let reopenedPanelID = try #require(reopenedTab.focusedPanelID)
+        let reopenedPanelState = try #require(reopenedTab.panels[reopenedPanelID])
         #expect(reopenedPanelState == browserState)
         #expect(workspaceAfterReopen.recentlyClosedPanels.isEmpty)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func reopenRestoredTabInsertsBeforeRecordedSuccessorWhenOriginalIndexIsStale() throws {
+        let workspaceID = UUID()
+        let sourceTabID = UUID()
+        let predecessorTabID = UUID()
+        let successorTabID = UUID()
+        let successorPanelID = UUID()
+        let successorSlotID = UUID()
+        let reopenedSlotID = UUID()
+
+        let successorTab = WorkspaceTabState(
+            id: successorTabID,
+            customTitle: "Workspace C",
+            layoutTree: .slot(slotID: successorSlotID, panelID: successorPanelID),
+            panels: [
+                successorPanelID: .terminal(
+                    TerminalPanelState(title: "Terminal C", shell: "zsh", cwd: "/tmp/c")
+                ),
+            ],
+            focusedPanelID: successorPanelID,
+            recentlyClosedPanels: [
+                ClosedPanelRecord(
+                    panelState: .web(
+                        WebPanelState(
+                            definition: .browser,
+                            title: "Workspace B",
+                            initialURL: "https://example.com/b"
+                        )
+                    ),
+                    closedAt: Date(timeIntervalSince1970: 1_710_000_001),
+                    sourceSlotID: reopenedSlotID,
+                    sourceTabID: sourceTabID,
+                    sourceTabIndex: 1,
+                    sourceTabPredecessorID: predecessorTabID,
+                    sourceTabSuccessorID: successorTabID,
+                    sourceTabCustomTitle: "Workspace B"
+                ),
+            ]
+        )
+
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: UUID(),
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: WorkspaceState(
+                    id: workspaceID,
+                    title: "Docs",
+                    selectedTabID: successorTabID,
+                    tabIDs: [successorTabID],
+                    tabsByID: [successorTabID: successorTab]
+                ),
+            ],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: nil
+        )
+        let reducer = AppReducer()
+
+        #expect(reducer.send(.reopenLastClosedPanel(workspaceID: workspaceID), state: &state))
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.tabIDs == [sourceTabID, successorTabID])
+        let restoredTab = try #require(workspace.tab(id: sourceTabID))
+        #expect(restoredTab.customTitle == "Workspace B")
+        let restoredPanelID = try #require(restoredTab.focusedPanelID)
+        guard case .web(let webState) = restoredTab.panels[restoredPanelID] else {
+            Issue.record("Expected reopened tab to contain the closed browser panel")
+            return
+        }
+        #expect(webState.initialURL == "https://example.com/b")
 
         try StateValidator.validate(state)
     }

@@ -254,6 +254,76 @@ struct AppStateCodableTests {
         let fallbackLabel = try #require(fallbackTab.panels[panelID]?.notificationLabel)
         #expect(fallbackTab.displayTitle == fallbackLabel)
     }
+
+    @Test
+    func closedPanelRecordCodablePreservesRestoreTabMetadata() throws {
+        let workspaceID = UUID()
+        let historyTabID = UUID()
+        let historyPanelID = UUID()
+        let historySlotID = UUID()
+        let sourceTabID = UUID()
+        let predecessorTabID = UUID()
+        let successorTabID = UUID()
+
+        let historyTab = WorkspaceTabState(
+            id: historyTabID,
+            layoutTree: .slot(slotID: historySlotID, panelID: historyPanelID),
+            panels: [
+                historyPanelID: .terminal(
+                    TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")
+                ),
+            ],
+            focusedPanelID: historyPanelID,
+            recentlyClosedPanels: [
+                ClosedPanelRecord(
+                    panelState: .web(
+                        WebPanelState(
+                            definition: .browser,
+                            title: "Docs",
+                            initialURL: "https://example.com/docs"
+                        )
+                    ),
+                    closedAt: Date(timeIntervalSince1970: 1_710_000_002),
+                    sourceSlotID: UUID(),
+                    sourceTabID: sourceTabID,
+                    sourceTabIndex: 1,
+                    sourceTabPredecessorID: predecessorTabID,
+                    sourceTabSuccessorID: successorTabID,
+                    sourceTabCustomTitle: "  Pinned Docs  "
+                ),
+            ]
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: UUID(),
+                    frame: CGRectCodable(x: 40, y: 60, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: WorkspaceState(
+                    id: workspaceID,
+                    title: "Workspace 1",
+                    selectedTabID: historyTabID,
+                    tabIDs: [historyTabID],
+                    tabsByID: [historyTabID: historyTab]
+                ),
+            ],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: nil
+        )
+
+        let decoded = try JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
+        let decodedRecord = try #require(decoded.workspacesByID[workspaceID]?.recentlyClosedPanels.first)
+        #expect(decodedRecord.sourceTabID == sourceTabID)
+        #expect(decodedRecord.sourceTabIndex == 1)
+        #expect(decodedRecord.sourceTabPredecessorID == predecessorTabID)
+        #expect(decodedRecord.sourceTabSuccessorID == successorTabID)
+        #expect(decodedRecord.sourceTabCustomTitle == "Pinned Docs")
+    }
 }
 
 private struct LegacyAppStatePayload: Codable {

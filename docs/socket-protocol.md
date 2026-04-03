@@ -227,6 +227,7 @@ Supported action IDs:
 - `workspace.split.down.with-profile`
   - requires `args.profileID`
 - `workspace.close-focused-panel`
+- `workspace.reopen-last-closed-panel`
 - `workspace.focus-slot.previous`
 - `workspace.focus-slot.next`
 - `workspace.focus-slot.left`

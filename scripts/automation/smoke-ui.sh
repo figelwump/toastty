@@ -1029,6 +1029,33 @@ FOCUSED_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"s
 send_request "automation.perform_action" '{"action":"topbar.toggle.focused-panel"}'
 send_request "automation.perform_action" "{\"action\":\"panel.create.browser\",\"args\":{\"placement\":\"newTab\",\"url\":\"$(json_escape_string "$BROWSER_SMOKE_SECONDARY_URL")\"}}"
 wait_for_browser_panel_title "Smoke Docs" "$BROWSER_SMOKE_SECONDARY_URL" >/dev/null
+SECONDARY_BROWSER_TAB_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+SECONDARY_BROWSER_TAB_COUNT="$(extract_int_field "$SECONDARY_BROWSER_TAB_SNAPSHOT" "tabCount")"
+SECONDARY_BROWSER_SELECTED_TAB_INDEX="$(extract_int_field "$SECONDARY_BROWSER_TAB_SNAPSHOT" "selectedTabIndex")"
+if [[ "$SECONDARY_BROWSER_TAB_COUNT" != "2" || "$SECONDARY_BROWSER_SELECTED_TAB_INDEX" != "2" ]]; then
+  echo "error: browser new-tab smoke setup did not select the second tab as expected" >&2
+  echo "snapshot response: ${SECONDARY_BROWSER_TAB_SNAPSHOT}" >&2
+  exit 1
+fi
+send_request "automation.perform_action" '{"action":"workspace.close-focused-panel"}' >/dev/null
+CLOSED_BROWSER_TAB_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+CLOSED_BROWSER_TAB_COUNT="$(extract_int_field "$CLOSED_BROWSER_TAB_SNAPSHOT" "tabCount")"
+CLOSED_BROWSER_SELECTED_TAB_INDEX="$(extract_int_field "$CLOSED_BROWSER_TAB_SNAPSHOT" "selectedTabIndex")"
+if [[ "$CLOSED_BROWSER_TAB_COUNT" != "1" || "$CLOSED_BROWSER_SELECTED_TAB_INDEX" != "1" ]]; then
+  echo "error: closing the focused browser tab did not collapse back to the first tab as expected" >&2
+  echo "snapshot response: ${CLOSED_BROWSER_TAB_SNAPSHOT}" >&2
+  exit 1
+fi
+send_request "automation.perform_action" '{"action":"workspace.reopen-last-closed-panel"}' >/dev/null
+REOPENED_BROWSER_TAB_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+REOPENED_BROWSER_TAB_COUNT="$(extract_int_field "$REOPENED_BROWSER_TAB_SNAPSHOT" "tabCount")"
+REOPENED_BROWSER_SELECTED_TAB_INDEX="$(extract_int_field "$REOPENED_BROWSER_TAB_SNAPSHOT" "selectedTabIndex")"
+if [[ "$REOPENED_BROWSER_TAB_COUNT" != "2" || "$REOPENED_BROWSER_SELECTED_TAB_INDEX" != "2" ]]; then
+  echo "error: reopening the closed browser tab did not restore the tab as expected" >&2
+  echo "snapshot response: ${REOPENED_BROWSER_TAB_SNAPSHOT}" >&2
+  exit 1
+fi
+wait_for_browser_panel_title "Smoke Docs" "$BROWSER_SMOKE_SECONDARY_URL" >/dev/null
 send_request "automation.perform_action" '{"action":"workspace.tab.select","args":{"index":1}}' >/dev/null
 send_request "automation.perform_action" '{"action":"workspace.tab.select","args":{"index":2}}' >/dev/null
 wait_for_browser_panel_title "Smoke Docs" "$BROWSER_SMOKE_SECONDARY_URL" >/dev/null

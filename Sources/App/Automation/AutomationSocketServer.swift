@@ -1383,6 +1383,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             )
             didMutate = store.send(.closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
 
+        case "workspace.reopen-last-closed-panel":
+            didMutate = store.send(.reopenLastClosedPanel(workspaceID: try workspaceID()))
+
         case "workspace.focus-next-unread-or-active":
             didMutate = store.focusNextUnreadOrActivePanelFromCommand(
                 preferredWindowID: try resolveWindowID(args: args),

@@ -323,6 +323,25 @@ public struct AppReducer {
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard var workspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
             guard let panelState = workspace.panelState(for: panelID) else { return false }
+            let sourceTabIndex = workspace.tabIDs.firstIndex(of: sourceLocation.tabID)
+            let sourceTabPredecessorID: UUID?
+            if let sourceTabIndex, sourceTabIndex > 0 {
+                sourceTabPredecessorID = workspace.tabIDs[sourceTabIndex - 1]
+            } else {
+                sourceTabPredecessorID = nil
+            }
+            let sourceTabSuccessorID: UUID?
+            if let sourceTabIndex {
+                let successorIndex = sourceTabIndex + 1
+                if workspace.tabIDs.indices.contains(successorIndex) {
+                    sourceTabSuccessorID = workspace.tabIDs[successorIndex]
+                } else {
+                    sourceTabSuccessorID = nil
+                }
+            } else {
+                sourceTabSuccessorID = nil
+            }
+            let sourceTabCustomTitle = workspace.tab(id: sourceLocation.tabID)?.customTitle
             workspace.selectedTabID = sourceLocation.tabID
             let wasFocusedPanel = workspace.focusedPanelID == panelID
             let previousSlotIDBeforeRemoval = wasFocusedPanel
@@ -334,7 +353,12 @@ public struct AppReducer {
                 ClosedPanelRecord(
                     panelState: panelState,
                     closedAt: Date(),
-                    sourceSlotID: sourceLocation.slotID
+                    sourceSlotID: sourceLocation.slotID,
+                    sourceTabID: sourceLocation.tabID,
+                    sourceTabIndex: sourceTabIndex,
+                    sourceTabPredecessorID: sourceTabPredecessorID,
+                    sourceTabSuccessorID: sourceTabSuccessorID,
+                    sourceTabCustomTitle: sourceTabCustomTitle
                 )
             )
             if workspace.recentlyClosedPanels.count > 10 {
@@ -381,30 +405,67 @@ public struct AppReducer {
 
         case .reopenLastClosedPanel(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let closedRecord = workspace.recentlyClosedPanels.last else { return false }
+            guard let historyTabID = workspace.resolvedSelectedTabID,
+                  let historyTab = workspace.tab(id: historyTabID),
+                  let closedRecord = historyTab.recentlyClosedPanels.last else { return false }
 
-            guard let targetSlotID = workspace.reopenSlotID(preferred: closedRecord.sourceSlotID) else {
+            let panelID = UUID()
+
+            if let sourceTabID = closedRecord.sourceTabID,
+               workspace.tab(id: sourceTabID) == nil {
+                var updatedHistoryTab = historyTab
+                updatedHistoryTab.recentlyClosedPanels.removeLast()
+                workspace.tabsByID[historyTabID] = updatedHistoryTab
+
+                let reopenedTab = WorkspaceTabState(
+                    id: sourceTabID,
+                    customTitle: closedRecord.sourceTabCustomTitle,
+                    layoutTree: .slot(slotID: closedRecord.sourceSlotID, panelID: panelID),
+                    panels: [panelID: closedRecord.panelState],
+                    focusedPanelID: panelID
+                )
+                let insertionIndex = Self.reopenedTabInsertionIndex(for: closedRecord, in: workspace)
+                workspace.insertTab(reopenedTab, at: insertionIndex, select: true)
+                commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+                return true
+            }
+
+            let targetTabID: UUID
+            if let sourceTabID = closedRecord.sourceTabID,
+               workspace.tab(id: sourceTabID) != nil {
+                targetTabID = sourceTabID
+            } else {
+                targetTabID = historyTabID
+            }
+
+            guard var targetTab = workspace.tab(id: targetTabID),
+                  let targetSlotID = targetTab.reopenSlotID(preferred: closedRecord.sourceSlotID) else {
                 return false
             }
 
-            let panelID = UUID()
-            workspace.panels[panelID] = closedRecord.panelState
-
+            targetTab.panels[panelID] = closedRecord.panelState
             guard splitLeaf(
                 slotID: targetSlotID,
-                in: &workspace.layoutTree,
+                in: &targetTab.layoutTree,
                 insertingPanelID: panelID,
                 orientation: .horizontal,
                 placeInsertedPanelSecond: true
             ) else {
-                workspace.panels.removeValue(forKey: panelID)
                 return false
             }
 
-            workspace.focusedPanelID = panelID
-            workspace.recentlyClosedPanels.removeLast()
-            workspace.selectedPanelIDs.removeAll()
+            targetTab.focusedPanelID = panelID
+            targetTab.selectedPanelIDs.removeAll()
+            if historyTabID == targetTabID {
+                targetTab.recentlyClosedPanels.removeLast()
+            } else {
+                var updatedHistoryTab = historyTab
+                updatedHistoryTab.recentlyClosedPanels.removeLast()
+                workspace.tabsByID[historyTabID] = updatedHistoryTab
+            }
 
+            workspace.tabsByID[targetTabID] = targetTab
+            workspace.selectedTabID = targetTabID
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
 
@@ -1096,6 +1157,27 @@ public struct AppReducer {
             merged.removeFirst(merged.count - 10)
         }
         return merged
+    }
+
+    private static func reopenedTabInsertionIndex(
+        for closedRecord: ClosedPanelRecord,
+        in workspace: WorkspaceState
+    ) -> Int {
+        if let successorID = closedRecord.sourceTabSuccessorID,
+           let successorIndex = workspace.tabIDs.firstIndex(of: successorID) {
+            return successorIndex
+        }
+
+        if let predecessorID = closedRecord.sourceTabPredecessorID,
+           let predecessorIndex = workspace.tabIDs.firstIndex(of: predecessorID) {
+            return predecessorIndex + 1
+        }
+
+        if let sourceTabIndex = closedRecord.sourceTabIndex {
+            return min(max(0, sourceTabIndex), workspace.tabIDs.count)
+        }
+
+        return workspace.tabIDs.count
     }
 
     private static func normalizedWorkspaceTitle(_ value: String?) -> String? {
