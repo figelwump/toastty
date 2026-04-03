@@ -56,6 +56,38 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         )
     }
 
+    func testFaviconCandidateURLsPreferRegularIconsBeforeMaskIcons() throws {
+        let pageURL = try XCTUnwrap(URL(string: "https://www.espn.com/nhl/story"))
+
+        let candidateURLs = BrowserPanelRuntime.faviconCandidateURLs(
+            linkReferences: [
+                FaviconLinkReference(
+                    href: "https://a.espncdn.com/prod/assets/icons/E.svg",
+                    rel: "mask-icon"
+                ),
+                FaviconLinkReference(
+                    href: "https://a.espncdn.com/favicon.ico",
+                    rel: "shortcut icon"
+                ),
+                FaviconLinkReference(
+                    href: "https://a.espncdn.com/wireless/mw5/r1/images/bookmark-icons-v2/espn-icon-180x180.png",
+                    rel: "apple-touch-icon"
+                ),
+            ],
+            pageURL: pageURL
+        )
+
+        XCTAssertEqual(
+            candidateURLs,
+            [
+                URL(string: "https://a.espncdn.com/favicon.ico"),
+                URL(string: "https://a.espncdn.com/wireless/mw5/r1/images/bookmark-icons-v2/espn-icon-180x180.png"),
+                URL(string: "https://www.espn.com/favicon.ico"),
+                URL(string: "https://a.espncdn.com/prod/assets/icons/E.svg"),
+            ].compactMap { $0 }
+        )
+    }
+
     func testFaviconCandidateURLsSkipFallbackForNonHTTPPages() throws {
         let pageURL = try XCTUnwrap(URL(string: "data:text/html,hello"))
 

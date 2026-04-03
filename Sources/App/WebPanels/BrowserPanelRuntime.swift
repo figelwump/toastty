@@ -15,6 +15,11 @@ struct BrowserPanelNavigationState: Equatable {
     }
 }
 
+struct FaviconLinkReference: Equatable, Sendable {
+    var href: String
+    var rel: String
+}
+
 private final class FocusAwareWKWebView: WKWebView {
     var interactionDidRequestFocus: (() -> Void)?
 
@@ -142,6 +147,13 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     }
 
     static func faviconCandidateURLs(linkHrefs: [String], pageURL: URL?) -> [URL] {
+        faviconCandidateURLs(
+            linkReferences: linkHrefs.map { FaviconLinkReference(href: $0, rel: "icon") },
+            pageURL: pageURL
+        )
+    }
+
+    static func faviconCandidateURLs(linkReferences: [FaviconLinkReference], pageURL: URL?) -> [URL] {
         var candidateURLs: [URL] = []
 
         func appendCandidate(_ url: URL?) {
@@ -154,7 +166,24 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             candidateURLs.append(absoluteURL)
         }
 
-        for href in linkHrefs {
+        var primaryIconHrefs: [String] = []
+        var touchIconHrefs: [String] = []
+        var maskIconHrefs: [String] = []
+
+        for reference in linkReferences {
+            switch faviconLinkKind(for: reference.rel) {
+            case .primary:
+                primaryIconHrefs.append(reference.href)
+            case .appleTouch:
+                touchIconHrefs.append(reference.href)
+            case .mask:
+                maskIconHrefs.append(reference.href)
+            case nil:
+                continue
+            }
+        }
+
+        for href in primaryIconHrefs + touchIconHrefs {
             let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.isEmpty == false else { continue }
             appendCandidate(URL(string: trimmed, relativeTo: pageURL))
@@ -170,6 +199,12 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             components.port = pageURL.port
             components.path = "/favicon.ico"
             appendCandidate(components.url)
+        }
+
+        for href in maskIconHrefs {
+            let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else { continue }
+            appendCandidate(URL(string: trimmed, relativeTo: pageURL))
         }
 
         return candidateURLs
@@ -435,28 +470,41 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     }
 
     private func faviconCandidateURLs(for pageURL: URL) async -> [URL] {
-        let hrefs = await faviconLinkHrefs()
-        return Self.faviconCandidateURLs(linkHrefs: hrefs, pageURL: pageURL)
+        let references = await faviconLinkReferences()
+        return Self.faviconCandidateURLs(linkReferences: references, pageURL: pageURL)
     }
 
-    private func faviconLinkHrefs() async -> [String] {
+    private func faviconLinkReferences() async -> [FaviconLinkReference] {
         let script = """
         (() => {
           const links = Array.from(document.querySelectorAll('link[rel]'));
           return links
-            .filter(link => (link.getAttribute('rel') || '').toLowerCase().includes('icon'))
-            .map(link => link.href || link.getAttribute('href') || '')
-            .filter(Boolean);
+            .map(link => ({
+              rel: link.getAttribute('rel') || '',
+              href: link.href || link.getAttribute('href') || ''
+            }))
+            .filter(link => link.href && link.rel.toLowerCase().includes('icon'));
         })();
         """
         guard let result = try? await webView.evaluateJavaScript(script) else {
             return []
         }
-        if let hrefs = result as? [String] {
-            return hrefs
+        if let references = result as? [[String: Any]] {
+            return references.compactMap(Self.faviconLinkReference(from:))
         }
-        if let hrefs = result as? [Any] {
-            return hrefs.compactMap { $0 as? String }
+        if let references = result as? [[AnyHashable: Any]] {
+            return references.compactMap(Self.faviconLinkReference(from:))
+        }
+        if let references = result as? [Any] {
+            return references.compactMap { item in
+                if let reference = item as? [String: Any] {
+                    return Self.faviconLinkReference(from: reference)
+                }
+                if let reference = item as? [AnyHashable: Any] {
+                    return Self.faviconLinkReference(from: reference)
+                }
+                return nil
+            }
         }
         return []
     }
@@ -555,6 +603,46 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         }
 
         return true
+    }
+
+    private enum FaviconLinkKind {
+        case primary
+        case appleTouch
+        case mask
+    }
+
+    private static func faviconLinkKind(for rel: String) -> FaviconLinkKind? {
+        let normalizedRel = rel.lowercased()
+        if normalizedRel.contains("mask-icon") {
+            return .mask
+        }
+        if normalizedRel.contains("apple-touch-icon") {
+            return .appleTouch
+        }
+        if normalizedRel.contains("icon") {
+            return .primary
+        }
+        return nil
+    }
+
+    private static func faviconLinkReference(
+        from dictionary: [String: Any]
+    ) -> FaviconLinkReference? {
+        guard let href = dictionary["href"] as? String,
+              let rel = dictionary["rel"] as? String else {
+            return nil
+        }
+        return FaviconLinkReference(href: href, rel: rel)
+    }
+
+    private static func faviconLinkReference(
+        from dictionary: [AnyHashable: Any]
+    ) -> FaviconLinkReference? {
+        guard let href = dictionary["href"] as? String,
+              let rel = dictionary["rel"] as? String else {
+            return nil
+        }
+        return FaviconLinkReference(href: href, rel: rel)
     }
 
     private static var defaultStartPageHTML: String {
