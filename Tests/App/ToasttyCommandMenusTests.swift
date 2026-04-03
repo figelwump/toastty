@@ -64,8 +64,8 @@ final class ToasttyCommandMenusTests: XCTestCase {
         )
         let actions = try XCTUnwrap(model.sections.first?.actions)
 
-        XCTAssertEqual(actions.first?.shortcut, ShortcutChord(key: "z", modifiers: [.command, .control]))
-        XCTAssertEqual(actions.last?.shortcut, ShortcutChord(key: "z", modifiers: [.command, .control, .shift]))
+        XCTAssertEqual(actions.first?.shortcut, ShortcutChord(key: "z", modifiers: [.command, .option]))
+        XCTAssertEqual(actions.last?.shortcut, ShortcutChord(key: "z", modifiers: [.command, .option, .shift]))
     }
 
     func testTerminalProfileMenuModelOmitsConflictedShortcutFromRegistry() throws {
@@ -101,7 +101,7 @@ final class ToasttyCommandMenusTests: XCTestCase {
         let actions = try XCTUnwrap(model.sections.first?.actions)
 
         XCTAssertNil(actions.first?.shortcut)
-        XCTAssertEqual(actions.last?.shortcut, ShortcutChord(key: "z", modifiers: [.command, .control, .shift]))
+        XCTAssertEqual(actions.last?.shortcut, ShortcutChord(key: "z", modifiers: [.command, .option, .shift]))
     }
 
     @MainActor

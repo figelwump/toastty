@@ -23,6 +23,8 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 |---|---|
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
+| `Cmd+Ctrl+B` | New browser in the current tab layout |
+| `Cmd+Ctrl+Shift+B` | New browser tab |
 | `Cmd+[` | Focus previous pane |
 | `Cmd+]` | Focus next pane |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
@@ -68,8 +70,8 @@ These shortcuts depend on configured profiles:
 
 | Shortcut | Action |
 |---|---|
-| `Cmd+Ctrl+<key>` | Launch agent profile when the profile defines `shortcutKey` |
-| `Cmd+Ctrl+<key>` | Split right with a terminal profile when the profile defines `shortcutKey` |
-| `Cmd+Ctrl+Shift+<key>` | Split down with a terminal profile when the profile defines `shortcutKey` |
+| `Cmd+Opt+<key>` | Launch agent profile when the profile defines `shortcutKey` |
+| `Cmd+Opt+<key>` | Split right with a terminal profile when the profile defines `shortcutKey` |
+| `Cmd+Opt+Shift+<key>` | Split down with a terminal profile when the profile defines `shortcutKey` |
 
 For agent setup details, see [running-agents.md](running-agents.md). For terminal profile setup details, see [terminal-profiles.md](terminal-profiles.md).

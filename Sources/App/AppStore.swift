@@ -44,7 +44,7 @@ struct PendingPanelFlashRequest: Equatable {
 }
 
 struct BrowserPanelCreateRequest: Equatable, Sendable {
-    static let defaultPlacement: WebPanelPlacement = .newTab
+    static let defaultPlacement: WebPanelPlacement = .rootRight
 
     var initialURL: String?
     var placementOverride: WebPanelPlacement?

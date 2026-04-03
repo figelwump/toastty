@@ -82,6 +82,7 @@ public struct WebPanelState: Codable, Equatable, Sendable {
 }
 
 public enum WebPanelPlacement: String, Codable, Equatable, Sendable {
+    case rootRight
     case newTab
     case splitRight
 }

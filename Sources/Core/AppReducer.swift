@@ -1200,6 +1200,29 @@ public struct AppReducer {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
 
         switch placement {
+        case .rootRight:
+            let panelID = UUID()
+            let newSlotID = UUID()
+            let newSplitNodeID = UUID()
+            workspace.panels[panelID] = .web(panel)
+            workspace.layoutTree = .split(
+                nodeID: newSplitNodeID,
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: workspace.layoutTree,
+                second: .slot(slotID: newSlotID, panelID: panelID)
+            )
+            workspace.focusedPanelID = panelID
+            workspace.selectedPanelIDs.removeAll()
+            if workspace.focusedPanelModeActive {
+                // Root-right creation is whole-layout by design. When focus mode
+                // is active, promote the new root so the existing subtree and
+                // newly attached browser remain visible together.
+                workspace.focusModeRootNodeID = newSplitNodeID
+            }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
         case .newTab:
             let panelID = UUID()
             let tab = WorkspaceTabState(

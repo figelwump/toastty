@@ -46,7 +46,7 @@ final class WorkspaceViewTests: XCTestCase {
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog)
         )
 
-        XCTAssertEqual(model.actions.map(\.helpText), ["Run Codex (⌃⌘C)"])
+        XCTAssertEqual(model.actions.map(\.helpText), ["Run Codex (⌥⌘C)"])
     }
 
     func testWorkspaceAgentTopBarModelShowsAddAgentsButtonWithoutConfiguredProfiles() {

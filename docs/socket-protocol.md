@@ -255,7 +255,8 @@ Supported action IDs:
   - `args.amount` is optional and clamps to at least `1`
 - `workspace.equalize-splits`
 - `panel.create.browser`
-  - `args.placement` is optional: `newTab` or `splitRight` (defaults to `newTab`)
+  - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
+  - When `args.placement` is omitted, the default is now `rootRight` rather than `newTab`
   - `args.url` is optional
 - `topbar.toggle.focused-panel`
 - `app.font.increase`

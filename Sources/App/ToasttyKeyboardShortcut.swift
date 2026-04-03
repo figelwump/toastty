@@ -112,6 +112,16 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command]
     )
 
+    static let newBrowser = ToasttyKeyboardShortcut(
+        "b",
+        modifiers: [.command, .control]
+    )
+
+    static let newBrowserTab = ToasttyKeyboardShortcut(
+        "b",
+        modifiers: [.command, .control, .shift]
+    )
+
     static let browserReload = ToasttyKeyboardShortcut(
         "r",
         modifiers: [.command]

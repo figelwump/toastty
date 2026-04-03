@@ -1352,10 +1352,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         func webPanelPlacement() throws -> WebPanelPlacement {
             guard let rawValue = args.string("placement")?.trimmingCharacters(in: .whitespacesAndNewlines),
                   rawValue.isEmpty == false else {
-                return .newTab
+                return .rootRight
             }
             guard let placement = WebPanelPlacement(rawValue: rawValue) else {
-                throw AutomationSocketError.invalidPayload("placement must be one of: newTab, splitRight")
+                throw AutomationSocketError.invalidPayload("placement must be one of: rootRight, newTab, splitRight")
             }
             return placement
         }

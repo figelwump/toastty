@@ -1364,6 +1364,45 @@ struct AppReducerTests {
     }
 
     @Test
+    func createWebPanelRootRightWrapsExistingLayoutAndFocusesIt() throws {
+        var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        let workspaceBefore = try #require(state.workspacesByID[workspaceID])
+        let leafCountBefore = workspaceBefore.layoutTree.allSlotInfos.count
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser, initialURL: "https://example.com/root"),
+                    placement: .rootRight
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        #expect(workspaceAfter.layoutTree.allSlotInfos.count == leafCountBefore + 1)
+        guard case .split(_, let orientation, _, _, let second) = workspaceAfter.layoutTree else {
+            Issue.record("expected root-right browser creation to wrap the layout in a split")
+            return
+        }
+        #expect(orientation == .horizontal)
+        guard case .slot(_, let browserPanelID) = second,
+              case .web(let webState) = workspaceAfter.panels[browserPanelID] else {
+            Issue.record("expected rightmost root slot to contain the browser panel")
+            return
+        }
+
+        #expect(workspaceAfter.focusedPanelID == browserPanelID)
+        #expect(webState.initialURL == "https://example.com/root")
+        #expect(webState.currentURL == nil)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func repeatedSplitRightWebPanelCreationAddsDistinctPanes() throws {
         var state = try #require(AutomationFixtureLoader.load(named: "split-workspace"))
         let reducer = AppReducer()
@@ -2432,6 +2471,120 @@ struct AppReducerTests {
             return
         }
         #expect(updatedWorkspace.focusModeRootNodeID == splitNodeID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func rootRightWebPanelCreationInFocusModePromotesNewRootIntoFocusMode() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        #expect(reducer.send(.toggleFocusedPanelMode(workspaceID: workspaceID), state: &state))
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .rootRight
+                ),
+                state: &state
+            )
+        )
+
+        let workspace = try #require(state.workspacesByID[workspaceID])
+        #expect(workspace.focusedPanelModeActive)
+        guard case .split(let splitNodeID, .horizontal, _, _, let second) = workspace.layoutTree else {
+            Issue.record("expected root-right browser creation to wrap the layout in a horizontal split")
+            return
+        }
+        guard case .slot(_, let panelID) = second else {
+            Issue.record("expected new browser panel to occupy the rightmost root slot")
+            return
+        }
+
+        #expect(workspace.focusModeRootNodeID == splitNodeID)
+        #expect(workspace.focusedPanelID == panelID)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func rootRightWebPanelCreationExpandsFocusedSubtreeBackToWholeLayout() throws {
+        let leftPanelID = UUID()
+        let topRightPanelID = UUID()
+        let bottomRightPanelID = UUID()
+        let leftSlotID = UUID()
+        let topRightSlotID = UUID()
+        let bottomRightSlotID = UUID()
+        let rightBranchNodeID = UUID()
+        let workspaceID = UUID()
+        let windowID = UUID()
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Workspace 1",
+            layoutTree: .split(
+                nodeID: UUID(),
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: .slot(slotID: leftSlotID, panelID: leftPanelID),
+                second: .split(
+                    nodeID: rightBranchNodeID,
+                    orientation: .vertical,
+                    ratio: 0.5,
+                    first: .slot(slotID: topRightSlotID, panelID: topRightPanelID),
+                    second: .slot(slotID: bottomRightSlotID, panelID: bottomRightPanelID)
+                )
+            ),
+            panels: [
+                leftPanelID: .terminal(TerminalPanelState(title: "Left", shell: "zsh", cwd: "/tmp/left")),
+                topRightPanelID: .terminal(TerminalPanelState(title: "Top Right", shell: "zsh", cwd: "/tmp/top-right")),
+                bottomRightPanelID: .terminal(TerminalPanelState(title: "Bottom Right", shell: "zsh", cwd: "/tmp/bottom-right")),
+            ],
+            focusedPanelID: topRightPanelID,
+            focusedPanelModeActive: true,
+            focusModeRootNodeID: rightBranchNodeID
+        )
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID
+        )
+        let reducer = AppReducer()
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .rootRight
+                ),
+                state: &state
+            )
+        )
+
+        let updatedWorkspace = try #require(state.workspacesByID[workspaceID])
+        #expect(updatedWorkspace.focusedPanelModeActive)
+        guard case .split(let splitNodeID, .horizontal, _, _, let second) = updatedWorkspace.layoutTree else {
+            Issue.record("expected root-right browser creation to wrap the whole layout in a horizontal split")
+            return
+        }
+        guard case .slot(_, let browserPanelID) = second else {
+            Issue.record("expected new browser panel to occupy the rightmost root slot")
+            return
+        }
+
+        #expect(updatedWorkspace.focusModeRootNodeID == splitNodeID)
+        #expect(updatedWorkspace.focusedPanelID == browserPanelID)
 
         try StateValidator.validate(state)
     }

@@ -148,6 +148,40 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isBrowserOpenLocationShortcut(repeatedEvent))
     }
 
+    func testNewBrowserShortcutMatchesCommandControlBOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .control], keyCode: 0x0B)
+        let shiftedEvent = try makeKeyEvent(characters: "B", modifiers: [.command, .control, .shift], keyCode: 0x0B)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "b",
+            modifiers: [.command, .control],
+            keyCode: 0x0B,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isNewBrowserShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserShortcut(repeatedEvent))
+    }
+
+    func testNewBrowserTabShortcutMatchesCommandControlShiftBOnly() throws {
+        let matchingEvent = try makeKeyEvent(
+            characters: "B",
+            modifiers: [.command, .control, .shift],
+            keyCode: 0x0B
+        )
+        let plainEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .control], keyCode: 0x0B)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "B",
+            modifiers: [.command, .control, .shift],
+            keyCode: 0x0B,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isNewBrowserTabShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserTabShortcut(plainEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserTabShortcut(repeatedEvent))
+    }
+
     func testBrowserReloadShortcutMatchesPlainCommandROnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "r", modifiers: [.command], keyCode: 0x0F)
         let shiftedEvent = try makeKeyEvent(characters: "R", modifiers: [.command, .shift], keyCode: 0x0F)
@@ -190,6 +224,49 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
         XCTAssertNil(interceptor.shortcutAction(for: openLocationEvent, appOwnedWindowID: nil))
         XCTAssertNil(interceptor.shortcutAction(for: reloadEvent, appOwnedWindowID: nil))
+    }
+
+    func testBrowserCreationShortcutsRequireAppOwnedWindowSelection() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let interceptor = makeInterceptor(store: store)
+        let newBrowserEvent = try makeKeyEvent(characters: "b", modifiers: [.command, .control], keyCode: 0x0B)
+        let newBrowserTabEvent = try makeKeyEvent(
+            characters: "B",
+            modifiers: [.command, .control, .shift],
+            keyCode: 0x0B
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: newBrowserEvent, appOwnedWindowID: windowID),
+            .createBrowser
+        )
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: newBrowserTabEvent, appOwnedWindowID: windowID),
+            .createBrowserTab
+        )
+        XCTAssertNil(interceptor.shortcutAction(for: newBrowserEvent, appOwnedWindowID: nil))
+        XCTAssertNil(interceptor.shortcutAction(for: newBrowserTabEvent, appOwnedWindowID: nil))
+    }
+
+    func testCreateBrowserActionUsesRequestedPlacement() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.createBrowser, appOwnedWindowID: windowID))
+        let workspaceAfterBrowser = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterBrowser.layoutTree.allSlotInfos.count, 2)
+        XCTAssertEqual(workspaceAfterBrowser.orderedTabs.count, 1)
+        guard case .web = workspaceAfterBrowser.panels[try XCTUnwrap(workspaceAfterBrowser.focusedPanelID)] else {
+            XCTFail("expected createBrowser shortcut to focus a browser panel in the current tab")
+            return
+        }
+
+        XCTAssertTrue(interceptor.handle(.createBrowserTab, appOwnedWindowID: windowID))
+        let workspaceAfterBrowserTab = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterBrowserTab.orderedTabs.count, 2)
     }
 
     func testFocusSplitActionConsumesShortcutWhenWorkspaceWindowResolves() throws {

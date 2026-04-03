@@ -410,6 +410,8 @@ final class DisplayShortcutInterceptor {
 
     enum ShortcutAction: Equatable {
         case closePanel
+        case createBrowser
+        case createBrowserTab
         case createWorkspaceTab
         case focusNextUnreadOrActivePanel
         case toggleFocusedPanelMode
@@ -479,6 +481,16 @@ final class DisplayShortcutInterceptor {
             return .createWorkspaceTab
         }
 
+        if Self.isNewBrowserShortcut(event),
+           appOwnedWindowID != nil {
+            return .createBrowser
+        }
+
+        if Self.isNewBrowserTabShortcut(event),
+           appOwnedWindowID != nil {
+            return .createBrowserTab
+        }
+
         if Self.isClosePanelShortcut(event),
            appOwnedWindowID != nil {
             return .closePanel
@@ -536,6 +548,10 @@ final class DisplayShortcutInterceptor {
         switch action {
         case .closePanel:
             closeFocusedPanel()
+        case .createBrowser:
+            createBrowser(preferredWindowID: appOwnedWindowID, placement: .rootRight)
+        case .createBrowserTab:
+            createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
             createWorkspaceTab()
         case .focusNextUnreadOrActivePanel:
@@ -573,6 +589,26 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command]
+    }
+
+    static func isNewBrowserShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "b" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .control]
+    }
+
+    static func isNewBrowserTabShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "b" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .control, .shift]
     }
 
     static func tabSelectionShortcutNumber(for event: NSEvent) -> Int? {
@@ -741,6 +777,17 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func createBrowser(preferredWindowID: UUID?, placement: WebPanelPlacement) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        return store.createBrowserPanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            request: BrowserPanelCreateRequest(
+                placementOverride: placement
+            )
+        )
     }
 
     private func focusNextUnreadOrActivePanel() -> Bool {

@@ -470,12 +470,11 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
 
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
-        XCTAssertEqual(workspace.orderedTabs.count, 2)
-        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
-        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
-        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
-        guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected selected tab panel to be web-backed browser")
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[panelID] else {
+            XCTFail("expected focused panel to be web-backed browser")
             return
         }
 

@@ -101,7 +101,7 @@ public enum TerminalProfilesFile {
         # `startupCommand` is sent to the pane's login shell when the pane is
         # created or restored.
         # `shortcutKey` (optional) is a single letter or digit that registers
-        # ⌘⌃<key> to split right and ⌘⌃⇧<key> to split down with this profile.
+        # ⌘⌥<key> to split right and ⌘⌥⇧<key> to split down with this profile.
         #
         # Toastty sets these environment variables for profiled panes:
         # - TOASTTY_PANEL_ID

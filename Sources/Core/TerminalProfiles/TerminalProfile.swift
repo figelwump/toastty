@@ -6,7 +6,7 @@ public struct TerminalProfile: Equatable, Sendable {
     public let badgeLabel: String
     public let startupCommand: String
     /// Single lowercase alphanumeric character used as a keyboard shortcut.
-    /// Split right: ⌘⌃<key>, split down: ⌘⌃⇧<key>.
+    /// Split right: ⌘⌥<key>, split down: ⌘⌥⇧<key>.
     public let shortcutKey: Character?
 
     public init(

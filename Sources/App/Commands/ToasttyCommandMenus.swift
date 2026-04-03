@@ -394,6 +394,20 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            Button("New Browser") {
+                store.createBrowserPanelFromCommand(
+                    preferredWindowID: preferredWindowID,
+                    request: BrowserPanelCreateRequest(
+                        placementOverride: .rootRight
+                    )
+                )
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newBrowser.key,
+                modifiers: ToasttyKeyboardShortcuts.newBrowser.modifiers
+            )
+            .disabled(commandWorkspace == nil)
+
             Button("New Browser Tab") {
                 store.createBrowserPanelFromCommand(
                     preferredWindowID: preferredWindowID,
@@ -402,9 +416,13 @@ struct ToasttyCommandMenus: Commands {
                     )
                 )
             }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newBrowserTab.key,
+                modifiers: ToasttyKeyboardShortcuts.newBrowserTab.modifiers
+            )
             .disabled(commandWorkspace == nil)
 
-            Button("New Browser Beside Current") {
+            Button("New Browser Split") {
                 store.createBrowserPanelFromCommand(
                     preferredWindowID: preferredWindowID,
                     request: BrowserPanelCreateRequest(

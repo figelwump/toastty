@@ -34,7 +34,7 @@ argv = ["claude"]
 | `displayName` | yes | Label shown in the Agent menu and toolbar buttons |
 | `argv` | yes | The exact command Toastty executes, as a JSON-style string array |
 | `manualCommandNames` | no | For built-in `[codex]` / `[claude]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
-| `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Ctrl+<key>` |
+| `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Opt+<key>` |
 
 ### Profile ID rules
 
