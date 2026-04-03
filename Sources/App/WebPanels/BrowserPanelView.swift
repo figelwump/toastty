@@ -87,7 +87,12 @@ struct BrowserPanelView: View {
                 onCancel: cancelAddressEditing,
                 onEditingChanged: handleAddressEditingChanged
             )
-            .frame(height: PanelHeaderSearchLayout.searchFieldHeight)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: PanelHeaderSearchLayout.searchFieldHeight,
+                maxHeight: PanelHeaderSearchLayout.searchFieldHeight
+            )
+            .layoutPriority(1)
             .padding(.leading, 8)
             .padding(.trailing, 8)
             .background(

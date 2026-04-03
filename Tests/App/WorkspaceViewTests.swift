@@ -101,6 +101,65 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 2))
     }
 
+    func testBrowserTitleIconPanelIDUsesFocusedBrowserWhenTabTitleIsDerived() {
+        let panelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .web(
+                    WebPanelState(
+                        definition: .browser,
+                        title: "ESPN"
+                    )
+                )
+            ],
+            focusedPanelID: panelID
+        )
+
+        XCTAssertEqual(WorkspaceView.browserTitleIconPanelID(for: tab), panelID)
+    }
+
+    func testBrowserTitleIconPanelIDSkipsCustomTabTitles() {
+        let panelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            customTitle: "Pinned",
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .web(
+                    WebPanelState(
+                        definition: .browser,
+                        title: "ESPN"
+                    )
+                )
+            ],
+            focusedPanelID: panelID
+        )
+
+        XCTAssertNil(WorkspaceView.browserTitleIconPanelID(for: tab))
+    }
+
+    func testBrowserTitleIconPanelIDSkipsNonBrowserFocusedPanels() {
+        let panelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: NSHomeDirectory()
+                    )
+                )
+            ],
+            focusedPanelID: panelID
+        )
+
+        XCTAssertNil(WorkspaceView.browserTitleIconPanelID(for: tab))
+    }
+
     func testResolvedWorkspaceTabWidthStaysAtIdealWidthWhenThereIsRoom() {
         let availableWidth = WorkspaceView.workspaceTabIdealTotalWidth(tabCount: 3) + 120
         XCTAssertEqual(

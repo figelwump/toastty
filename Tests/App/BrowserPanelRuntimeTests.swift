@@ -34,6 +34,40 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         )
     }
 
+    func testFaviconCandidateURLsResolveRelativeLinksAndAppendRootFallback() throws {
+        let pageURL = try XCTUnwrap(URL(string: "https://www.espn.com/nhl/story"))
+
+        let candidateURLs = BrowserPanelRuntime.faviconCandidateURLs(
+            linkHrefs: [
+                "/apple-touch-icon.png",
+                "https://cdn.espn.com/favicon-32.png",
+                "/apple-touch-icon.png",
+            ],
+            pageURL: pageURL
+        )
+
+        XCTAssertEqual(
+            candidateURLs,
+            [
+                URL(string: "https://www.espn.com/apple-touch-icon.png"),
+                URL(string: "https://cdn.espn.com/favicon-32.png"),
+                URL(string: "https://www.espn.com/favicon.ico"),
+            ].compactMap { $0 }
+        )
+    }
+
+    func testFaviconCandidateURLsSkipFallbackForNonHTTPPages() throws {
+        let pageURL = try XCTUnwrap(URL(string: "data:text/html,hello"))
+
+        XCTAssertEqual(
+            BrowserPanelRuntime.faviconCandidateURLs(
+                linkHrefs: [],
+                pageURL: pageURL
+            ),
+            []
+        )
+    }
+
     func testLoadUserEnteredURLPublishesPendingDisplayedURLImmediately() {
         let runtime = BrowserPanelRuntime(
             panelID: UUID(),

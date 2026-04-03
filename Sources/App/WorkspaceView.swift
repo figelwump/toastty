@@ -57,7 +57,7 @@ struct WorkspaceView: View {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
-    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
@@ -174,6 +174,17 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceTabInstallsContextMenu(tabCount: Int) -> Bool {
         tabCount > 0
+    }
+
+    nonisolated static func browserTitleIconPanelID(for tab: WorkspaceTabState) -> UUID? {
+        guard tab.customTitle == nil,
+              let panelID = tab.resolvedFocusedPanelID,
+              case .web(let webState)? = tab.panels[panelID],
+              webState.definition == .browser else {
+            return nil
+        }
+
+        return panelID
     }
 
     nonisolated static func workspaceTabMinimumTotalWidth(
@@ -1173,6 +1184,15 @@ struct WorkspaceView: View {
                     )
             }
 
+            if let browserPanelID = Self.browserTitleIconPanelID(for: tab) {
+                BrowserTitleIconView(
+                    image: webPanelRuntimeRegistry.browserRuntime(for: browserPanelID).faviconImage,
+                    fallbackSymbolName: "globe",
+                    tintColor: textColor,
+                    size: 12
+                )
+            }
+
             Text(tab.displayTitle)
                 .font(ToastyTheme.fontWorkspaceTab)
                 .foregroundStyle(textColor)
@@ -1551,6 +1571,29 @@ struct WorkspaceView: View {
     }
 }
 
+private struct BrowserTitleIconView: View {
+    let image: NSImage?
+    let fallbackSymbolName: String
+    let tintColor: Color
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Image(systemName: fallbackSymbolName)
+                    .font(.system(size: size - 2, weight: .medium))
+                    .foregroundStyle(tintColor.opacity(0.82))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+    }
+}
+
 private struct PendingWorkspaceTabClose: Identifiable {
     let workspaceID: UUID
     let tabID: UUID
@@ -1844,7 +1887,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
-    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
     let appIsActive: Bool
@@ -2058,12 +2101,23 @@ private struct PanelCardView: View {
     }
 
     private var panelHeaderTitle: some View {
-        Text(panelLabel)
-            .font(panelTitleFont)
-            .foregroundStyle(panelTitleTextColor)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
+        HStack(spacing: 6) {
+            if let browserTitleIconImage {
+                BrowserTitleIconView(
+                    image: browserTitleIconImage,
+                    fallbackSymbolName: "globe",
+                    tintColor: panelTitleTextColor,
+                    size: 14
+                )
+            }
+
+            Text(panelLabel)
+                .font(panelTitleFont)
+                .foregroundStyle(panelTitleTextColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
     }
 
     private var panelLabel: String {
@@ -2098,6 +2152,14 @@ private struct PanelCardView: View {
         guard case .terminal = panelState else { return nil }
         guard let shortcutNumber else { return nil }
         return DisplayShortcutConfig.panelFocusShortcutLabel(for: shortcutNumber)
+    }
+
+    private var browserTitleIconImage: NSImage? {
+        guard case .web(let webState) = panelState,
+              webState.definition == .browser else {
+            return nil
+        }
+        return webPanelRuntimeRegistry.browserRuntime(for: panelID).faviconImage
     }
 
     private var showsHeaderSearch: Bool {

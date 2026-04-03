@@ -43,6 +43,9 @@ private final class FocusAwareWKWebView: WKWebView {
 final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     @Published private(set) var navigationState = BrowserPanelNavigationState()
     @Published private(set) var locationFieldFocusRequestID: UUID?
+    // Favicon remains runtime-only; it is useful UI chrome but not worth
+    // persisting or threading through the core panel state contract.
+    @Published private(set) var faviconImage: NSImage?
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
@@ -58,6 +61,8 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var pendingDetachTask: Task<Void, Never>?
     private var lastRequestedURLString: String?
     private var isShowingStartPage = false
+    private var faviconRefreshTask: Task<Void, Never>?
+    private var pendingFaviconRequestID: UUID?
 
     init(
         panelID: UUID,
@@ -83,6 +88,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
 
     deinit {
         pendingDetachTask?.cancel()
+        faviconRefreshTask?.cancel()
         urlObservation?.invalidate()
         titleObservation?.invalidate()
         canGoBackObservation?.invalidate()
@@ -133,6 +139,40 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         }
 
         return trimmed
+    }
+
+    static func faviconCandidateURLs(linkHrefs: [String], pageURL: URL?) -> [URL] {
+        var candidateURLs: [URL] = []
+
+        func appendCandidate(_ url: URL?) {
+            guard let absoluteURL = url?.absoluteURL,
+                  let scheme = absoluteURL.scheme?.lowercased(),
+                  ["http", "https", "data", "file"].contains(scheme),
+                  candidateURLs.contains(absoluteURL) == false else {
+                return
+            }
+            candidateURLs.append(absoluteURL)
+        }
+
+        for href in linkHrefs {
+            let trimmed = href.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.isEmpty == false else { continue }
+            appendCandidate(URL(string: trimmed, relativeTo: pageURL))
+        }
+
+        if let pageURL,
+           let scheme = pageURL.scheme?.lowercased(),
+           ["http", "https"].contains(scheme),
+           let host = pageURL.host {
+            var components = URLComponents()
+            components.scheme = scheme
+            components.host = host
+            components.port = pageURL.port
+            components.path = "/favicon.ico"
+            appendCandidate(components.url)
+        }
+
+        return candidateURLs
     }
 
     var lifecycleState: PanelHostLifecycleState {
@@ -282,6 +322,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         lastRequestedURLString = nil
         guard isShowingStartPage == false else { return }
         isShowingStartPage = true
+        clearFavicon()
         publishNavigationState()
         webView.loadHTMLString(Self.defaultStartPageHTML, baseURL: nil)
     }
@@ -289,10 +330,12 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private func load(urlString: String) {
         guard let url = URL(string: urlString) else {
             isShowingStartPage = false
+            clearFavicon()
             publishNavigationState()
             webView.loadHTMLString(Self.invalidURLHTML(for: urlString), baseURL: nil)
             return
         }
+        clearFavicon()
         webView.load(URLRequest(url: url))
     }
 
@@ -346,6 +389,100 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
 
     private func normalizedObservedTitle() -> String? {
         WebPanelState.normalizedTitle(webView.title)
+    }
+
+    private func clearFavicon() {
+        faviconRefreshTask?.cancel()
+        faviconRefreshTask = nil
+        pendingFaviconRequestID = nil
+        if faviconImage != nil {
+            faviconImage = nil
+        }
+    }
+
+    private func refreshFavicon() {
+        guard isShowingStartPage == false,
+              let pageURL = webView.url else {
+            clearFavicon()
+            return
+        }
+
+        faviconRefreshTask?.cancel()
+        let requestID = UUID()
+        pendingFaviconRequestID = requestID
+        faviconRefreshTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            let image = await self.firstAvailableFaviconImage(for: pageURL)
+            guard Task.isCancelled == false,
+                  self.pendingFaviconRequestID == requestID else {
+                return
+            }
+            self.faviconRefreshTask = nil
+            self.pendingFaviconRequestID = nil
+            self.faviconImage = image
+        }
+    }
+
+    private func firstAvailableFaviconImage(for pageURL: URL) async -> NSImage? {
+        let candidateURLs = await faviconCandidateURLs(for: pageURL)
+        for candidateURL in candidateURLs {
+            guard Task.isCancelled == false else { return nil }
+            if let image = await loadFaviconImage(from: candidateURL) {
+                return image
+            }
+        }
+        return nil
+    }
+
+    private func faviconCandidateURLs(for pageURL: URL) async -> [URL] {
+        let hrefs = await faviconLinkHrefs()
+        return Self.faviconCandidateURLs(linkHrefs: hrefs, pageURL: pageURL)
+    }
+
+    private func faviconLinkHrefs() async -> [String] {
+        let script = """
+        (() => {
+          const links = Array.from(document.querySelectorAll('link[rel]'));
+          return links
+            .filter(link => (link.getAttribute('rel') || '').toLowerCase().includes('icon'))
+            .map(link => link.href || link.getAttribute('href') || '')
+            .filter(Boolean);
+        })();
+        """
+        guard let result = try? await webView.evaluateJavaScript(script) else {
+            return []
+        }
+        if let hrefs = result as? [String] {
+            return hrefs
+        }
+        if let hrefs = result as? [Any] {
+            return hrefs.compactMap { $0 as? String }
+        }
+        return []
+    }
+
+    private func loadFaviconImage(from url: URL) async -> NSImage? {
+        do {
+            let data: Data
+            if url.isFileURL || url.scheme?.lowercased() == "data" {
+                data = try await Task.detached(priority: .utility) {
+                    try Data(contentsOf: url)
+                }.value
+            } else {
+                var request = URLRequest(url: url)
+                request.timeoutInterval = 8
+                let (responseData, response) = try await URLSession.shared.data(for: request)
+                if let httpResponse = response as? HTTPURLResponse,
+                   (200 ..< 300).contains(httpResponse.statusCode) == false {
+                    return nil
+                }
+                data = responseData
+            }
+            guard data.isEmpty == false else { return nil }
+            return NSImage(data: data)
+        } catch {
+            return nil
+        }
     }
 
     private func reportedCurrentURLString() -> String? {
@@ -546,6 +683,14 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
 
 extension BrowserPanelRuntime: WKNavigationDelegate {
     func webView(
+        _: WKWebView,
+        didCommit _: WKNavigation!
+    ) {
+        clearFavicon()
+        publishNavigationState()
+    }
+
+    func webView(
         _ webView: WKWebView,
         didFinish navigation: WKNavigation!
     ) {
@@ -556,6 +701,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         }
         publishObservedMetadata()
         publishNavigationState()
+        refreshFavicon()
     }
 
     func webView(
@@ -565,6 +711,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     ) {
         _ = navigation
         _ = error
+        clearFavicon()
         publishObservedMetadata()
         publishNavigationState()
     }
@@ -576,6 +723,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     ) {
         _ = navigation
         _ = error
+        clearFavicon()
         publishObservedMetadata()
         publishNavigationState()
     }
