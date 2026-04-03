@@ -864,7 +864,7 @@ struct ToasttyApp: App {
             defaultTerminalProfileID: initialDefaultTerminalProfileID
         )
         if usesPersistentPreferences {
-            Self.prunePaneHistoryFiles(
+            Self.prunePaneRestoreFiles(
                 runtimePaths: runtimePaths,
                 liveTerminalPanelIDs: bootstrap.state.allTerminalPanelIDs
             )
@@ -1147,7 +1147,8 @@ struct ToasttyApp: App {
                 "cli_path_present": cliExecutablePath == nil ? "false" : "true",
                 "agent_shim_directory": shimDirectoryPath ?? "none",
                 "agent_shim_directory_present": shimDirectoryPath == nil ? "false" : "true",
-                "pane_history_directory": runtimePaths.paneHistoryDirectoryURL.path,
+                "legacy_pane_history_directory": runtimePaths.paneHistoryDirectoryURL.path,
+                "pane_journal_directory": runtimePaths.paneJournalDirectoryURL.path,
                 "path_starts_with_shim_directory": pathStartsWithDirectory(
                     launchPath,
                     directoryPath: shimDirectoryPath
@@ -1160,12 +1161,11 @@ struct ToasttyApp: App {
             ]
         )
         terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
-            let paneHistoryFilePath = runtimePaths.paneHistoryFileURL(for: panelID).path
+            let paneJournalFilePath = runtimePaths.paneJournalFileURL(for: panelID).path
             var environment: [String: String] = [
                 ToasttyLaunchContextEnvironment.panelIDKey: panelID.uuidString,
                 ToasttyLaunchContextEnvironment.socketPathKey: socketPath,
-                ToasttyLaunchContextEnvironment.paneHistoryFileKey: paneHistoryFilePath,
-                "HISTFILE": paneHistoryFilePath,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: paneJournalFilePath,
             ]
             if let cliExecutablePath {
                 environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
@@ -1587,16 +1587,18 @@ struct ToasttyApp: App {
         )
     }
 
-    private static func prunePaneHistoryFiles(
+    private static func prunePaneRestoreFiles(
         runtimePaths: ToasttyRuntimePaths,
         liveTerminalPanelIDs: Set<UUID>
     ) {
         let result = PaneHistoryStore(runtimePaths: runtimePaths)
             .pruneUnreferencedHistoryFiles(keepingPanelIDs: liveTerminalPanelIDs)
+        let journalResult = PaneCommandJournalStore(runtimePaths: runtimePaths)
+            .pruneUnreferencedJournalFiles(keepingPanelIDs: liveTerminalPanelIDs)
 
         if result.removedFileCount > 0 {
             ToasttyLog.info(
-                "Pruned stale pane history files",
+                "Pruned stale legacy pane history files",
                 category: .bootstrap,
                 metadata: [
                     "directory": runtimePaths.paneHistoryDirectoryURL.path,
@@ -1606,13 +1608,37 @@ struct ToasttyApp: App {
             )
         }
 
+        if journalResult.removedFileCount > 0 {
+            ToasttyLog.info(
+                "Pruned stale pane journal files",
+                category: .bootstrap,
+                metadata: [
+                    "directory": runtimePaths.paneJournalDirectoryURL.path,
+                    "removed_count": String(journalResult.removedFileCount),
+                    "live_panel_count": String(liveTerminalPanelIDs.count),
+                ]
+            )
+        }
+
         if result.failedRemovalCount > 0 {
             ToasttyLog.warning(
-                "Failed removing some stale pane history files",
+                "Failed removing some stale legacy pane history files",
                 category: .bootstrap,
                 metadata: [
                     "directory": runtimePaths.paneHistoryDirectoryURL.path,
                     "failed_removal_count": String(result.failedRemovalCount),
+                    "live_panel_count": String(liveTerminalPanelIDs.count),
+                ]
+            )
+        }
+
+        if journalResult.failedRemovalCount > 0 {
+            ToasttyLog.warning(
+                "Failed removing some stale pane journal files",
+                category: .bootstrap,
+                metadata: [
+                    "directory": runtimePaths.paneJournalDirectoryURL.path,
+                    "failed_removal_count": String(journalResult.failedRemovalCount),
                     "live_panel_count": String(liveTerminalPanelIDs.count),
                 ]
             )

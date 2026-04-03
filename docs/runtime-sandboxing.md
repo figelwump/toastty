@@ -28,7 +28,7 @@ When runtime sandboxing is enabled, Toastty stores mutable app state inside the 
 - `config`
 - `terminal-profiles.toml`
 - `workspace-layout-profiles.json`
-- `history/panes/`
+- `history/pane-journals/`
 - `logs/toastty.log`
 - `instance.json`
 - a dedicated `UserDefaults` suite derived from the runtime-home path

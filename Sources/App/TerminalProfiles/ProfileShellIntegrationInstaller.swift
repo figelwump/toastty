@@ -3,7 +3,8 @@ import Darwin
 import Foundation
 
 enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
-    static let defaultPaneHistoryEntryCount = 5_000
+    static let defaultPaneJournalEntryCount = 5_000
+    static let paneJournalCompactionInterval = 250
 
     case zsh
     case bash
@@ -68,35 +69,91 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \texport PATH
             }
 
-            _toastty_configure_pane_history() {
-            \tlocal pane_history_file="${TOASTTY_PANE_HISTORY_FILE:-}"
-            \t[[ -n "$pane_history_file" ]] || return
+            _toastty_ensure_pane_journal_directory() {
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" ]] || return 1
 
-            \tlocal pane_history_dir="${pane_history_file:h}"
-            \tcommand mkdir -p "$pane_history_dir" 2>/dev/null || return
-            \tlocal configured_history_size="${HISTSIZE:-}"
-            \tlocal configured_save_history_size="${SAVEHIST:-}"
-            \tlocal save_history_size=""
-            \tif [[ "$configured_save_history_size" == <-> && "$configured_save_history_size" -gt 0 ]]; then
-            \t\tsave_history_size="$configured_save_history_size"
-            \telif [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
-            \t\t# Fresh interactive zsh shells default to HISTSIZE=30/SAVEHIST=0 even when
-            \t\t# the user has not configured history. That default is too small to be useful
-            \t\t# for restored pane-local history, so treat it as "unset" here.
-            \t\tsave_history_size="$configured_history_size"
-            \telse
-            \t\tsave_history_size="\(Self.defaultPaneHistoryEntryCount)"
-            \tfi
-            \tlocal history_size=""
-            \tif [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
-            \t\thistory_size="$configured_history_size"
-            \telse
-            \t\thistory_size="$save_history_size"
+            \tlocal pane_journal_dir="${pane_journal_file:h}"
+            \t/bin/mkdir -p -- "$pane_journal_dir" 2>/dev/null || return 1
+            \treturn 0
+            }
+
+            _toastty_compact_pane_journal() {
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+
+            \tlocal -a entries=()
+            \tlocal entry=""
+            \twhile IFS= read -r -d '' entry; do
+            \t\tentries+=("$entry")
+            \tdone < "$pane_journal_file"
+
+            \tlocal total_entries=${#entries[@]}
+            \tlocal max_entries=\(Self.defaultPaneJournalEntryCount)
+            \t(( total_entries > max_entries )) || return
+
+            \tlocal start_index=$(( total_entries - max_entries + 1 ))
+            \tlocal temp_file="${pane_journal_file}.tmp.$$"
+            \t: > "$temp_file" || return
+
+            \tlocal index
+            \tfor (( index = start_index; index <= total_entries; ++index )); do
+            \t\tprintf '%s\\0' "${entries[index]}" >> "$temp_file" || {
+            \t\t\t/bin/rm -f -- "$temp_file"
+            \t\t\treturn
+            \t\t}
+            \tdone
+
+            \t/bin/mv -f -- "$temp_file" "$pane_journal_file" 2>/dev/null || /bin/rm -f -- "$temp_file"
+            }
+
+            _toastty_import_pane_journal_if_needed() {
+            \t[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+            \t[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+
+            \tlocal entry=""
+            \twhile IFS= read -r -d '' entry; do
+            \t\tprint -sr -- "$entry"
+            \tdone < "$pane_journal_file"
+            }
+
+            _toastty_initialize_pane_journal() {
+            \t[[ -z ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]] || return
+
+            \tif _toastty_ensure_pane_journal_directory; then
+            \t\t_toastty_compact_pane_journal
+            \t\t_toastty_import_pane_journal_if_needed
+            \t\ttypeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
             \tfi
 
-            \tif [[ -z ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
-            \t\tfc -p "$pane_history_file" "$history_size" "$save_history_size" 2>/dev/null || return
-            \t\ttypeset -g _TOASTTY_PANE_HISTORY_INITIALIZED=1
+            \tif [[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]]; then
+            \t\texport TOASTTY_PANE_JOURNAL_IMPORTED=1
+            \tfi
+            \ttypeset -g _TOASTTY_PANE_JOURNAL_INITIALIZED=1
+            }
+
+            _toastty_append_last_history_entry_to_journal() {
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" ]] || return
+
+            \tlocal current_histcmd="${HISTCMD:-0}"
+            \t[[ "$current_histcmd" == <-> ]] || return
+            \tlocal last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
+            \t[[ "$last_histcmd" == <-> ]] || last_histcmd=0
+            \t(( current_histcmd > last_histcmd )) || return
+
+            \tlocal entry="$(fc -ln -1)"
+            \ttypeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
+            \t[[ -n "$entry" ]] || return
+
+            \tprintf '%s\\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
+
+            \ttypeset -g _TOASTTY_PANE_JOURNAL_WRITE_COUNT="$(( ${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0} + 1 ))"
+            \tif (( _TOASTTY_PANE_JOURNAL_WRITE_COUNT % \(Self.paneJournalCompactionInterval) == 0 )); then
+            \t\t_toastty_compact_pane_journal
             \tfi
             }
 
@@ -114,8 +171,8 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             }
 
             _toastty_precmd() {
-            \tif [[ -n ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
-            \t\tfc -AI
+            \tif [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
+            \t\t_toastty_append_last_history_entry_to_journal
             \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
             \t_toastty_emit_title "$cwd"
@@ -128,7 +185,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             if [[ -o interactive ]]; then
             \t_toastty_restore_agent_shim_path
-            \t_toastty_configure_pane_history
+            \t_toastty_initialize_pane_journal
             \tif [[ -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
             \t\tautoload -Uz add-zsh-hook
             \t\tadd-zsh-hook precmd _toastty_precmd
@@ -159,35 +216,93 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \texport PATH
             }
 
-            _toastty_resolved_history_limit() {
-            \tlocal configured_limit="$1"
-            \tlocal default_limit="$2"
-            \tif [[ "$configured_limit" =~ ^[0-9]+$ ]] && (( configured_limit > 0 )); then
-            \t\tprintf '%s\\n' "$configured_limit"
-            \telse
-            \t\tprintf '%s\\n' "$default_limit"
-            \tfi
+            _toastty_ensure_pane_journal_directory() {
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" ]] || return 1
+
+            \tlocal pane_journal_dir="${pane_journal_file%/*}"
+            \t/bin/mkdir -p -- "$pane_journal_dir" 2>/dev/null || return 1
+            \treturn 0
             }
 
-            _toastty_configure_pane_history() {
-            \tlocal pane_history_file="${TOASTTY_PANE_HISTORY_FILE:-}"
-            \t[[ -n "$pane_history_file" ]] || return
+            _toastty_compact_pane_journal() {
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
 
-            \tlocal pane_history_dir="${pane_history_file%/*}"
-            \tcommand mkdir -p "$pane_history_dir" 2>/dev/null || return
-            \tlocal history_size="$(_toastty_resolved_history_limit "${HISTSIZE:-}" "\(Self.defaultPaneHistoryEntryCount)")"
-            \tlocal history_file_size="$(_toastty_resolved_history_limit "${HISTFILESIZE:-}" "$history_size")"
+            \tlocal -a entries=()
+            \tlocal entry=""
+            \twhile IFS= read -r -d '' entry; do
+            \t\tentries+=("$entry")
+            \tdone < "$pane_journal_file"
 
-            \tif [[ -z "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
-            \t\tHISTSIZE="$history_size"
-            \t\tHISTFILESIZE="$history_file_size"
-            \t\texport HISTSIZE
-            \t\texport HISTFILESIZE
-            \t\tHISTFILE="$pane_history_file"
-            \t\texport HISTFILE
-            \t\thistory -c
-            \t\thistory -r "$HISTFILE" 2>/dev/null || true
-            \t\t_TOASTTY_PANE_HISTORY_INITIALIZED=1
+            \tlocal total_entries="${#entries[@]}"
+            \tlocal max_entries=\(Self.defaultPaneJournalEntryCount)
+            (( total_entries > max_entries )) || return
+
+            \tlocal start_index=$(( total_entries - max_entries ))
+            \tlocal temp_file="${pane_journal_file}.tmp.$$"
+            \t: > "$temp_file" || return
+
+            \tlocal index
+            \tfor (( index = start_index; index < total_entries; ++index )); do
+            \t\tprintf '%s\\0' "${entries[index]}" >> "$temp_file" || {
+            \t\t\t/bin/rm -f -- "$temp_file"
+            \t\t\treturn
+            \t\t}
+            \tdone
+
+            \t/bin/mv -f -- "$temp_file" "$pane_journal_file" 2>/dev/null || /bin/rm -f -- "$temp_file"
+            }
+
+            _toastty_import_pane_journal_if_needed() {
+            \t[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+            \t[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+
+            \tlocal entry=""
+            \twhile IFS= read -r -d '' entry; do
+            \t\tbuiltin history -s -- "$entry"
+            \tdone < "$pane_journal_file"
+            }
+
+            _toastty_initialize_pane_journal() {
+            \t[[ -z "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]] || return
+
+            \tif _toastty_ensure_pane_journal_directory; then
+            \t\t_toastty_compact_pane_journal
+            \t\t_toastty_import_pane_journal_if_needed
+            \t\t_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+            \tfi
+
+            \tif [[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]]; then
+            \t\texport TOASTTY_PANE_JOURNAL_IMPORTED=1
+            \tfi
+            \t_TOASTTY_PANE_JOURNAL_INITIALIZED=1
+            }
+
+            _toastty_append_last_history_entry_to_journal() {
+            \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \t[[ -n "$pane_journal_file" ]] || return
+
+            \tlocal current_histcmd="${HISTCMD:-0}"
+            \t[[ "$current_histcmd" =~ ^[0-9]+$ ]] || return
+            \tlocal last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
+            \t[[ "$last_histcmd" =~ ^[0-9]+$ ]] || last_histcmd=0
+            \t(( current_histcmd > last_histcmd )) || return
+
+            \tlocal entry=""
+            \tentry=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1)
+            \tentry="${entry#*[[:digit:]][* ] }"
+            \t_TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
+            \t[[ -n "$entry" ]] || return
+
+            \tprintf '%s\\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
+
+            \t_TOASTTY_PANE_JOURNAL_WRITE_COUNT="$(( ${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0} + 1 ))"
+            \tif (( _TOASTTY_PANE_JOURNAL_WRITE_COUNT % \(Self.paneJournalCompactionInterval) == 0 )); then
+            \t\t_toastty_compact_pane_journal
             \tfi
             }
 
@@ -206,8 +321,8 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             }
 
             _toastty_prompt_command() {
-            \tif [[ -n "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
-            \t\thistory -a
+            \tif [[ -n "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]]; then
+            \t\t_toastty_append_last_history_entry_to_journal
             \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
             \t_toastty_emit_title "$cwd"
@@ -215,7 +330,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             if [[ $- == *i* ]]; then
             \t_toastty_restore_agent_shim_path
-            \t_toastty_configure_pane_history
+            \t_toastty_initialize_pane_journal
             \tif [[ -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
             \t\tPROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
             \t\t_TOASTTY_TITLE_HOOKS_INSTALLED=1
@@ -308,8 +423,8 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable, Sendable 
 final class ProfileShellIntegrationInstaller {
     private static let managedSourceCommentLines = [
         "# Added by Toastty terminal profile shell integration",
-        "# Keep this near the end of this file, after all other PATH and history-file changes,",
-        "# so Toastty can restore its managed shim directory and pane-local history settings.",
+        "# Keep this near the end of this file, after other PATH, history, and prompt-hook changes,",
+        "# so Toastty can restore its shim directory and prompt-time title/journal hooks.",
     ]
 
     private let fileManager: FileManager

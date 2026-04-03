@@ -921,7 +921,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     func surfaceLaunchConfiguration(for panelID: UUID) -> TerminalSurfaceLaunchConfiguration {
-        let baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
+        let baseEnvironmentVariables = launchContextEnvironment(for: panelID)
         logSurfaceLaunchEnvironmentIfNeeded(panelID: panelID, environment: baseEnvironmentVariables)
 
         guard launchedProfiledPanelIDs.contains(panelID) == false else {
@@ -964,6 +964,17 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             }
             return configuration
         }
+    }
+
+    private func launchContextEnvironment(for panelID: UUID) -> [String: String] {
+        let baseEnvironmentVariables = baseLaunchEnvironmentProvider?(panelID) ?? [:]
+        return baseEnvironmentVariables.merging([
+            ToasttyLaunchContextEnvironment.launchReasonKey: launchReason(for: panelID).rawValue,
+        ], uniquingKeysWith: { _, new in new })
+    }
+
+    private func launchReason(for panelID: UUID) -> TerminalLaunchReason {
+        restoredTerminalPanelIDsAwaitingLaunch.contains(panelID) ? .restore : .create
     }
 
     func profileStartupCommandAwaitingTitleCleanup(

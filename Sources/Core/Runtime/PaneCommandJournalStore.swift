@@ -1,6 +1,6 @@
 import Foundation
 
-public struct PaneHistoryPruneResult: Equatable, Sendable {
+public struct PaneCommandJournalPruneResult: Equatable, Sendable {
     public let removedFileCount: Int
     public let failedRemovalCount: Int
 
@@ -10,7 +10,7 @@ public struct PaneHistoryPruneResult: Equatable, Sendable {
     }
 }
 
-public struct PaneHistoryStore: Sendable {
+public struct PaneCommandJournalStore: Sendable {
     public let directoryURL: URL
 
     public init(directoryURL: URL) {
@@ -18,67 +18,67 @@ public struct PaneHistoryStore: Sendable {
     }
 
     public init(runtimePaths: ToasttyRuntimePaths) {
-        self.init(directoryURL: runtimePaths.paneHistoryDirectoryURL)
+        self.init(directoryURL: runtimePaths.paneJournalDirectoryURL)
     }
 
-    public func pruneUnreferencedHistoryFiles(
+    public func pruneUnreferencedJournalFiles(
         keepingPanelIDs livePanelIDs: Set<UUID>,
         fileManager: FileManager = .default
-    ) -> PaneHistoryPruneResult {
+    ) -> PaneCommandJournalPruneResult {
         guard fileManager.fileExists(atPath: directoryURL.path) else {
-            return PaneHistoryPruneResult(removedFileCount: 0, failedRemovalCount: 0)
+            return PaneCommandJournalPruneResult(removedFileCount: 0, failedRemovalCount: 0)
         }
 
-        let historyFileURLs: [URL]
+        let journalFileURLs: [URL]
         do {
-            historyFileURLs = try fileManager.contentsOfDirectory(
+            journalFileURLs = try fileManager.contentsOfDirectory(
                 at: directoryURL,
                 includingPropertiesForKeys: [.isRegularFileKey],
                 options: [.skipsHiddenFiles]
             )
         } catch {
             ToasttyLog.warning(
-                "Failed reading legacy pane history directory for pruning",
+                "Failed reading pane journal directory for pruning",
                 category: .state,
                 metadata: [
                     "directory": directoryURL.path,
                     "error": error.localizedDescription,
                 ]
             )
-            return PaneHistoryPruneResult(removedFileCount: 0, failedRemovalCount: 0)
+            return PaneCommandJournalPruneResult(removedFileCount: 0, failedRemovalCount: 0)
         }
 
         var removedFileCount = 0
         var failedRemovalCount = 0
 
-        for historyFileURL in historyFileURLs {
-            guard historyFileURL.pathExtension == "history" else { continue }
-            let resourceValues = try? historyFileURL.resourceValues(forKeys: [.isRegularFileKey])
+        for journalFileURL in journalFileURLs {
+            guard journalFileURL.pathExtension == "journal" else { continue }
+            let resourceValues = try? journalFileURL.resourceValues(forKeys: [.isRegularFileKey])
             guard resourceValues?.isRegularFile != false else { continue }
 
-            let panelIDComponent = historyFileURL.deletingPathExtension().lastPathComponent
+            let panelIDComponent = journalFileURL.deletingPathExtension().lastPathComponent
             guard let panelID = UUID(uuidString: panelIDComponent),
                   livePanelIDs.contains(panelID) == false else {
                 continue
             }
 
             do {
-                try fileManager.removeItem(at: historyFileURL)
+                try fileManager.removeItem(at: journalFileURL)
                 removedFileCount += 1
             } catch {
                 failedRemovalCount += 1
                 ToasttyLog.warning(
-                    "Failed removing stale legacy pane history file",
+                    "Failed removing stale pane journal file",
                     category: .state,
                     metadata: [
-                        "path": historyFileURL.path,
+                        "path": journalFileURL.path,
                         "error": error.localizedDescription,
                     ]
                 )
             }
         }
 
-        return PaneHistoryPruneResult(
+        return PaneCommandJournalPruneResult(
             removedFileCount: removedFileCount,
             failedRemovalCount: failedRemovalCount
         )

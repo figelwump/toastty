@@ -2,7 +2,7 @@ import Foundation
 
 enum ProfileShellIntegrationMessaging {
     static let restartNotice = """
-    New shells will pick it up automatically. Existing tmux or zmx sessions may need to restart or re-source that init file before live titles update. Pane-local history applies to shells launched after Toastty injects the pane history environment, so older multiplexer sessions usually need a restart.
+    New shells will pick it up automatically. Existing tmux or zmx sessions may need to restart or re-source that init file before live titles update and restored-pane command recall takes effect.
     """
 
     static func managedSnippetPlanLine(for status: ProfileShellIntegrationInstallStatus) -> String {

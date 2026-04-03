@@ -54,7 +54,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let panelID = UUID()
         let slotID = UUID()
         let windowID = UUID()
-        let paneHistoryFilePath = "/tmp/toastty-history/\(panelID.uuidString).history"
+        let paneJournalFilePath = "/tmp/toastty-history/\(panelID.uuidString).journal"
         let state = AppState(
             windows: [
                 WindowState(
@@ -102,8 +102,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         registry.setTerminalProfileProvider(profileProvider, restoredTerminalPanelIDs: [panelID])
         registry.setBaseLaunchEnvironmentProvider { requestedPanelID in
             [
-                ToasttyLaunchContextEnvironment.paneHistoryFileKey: "/tmp/toastty-history/\(requestedPanelID.uuidString).history",
-                "HISTFILE": "/tmp/toastty-history/\(requestedPanelID.uuidString).history",
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: "/tmp/toastty-history/\(requestedPanelID.uuidString).journal",
             ]
         }
         registry.bind(store: store)
@@ -113,10 +112,9 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertEqual(
             launchConfiguration.environmentVariables,
             [
-                "HISTFILE": paneHistoryFilePath,
                 "TOASTTY_LAUNCH_REASON": "restore",
                 "TOASTTY_PANEL_ID": panelID.uuidString,
-                "TOASTTY_PANE_HISTORY_FILE": paneHistoryFilePath,
+                "TOASTTY_PANE_JOURNAL_FILE": paneJournalFilePath,
                 "TOASTTY_TERMINAL_PROFILE_ID": "zmx",
             ]
         )
@@ -182,7 +180,14 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         registry.markInitialSurfaceLaunchCompleted(for: panelID)
 
-        XCTAssertEqual(registry.surfaceLaunchConfiguration(for: panelID), .empty)
+        XCTAssertEqual(
+            registry.surfaceLaunchConfiguration(for: panelID),
+            TerminalSurfaceLaunchConfiguration(
+                environmentVariables: [
+                    ToasttyLaunchContextEnvironment.launchReasonKey: "create",
+                ]
+            )
+        )
     }
 
     func testActivatePanelIfNeededFocusesResolvedPanel() throws {

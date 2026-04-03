@@ -1,20 +1,22 @@
 # Shell Integration
 
-Toastty's shell integration emits `OSC 2` title sequences so that panel headers show live working directories and running commands, even inside multiplexers like `tmux` or `zmx`. For `zsh` and `bash`, it also switches each pane to its own shell history file so restored panes can recall their own commands with `Up`.
+Toastty's shell integration emits `OSC 2` title sequences so panel headers show live working directories and running commands, even inside multiplexers like `tmux` or `zmx`. For `zsh` and `bash`, Toastty also keeps a Toastty-owned per-pane restore journal while leaving the shell's normal shared history alone.
 
-The easiest way to install is either `Toastty > Install Shell Integration…` or the top-bar `Get Started…` flow in Toastty — both write the snippet and source it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
+On restore, Toastty imports that pane's journal into the shell's in-memory history. That means `Up` starts with the last commands from that pane, while reverse-search and normal history traversal can still see the broader shared shell history.
+
+The easiest way to install is either `Toastty > Install Shell Integration…` or the top-bar `Get Started…` flow in Toastty. Both write the snippet and source it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.
 
-When the managed snippets do not see a useful shell-provided history-file limit, Toastty falls back to a per-pane cap of 5,000 entries. Explicit positive shell settings still win.
-
 The managed snippets also restore `TOASTTY_AGENT_SHIM_DIR` to the front of `PATH` when that environment variable is present, so manual `codex`, `claude`, and any configured wrapper executables declared through `manualCommandNames` keep using Toastty's wrappers after shell startup files run.
 
-Source the Toastty snippet after all other shell startup code that mutates `PATH` or overrides `HISTFILE`, such as `nvm`, Homebrew shellenv, `asdf`, `bun`, `pyenv`, or custom history setup. It does not need to be the literal last line, but anything that rewrites `PATH` or `HISTFILE` after it can undo Toastty's shim ordering or pane-local history selection.
+Source the Toastty snippet after other `PATH`, history, and prompt-hook changes. It does not need to be the literal last line, but anything that rewrites `PATH`, replaces `PROMPT_COMMAND`, or overwrites prompt hooks after it can undo Toastty's shim ordering or prompt-time journal/title hooks.
 
 Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
 
-Existing `tmux` or `zmx` sessions may only need a re-source for title updates. Pane-local history depends on `TOASTTY_PANE_HISTORY_FILE` being present in the shell's launch environment, so older multiplexer sessions usually need a restart before the per-pane history file takes effect.
+Existing `tmux` or `zmx` sessions may only need a re-source for title updates. Restored-pane command recall only applies to shells launched after Toastty injects the launch context environment, so older multiplexer sessions usually need a restart.
+
+Toastty does not migrate legacy `history/panes/*.history` files into the new `history/pane-journals/*.journal` format. Shared shell history still remains available immediately, and pane-local recall rebuilds as new commands run in each pane.
 
 ## Zsh
 
@@ -33,38 +35,54 @@ _toastty_restore_agent_shim_path() {
 	export PATH
 }
 
-_toastty_configure_pane_history() {
-	local pane_history_file="${TOASTTY_PANE_HISTORY_FILE:-}"
-	[[ -n "$pane_history_file" ]] || return
+_toastty_ensure_pane_journal_directory() {
+	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+	[[ -n "$pane_journal_file" ]] || return 1
 
-	local pane_history_dir="${pane_history_file:h}"
-	command mkdir -p "$pane_history_dir" 2>/dev/null || return
+	local pane_journal_dir="${pane_journal_file:h}"
+	/bin/mkdir -p -- "$pane_journal_dir" 2>/dev/null || return 1
+	return 0
+}
 
-	local configured_history_size="${HISTSIZE:-}"
-	local configured_save_history_size="${SAVEHIST:-}"
-	local save_history_size=""
-	if [[ "$configured_save_history_size" == <-> && "$configured_save_history_size" -gt 0 ]]; then
-		save_history_size="$configured_save_history_size"
-	elif [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
-		# Fresh interactive zsh shells default to HISTSIZE=30/SAVEHIST=0 even when
-		# the user has not configured history. That default is too small to be useful
-		# for restored pane-local history, so treat it as "unset" here.
-		save_history_size="$configured_history_size"
-	else
-		save_history_size="5000"
+_toastty_import_pane_journal_if_needed() {
+	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+
+	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+	[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+
+	local entry=""
+	while IFS= read -r -d '' entry; do
+		print -sr -- "$entry"
+	done < "$pane_journal_file"
+}
+
+_toastty_initialize_pane_journal() {
+	[[ -z ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]] || return
+
+	if _toastty_ensure_pane_journal_directory; then
+		_toastty_import_pane_journal_if_needed
+		typeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
 	fi
 
-	local history_size=""
-	if [[ "$configured_history_size" == <-> && "$configured_history_size" -gt 0 && "$configured_history_size" != "30" ]]; then
-		history_size="$configured_history_size"
-	else
-		history_size="$save_history_size"
-	fi
+	unset TOASTTY_LAUNCH_REASON
+	typeset -g _TOASTTY_PANE_JOURNAL_INITIALIZED=1
+}
 
-	if [[ -z ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
-		fc -p "$pane_history_file" "$history_size" "$save_history_size" 2>/dev/null || return
-		typeset -g _TOASTTY_PANE_HISTORY_INITIALIZED=1
-	fi
+_toastty_append_last_history_entry_to_journal() {
+	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+	[[ -n "$pane_journal_file" ]] || return
+
+	local current_histcmd="${HISTCMD:-0}"
+	[[ "$current_histcmd" == <-> ]] || return
+	local last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
+	[[ "$last_histcmd" == <-> ]] || last_histcmd=0
+	(( current_histcmd > last_histcmd )) || return
+
+	local entry="$(fc -ln -1)"
+	typeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
+	[[ -n "$entry" ]] || return
+
+	printf '%s\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
 }
 
 _toastty_emit_title() {
@@ -81,8 +99,8 @@ _toastty_emit_title() {
 }
 
 _toastty_precmd() {
-	if [[ -n ${_TOASTTY_PANE_HISTORY_INITIALIZED:-} ]]; then
-		fc -AI
+	if [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
+		_toastty_append_last_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"
 	_toastty_emit_title "$cwd"
@@ -95,7 +113,7 @@ _toastty_preexec() {
 
 if [[ -o interactive ]]; then
 	_toastty_restore_agent_shim_path
-	_toastty_configure_pane_history
+	_toastty_initialize_pane_journal
 	if [[ -z ${_TOASTTY_TITLE_HOOKS_INSTALLED:-} ]]; then
 		autoload -Uz add-zsh-hook
 		add-zsh-hook precmd _toastty_precmd
@@ -105,7 +123,7 @@ if [[ -o interactive ]]; then
 fi
 ```
 
-Then add this near the end of `~/.zshrc`, after other `PATH` and `HISTFILE` changes:
+Then add this near the end of `~/.zshrc`:
 
 ```zsh
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
@@ -136,37 +154,56 @@ _toastty_restore_agent_shim_path() {
 	export PATH
 }
 
-_toastty_configure_pane_history() {
-	local pane_history_file="${TOASTTY_PANE_HISTORY_FILE:-}"
-	[[ -n "$pane_history_file" ]] || return
+_toastty_ensure_pane_journal_directory() {
+	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+	[[ -n "$pane_journal_file" ]] || return 1
 
-	local pane_history_dir="${pane_history_file%/*}"
-	command mkdir -p "$pane_history_dir" 2>/dev/null || return
+	local pane_journal_dir="${pane_journal_file%/*}"
+	/bin/mkdir -p -- "$pane_journal_dir" 2>/dev/null || return 1
+	return 0
+}
 
-	_toastty_resolved_history_limit() {
-		local configured_limit="$1"
-		local default_limit="$2"
-		if [[ "$configured_limit" =~ ^[0-9]+$ ]] && (( configured_limit > 0 )); then
-			printf '%s\n' "$configured_limit"
-		else
-			printf '%s\n' "$default_limit"
-		fi
-	}
+_toastty_import_pane_journal_if_needed() {
+	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
 
-	local history_size="$(_toastty_resolved_history_limit "${HISTSIZE:-}" "5000")"
-	local history_file_size="$(_toastty_resolved_history_limit "${HISTFILESIZE:-}" "$history_size")"
+	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+	[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
 
-	if [[ -z "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
-		HISTSIZE="$history_size"
-		HISTFILESIZE="$history_file_size"
-		export HISTSIZE
-		export HISTFILESIZE
-		HISTFILE="$pane_history_file"
-		export HISTFILE
-		history -c
-		history -r "$HISTFILE" 2>/dev/null || true
-		_TOASTTY_PANE_HISTORY_INITIALIZED=1
+	local entry=""
+	while IFS= read -r -d '' entry; do
+		builtin history -s -- "$entry"
+	done < "$pane_journal_file"
+}
+
+_toastty_initialize_pane_journal() {
+	[[ -z "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]] || return
+
+	if _toastty_ensure_pane_journal_directory; then
+		_toastty_import_pane_journal_if_needed
+		_TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
 	fi
+
+	unset TOASTTY_LAUNCH_REASON
+	_TOASTTY_PANE_JOURNAL_INITIALIZED=1
+}
+
+_toastty_append_last_history_entry_to_journal() {
+	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+	[[ -n "$pane_journal_file" ]] || return
+
+	local current_histcmd="${HISTCMD:-0}"
+	[[ "$current_histcmd" =~ ^[0-9]+$ ]] || return
+	local last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
+	[[ "$last_histcmd" =~ ^[0-9]+$ ]] || last_histcmd=0
+	(( current_histcmd > last_histcmd )) || return
+
+	local entry=""
+	entry=$(LC_ALL=C HISTTIMEFORMAT='' builtin history 1)
+	entry="${entry#*[[:digit:]][* ] }"
+	_TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
+	[[ -n "$entry" ]] || return
+
+	printf '%s\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
 }
 
 _toastty_emit_title() {
@@ -184,8 +221,8 @@ _toastty_emit_title() {
 }
 
 _toastty_prompt_command() {
-	if [[ -n "${_TOASTTY_PANE_HISTORY_INITIALIZED:-}" ]]; then
-		history -a
+	if [[ -n "${_TOASTTY_PANE_JOURNAL_INITIALIZED:-}" ]]; then
+		_toastty_append_last_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"
 	_toastty_emit_title "$cwd"
@@ -193,7 +230,7 @@ _toastty_prompt_command() {
 
 if [[ $- == *i* ]]; then
 	_toastty_restore_agent_shim_path
-	_toastty_configure_pane_history
+	_toastty_initialize_pane_journal
 	if [[ -z "${_TOASTTY_TITLE_HOOKS_INSTALLED:-}" ]]; then
 		PROMPT_COMMAND="_toastty_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 		_TOASTTY_TITLE_HOOKS_INSTALLED=1
@@ -201,8 +238,7 @@ if [[ $- == *i* ]]; then
 fi
 ```
 
-Then add this near the end of `~/.bash_profile` on macOS, or `~/.bashrc` if that is the
-interactive file your Bash sessions already load:
+Then add this near the end of `~/.bash_profile` on macOS, or `~/.bashrc` if that is the interactive file your Bash sessions already load:
 
 ```bash
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.bash"
@@ -210,12 +246,7 @@ source "$HOME/.toastty/shell/toastty-profile-shell-integration.bash"
 
 ## Other shells
 
-Install an equivalent interactive hook that writes `OSC 2` (`\033]2;...\a`) to
-`/dev/tty` with the current working directory whenever the prompt returns. If
-your shell also has a pre-exec hook, emitting the current command there is
-useful too, but the prompt-time directory title is the important part for
-profiled multiplexer sessions. Toastty's managed pane-local history wiring is
-currently provided for `zsh` and `bash` only.
+Install an equivalent interactive hook that writes `OSC 2` (`\033]2;...\a`) to `/dev/tty` with the current working directory whenever the prompt returns. If your shell also has a pre-exec hook, emitting the current command there is useful too, but the prompt-time directory title is the important part for profiled multiplexer sessions. Toastty's managed restore-journal wiring is currently provided for `zsh` and `bash` only.
 
 ## Related docs
 
