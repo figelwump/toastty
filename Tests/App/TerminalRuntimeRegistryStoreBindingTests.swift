@@ -202,6 +202,59 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalPanelID)
     }
 
+    func testOpenCommandClickLinkRoutesIntoTerminalPanelOwningWindow() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 80, y: 80, width: 1200, height: 800),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: secondWindowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+        let sourcePanelID = try XCTUnwrap(firstWorkspace.focusedPanelID)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                URL(string: "https://example.com/inside-terminal")!,
+                from: sourcePanelID
+            )
+        )
+
+        let firstWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspace.id])
+        let secondWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
+        XCTAssertEqual(firstWorkspaceAfter.panels.count, firstWorkspace.panels.count + 1)
+        XCTAssertEqual(secondWorkspaceAfter.panels.count, secondWorkspace.panels.count)
+
+        guard let browserPanelID = firstWorkspaceAfter.panels.keys.first(where: { firstWorkspace.panels.keys.contains($0) == false }),
+              case .web(let webState) = firstWorkspaceAfter.panels[browserPanelID] else {
+            XCTFail("expected browser panel in source workspace")
+            return
+        }
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, "https://example.com/inside-terminal")
+        try StateValidator.validate(store.state)
+    }
+
     func testFocusPanelForImageDropActivatesAppAndRoutesToTargetWindow() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let leftPanelID = UUID()

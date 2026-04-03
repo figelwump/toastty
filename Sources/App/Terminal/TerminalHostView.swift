@@ -22,6 +22,7 @@ private extension NSView {
 
 final class TerminalHostView: NSView {
     var activatePanelIfNeeded: (() -> Bool)?
+    var openCommandClickLink: ((URL) -> Bool)?
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
@@ -37,6 +38,7 @@ final class TerminalHostView: NSView {
     private var trackedPressedModifierKeyCodes: [UInt16] = []
     private var markedText = NSMutableAttributedString(string: "")
     private var keyTextAccumulator: [String]?
+    private var pendingCommandClickLinkURL: URL?
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
@@ -671,6 +673,9 @@ final class TerminalHostView: NSView {
     override func mouseDown(with event: NSEvent) {
         _ = activatePanelIfNeeded?()
         focusHostViewIfNeeded()
+        if preparePendingCommandClickLinkOpen(with: event) {
+            return
+        }
         guard forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_PRESS,
@@ -682,6 +687,9 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if performPendingCommandClickLinkOpen(with: event) {
+            return
+        }
         let handled = forwardMouseButton(
             event,
             state: GHOSTTY_MOUSE_RELEASE,
@@ -788,6 +796,10 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if pendingCommandClickLinkURL != nil {
+            pendingCommandClickLinkURL = nil
+            return
+        }
         guard forwardMousePosition(event) else {
             super.mouseDragged(with: event)
             return
@@ -1136,6 +1148,42 @@ final class TerminalHostView: NSView {
         guard let window else { return }
         guard window.firstResponder !== self else { return }
         window.makeFirstResponder(self)
+    }
+
+    private func preparePendingCommandClickLinkOpen(with event: NSEvent) -> Bool {
+        guard openCommandClickLink != nil,
+              event.modifierFlags.contains(.command),
+              let url = hoveredGhosttyLinkURL() else {
+            pendingCommandClickLinkURL = nil
+            return false
+        }
+
+        // Reclaim explicit terminal Command-clicks before Ghostty sees the
+        // mouse press so we do not leave its internal button state half-forwarded.
+        pendingCommandClickLinkURL = url
+        return true
+    }
+
+    private func performPendingCommandClickLinkOpen(with event: NSEvent) -> Bool {
+        guard let url = pendingCommandClickLinkURL else {
+            return false
+        }
+        pendingCommandClickLinkURL = nil
+        // Once the press is reclaimed for app-owned Command-click handling, the
+        // matching release must stay local too, even if Command is released first.
+        guard event.modifierFlags.contains(.command) else {
+            return true
+        }
+        _ = openCommandClickLink?(url)
+        return true
+    }
+
+    private func hoveredGhosttyLinkURL() -> URL? {
+        guard let ghosttyMouseOverLinkURL,
+              let url = URL(string: ghosttyMouseOverLinkURL) else {
+            return nil
+        }
+        return url
     }
 
     private func shouldForwardRawRightMouseEvents(surface: ghostty_surface_t) -> Bool {

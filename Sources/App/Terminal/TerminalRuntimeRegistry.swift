@@ -911,6 +911,17 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         return false
     }
 
+    @discardableResult
+    func openCommandClickLink(_ url: URL, from panelID: UUID) -> Bool {
+        guard let store else { return false }
+        let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
+        return AppURLRouter.open(
+            url,
+            preferredWindowID: preferredWindowID,
+            appStore: store
+        )
+    }
+
     #if TOASTTY_HAS_GHOSTTY_KIT
     func splitSourceSurfaceState(forNewPanelID panelID: UUID) -> TerminalSplitSourceSurfaceState {
         splitSourceSurfaceState(for: panelID)
