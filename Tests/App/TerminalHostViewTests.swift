@@ -65,6 +65,144 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertNil(action)
     }
 
+    func testGhosttyLinkHoverModifierFlagsStripsShiftWhenCommandIsPressed() {
+        let flags = NSEvent.ModifierFlags(
+            rawValue: NSEvent.ModifierFlags.command.rawValue
+                | NSEvent.ModifierFlags.shift.rawValue
+                | UInt(NX_DEVICERSHIFTKEYMASK)
+        )
+
+        let normalized = TerminalHostView.ghosttyLinkHoverModifierFlags(for: flags)
+
+        XCTAssertTrue(normalized.contains(.command))
+        XCTAssertFalse(normalized.contains(.shift))
+        XCTAssertEqual(normalized.rawValue & UInt(NX_DEVICERSHIFTKEYMASK), 0)
+    }
+
+    func testGhosttyLinkHoverModifierFlagsKeepsShiftWithoutCommand() {
+        let flags = NSEvent.ModifierFlags(
+            rawValue: NSEvent.ModifierFlags.shift.rawValue | UInt(NX_DEVICERSHIFTKEYMASK)
+        )
+
+        let normalized = TerminalHostView.ghosttyLinkHoverModifierFlags(for: flags)
+
+        XCTAssertEqual(normalized, flags)
+    }
+
+    func testMouseMovedNormalizesCommandShiftHoverModifiersForLinkDiscovery() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+        let modifierFlags = NSEvent.ModifierFlags(
+            rawValue: NSEvent.ModifierFlags.command.rawValue
+                | NSEvent.ModifierFlags.shift.rawValue
+                | UInt(NX_DEVICERSHIFTKEYMASK)
+        )
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, x, y, mods in
+                mouseRecorder.record(x: x, y: y, mods: mods)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1243))
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+
+        hostView.mouseMoved(
+            with: try makeMouseEvent(
+                type: .mouseMoved,
+                window: window,
+                location: NSPoint(x: 20, y: 30),
+                modifierFlags: modifierFlags
+            )
+        )
+
+        let event = try XCTUnwrap(mouseRecorder.lastEvent)
+        XCTAssertEqual(event.x, 20, accuracy: 0.001)
+        XCTAssertEqual(event.y, 70, accuracy: 0.001)
+        XCTAssertEqual(event.modsRawValue, GHOSTTY_MODS_SUPER.rawValue)
+    }
+
+    func testMouseDraggedPreservesShiftForCommandShiftDragModifiers() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+        let modifierFlags = NSEvent.ModifierFlags(
+            rawValue: NSEvent.ModifierFlags.command.rawValue
+                | NSEvent.ModifierFlags.shift.rawValue
+                | UInt(NX_DEVICERSHIFTKEYMASK)
+        )
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, x, y, mods in
+                mouseRecorder.record(x: x, y: y, mods: mods)
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1244))
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+
+        hostView.mouseDragged(
+            with: try makeMouseEvent(
+                type: .leftMouseDragged,
+                window: window,
+                location: NSPoint(x: 24, y: 36),
+                modifierFlags: modifierFlags
+            )
+        )
+
+        let event = try XCTUnwrap(mouseRecorder.lastEvent)
+        XCTAssertEqual(event.modsRawValue, GHOSTTY_MODS_SUPER.rawValue | GHOSTTY_MODS_SHIFT.rawValue | GHOSTTY_MODS_SHIFT_RIGHT.rawValue)
+    }
+
+    func testFlagsChangedUsesNormalizedHoverModifiersForCurrentMousePosition() throws {
+        let hostView = TerminalHostView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let mouseRecorder = GhosttyMousePositionRecorder()
+        let modifierFlags = NSEvent.ModifierFlags(
+            rawValue: NSEvent.ModifierFlags.command.rawValue
+                | NSEvent.ModifierFlags.shift.rawValue
+                | UInt(NX_DEVICERSHIFTKEYMASK)
+        )
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, x, y, mods in
+                mouseRecorder.record(x: x, y: y, mods: mods)
+            },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in true }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1245))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: modifierFlags
+            )
+        )
+
+        let event = try XCTUnwrap(mouseRecorder.lastEvent)
+        XCTAssertEqual(event.x, 28, accuracy: 0.001)
+        XCTAssertEqual(event.y, 68, accuracy: 0.001)
+        XCTAssertEqual(event.modsRawValue, GHOSTTY_MODS_SUPER.rawValue)
+    }
+
     func testUnshiftedCodepointSkipsCharacterLookupForFlagsChangedEvents() {
         var providerWasCalled = false
 
@@ -1152,6 +1290,12 @@ private struct RecordedGhosttyKeyEvent: Equatable {
     let composing: Bool
 }
 
+private struct RecordedGhosttyMousePosition: Equatable {
+    let x: Double
+    let y: Double
+    let modsRawValue: UInt32
+}
+
 private final class GhosttyKeyEventRecorder: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [RecordedGhosttyKeyEvent] = []
@@ -1176,6 +1320,31 @@ private final class GhosttyKeyEventRecorder: @unchecked Sendable {
             lock.unlock()
         }
         return storage
+    }
+}
+
+private final class GhosttyMousePositionRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [RecordedGhosttyMousePosition] = []
+
+    func record(x: Double, y: Double, mods: ghostty_input_mods_e) {
+        lock.lock()
+        storage.append(
+            RecordedGhosttyMousePosition(
+                x: x,
+                y: y,
+                modsRawValue: mods.rawValue
+            )
+        )
+        lock.unlock()
+    }
+
+    var lastEvent: RecordedGhosttyMousePosition? {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        return storage.last
     }
 }
 
@@ -1247,6 +1416,7 @@ private final class HookCallCounter: @unchecked Sendable {
 private final class TestWindow: NSWindow {
     var forcedOcclusionState: NSWindow.OcclusionState = []
     var forcedIsKeyWindow = false
+    var forcedMouseLocationOutsideOfEventStream = NSPoint.zero
     private var storedFirstResponder: NSResponder?
 
     override var firstResponder: NSResponder? {
@@ -1268,6 +1438,10 @@ private final class TestWindow: NSWindow {
 
     override var occlusionState: NSWindow.OcclusionState {
         forcedOcclusionState
+    }
+
+    override var mouseLocationOutsideOfEventStream: NSPoint {
+        forcedMouseLocationOutsideOfEventStream
     }
 
     override func makeFirstResponder(_ responder: NSResponder?) -> Bool {

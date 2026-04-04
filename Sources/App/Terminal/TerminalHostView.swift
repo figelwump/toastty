@@ -124,6 +124,7 @@ final class TerminalHostView: NSView {
         var setFocus: @Sendable (ghostty_surface_t, Bool) -> Void
         var setOcclusion: @Sendable (ghostty_surface_t, Bool) -> Void
         var refresh: @Sendable (ghostty_surface_t) -> Void
+        var sendMousePosition: @Sendable (ghostty_surface_t, Double, Double, ghostty_input_mods_e) -> Void
         var keyTranslationMods: @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e
         var sendKey: @Sendable (ghostty_surface_t, ghostty_input_key_s) -> Bool
         var setPreedit: @Sendable (ghostty_surface_t, UnsafePointer<CChar>?, uintptr_t) -> Void
@@ -133,6 +134,9 @@ final class TerminalHostView: NSView {
             setFocus: @escaping @Sendable (ghostty_surface_t, Bool) -> Void,
             setOcclusion: @escaping @Sendable (ghostty_surface_t, Bool) -> Void,
             refresh: @escaping @Sendable (ghostty_surface_t) -> Void,
+            sendMousePosition: @escaping @Sendable (ghostty_surface_t, Double, Double, ghostty_input_mods_e) -> Void = { surface, x, y, mods in
+                ghostty_surface_mouse_pos(surface, x, y, mods)
+            },
             keyTranslationMods: @escaping @Sendable (ghostty_surface_t, ghostty_input_mods_e) -> ghostty_input_mods_e = { surface, mods in
                 ghostty_surface_key_translation_mods(surface, mods)
             },
@@ -149,6 +153,7 @@ final class TerminalHostView: NSView {
             self.setFocus = setFocus
             self.setOcclusion = setOcclusion
             self.refresh = refresh
+            self.sendMousePosition = sendMousePosition
             self.keyTranslationMods = keyTranslationMods
             self.sendKey = sendKey
             self.setPreedit = setPreedit
@@ -164,6 +169,9 @@ final class TerminalHostView: NSView {
             },
             refresh: { surface in
                 ghostty_surface_refresh(surface)
+            },
+            sendMousePosition: { surface, x, y, mods in
+                ghostty_surface_mouse_pos(surface, x, y, mods)
             },
             keyTranslationMods: { surface, mods in
                 ghostty_surface_key_translation_mods(surface, mods)
@@ -788,7 +796,7 @@ final class TerminalHostView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
-        _ = forwardMousePosition(event)
+        _ = forwardMouseHoverPosition(event)
         #endif
         super.mouseEntered(with: event)
     }
@@ -798,15 +806,16 @@ final class TerminalHostView: NSView {
         setGhosttyMouseOverLink(nil)
         if NSEvent.pressedMouseButtons == 0,
            let ghosttySurface {
-            let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
-            ghostty_surface_mouse_pos(ghosttySurface, -1, -1, mods)
+            let hoverModifierFlags = Self.ghosttyLinkHoverModifierFlags(for: event.modifierFlags)
+            let mods = Self.ghosttyModifierFlags(for: hoverModifierFlags)
+            ghosttySurfaceHooks.sendMousePosition(ghosttySurface, -1, -1, mods)
         }
         #endif
         super.mouseExited(with: event)
     }
 
     override func mouseMoved(with event: NSEvent) {
-        guard forwardMousePosition(event) else {
+        guard forwardMouseHoverPosition(event) else {
             super.mouseMoved(with: event)
             return
         }
@@ -998,7 +1007,7 @@ final class TerminalHostView: NSView {
 
         // FlagsChanged events can carry stale or zero-origin locationInWindow
         // values, so use the window's live mouse location instead of the event's.
-        _ = forwardCurrentMousePosition(modifierFlags: event.modifierFlags)
+        _ = forwardCurrentMouseHoverPosition(modifierFlags: event.modifierFlags)
         guard handled else {
             super.flagsChanged(with: event)
             return
@@ -1233,11 +1242,31 @@ final class TerminalHostView: NSView {
         return true
     }
 
+    @discardableResult
+    private func forwardMouseHoverPosition(_ event: NSEvent) -> Bool {
+        guard let ghosttySurface else { return false }
+        let hoverModifierFlags = Self.ghosttyLinkHoverModifierFlags(for: event.modifierFlags)
+        forwardMousePosition(event, surface: ghosttySurface, modifierFlags: hoverModifierFlags)
+        return true
+    }
+
     private func forwardMousePosition(_ event: NSEvent, surface: ghostty_surface_t) {
+        forwardMousePosition(
+            event,
+            surface: surface,
+            modifierFlags: event.modifierFlags
+        )
+    }
+
+    private func forwardMousePosition(
+        _ event: NSEvent,
+        surface: ghostty_surface_t,
+        modifierFlags: NSEvent.ModifierFlags
+    ) {
         let point = convert(event.locationInWindow, from: nil)
         let y = bounds.height - point.y
-        let mods = Self.ghosttyModifierFlags(for: event.modifierFlags)
-        ghostty_surface_mouse_pos(surface, point.x, y, mods)
+        let mods = Self.ghosttyModifierFlags(for: modifierFlags)
+        ghosttySurfaceHooks.sendMousePosition(surface, point.x, y, mods)
     }
 
     /// Forwards the current mouse position using the window's live cursor
@@ -1253,8 +1282,17 @@ final class TerminalHostView: NSView {
         let point = convert(windowPoint, from: nil)
         let y = bounds.height - point.y
         let mods = Self.ghosttyModifierFlags(for: modifierFlags)
-        ghostty_surface_mouse_pos(ghosttySurface, point.x, y, mods)
+        ghosttySurfaceHooks.sendMousePosition(ghosttySurface, point.x, y, mods)
         return true
+    }
+
+    @discardableResult
+    private func forwardCurrentMouseHoverPosition(
+        modifierFlags: NSEvent.ModifierFlags
+    ) -> Bool {
+        forwardCurrentMousePosition(
+            modifierFlags: Self.ghosttyLinkHoverModifierFlags(for: modifierFlags)
+        )
     }
 
     @discardableResult
@@ -1417,6 +1455,17 @@ final class TerminalHostView: NSView {
         if rawFlags & UInt(NX_DEVICERALTKEYMASK) != 0 { raw |= GHOSTTY_MODS_ALT_RIGHT.rawValue }
         if rawFlags & UInt(NX_DEVICERCMDKEYMASK) != 0 { raw |= GHOSTTY_MODS_SUPER_RIGHT.rawValue }
         return ghostty_input_mods_e(rawValue: raw)
+    }
+
+    static func ghosttyLinkHoverModifierFlags(
+        for flags: NSEvent.ModifierFlags
+    ) -> NSEvent.ModifierFlags {
+        guard flags.contains(.command), flags.contains(.shift) else {
+            return flags
+        }
+
+        let rightShiftMask = NSEvent.ModifierFlags(rawValue: UInt(NX_DEVICERSHIFTKEYMASK))
+        return flags.subtracting([.shift, rightShiftMask])
     }
 
     private static func ghosttyConsumedModifierFlags(
