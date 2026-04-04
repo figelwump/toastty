@@ -734,7 +734,12 @@ final class DisplayShortcutInterceptor {
 
     static func resizeSplitDirection(for event: NSEvent) -> SplitResizeDirection? {
         guard event.type == .keyDown, event.isARepeat == false else { return nil }
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        // AppKit marks arrow-key events with .numericPad even on the main
+        // keyboard, so strip that flag before matching the app-owned chord.
+        let modifiers = event
+            .modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting(.numericPad)
         guard modifiers == [.command, .control] else { return nil }
 
         switch Int(event.keyCode) {

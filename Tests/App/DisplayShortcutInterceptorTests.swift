@@ -201,12 +201,12 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
     func testResizeSplitDirectionMatchesCommandControlArrowsOnly() throws {
         let leftArrow = try makeKeyEvent(
             characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
-            modifiers: [.command, .control],
+            modifiers: [.command, .control, .numericPad],
             keyCode: 0x7B
         )
         let upArrow = try makeKeyEvent(
             characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
-            modifiers: [.command, .control],
+            modifiers: [.command, .control, .numericPad],
             keyCode: 0x7E
         )
         let plainLeftArrow = try makeKeyEvent(
@@ -214,9 +214,14 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             modifiers: [.control],
             keyCode: 0x7B
         )
+        let shiftedLeftArrow = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+            modifiers: [.command, .control, .shift, .numericPad],
+            keyCode: 0x7B
+        )
         let repeatedRightArrow = try makeKeyEvent(
             characters: String(UnicodeScalar(NSRightArrowFunctionKey)!),
-            modifiers: [.command, .control],
+            modifiers: [.command, .control, .numericPad],
             keyCode: 0x7C,
             isARepeat: true
         )
@@ -224,6 +229,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertEqual(DisplayShortcutInterceptor.resizeSplitDirection(for: leftArrow), .left)
         XCTAssertEqual(DisplayShortcutInterceptor.resizeSplitDirection(for: upArrow), .up)
         XCTAssertNil(DisplayShortcutInterceptor.resizeSplitDirection(for: plainLeftArrow))
+        XCTAssertNil(DisplayShortcutInterceptor.resizeSplitDirection(for: shiftedLeftArrow))
         XCTAssertNil(DisplayShortcutInterceptor.resizeSplitDirection(for: repeatedRightArrow))
     }
 
@@ -341,6 +347,16 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let workspaceBeforeResize = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         let browserPanelID = try XCTUnwrap(workspaceBeforeResize.focusedPanelID)
         let initialRatio = try XCTUnwrap(rootSplitRatio(in: workspaceBeforeResize))
+        let leftArrowEvent = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+            modifiers: [.command, .control, .numericPad],
+            keyCode: 0x7B
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: leftArrowEvent, appOwnedWindowID: windowID),
+            .resizeSplit(.left)
+        )
 
         XCTAssertTrue(interceptor.handle(.resizeSplit(.left), appOwnedWindowID: windowID))
 
