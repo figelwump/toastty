@@ -6,7 +6,7 @@ public struct AgentProfile: Codable, Equatable, Hashable, Identifiable, Sendable
     public let argv: [String]
     public let manualCommandNames: [String]
     /// Single lowercase alphanumeric character used as a keyboard shortcut.
-    /// Launch: ⌘⌃<key>.
+    /// Launch: ⌘⌥<key>.
     public let shortcutKey: Character?
 
     public init(

@@ -42,7 +42,7 @@ public enum AppAction: Equatable, Sendable {
     case detachPanelToNewWindow(panelID: UUID)
     case closePanel(panelID: UUID)
     case reopenLastClosedPanel(workspaceID: UUID)
-    case toggleAuxPanel(workspaceID: UUID, kind: PanelKind)
+    case createWebPanel(workspaceID: UUID, panel: WebPanelState, placement: WebPanelPlacement)
     case toggleFocusedPanelMode(workspaceID: UUID)
     case setConfiguredTerminalFont(points: Double?)
     case setDefaultTerminalProfile(profileID: String?)
@@ -62,6 +62,7 @@ public enum AppAction: Equatable, Sendable {
     case equalizeLayoutSplits(workspaceID: UUID)
     case createTerminalPanel(workspaceID: UUID, slotID: UUID)
     case updateTerminalPanelMetadata(panelID: UUID, title: String?, cwd: String?)
+    case updateWebPanelMetadata(panelID: UUID, title: String?, url: String?)
     case recordDesktopNotification(workspaceID: UUID, panelID: UUID?)
     case markPanelNotificationsRead(workspaceID: UUID, panelID: UUID)
     case toggleSidebar(windowID: UUID)
@@ -106,8 +107,8 @@ public extension AppAction {
             return "closePanel"
         case .reopenLastClosedPanel:
             return "reopenLastClosedPanel"
-        case .toggleAuxPanel:
-            return "toggleAuxPanel"
+        case .createWebPanel:
+            return "createWebPanel"
         case .toggleFocusedPanelMode:
             return "toggleFocusedPanelMode"
         case .setConfiguredTerminalFont:
@@ -138,6 +139,8 @@ public extension AppAction {
             return "createTerminalPanel"
         case .updateTerminalPanelMetadata:
             return "updateTerminalPanelMetadata"
+        case .updateWebPanelMetadata:
+            return "updateWebPanelMetadata"
         case .recordDesktopNotification:
             return "recordDesktopNotification"
         case .markPanelNotificationsRead:

@@ -90,13 +90,6 @@ extension WorkspaceState {
         return layoutTree.allSlotInfos.first?.slotID
     }
 
-    func auxiliaryColumnSlotID(for auxPanelIDs: Set<UUID>) -> UUID? {
-        guard auxPanelIDs.isEmpty == false else { return nil }
-        return layoutTree.allSlotInfos.last(where: { slot in
-            auxPanelIDs.contains(slot.panelID)
-        })?.slotID
-    }
-
     func focusedPanelIDAfterClosing(
         closedPanelID: UUID,
         closedPanelWasFocused: Bool,
@@ -152,6 +145,19 @@ extension WorkspaceState {
 
             tabsByID[tabID] = tab
         }
+    }
+}
+
+extension WorkspaceTabState {
+    func reopenSlotID(preferred preferredSlotID: UUID) -> UUID? {
+        if layoutTree.slotNode(slotID: preferredSlotID) != nil {
+            return preferredSlotID
+        }
+        if let focusedPanelID,
+           let focusedSlot = layoutTree.slotContaining(panelID: focusedPanelID) {
+            return focusedSlot.slotID
+        }
+        return layoutTree.allSlotInfos.first?.slotID
     }
 }
 

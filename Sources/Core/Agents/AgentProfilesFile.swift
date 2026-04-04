@@ -72,7 +72,7 @@ public enum AgentProfilesFile {
         #                        should shim for typed launches of built-in
         #                        Codex/Claude wrappers. Use basenames only,
         #                        with no paths or spaces.
-        #   shortcutKey  — (optional) single letter or digit; registers ⌘⌃<key>.
+        #   shortcutKey  — (optional) single letter or digit; registers ⌘⌥<key>.
         #
         # Edit these examples to match your local setup.
         #

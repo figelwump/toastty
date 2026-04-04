@@ -152,6 +152,10 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return false }
             return self.delegate?.activatePanelIfNeeded(self.panelID) ?? false
         }
+        terminalHostView.openCommandClickLink = { [weak self] url in
+            guard let self else { return false }
+            return self.delegate?.openCommandClickLink(url, from: self.panelID) ?? false
+        }
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }
             return self.delegate?.prepareImageFileDrop(from: urls, targetPanelID: self.panelID)
@@ -672,6 +676,7 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
         requestedFocus = false
         #if TOASTTY_HAS_GHOSTTY_KIT
         terminalHostView.activatePanelIfNeeded = nil
+        terminalHostView.openCommandClickLink = nil
         #endif
         fallbackView.removeFromSuperview()
         hostedView.removeFromSuperview()

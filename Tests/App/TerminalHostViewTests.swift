@@ -519,6 +519,77 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(window.firstResponder === hostView)
     }
 
+    func testCommandClickHoveredLinkOpensViaAppCallbackOnMouseUp() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openedURL: URL?
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { url in
+            openedURL = url
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+    }
+
+    func testCommandClickHoveredLinkDragCancelsOpen() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openCallCount = 0
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { _ in
+            openCallCount += 1
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseDragged(
+            with: try makeMouseEvent(
+                type: .leftMouseDragged,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+
+        XCTAssertEqual(openCallCount, 0)
+    }
+
     func testRightMouseDownActivatesPanelBeforeFocusingHostView() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()

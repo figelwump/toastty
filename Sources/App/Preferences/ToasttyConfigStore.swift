@@ -5,12 +5,15 @@ struct ToasttyConfig: Equatable {
     var terminalFontSizePoints: Double?
     var defaultTerminalProfileID: String?
     var enableAgentCommandShims = true
+    var urlRoutingPreferences = URLRoutingPreferences()
 }
 
 enum ToasttyConfigStore {
     private static let terminalFontSizeKey = "terminal-font-size"
     private static let defaultTerminalProfileKey = "default-terminal-profile"
     private static let enableAgentCommandShimsKey = "enable-agent-command-shims"
+    private static let urlOpeningDestinationKey = "url-opening-destination"
+    private static let urlOpeningBrowserPlacementKey = "url-opening-browser-placement"
     private static let configDirectoryName = ".toastty"
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
@@ -137,6 +140,16 @@ enum ToasttyConfigStore {
                 guard let parsed = parseBool(value) else { continue }
                 config.enableAgentCommandShims = parsed
 
+            case urlOpeningDestinationKey:
+                guard let parsedValue = parseString(value),
+                      let parsed = URLOpenDestination(rawValue: parsedValue) else { continue }
+                config.urlRoutingPreferences.destination = parsed
+
+            case urlOpeningBrowserPlacementKey:
+                guard let parsedValue = parseString(value),
+                      let parsed = URLBrowserOpenPlacement(rawValue: parsedValue) else { continue }
+                config.urlRoutingPreferences.browserPlacement = parsed
+
             default:
                 continue
             }
@@ -166,11 +179,24 @@ enum ToasttyConfigStore {
             "# Set this to false if you do not want Toastty intercepting",
             "# those commands in Toastty terminals.",
             "# enable-agent-command-shims = false",
+            "",
+            "# url-opening-destination controls where Toastty opens app-owned",
+            "# web URLs such as Toastty Help links.",
+            "# Supported values: toastty-browser, system-browser.",
+            "# The default is toastty-browser.",
+            "# url-opening-destination = toastty-browser",
+            "",
+            "# url-opening-browser-placement controls how Toastty places those",
+            "# internally opened browser panels.",
+            "# Supported values: rootRight, newTab.",
+            "# The default is newTab.",
+            "# url-opening-browser-placement = newTab",
         ]
 
         if config.terminalFontSizePoints != nil
             || config.defaultTerminalProfileID != nil
-            || config.enableAgentCommandShims == false {
+            || config.enableAgentCommandShims == false
+            || config.urlRoutingPreferences != URLRoutingPreferences() {
             lines.append("")
         }
 
@@ -184,6 +210,18 @@ enum ToasttyConfigStore {
 
         if config.enableAgentCommandShims == false {
             lines.append("\(enableAgentCommandShimsKey) = false")
+        }
+
+        if config.urlRoutingPreferences.destination != .toasttyBrowser {
+            lines.append(
+                "\(urlOpeningDestinationKey) = \(config.urlRoutingPreferences.destination.rawValue)"
+            )
+        }
+
+        if config.urlRoutingPreferences.browserPlacement != .newTab {
+            lines.append(
+                "\(urlOpeningBrowserPlacementKey) = \(config.urlRoutingPreferences.browserPlacement.rawValue)"
+            )
         }
 
         return lines.joined(separator: "\n") + "\n"

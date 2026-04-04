@@ -8,7 +8,7 @@ struct WorkspaceStateTerminalOrderingTests {
         let leftTerminalID = UUID()
         let topRightTerminalID = UUID()
         let bottomRightTerminalID = UUID()
-        let hiddenDiffID = UUID()
+        let hiddenBrowserID = UUID()
 
         let workspace = WorkspaceState(
             id: UUID(),
@@ -31,7 +31,7 @@ struct WorkspaceStateTerminalOrderingTests {
                     ),
                     second: .slot(
                         slotID: UUID(),
-                        panelID: hiddenDiffID
+                        panelID: hiddenBrowserID
                     )
                 )
             ),
@@ -39,7 +39,7 @@ struct WorkspaceStateTerminalOrderingTests {
                 leftTerminalID: .terminal(TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")),
                 topRightTerminalID: .terminal(TerminalPanelState(title: "Terminal 2", shell: "zsh", cwd: "/tmp")),
                 bottomRightTerminalID: .terminal(TerminalPanelState(title: "Terminal 3", shell: "zsh", cwd: "/tmp")),
-                hiddenDiffID: .diff(DiffPanelState()),
+                hiddenBrowserID: .web(WebPanelState(definition: .browser)),
             ],
             focusedPanelID: leftTerminalID
         )

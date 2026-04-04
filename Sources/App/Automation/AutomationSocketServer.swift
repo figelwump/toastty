@@ -1349,6 +1349,17 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return TerminalProfileBinding(profileID: profileID)
         }
 
+        func webPanelPlacement() throws -> WebPanelPlacement {
+            guard let rawValue = args.string("placement")?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  rawValue.isEmpty == false else {
+                return .rootRight
+            }
+            guard let placement = WebPanelPlacement(rawValue: rawValue) else {
+                throw AutomationSocketError.invalidPayload("placement must be one of: rootRight, newTab, splitRight")
+            }
+            return placement
+        }
+
         let didMutate: Bool
         switch actionID {
         case "workspace.tab.new":
@@ -1371,6 +1382,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 allowSelectedTabFallback: true
             )
             didMutate = store.send(.closeWorkspaceTab(workspaceID: resolvedWorkspaceID, tabID: tabID))
+
+        case "workspace.reopen-last-closed-panel":
+            didMutate = store.send(.reopenLastClosedPanel(workspaceID: try workspaceID()))
 
         case "workspace.focus-next-unread-or-active":
             didMutate = store.focusNextUnreadOrActivePanelFromCommand(
@@ -1478,14 +1492,14 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "workspace.equalize-splits":
             didMutate = store.send(.equalizeLayoutSplits(workspaceID: try workspaceID()))
 
-        case "topbar.toggle.diff":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .diff))
-
-        case "topbar.toggle.markdown":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .markdown))
-
-        case "topbar.toggle.scratchpad":
-            didMutate = store.send(.toggleAuxPanel(workspaceID: try workspaceID(), kind: .scratchpad))
+        case "panel.create.browser":
+            didMutate = store.createBrowserPanel(
+                workspaceID: try workspaceID(),
+                request: BrowserPanelCreateRequest(
+                    initialURL: args.string("url"),
+                    placementOverride: try webPanelPlacement()
+                )
+            )
 
         case "topbar.toggle.focused-panel":
             didMutate = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: try workspaceID())

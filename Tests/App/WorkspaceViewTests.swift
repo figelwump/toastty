@@ -46,7 +46,7 @@ final class WorkspaceViewTests: XCTestCase {
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: catalog)
         )
 
-        XCTAssertEqual(model.actions.map(\.helpText), ["Run Codex (⌃⌘C)"])
+        XCTAssertEqual(model.actions.map(\.helpText), ["Run Codex (⌥⌘C)"])
     }
 
     func testWorkspaceAgentTopBarModelShowsAddAgentsButtonWithoutConfiguredProfiles() {
@@ -99,6 +99,65 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertFalse(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 1))
         XCTAssertTrue(WorkspaceView.workspaceTabInstallsContextMenu(tabCount: 2))
+    }
+
+    func testBrowserTitleIconPanelIDUsesFocusedBrowserWhenTabTitleIsDerived() {
+        let panelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .web(
+                    WebPanelState(
+                        definition: .browser,
+                        title: "ESPN"
+                    )
+                )
+            ],
+            focusedPanelID: panelID
+        )
+
+        XCTAssertEqual(WorkspaceView.browserTitleIconPanelID(for: tab), panelID)
+    }
+
+    func testBrowserTitleIconPanelIDSkipsCustomTabTitles() {
+        let panelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            customTitle: "Pinned",
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .web(
+                    WebPanelState(
+                        definition: .browser,
+                        title: "ESPN"
+                    )
+                )
+            ],
+            focusedPanelID: panelID
+        )
+
+        XCTAssertNil(WorkspaceView.browserTitleIconPanelID(for: tab))
+    }
+
+    func testBrowserTitleIconPanelIDSkipsNonBrowserFocusedPanels() {
+        let panelID = UUID()
+        let tab = WorkspaceTabState(
+            id: UUID(),
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: NSHomeDirectory()
+                    )
+                )
+            ],
+            focusedPanelID: panelID
+        )
+
+        XCTAssertNil(WorkspaceView.browserTitleIconPanelID(for: tab))
     }
 
     func testResolvedWorkspaceTabWidthStaysAtIdealWidthWhenThereIsRoom() {
@@ -605,6 +664,8 @@ final class WorkspaceViewTests: XCTestCase {
             homeDirectoryPath: tempHomeDirectory.path,
             environment: [:]
         )
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        webPanelRuntimeRegistry.bind(store: store)
         let agentLaunchService = AgentLaunchService(
             store: store,
             terminalCommandRouter: registry,
@@ -617,6 +678,7 @@ final class WorkspaceViewTests: XCTestCase {
             agentCatalogStore: agentCatalogStore,
             terminalProfileStore: terminalProfileStore,
             terminalRuntimeRegistry: registry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
             agentLaunchService: agentLaunchService,

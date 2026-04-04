@@ -8,6 +8,9 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
     @discardableResult
     func activatePanelIfNeeded(_ panelID: UUID) -> Bool
 
+    @discardableResult
+    func openCommandClickLink(_ url: URL, from panelID: UUID) -> Bool
+
     func prepareImageFileDrop(from urls: [URL], targetPanelID: UUID) -> PreparedImageFileDrop?
 
     @discardableResult
@@ -39,6 +42,13 @@ protocol TerminalSurfaceControllerDelegate: AnyObject {
 extension TerminalSurfaceControllerDelegate {
     @discardableResult
     func activatePanelIfNeeded(_ panelID: UUID) -> Bool {
+        _ = panelID
+        return false
+    }
+
+    @discardableResult
+    func openCommandClickLink(_ url: URL, from panelID: UUID) -> Bool {
+        _ = url
         _ = panelID
         return false
     }

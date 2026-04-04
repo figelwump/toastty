@@ -91,20 +91,14 @@ extension WorkspaceLayoutTerminalPanelSnapshot {
 
 public enum WorkspaceLayoutPanelSnapshot: Equatable, Sendable {
     case terminal(WorkspaceLayoutTerminalPanelSnapshot)
-    case diff(DiffPanelState)
-    case markdown(MarkdownPanelState)
-    case scratchpad(ScratchpadPanelState)
+    case web(WebPanelState)
 
     init(panelState: PanelState) {
         switch panelState {
         case .terminal(let terminalState):
             self = .terminal(WorkspaceLayoutTerminalPanelSnapshot(terminalState: terminalState))
-        case .diff(let diffState):
-            self = .diff(diffState)
-        case .markdown(let markdownState):
-            self = .markdown(markdownState)
-        case .scratchpad(let scratchpadState):
-            self = .scratchpad(scratchpadState)
+        case .web(let webState):
+            self = .web(webState)
         }
     }
 }
@@ -113,9 +107,7 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
     private enum CodingKeys: String, CodingKey {
         case kind
         case terminal
-        case diff
-        case markdown
-        case scratchpad
+        case web
     }
 
     public init(from decoder: Decoder) throws {
@@ -124,12 +116,8 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
         switch kind {
         case .terminal:
             self = .terminal(try container.decode(WorkspaceLayoutTerminalPanelSnapshot.self, forKey: .terminal))
-        case .diff:
-            self = .diff(try container.decode(DiffPanelState.self, forKey: .diff))
-        case .markdown:
-            self = .markdown(try container.decode(MarkdownPanelState.self, forKey: .markdown))
-        case .scratchpad:
-            self = .scratchpad(try container.decode(ScratchpadPanelState.self, forKey: .scratchpad))
+        case .web:
+            self = .web(try container.decode(WebPanelState.self, forKey: .web))
         }
     }
 
@@ -139,15 +127,9 @@ extension WorkspaceLayoutPanelSnapshot: Codable {
         case .terminal(let value):
             try container.encode(PanelKind.terminal, forKey: .kind)
             try container.encode(value, forKey: .terminal)
-        case .diff(let value):
-            try container.encode(PanelKind.diff, forKey: .kind)
-            try container.encode(value, forKey: .diff)
-        case .markdown(let value):
-            try container.encode(PanelKind.markdown, forKey: .kind)
-            try container.encode(value, forKey: .markdown)
-        case .scratchpad(let value):
-            try container.encode(PanelKind.scratchpad, forKey: .kind)
-            try container.encode(value, forKey: .scratchpad)
+        case .web(let value):
+            try container.encode(PanelKind.web, forKey: .kind)
+            try container.encode(value, forKey: .web)
         }
     }
 }
@@ -219,10 +201,6 @@ public struct WorkspaceLayoutWorkspaceSnapshot: Codable, Equatable, Sendable {
         requiredSelectedTab.focusedPanelID
     }
 
-    public var auxPanelVisibility: Set<PanelKind> {
-        requiredSelectedTab.auxPanelVisibility
-    }
-
     func makeWorkspaceState() -> WorkspaceState {
         return WorkspaceState(
             id: id,
@@ -247,7 +225,6 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         case layoutTree
         case panels
         case focusedPanelID
-        case auxPanelVisibility
     }
 
     public init(from decoder: Decoder) throws {
@@ -268,8 +245,7 @@ extension WorkspaceLayoutWorkspaceSnapshot {
                 id: UUID(),
                 layoutTree: try container.decode(LayoutNode.self, forKey: .layoutTree),
                 panels: try container.decode([UUID: WorkspaceLayoutPanelSnapshot].self, forKey: .panels),
-                focusedPanelID: try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID),
-                auxPanelVisibility: try container.decodeIfPresent(Set<PanelKind>.self, forKey: .auxPanelVisibility) ?? []
+                focusedPanelID: try container.decodeIfPresent(UUID.self, forKey: .focusedPanelID)
             )
             selectedTabID = legacyTab.id
             tabIDs = [legacyTab.id]
@@ -290,7 +266,6 @@ extension WorkspaceLayoutWorkspaceSnapshot {
         try container.encode(legacyTab?.layoutTree, forKey: .layoutTree)
         try container.encode(legacyTab?.panels ?? [:], forKey: .panels)
         try container.encodeIfPresent(legacyTab?.focusedPanelID, forKey: .focusedPanelID)
-        try container.encode(legacyTab?.auxPanelVisibility ?? [], forKey: .auxPanelVisibility)
     }
 
     private var requiredSelectedTab: WorkspaceLayoutTabSnapshot {
@@ -307,22 +282,19 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
     public var layoutTree: LayoutNode
     public var panels: [UUID: WorkspaceLayoutPanelSnapshot]
     public var focusedPanelID: UUID?
-    public var auxPanelVisibility: Set<PanelKind>
 
     public init(
         id: UUID,
         customTitle: String? = nil,
         layoutTree: LayoutNode,
         panels: [UUID: WorkspaceLayoutPanelSnapshot],
-        focusedPanelID: UUID?,
-        auxPanelVisibility: Set<PanelKind>
+        focusedPanelID: UUID?
     ) {
         self.id = id
         self.customTitle = customTitle
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
-        self.auxPanelVisibility = auxPanelVisibility
     }
 
     init(tab: WorkspaceTabState) {
@@ -333,7 +305,6 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
             partialResult[entry.key] = WorkspaceLayoutPanelSnapshot(panelState: entry.value)
         }
         focusedPanelID = tab.focusedPanelID
-        auxPanelVisibility = tab.auxPanelVisibility
     }
 
     func makeWorkspaceTabState() -> WorkspaceTabState {
@@ -344,7 +315,6 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
             layoutTree: layoutTree,
             panels: restoredPanels,
             focusedPanelID: focusedPanelID,
-            auxPanelVisibility: auxPanelVisibility,
             focusedPanelModeActive: false,
             unreadPanelIDs: [],
             recentlyClosedPanels: []
@@ -373,12 +343,8 @@ public struct WorkspaceLayoutTabSnapshot: Codable, Equatable, Identifiable, Send
                         profileBinding: terminalSnapshot.profileBinding
                     )
                 )
-            case .diff(let diffState):
-                partialResult[panelID] = .diff(diffState)
-            case .markdown(let markdownState):
-                partialResult[panelID] = .markdown(markdownState)
-            case .scratchpad(let scratchpadState):
-                partialResult[panelID] = .scratchpad(scratchpadState)
+            case .web(let webState):
+                partialResult[panelID] = .web(webState)
             }
         }
     }

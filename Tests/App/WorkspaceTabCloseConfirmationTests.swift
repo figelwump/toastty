@@ -72,7 +72,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
     func testAssessmentIgnoresNonTerminalPanels() {
         let (tab, panelIDs) = makeTab(panelStates: [
             makeTerminalPanelState(title: "Terminal 1"),
-            .markdown(MarkdownPanelState()),
+            .web(WebPanelState(definition: .browser)),
         ])
 
         let assessment = WorkspaceTabCloseConfirmation.assess(

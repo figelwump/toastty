@@ -107,6 +107,26 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command, .shift]
     )
 
+    static let browserOpenLocation = ToasttyKeyboardShortcut(
+        "l",
+        modifiers: [.command]
+    )
+
+    static let newBrowser = ToasttyKeyboardShortcut(
+        "b",
+        modifiers: [.command, .control]
+    )
+
+    static let newBrowserTab = ToasttyKeyboardShortcut(
+        "b",
+        modifiers: [.command, .control, .shift]
+    )
+
+    static let browserReload = ToasttyKeyboardShortcut(
+        "r",
+        modifiers: [.command]
+    )
+
     static let focusNextUnreadOrActivePanel = ToasttyKeyboardShortcut(
         "a",
         modifiers: [.command, .shift]
@@ -130,6 +150,26 @@ enum ToasttyKeyboardShortcuts {
     static let focusNextPane = ToasttyKeyboardShortcut(
         "]",
         modifiers: [.command]
+    )
+
+    static let focusPaneLeft = ToasttyKeyboardShortcut(
+        .leftArrow,
+        modifiers: [.command, .option]
+    )
+
+    static let focusPaneRight = ToasttyKeyboardShortcut(
+        .rightArrow,
+        modifiers: [.command, .option]
+    )
+
+    static let focusPaneUp = ToasttyKeyboardShortcut(
+        .upArrow,
+        modifiers: [.command, .option]
+    )
+
+    static let focusPaneDown = ToasttyKeyboardShortcut(
+        .downArrow,
+        modifiers: [.command, .option]
     )
 
     static let resizeSplitLeft = ToasttyKeyboardShortcut(

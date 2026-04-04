@@ -99,7 +99,8 @@ public struct ProfileShortcutRegistry: Equatable, Sendable {
         terminalProfilesFilePath: String,
         agentProfiles: AgentCatalog,
         agentProfilesFilePath: String,
-        agentShortcutModifiers: ShortcutModifierSet = [.command, .control]
+        terminalSplitBaseModifiers: ShortcutModifierSet = [.command, .option],
+        agentShortcutModifiers: ShortcutModifierSet = [.command, .option]
     ) {
         struct Candidate: Hashable {
             let actionID: ProfileShortcutActionID
@@ -127,12 +128,15 @@ public struct ProfileShortcutRegistry: Equatable, Sendable {
                 filePath: terminalProfilesFilePath
             )
             append(
-                chord: ShortcutChord(key: shortcutKey, modifiers: [.command, .control]),
+                chord: ShortcutChord(key: shortcutKey, modifiers: terminalSplitBaseModifiers),
                 actionID: .terminalProfileSplit(profileID: profile.id, direction: .right),
                 source: source
             )
             append(
-                chord: ShortcutChord(key: shortcutKey, modifiers: [.command, .control, .shift]),
+                chord: ShortcutChord(
+                    key: shortcutKey,
+                    modifiers: terminalSplitBaseModifiers.union(.shift)
+                ),
                 actionID: .terminalProfileSplit(profileID: profile.id, direction: .down),
                 source: source
             )

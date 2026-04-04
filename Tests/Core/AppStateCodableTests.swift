@@ -142,7 +142,6 @@ struct AppStateCodableTests {
                         ),
                     ],
                     focusedPanelID: panelID,
-                    auxPanelVisibility: [.diff],
                     unreadPanelIDs: [panelID],
                     unreadNotificationCount: 3,
                     recentlyClosedPanels: [
@@ -179,7 +178,6 @@ struct AppStateCodableTests {
         #expect(decodedWorkspace.tabIDs == [decodedTabID])
         #expect(decodedWorkspace.selectedTabID == decodedTabID)
         #expect(decodedWorkspace.focusedPanelID == panelID)
-        #expect(decodedWorkspace.auxPanelVisibility == [.diff])
         #expect(decodedWorkspace.unreadWorkspaceNotificationCount == 3)
         #expect(decodedWorkspace.unreadPanelIDs == [panelID])
         #expect(decodedWorkspace.focusedPanelModeActive == false)
@@ -256,6 +254,76 @@ struct AppStateCodableTests {
         let fallbackLabel = try #require(fallbackTab.panels[panelID]?.notificationLabel)
         #expect(fallbackTab.displayTitle == fallbackLabel)
     }
+
+    @Test
+    func closedPanelRecordCodablePreservesRestoreTabMetadata() throws {
+        let workspaceID = UUID()
+        let historyTabID = UUID()
+        let historyPanelID = UUID()
+        let historySlotID = UUID()
+        let sourceTabID = UUID()
+        let predecessorTabID = UUID()
+        let successorTabID = UUID()
+
+        let historyTab = WorkspaceTabState(
+            id: historyTabID,
+            layoutTree: .slot(slotID: historySlotID, panelID: historyPanelID),
+            panels: [
+                historyPanelID: .terminal(
+                    TerminalPanelState(title: "Terminal 1", shell: "zsh", cwd: "/tmp")
+                ),
+            ],
+            focusedPanelID: historyPanelID,
+            recentlyClosedPanels: [
+                ClosedPanelRecord(
+                    panelState: .web(
+                        WebPanelState(
+                            definition: .browser,
+                            title: "Docs",
+                            initialURL: "https://example.com/docs"
+                        )
+                    ),
+                    closedAt: Date(timeIntervalSince1970: 1_710_000_002),
+                    sourceSlotID: UUID(),
+                    sourceTabID: sourceTabID,
+                    sourceTabIndex: 1,
+                    sourceTabPredecessorID: predecessorTabID,
+                    sourceTabSuccessorID: successorTabID,
+                    sourceTabCustomTitle: "  Pinned Docs  "
+                ),
+            ]
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: UUID(),
+                    frame: CGRectCodable(x: 40, y: 60, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: WorkspaceState(
+                    id: workspaceID,
+                    title: "Workspace 1",
+                    selectedTabID: historyTabID,
+                    tabIDs: [historyTabID],
+                    tabsByID: [historyTabID: historyTab]
+                ),
+            ],
+            selectedWindowID: nil,
+            configuredTerminalFontPoints: nil
+        )
+
+        let decoded = try JSONDecoder().decode(AppState.self, from: JSONEncoder().encode(state))
+        let decodedRecord = try #require(decoded.workspacesByID[workspaceID]?.recentlyClosedPanels.first)
+        #expect(decodedRecord.sourceTabID == sourceTabID)
+        #expect(decodedRecord.sourceTabIndex == 1)
+        #expect(decodedRecord.sourceTabPredecessorID == predecessorTabID)
+        #expect(decodedRecord.sourceTabSuccessorID == successorTabID)
+        #expect(decodedRecord.sourceTabCustomTitle == "Pinned Docs")
+    }
 }
 
 private struct LegacyAppStatePayload: Codable {
@@ -273,7 +341,6 @@ private struct LegacyWorkspacePayload: Codable {
     let layoutTree: LayoutNode
     let panels: [UUID: PanelState]
     let focusedPanelID: UUID?
-    let auxPanelVisibility: Set<PanelKind>
     let unreadPanelIDs: Set<UUID>
     let unreadNotificationCount: Int
     let recentlyClosedPanels: [ClosedPanelRecord]
@@ -284,7 +351,6 @@ private struct LegacyWorkspacePayload: Codable {
         layoutTree: LayoutNode,
         panels: [UUID: PanelState],
         focusedPanelID: UUID?,
-        auxPanelVisibility: Set<PanelKind>,
         unreadPanelIDs: Set<UUID>,
         unreadNotificationCount: Int,
         recentlyClosedPanels: [ClosedPanelRecord]
@@ -294,7 +360,6 @@ private struct LegacyWorkspacePayload: Codable {
         self.layoutTree = layoutTree
         self.panels = panels
         self.focusedPanelID = focusedPanelID
-        self.auxPanelVisibility = auxPanelVisibility
         self.unreadPanelIDs = unreadPanelIDs
         self.unreadNotificationCount = unreadNotificationCount
         self.recentlyClosedPanels = recentlyClosedPanels
@@ -306,7 +371,6 @@ private struct LegacyWorkspacePayload: Codable {
         layoutTree = workspace.layoutTree
         panels = workspace.panels
         focusedPanelID = workspace.focusedPanelID
-        auxPanelVisibility = workspace.auxPanelVisibility
         unreadPanelIDs = workspace.unreadPanelIDs
         unreadNotificationCount = workspace.unreadWorkspaceNotificationCount
         recentlyClosedPanels = workspace.recentlyClosedPanels

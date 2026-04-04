@@ -43,6 +43,31 @@ struct PendingPanelFlashRequest: Equatable {
     let panelID: UUID
 }
 
+struct BrowserPanelCreateRequest: Equatable, Sendable {
+    static let defaultPlacement: WebPanelPlacement = .rootRight
+
+    var initialURL: String?
+    var placementOverride: WebPanelPlacement?
+
+    init(
+        initialURL: String? = nil,
+        placementOverride: WebPanelPlacement? = nil
+    ) {
+        self.initialURL = WebPanelState.normalizedInitialURL(initialURL)
+        self.placementOverride = placementOverride
+    }
+
+    var resolvedPlacement: WebPanelPlacement {
+        placementOverride ?? Self.defaultPlacement
+    }
+}
+
+struct FocusedBrowserPanelCommandSelection: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -62,6 +87,7 @@ final class AppStore: ObservableObject {
 
     @Published private(set) var state: AppState
     @Published private(set) var hasEverLaunchedAgent: Bool
+    @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
 
     /// Set by workspace rename commands; the sidebar in the target window
     /// observes this to enter inline-rename mode for the target workspace.
@@ -209,6 +235,24 @@ final class AppStore: ObservableObject {
         createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) != nil
     }
 
+    func focusedBrowserPanelSelection(
+        preferredWindowID: UUID?
+    ) -> FocusedBrowserPanelCommandSelection? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let panelID = selection.workspace.focusedPanelID,
+              selection.workspace.slotID(containingPanelID: panelID) != nil,
+              case .web(let webState) = selection.workspace.panels[panelID],
+              webState.definition == .browser else {
+            return nil
+        }
+
+        return FocusedBrowserPanelCommandSelection(
+            windowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            panelID: panelID
+        )
+    }
+
     @discardableResult
     func createWorkspaceTabFromCommand(preferredWindowID: UUID?) -> Bool {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
@@ -220,6 +264,42 @@ final class AppStore: ObservableObject {
                 workspaceID: selection.workspace.id,
                 seed: windowLaunchSeed(from: selection)
             )
+        )
+    }
+
+    @discardableResult
+    func createBrowserPanel(
+        workspaceID: UUID,
+        request: BrowserPanelCreateRequest
+    ) -> Bool {
+        guard state.workspacesByID[workspaceID] != nil else {
+            return false
+        }
+
+        return send(
+            .createWebPanel(
+                workspaceID: workspaceID,
+                panel: WebPanelState(
+                    definition: .browser,
+                    initialURL: request.initialURL
+                ),
+                placement: request.resolvedPlacement
+            )
+        )
+    }
+
+    @discardableResult
+    func createBrowserPanelFromCommand(
+        preferredWindowID: UUID?,
+        request: BrowserPanelCreateRequest
+    ) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        return createBrowserPanel(
+            workspaceID: selection.workspace.id,
+            request: request
         )
     }
 
@@ -451,6 +531,20 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
+    func focusPanel(containing panelID: UUID) -> Bool {
+        guard let selection = state.workspaceSelection(containingPanelID: panelID) else {
+            return false
+        }
+
+        return focusPanel(
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            panelID: panelID,
+            flashPanelOnSuccess: false
+        )
+    }
+
+    @discardableResult
     func confirmWorkspaceClose(windowID: UUID, workspaceID: UUID) -> Bool {
         let request = PendingWorkspaceCloseRequest(windowID: windowID, workspaceID: workspaceID)
         if pendingCloseWorkspaceRequest == request {
@@ -563,6 +657,25 @@ final class AppStore: ObservableObject {
         hasEverLaunchedAgent = true
         guard persistUserSettings else { return }
         ToasttySettingsStore.persistHasEverLaunchedAgent(true)
+    }
+
+    func setURLRoutingPreferences(_ preferences: URLRoutingPreferences) {
+        urlRoutingPreferences = preferences
+    }
+
+    @discardableResult
+    func openURLInBrowser(
+        preferredWindowID: UUID?,
+        url: URL,
+        placement: URLBrowserOpenPlacement
+    ) -> Bool {
+        createBrowserPanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            request: BrowserPanelCreateRequest(
+                initialURL: url.absoluteString,
+                placementOverride: placement.webPanelPlacement
+            )
+        )
     }
 
     private func createWorkspaceCommandTarget(preferredWindowID: UUID?) -> WorkspaceCommandTarget? {

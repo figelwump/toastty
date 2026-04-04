@@ -40,7 +40,7 @@ struct ProfileShortcutRegistryTests {
                     profileID: "zmx",
                     direction: .right
                 )
-            ) == ShortcutChord(key: "z", modifiers: [.command, .control])
+            ) == ShortcutChord(key: "z", modifiers: [.command, .option])
         )
         #expect(
             registry.chord(
@@ -48,13 +48,13 @@ struct ProfileShortcutRegistryTests {
                     profileID: "zmx",
                     direction: .down
                 )
-            ) == ShortcutChord(key: "z", modifiers: [.command, .control, .shift])
+            ) == ShortcutChord(key: "z", modifiers: [.command, .option, .shift])
         )
         #expect(registry.conflicts.isEmpty)
     }
 
     @Test
-    func agentProfilesUseCommandControlShortcuts() {
+    func agentProfilesUseCommandOptionShortcuts() {
         let registry = ProfileShortcutRegistry(
             terminalProfiles: .empty,
             terminalProfilesFilePath: "/tmp/terminal-profiles.toml",
@@ -73,7 +73,7 @@ struct ProfileShortcutRegistryTests {
 
         #expect(
             registry.chord(for: .agentProfileLaunch(profileID: "codex")) ==
-                ShortcutChord(key: "c", modifiers: [.command, .control])
+                ShortcutChord(key: "c", modifiers: [.command, .option])
         )
         #expect(registry.conflicts.isEmpty)
     }
@@ -121,11 +121,11 @@ struct ProfileShortcutRegistryTests {
                     profileID: "zmx",
                     direction: .down
                 )
-            ) == ShortcutChord(key: "z", modifiers: [.command, .control, .shift])
+            ) == ShortcutChord(key: "z", modifiers: [.command, .option, .shift])
         )
         #expect(registry.warningMessages.count == 1)
         #expect(registry.warningMessages[0].contains("agent profile [codex]"))
         #expect(registry.warningMessages[0].contains("terminal profile [zmx]"))
-        #expect(registry.warningMessages[0].contains("⌃⌘Z"))
+        #expect(registry.warningMessages[0].contains("⌥⌘Z"))
     }
 }

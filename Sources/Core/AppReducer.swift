@@ -323,6 +323,25 @@ public struct AppReducer {
             guard let sourceLocation = locatePanel(panelID, in: state) else { return false }
             guard var workspace = state.workspacesByID[sourceLocation.workspaceID] else { return false }
             guard let panelState = workspace.panelState(for: panelID) else { return false }
+            let sourceTabIndex = workspace.tabIDs.firstIndex(of: sourceLocation.tabID)
+            let sourceTabPredecessorID: UUID?
+            if let sourceTabIndex, sourceTabIndex > 0 {
+                sourceTabPredecessorID = workspace.tabIDs[sourceTabIndex - 1]
+            } else {
+                sourceTabPredecessorID = nil
+            }
+            let sourceTabSuccessorID: UUID?
+            if let sourceTabIndex {
+                let successorIndex = sourceTabIndex + 1
+                if workspace.tabIDs.indices.contains(successorIndex) {
+                    sourceTabSuccessorID = workspace.tabIDs[successorIndex]
+                } else {
+                    sourceTabSuccessorID = nil
+                }
+            } else {
+                sourceTabSuccessorID = nil
+            }
+            let sourceTabCustomTitle = workspace.tab(id: sourceLocation.tabID)?.customTitle
             workspace.selectedTabID = sourceLocation.tabID
             let wasFocusedPanel = workspace.focusedPanelID == panelID
             let previousSlotIDBeforeRemoval = wasFocusedPanel
@@ -334,7 +353,12 @@ public struct AppReducer {
                 ClosedPanelRecord(
                     panelState: panelState,
                     closedAt: Date(),
-                    sourceSlotID: sourceLocation.slotID
+                    sourceSlotID: sourceLocation.slotID,
+                    sourceTabID: sourceLocation.tabID,
+                    sourceTabIndex: sourceTabIndex,
+                    sourceTabPredecessorID: sourceTabPredecessorID,
+                    sourceTabSuccessorID: sourceTabSuccessorID,
+                    sourceTabCustomTitle: sourceTabCustomTitle
                 )
             )
             if workspace.recentlyClosedPanels.count > 10 {
@@ -349,7 +373,6 @@ public struct AppReducer {
 
             workspace.panels.removeValue(forKey: panelID)
             workspace.unreadPanelIDs.remove(panelID)
-            workspace.auxPanelVisibility.remove(panelState.kind)
             _ = workspace.updateTab(id: sourceLocation.tabID) { tab in
                 _ = tab.selectedPanelIDs.remove(panelID)
             }
@@ -382,128 +405,77 @@ public struct AppReducer {
 
         case .reopenLastClosedPanel(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard let closedRecord = workspace.recentlyClosedPanels.last else { return false }
+            guard let historyTabID = workspace.resolvedSelectedTabID,
+                  let historyTab = workspace.tab(id: historyTabID),
+                  let closedRecord = historyTab.recentlyClosedPanels.last else { return false }
 
-            if closedRecord.panelState.kind != .terminal,
-               let existingAuxPanelID = workspace.panels.first(where: { $0.value.kind == closedRecord.panelState.kind })?.key {
-                workspace.focusedPanelID = existingAuxPanelID
-                workspace.recentlyClosedPanels.removeLast()
-                workspace.selectedPanelIDs.removeAll()
+            let panelID = UUID()
+
+            if let sourceTabID = closedRecord.sourceTabID,
+               workspace.tab(id: sourceTabID) == nil {
+                var updatedHistoryTab = historyTab
+                updatedHistoryTab.recentlyClosedPanels.removeLast()
+                workspace.tabsByID[historyTabID] = updatedHistoryTab
+
+                let reopenedTab = WorkspaceTabState(
+                    id: sourceTabID,
+                    customTitle: closedRecord.sourceTabCustomTitle,
+                    layoutTree: .slot(slotID: closedRecord.sourceSlotID, panelID: panelID),
+                    panels: [panelID: closedRecord.panelState],
+                    focusedPanelID: panelID
+                )
+                let insertionIndex = Self.reopenedTabInsertionIndex(for: closedRecord, in: workspace)
+                workspace.insertTab(reopenedTab, at: insertionIndex, select: true)
                 commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
                 return true
             }
 
-            guard let targetSlotID = workspace.reopenSlotID(preferred: closedRecord.sourceSlotID) else {
+            let targetTabID: UUID
+            if let sourceTabID = closedRecord.sourceTabID,
+               workspace.tab(id: sourceTabID) != nil {
+                targetTabID = sourceTabID
+            } else {
+                targetTabID = historyTabID
+            }
+
+            guard var targetTab = workspace.tab(id: targetTabID),
+                  let targetSlotID = targetTab.reopenSlotID(preferred: closedRecord.sourceSlotID) else {
                 return false
             }
 
-            let panelID = UUID()
-            workspace.panels[panelID] = closedRecord.panelState
-
+            targetTab.panels[panelID] = closedRecord.panelState
             guard splitLeaf(
                 slotID: targetSlotID,
-                in: &workspace.layoutTree,
+                in: &targetTab.layoutTree,
                 insertingPanelID: panelID,
                 orientation: .horizontal,
                 placeInsertedPanelSecond: true
             ) else {
-                workspace.panels.removeValue(forKey: panelID)
                 return false
             }
 
-            workspace.focusedPanelID = panelID
-            if closedRecord.panelState.kind != .terminal {
-                workspace.auxPanelVisibility.insert(closedRecord.panelState.kind)
-            }
-            workspace.recentlyClosedPanels.removeLast()
-            workspace.selectedPanelIDs.removeAll()
-
-            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-            return true
-
-        case .toggleAuxPanel(let workspaceID, let kind):
-            guard kind != .terminal else { return false }
-            guard var workspace = state.workspacesByID[workspaceID] else { return false }
-            guard workspace.focusedPanelModeActive == false else { return false }
-            let selectedTabID = workspace.resolvedSelectedTabID
-
-            if let existingPanelID = workspace.panels.first(where: { $0.value.kind == kind })?.key {
-                let removal = workspace.layoutTree.removingPanel(existingPanelID)
-                guard removal.removed else { return false }
-
-                workspace.panels.removeValue(forKey: existingPanelID)
-                workspace.unreadPanelIDs.remove(existingPanelID)
-                workspace.auxPanelVisibility.remove(kind)
-
-                if let updatedTree = removal.node {
-                    workspace.layoutTree = updatedTree
-                    if workspace.focusedPanelID == existingPanelID {
-                        _ = workspace.synchronizeFocusedPanelToLayout()
-                    }
-                    commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-                } else if let windowID = locateWindowID(containingWorkspaceID: workspaceID, in: state) {
-                    guard let selectedTabID else { return false }
-                    commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
-                    removeWorkspaceTab(
-                        selectedTabID,
-                        workspaceID: workspaceID,
-                        windowID: windowID,
-                        state: &state
-                    )
-                }
-                return true
-            }
-
-            guard let auxPanelState = makeAuxPanelState(for: kind) else { return false }
-            let existingAuxPanelIDs = auxPanelIDs(in: workspace)
-            let panelID = UUID()
-            workspace.panels[panelID] = auxPanelState
-
-            if existingAuxPanelIDs.isEmpty {
-                // First aux panel always gets a dedicated right column regardless of terminal slot layout.
-                let terminalTree = workspace.layoutTree
-                let auxLeaf = LayoutNode.slot(
-                    slotID: UUID(),
-                    panelID: panelID
-                )
-                workspace.layoutTree = .split(
-                    nodeID: UUID(),
-                    orientation: .horizontal,
-                    ratio: 0.7,
-                    first: terminalTree,
-                    second: auxLeaf
-                )
+            targetTab.focusedPanelID = panelID
+            targetTab.selectedPanelIDs.removeAll()
+            if historyTabID == targetTabID {
+                targetTab.recentlyClosedPanels.removeLast()
             } else {
-                guard let auxColumnSlotID = workspace.auxiliaryColumnSlotID(for: existingAuxPanelIDs) else {
-                    workspace.panels.removeValue(forKey: panelID)
-                    return false
-                }
-                guard let existingAuxLeaf = workspace.layoutTree.slotNode(slotID: auxColumnSlotID) else {
-                    workspace.panels.removeValue(forKey: panelID)
-                    return false
-                }
-
-                let auxLeaf = LayoutNode.slot(
-                    slotID: UUID(),
-                    panelID: panelID
-                )
-                let splitRightColumn = LayoutNode.split(
-                    nodeID: UUID(),
-                    orientation: .vertical,
-                    ratio: 0.5,
-                    first: existingAuxLeaf,
-                    second: auxLeaf
-                )
-
-                guard workspace.layoutTree.replaceSlot(slotID: auxColumnSlotID, with: splitRightColumn) else {
-                    workspace.panels.removeValue(forKey: panelID)
-                    return false
-                }
+                var updatedHistoryTab = historyTab
+                updatedHistoryTab.recentlyClosedPanels.removeLast()
+                workspace.tabsByID[historyTabID] = updatedHistoryTab
             }
 
-            workspace.auxPanelVisibility.insert(kind)
+            workspace.tabsByID[targetTabID] = targetTab
+            workspace.selectedTabID = targetTabID
             commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
             return true
+
+        case .createWebPanel(let workspaceID, let panel, let placement):
+            return createWebPanel(
+                workspaceID: workspaceID,
+                panel: panel,
+                placement: placement,
+                state: &state
+            )
 
         case .toggleFocusedPanelMode(let workspaceID):
             guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -647,6 +619,36 @@ public struct AppReducer {
             guard didMutate else { return false }
             _ = workspace.updateTab(id: tabID) { tab in
                 tab.panels[panelID] = .terminal(terminalState)
+            }
+            commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
+            return true
+
+        case .updateWebPanelMetadata(let panelID, let title, let url):
+            guard let location = locatePanel(panelID, in: state) else { return false }
+            guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
+            guard let tabID = workspace.tabID(containingPanelID: panelID),
+                  case .web(var webState) = workspace.tab(id: tabID)?.panels[panelID] else { return false }
+
+            var didMutate = false
+
+            let resolvedTitle = WebPanelState.resolvedTitle(
+                definition: webState.definition,
+                title: title
+            )
+            if webState.title != resolvedTitle {
+                webState.title = resolvedTitle
+                didMutate = true
+            }
+
+            let normalizedCurrentURL = WebPanelState.normalizedCurrentURL(url)
+            if webState.currentURL != normalizedCurrentURL {
+                webState.currentURL = normalizedCurrentURL
+                didMutate = true
+            }
+
+            guard didMutate else { return false }
+            _ = workspace.updateTab(id: tabID) { tab in
+                tab.panels[panelID] = .web(webState)
             }
             commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
             return true
@@ -981,14 +983,6 @@ public struct AppReducer {
         state.windows.first(where: { $0.workspaceIDs.contains(workspaceID) })?.id
     }
 
-    private static func auxPanelIDs(in workspace: WorkspaceState) -> Set<UUID> {
-        Set(
-            workspace.panels.compactMap { panelID, panelState in
-                auxiliaryPanelKinds.contains(panelState.kind) ? panelID : nil
-            }
-        )
-    }
-
     private static func splitLeaf(
         slotID: UUID,
         in layoutTree: inout LayoutNode,
@@ -1078,8 +1072,7 @@ public struct AppReducer {
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
-        guard workspace.tabsByID[tabID] != nil else { return false }
-        _ = workspace.removeTab(id: tabID)
+        guard let removedTab = workspace.removeTab(id: tabID) else { return false }
 
         if workspace.tabIDs.isEmpty {
             switch emptyWorkspaceDisposition {
@@ -1094,6 +1087,16 @@ public struct AppReducer {
                     windowID: windowID,
                     emptyWindowDisposition: emptyWindowDisposition,
                     state: &state
+                )
+            }
+        }
+
+        if removedTab.recentlyClosedPanels.isEmpty == false,
+           let destinationTabID = workspace.resolvedSelectedTabID {
+            _ = workspace.updateTab(id: destinationTabID) { tab in
+                tab.recentlyClosedPanels = mergeClosedPanelHistory(
+                    tab.recentlyClosedPanels,
+                    with: removedTab.recentlyClosedPanels
                 )
             }
         }
@@ -1144,6 +1147,39 @@ public struct AppReducer {
         return "Workspace \(currentMax + 1)"
     }
 
+    private static func mergeClosedPanelHistory(
+        _ existing: [ClosedPanelRecord],
+        with incoming: [ClosedPanelRecord]
+    ) -> [ClosedPanelRecord] {
+        var merged = existing + incoming
+        merged.sort { $0.closedAt < $1.closedAt }
+        if merged.count > 10 {
+            merged.removeFirst(merged.count - 10)
+        }
+        return merged
+    }
+
+    private static func reopenedTabInsertionIndex(
+        for closedRecord: ClosedPanelRecord,
+        in workspace: WorkspaceState
+    ) -> Int {
+        if let successorID = closedRecord.sourceTabSuccessorID,
+           let successorIndex = workspace.tabIDs.firstIndex(of: successorID) {
+            return successorIndex
+        }
+
+        if let predecessorID = closedRecord.sourceTabPredecessorID,
+           let predecessorIndex = workspace.tabIDs.firstIndex(of: predecessorID) {
+            return predecessorIndex + 1
+        }
+
+        if let sourceTabIndex = closedRecord.sourceTabIndex {
+            return min(max(0, sourceTabIndex), workspace.tabIDs.count)
+        }
+
+        return workspace.tabIDs.count
+    }
+
     private static func normalizedWorkspaceTitle(_ value: String?) -> String? {
         normalizedMetadataValue(value)
     }
@@ -1155,20 +1191,81 @@ public struct AppReducer {
         return trimmed
     }
 
-    private static func makeAuxPanelState(for kind: PanelKind) -> PanelState? {
-        switch kind {
-        case .terminal:
-            return nil
-        case .diff:
-            return .diff(DiffPanelState())
-        case .markdown:
-            return .markdown(MarkdownPanelState())
-        case .scratchpad:
-            return .scratchpad(ScratchpadPanelState())
+    private static func createWebPanel(
+        workspaceID: UUID,
+        panel: WebPanelState,
+        placement: WebPanelPlacement,
+        state: inout AppState
+    ) -> Bool {
+        guard var workspace = state.workspacesByID[workspaceID] else { return false }
+
+        switch placement {
+        case .rootRight:
+            let panelID = UUID()
+            let newSlotID = UUID()
+            let newSplitNodeID = UUID()
+            workspace.panels[panelID] = .web(panel)
+            workspace.layoutTree = .split(
+                nodeID: newSplitNodeID,
+                orientation: .horizontal,
+                ratio: 0.5,
+                first: workspace.layoutTree,
+                second: .slot(slotID: newSlotID, panelID: panelID)
+            )
+            workspace.focusedPanelID = panelID
+            workspace.selectedPanelIDs.removeAll()
+            if workspace.focusedPanelModeActive {
+                // Root-right creation is whole-layout by design. When focus mode
+                // is active, promote the new root so the existing subtree and
+                // newly attached browser remain visible together.
+                workspace.focusModeRootNodeID = newSplitNodeID
+            }
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .newTab:
+            let panelID = UUID()
+            let tab = WorkspaceTabState(
+                id: UUID(),
+                layoutTree: .slot(slotID: UUID(), panelID: panelID),
+                panels: [panelID: .web(panel)],
+                focusedPanelID: panelID
+            )
+            workspace.appendTab(tab, select: true)
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
+
+        case .splitRight:
+            guard let focusResolution = workspace.synchronizeFocusedPanelToLayout() else {
+                return false
+            }
+
+            let panelID = UUID()
+            let newSlotID = UUID()
+            let trackedRootNodeID = workspace.effectiveFocusModeRootNodeID
+            workspace.panels[panelID] = .web(panel)
+
+            guard let splitResult = WorkspaceSplitTree(root: workspace.layoutTree).splitting(
+                slotID: focusResolution.slot.slotID,
+                direction: .right,
+                newPanelID: panelID,
+                newSlotID: newSlotID
+            ) else {
+                workspace.panels.removeValue(forKey: panelID)
+                return false
+            }
+
+            workspace.apply(splitTree: splitResult.tree)
+            if workspace.focusedPanelModeActive,
+               trackedRootNodeID == focusResolution.slot.slotID {
+                workspace.focusModeRootNodeID = splitResult.newSplitNodeID
+            }
+            workspace.focusedPanelID = panelID
+            workspace.selectedPanelIDs.removeAll()
+            commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
+            return true
         }
     }
-
-    private static let auxiliaryPanelKinds: Set<PanelKind> = [.diff, .markdown, .scratchpad]
 }
 
 private struct PanelLocation {

@@ -46,7 +46,7 @@ Field reference:
 | `displayName` | yes | Shown in `Terminal > <Profile Name>` menus. |
 | `badge` | no | Panel-header pill label. Defaults to `displayName` when omitted. |
 | `startupCommand` | yes | Sent to the pane's login shell when the pane is created or restored. |
-| `shortcutKey` | no | Single letter or digit. Registers `Cmd+Ctrl+<key>` for Split Right and `Cmd+Ctrl+Shift+<key>` for Split Down. Shortcut keys are case-insensitive and must be unique across profiles. |
+| `shortcutKey` | no | Single letter or digit. Registers `Cmd+Opt+<key>` for Split Right and `Cmd+Opt+Shift+<key>` for Split Down. Shortcut keys are case-insensitive and must be unique across profiles. |
 
 If the file fails to parse at startup, Toastty logs a warning and continues with an empty profile catalog until the file is fixed and reloaded.
 
@@ -74,8 +74,8 @@ Toastty sets these variables before running the profile startup command:
 
 When a profile defines `shortcutKey`, Toastty registers two split actions:
 
-- `Cmd+Ctrl+<key>` for `Split Right`
-- `Cmd+Ctrl+Shift+<key>` for `Split Down`
+- `Cmd+Opt+<key>` for `Split Right`
+- `Cmd+Opt+Shift+<key>` for `Split Down`
 
 These shortcuts point at the same profile-specific actions exposed in the `Terminal` menu.
 

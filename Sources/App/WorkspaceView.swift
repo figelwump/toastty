@@ -57,6 +57,7 @@ struct WorkspaceView: View {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
@@ -173,6 +174,17 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceTabInstallsContextMenu(tabCount: Int) -> Bool {
         tabCount > 0
+    }
+
+    nonisolated static func browserTitleIconPanelID(for tab: WorkspaceTabState) -> UUID? {
+        guard tab.customTitle == nil,
+              let panelID = tab.resolvedFocusedPanelID,
+              case .web(let webState)? = tab.panels[panelID],
+              webState.definition == .browser else {
+            return nil
+        }
+
+        return panelID
     }
 
     nonisolated static func workspaceTabMinimumTotalWidth(
@@ -666,6 +678,7 @@ struct WorkspaceView: View {
                         store: store,
                         terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
+                        webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
                         windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
                         appIsActive: appIsActive,
@@ -720,17 +733,6 @@ struct WorkspaceView: View {
                 }
             }
         }
-    }
-
-    @ViewBuilder
-    private func auxToggle(title: String, systemImage: String, kind: PanelKind, identifier: String) -> some View {
-        let isOn = selectedWorkspace?.auxPanelVisibility.contains(kind) ?? false
-        topBarButton(title: title, systemImage: systemImage, active: isOn) {
-            guard let workspaceID = selectedWorkspace?.id else { return }
-            store.send(.toggleAuxPanel(workspaceID: workspaceID, kind: kind))
-        }
-        .disabled(isFocusedPanelModeActive)
-        .accessibilityIdentifier(identifier)
     }
 
     @ViewBuilder
@@ -1182,6 +1184,15 @@ struct WorkspaceView: View {
                     )
             }
 
+            if let browserPanelID = Self.browserTitleIconPanelID(for: tab) {
+                BrowserTitleIconView(
+                    image: webPanelRuntimeRegistry.browserRuntime(for: browserPanelID).faviconImage,
+                    fallbackSymbolName: "globe",
+                    tintColor: textColor,
+                    size: 12
+                )
+            }
+
             Text(tab.displayTitle)
                 .font(ToastyTheme.fontWorkspaceTab)
                 .foregroundStyle(textColor)
@@ -1555,6 +1566,29 @@ struct WorkspaceView: View {
     }
 }
 
+private struct BrowserTitleIconView: View {
+    let image: NSImage?
+    let fallbackSymbolName: String
+    let tintColor: Color
+    let size: CGFloat
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .interpolation(.high)
+            } else {
+                Image(systemName: fallbackSymbolName)
+                    .font(.system(size: size - 2, weight: .medium))
+                    .foregroundStyle(tintColor.opacity(0.82))
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+    }
+}
+
 private struct PendingWorkspaceTabClose: Identifiable {
     let workspaceID: UUID
     let tabID: UUID
@@ -1856,6 +1890,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
     let appIsActive: Bool
@@ -1885,6 +1920,7 @@ private struct SlotPlacementView: View {
                     store: store,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
@@ -1924,6 +1960,7 @@ private struct PanelCardView: View {
     @ObservedObject var store: AppStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
 
     private var isFocused: Bool {
@@ -1982,12 +2019,8 @@ private struct PanelCardView: View {
                     Color.clear
                 }
 
-            case .diff:
-                auxPanelPlaceholder(title: "Diff Panel")
-            case .markdown:
-                auxPanelPlaceholder(title: "Markdown Panel")
-            case .scratchpad:
-                auxPanelPlaceholder(title: "Scratchpad Panel")
+            case .web(let webState):
+                webPanelBody(state: webState)
             }
         }
         .background(ToastyTheme.surfaceBackground)
@@ -2071,12 +2104,23 @@ private struct PanelCardView: View {
     }
 
     private var panelHeaderTitle: some View {
-        Text(panelLabel)
-            .font(panelTitleFont)
-            .foregroundStyle(panelTitleTextColor)
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
+        HStack(spacing: 6) {
+            if let browserTitleIconImage {
+                BrowserTitleIconView(
+                    image: browserTitleIconImage,
+                    fallbackSymbolName: "globe",
+                    tintColor: panelTitleTextColor,
+                    size: 14
+                )
+            }
+
+            Text(panelLabel)
+                .font(panelTitleFont)
+                .foregroundStyle(panelTitleTextColor)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .accessibilityIdentifier("panel.header.title.\(panelID.uuidString)")
     }
 
     private var panelLabel: String {
@@ -2086,12 +2130,8 @@ private struct PanelCardView: View {
                 return panelSessionStatus.agent.displayName
             }
             return terminalDisplayTitleOverride ?? terminal.displayPanelLabel
-        case .diff:
-            return "Diff Panel"
-        case .markdown:
-            return "Markdown Panel"
-        case .scratchpad:
-            return "Scratchpad Panel"
+        case .web(let webState):
+            return webState.displayPanelLabel
         }
     }
 
@@ -2115,6 +2155,14 @@ private struct PanelCardView: View {
         guard case .terminal = panelState else { return nil }
         guard let shortcutNumber else { return nil }
         return DisplayShortcutConfig.panelFocusShortcutLabel(for: shortcutNumber)
+    }
+
+    private var browserTitleIconImage: NSImage? {
+        guard case .web(let webState) = panelState,
+              webState.definition == .browser else {
+            return nil
+        }
+        return webPanelRuntimeRegistry.browserRuntime(for: panelID).faviconImage
     }
 
     private var showsHeaderSearch: Bool {
@@ -2194,15 +2242,51 @@ private struct PanelCardView: View {
     }
 
     @ViewBuilder
-    private func auxPanelPlaceholder(title: String) -> some View {
-        Text(title)
-            .font(ToastyTheme.fontMonoHeader)
-            .foregroundStyle(ToastyTheme.mutedText)
+    private func webPanelBody(state: WebPanelState) -> some View {
+        if state.definition == .browser {
+            BrowserPanelView(
+                panelID: panelID,
+                webState: state,
+                runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
+                isActivePanel: isFocused,
+                activatePanel: {
+                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                }
+            )
             .frame(
                 maxWidth: .infinity,
                 maxHeight: .infinity,
-                alignment: .leading
+                alignment: .topLeading
             )
+        } else {
+            webPanelPlaceholder(state: state)
+        }
+    }
+
+    @ViewBuilder
+    private func webPanelPlaceholder(state: WebPanelState) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(state.definition.defaultTitle)
+                .font(ToastyTheme.fontMonoHeader)
+                .foregroundStyle(ToastyTheme.primaryText)
+
+            if let url = state.restorableURL {
+                Text(url)
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .textSelection(.enabled)
+            } else {
+                Text("\(state.definition.defaultTitle) runtime not wired yet.")
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(ToastyTheme.mutedText)
+            }
+        }
+        .frame(
+            maxWidth: .infinity,
+            maxHeight: .infinity,
+            alignment: .topLeading
+        )
+        .padding(18)
     }
 
     private func shortcutBadge(_ label: String) -> some View {

@@ -380,6 +380,48 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(commandWorkspace == nil)
 
+            Divider()
+
+            Button("New Browser") {
+                store.createBrowserPanelFromCommand(
+                    preferredWindowID: preferredWindowID,
+                    request: BrowserPanelCreateRequest(
+                        placementOverride: .rootRight
+                    )
+                )
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newBrowser.key,
+                modifiers: ToasttyKeyboardShortcuts.newBrowser.modifiers
+            )
+            .disabled(commandWorkspace == nil)
+
+            Button("New Browser Tab") {
+                store.createBrowserPanelFromCommand(
+                    preferredWindowID: preferredWindowID,
+                    request: BrowserPanelCreateRequest(
+                        placementOverride: .newTab
+                    )
+                )
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.newBrowserTab.key,
+                modifiers: ToasttyKeyboardShortcuts.newBrowserTab.modifiers
+            )
+            .disabled(commandWorkspace == nil)
+
+            Button("New Browser Split") {
+                store.createBrowserPanelFromCommand(
+                    preferredWindowID: preferredWindowID,
+                    request: BrowserPanelCreateRequest(
+                        placementOverride: .splitRight
+                    )
+                )
+            }
+            .disabled(commandWorkspace == nil)
+
+            Divider()
+
             Button("Close Panel") {
                 closeFocusedPanelFromCommandSelection()
             }
@@ -456,6 +498,7 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(canFocusNextUnreadOrActivePanel == false)
         }
+
         CommandMenu("Agent") {
             if agentCatalogStore.catalog.profiles.isEmpty {
                 Button("No Agents Configured") {}

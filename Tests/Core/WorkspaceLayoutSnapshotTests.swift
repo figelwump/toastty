@@ -27,7 +27,6 @@ struct WorkspaceLayoutSnapshotTests {
                 rightPanelID: .terminal(TerminalPanelState(title: "Client", shell: "zsh", cwd: "/tmp/ui")),
             ],
             focusedPanelID: rightPanelID,
-            auxPanelVisibility: [.diff],
             focusedPanelModeActive: true,
             focusModeRootNodeID: rightSlotID,
             selectedPanelIDs: [leftPanelID, rightPanelID],
@@ -63,7 +62,6 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(restoredWorkspace.title == "Infra")
         #expect(restoredWorkspace.layoutTree == workspace.layoutTree)
         #expect(restoredWorkspace.focusedPanelID == rightPanelID)
-        #expect(restoredWorkspace.auxPanelVisibility == [.diff])
 
         guard case .terminal(let leftTerminalState) = restoredWorkspace.panels[leftPanelID] else {
             Issue.record("Expected left panel to be terminal")
@@ -114,8 +112,7 @@ struct WorkspaceLayoutSnapshotTests {
                     TerminalPanelState(title: "Agent A", shell: "zsh", cwd: "/tmp/one")
                 ),
             ],
-            focusedPanelID: workspaceOnePanelID,
-            auxPanelVisibility: []
+            focusedPanelID: workspaceOnePanelID
         )
 
         let workspaceTwo = WorkspaceState(
@@ -127,8 +124,7 @@ struct WorkspaceLayoutSnapshotTests {
                     TerminalPanelState(title: "Agent B", shell: "zsh", cwd: "/tmp/two")
                 ),
             ],
-            focusedPanelID: workspaceTwoPanelID,
-            auxPanelVisibility: []
+            focusedPanelID: workspaceTwoPanelID
         )
 
         let state = AppState(
@@ -163,6 +159,70 @@ struct WorkspaceLayoutSnapshotTests {
 
         #expect(workspaceOneTerminal.title == "Terminal 1")
         #expect(workspaceTwoTerminal.title == "Terminal 1")
+    }
+
+    @Test
+    func makeAppStatePreservesWebPanelURLsAndTabTitles() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let browserTabID = UUID()
+        let browserPanelID = UUID()
+        let browserSlotID = UUID()
+
+        let browserTab = WorkspaceTabState(
+            id: browserTabID,
+            customTitle: "Pinned Docs",
+            layoutTree: .slot(slotID: browserSlotID, panelID: browserPanelID),
+            panels: [
+                browserPanelID: .web(
+                    WebPanelState(
+                        definition: .browser,
+                        title: "Example Docs",
+                        initialURL: "https://example.com/docs",
+                        currentURL: "https://example.com/docs/latest"
+                    )
+                ),
+            ],
+            focusedPanelID: browserPanelID
+        )
+
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Docs",
+            selectedTabID: browserTabID,
+            tabIDs: [browserTabID],
+            tabsByID: [browserTabID: browserTab]
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        let restoredTab = try #require(restoredWorkspace.tab(id: browserTabID))
+
+        #expect(restoredTab.customTitle == "Pinned Docs")
+        guard case .web(let webState) = restoredTab.panels[browserPanelID] else {
+            Issue.record("Expected browser tab panel to restore as web")
+            return
+        }
+
+        #expect(webState.definition == .browser)
+        #expect(webState.title == "Example Docs")
+        #expect(webState.initialURL == "https://example.com/docs")
+        #expect(webState.currentURL == "https://example.com/docs/latest")
+        #expect(webState.restorableURL == "https://example.com/docs/latest")
     }
 
     @Test
@@ -215,6 +275,52 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func makeAppStatePreservesWebPanels() throws {
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let webState = WebPanelState(
+            definition: .browser,
+            title: "Docs",
+            initialURL: "https://example.com",
+            currentURL: "https://example.com/docs"
+        )
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Browser",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .web(webState),
+            ],
+            focusedPanelID: panelID
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        guard case .web(let restoredWebState) = restoredWorkspace.panels[panelID] else {
+            Issue.record("Expected web panel to survive restore")
+            return
+        }
+
+        #expect(restoredWebState == webState)
+        #expect(restoredWorkspace.focusedPanelID == panelID)
+    }
+
+    @Test
     func workspaceLayoutSnapshotRoundTripsMultipleTabsAndSelection() throws {
         let windowID = UUID()
         let workspaceID = UUID()
@@ -261,7 +367,6 @@ struct WorkspaceLayoutSnapshotTests {
                         ),
                     ],
                     focusedPanelID: secondPanelID,
-                    auxPanelVisibility: [.diff]
                 ),
             ]
         )
@@ -304,7 +409,6 @@ struct WorkspaceLayoutSnapshotTests {
         #expect(secondTerminalState.profileBinding == TerminalProfileBinding(profileID: "ssh-prod"))
         #expect(restoredWorkspace.tab(id: secondTabID)?.customTitle == "Deploy")
         #expect(restoredWorkspace.tab(id: secondTabID)?.displayTitle == "Deploy")
-        #expect(restoredWorkspace.tab(id: secondTabID)?.auxPanelVisibility == [.diff])
         try StateValidator.validate(restoredState)
     }
 
@@ -314,8 +418,7 @@ struct WorkspaceLayoutSnapshotTests {
             id: UUID(),
             layoutTree: .slot(slotID: UUID(), panelID: UUID()),
             panels: [:],
-            focusedPanelID: nil,
-            auxPanelVisibility: []
+            focusedPanelID: nil
         )
 
         let encoded = try JSONEncoder().encode(snapshot)

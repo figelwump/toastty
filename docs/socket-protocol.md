@@ -227,6 +227,7 @@ Supported action IDs:
 - `workspace.split.down.with-profile`
   - requires `args.profileID`
 - `workspace.close-focused-panel`
+- `workspace.reopen-last-closed-panel`
 - `workspace.focus-slot.previous`
 - `workspace.focus-slot.next`
 - `workspace.focus-slot.left`
@@ -253,9 +254,10 @@ Supported action IDs:
 - `workspace.resize-split.down`
   - `args.amount` is optional and clamps to at least `1`
 - `workspace.equalize-splits`
-- `topbar.toggle.diff`
-- `topbar.toggle.markdown`
-- `topbar.toggle.scratchpad`
+- `panel.create.browser`
+  - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
+  - When `args.placement` is omitted, the default is now `rootRight` rather than `newTab`
+  - `args.url` is optional
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist

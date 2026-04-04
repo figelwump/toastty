@@ -7,6 +7,7 @@ struct AppWindowView: View {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let agentLaunchService: AgentLaunchService
@@ -44,6 +45,7 @@ struct AppWindowView: View {
                     agentCatalogStore: agentCatalogStore,
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
+                    webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
                     profileShortcutRegistry: profileShortcutRegistry,
                     agentLaunchService: agentLaunchService,

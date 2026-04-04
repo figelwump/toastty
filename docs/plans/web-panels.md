@@ -466,24 +466,9 @@ to:
 - `terminal`
 - `web`
 
-Old non-terminal persisted states should be migrated into `WebPanelState` with built-in `definitionID` values during decode/load.
-
-Initial mapping direction:
-
-- `.diff(DiffPanelState)`:
-  - `definitionID = "toastty.diff"`
-  - map durable diff inputs such as repo binding or staged/unstaged mode into `creationArguments` or `persistedState`
-  - clearly transient loading state does not need to survive migration
-- `.markdown(MarkdownPanelState)`:
-  - `definitionID = "toastty.markdown"`
-  - `filePath` maps to `creationArguments["filePath"]` when present
-  - `sourcePanelID` maps to `launchContext.sourcePanelID` when present
-  - inline markdown content, if still needed, can map into `persistedState` or a content argument
-- `.scratchpad(ScratchpadPanelState)`:
-  - `definitionID = "toastty.scratchpad"`
-  - existing durable scratchpad content or document identity maps into `persistedState`
-
-The migration goal is semantic continuity, not byte-for-byte preservation of old internal shapes. If old state contains clearly transient UI or runtime details, it is acceptable to drop them during migration.
+Because the legacy non-terminal panel kinds never shipped, Toastty does not need a
+decode/load compatibility layer for `.diff`, `.markdown`, or `.scratchpad`.
+This can be a hard schema cutover in source and tests.
 
 ## open questions
 
