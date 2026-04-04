@@ -223,7 +223,7 @@ final class WorkspaceTabCommandController {
 
 @MainActor
 final class SplitLayoutCommandController {
-    private static let appOwnedResizeAmount = 5
+    static let appOwnedResizeAmount = 5
 
     private let store: AppStore
 

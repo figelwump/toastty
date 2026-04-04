@@ -242,11 +242,20 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 
         let firstWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspace.id])
         let secondWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
-        XCTAssertEqual(firstWorkspaceAfter.panels.count, firstWorkspace.panels.count + 1)
+        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspace.tabIDs.count + 1)
         XCTAssertEqual(secondWorkspaceAfter.panels.count, secondWorkspace.panels.count)
+        XCTAssertEqual(secondWorkspaceAfter.tabIDs.count, secondWorkspace.tabIDs.count)
 
-        guard let browserPanelID = firstWorkspaceAfter.panels.keys.first(where: { firstWorkspace.panels.keys.contains($0) == false }),
-              case .web(let webState) = firstWorkspaceAfter.panels[browserPanelID] else {
+        let browserTabID = try XCTUnwrap(firstWorkspaceAfter.resolvedSelectedTabID)
+        XCTAssertNotEqual(browserTabID, firstWorkspace.resolvedSelectedTabID)
+        let browserTab = try XCTUnwrap(firstWorkspaceAfter.tabsByID[browserTabID])
+        XCTAssertEqual(browserTab.panels.count, 1)
+        let originalTabID = try XCTUnwrap(firstWorkspace.resolvedSelectedTabID)
+        let originalTabAfter = try XCTUnwrap(firstWorkspaceAfter.tabsByID[originalTabID])
+        XCTAssertEqual(originalTabAfter.panels.count, firstWorkspace.panels.count)
+
+        guard let browserPanelID = browserTab.focusedPanelID,
+              case .web(let webState) = browserTab.panels[browserPanelID] else {
             XCTFail("expected browser panel in source workspace")
             return
         }

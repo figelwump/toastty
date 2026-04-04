@@ -422,6 +422,8 @@ final class DisplayShortcutInterceptor {
         case switchWorkspace(Int)
         case focusPanel(Int)
         case focusSplit(SlotFocusDirection)
+        case resizeSplit(SplitResizeDirection)
+        case equalizeSplits
         case browserOpenLocation
         case browserReload
         case cycleWorkspaceNext
@@ -517,6 +519,16 @@ final class DisplayShortcutInterceptor {
             return .focusSplit(direction)
         }
 
+        if let direction = Self.resizeSplitDirection(for: event),
+           appOwnedWindowID != nil {
+            return .resizeSplit(direction)
+        }
+
+        if Self.isEqualizeSplitsShortcut(event),
+           appOwnedWindowID != nil {
+            return .equalizeSplits
+        }
+
         if Self.isBrowserOpenLocationShortcut(event),
            appOwnedFocusedBrowserSelection(preferredWindowID: appOwnedWindowID) != nil {
             return .browserOpenLocation
@@ -571,6 +583,10 @@ final class DisplayShortcutInterceptor {
             focusTerminalPanel(shortcutNumber: shortcutNumber)
         case .focusSplit(let direction):
             focusSplit(direction: direction, preferredWindowID: appOwnedWindowID)
+        case .resizeSplit(let direction):
+            resizeSplit(direction: direction, preferredWindowID: appOwnedWindowID)
+        case .equalizeSplits:
+            equalizeSplits(preferredWindowID: appOwnedWindowID)
         case .browserOpenLocation:
             openFocusedBrowserLocation(preferredWindowID: appOwnedWindowID)
         case .browserReload:
@@ -714,6 +730,36 @@ final class DisplayShortcutInterceptor {
         default:
             return nil
         }
+    }
+
+    static func resizeSplitDirection(for event: NSEvent) -> SplitResizeDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command, .control] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_LeftArrow):
+            return .left
+        case Int(kVK_RightArrow):
+            return .right
+        case Int(kVK_UpArrow):
+            return .up
+        case Int(kVK_DownArrow):
+            return .down
+        default:
+            return nil
+        }
+    }
+
+    static func isEqualizeSplitsShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown, event.isARepeat == false else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard modifiers == [.command, .control] else {
+            return false
+        }
+        return Int(event.keyCode) == Int(kVK_ANSI_Equal)
     }
 
     static func isBrowserOpenLocationShortcut(_ event: NSEvent) -> Bool {
@@ -897,6 +943,39 @@ final class DisplayShortcutInterceptor {
         // Cmd+[ and Cmd+] are Toastty-owned pane-focus shortcuts. Once the
         // current workspace window resolves, keep them out of WebKit's back
         // and forward navigation even if no adjacent split exists.
+        return true
+    }
+
+    private func resizeSplit(direction: SplitResizeDirection, preferredWindowID: UUID?) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        _ = store.send(
+            .resizeFocusedSlotSplit(
+                workspaceID: workspaceID,
+                direction: direction,
+                amount: SplitLayoutCommandController.appOwnedResizeAmount
+            )
+        )
+        // Cmd+Ctrl+Arrow is a Toastty-owned layout shortcut. Once the current
+        // workspace window resolves, keep it out of Ghostty even if the
+        // focused slot cannot resize further in that direction.
+        return true
+    }
+
+    private func equalizeSplits(preferredWindowID: UUID?) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        _ = store.send(.equalizeLayoutSplits(workspaceID: workspaceID))
+        // Cmd+Ctrl+= is likewise app-owned once a Toastty workspace window is
+        // resolved so embedded terminals never reinterpret it as raw input.
         return true
     }
 
