@@ -134,6 +134,41 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertNil(DisplayShortcutInterceptor.focusSplitDirection(for: repeatedRightBracket))
     }
 
+    func testDirectionalFocusSplitDirectionMatchesCommandOptionArrowsOnly() throws {
+        let leftArrow = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+            modifiers: [.command, .option, .numericPad],
+            keyCode: 0x7B
+        )
+        let downArrow = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSDownArrowFunctionKey)!),
+            modifiers: [.command, .option, .numericPad],
+            keyCode: 0x7D
+        )
+        let plainLeftArrow = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+            modifiers: [.option, .numericPad],
+            keyCode: 0x7B
+        )
+        let shiftedLeftArrow = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+            modifiers: [.command, .option, .shift, .numericPad],
+            keyCode: 0x7B
+        )
+        let repeatedRightArrow = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSRightArrowFunctionKey)!),
+            modifiers: [.command, .option, .numericPad],
+            keyCode: 0x7C,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(DisplayShortcutInterceptor.directionalFocusSplitDirection(for: leftArrow), .left)
+        XCTAssertEqual(DisplayShortcutInterceptor.directionalFocusSplitDirection(for: downArrow), .down)
+        XCTAssertNil(DisplayShortcutInterceptor.directionalFocusSplitDirection(for: plainLeftArrow))
+        XCTAssertNil(DisplayShortcutInterceptor.directionalFocusSplitDirection(for: shiftedLeftArrow))
+        XCTAssertNil(DisplayShortcutInterceptor.directionalFocusSplitDirection(for: repeatedRightArrow))
+    }
+
     func testBrowserOpenLocationShortcutMatchesPlainCommandLOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "l", modifiers: [.command], keyCode: 0x25)
         let shiftedEvent = try makeKeyEvent(characters: "L", modifiers: [.command, .shift], keyCode: 0x25)
@@ -328,6 +363,70 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         XCTAssertTrue(interceptor.handle(.focusSplit(.previous), appOwnedWindowID: windowID))
         XCTAssertEqual(store.selectedWorkspace?.focusedPanelID, originalFocusedPanelID)
+    }
+
+    func testBrowserFocusedDirectionalFocusShortcutUsesAppOwnedActionAndMovesFocus() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let interceptor = makeInterceptor(store: store)
+        let leftArrowEvent = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
+            modifiers: [.command, .option, .numericPad],
+            keyCode: 0x7B
+        )
+        let workspaceBeforeFocus = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let browserPanelID = try XCTUnwrap(workspaceBeforeFocus.focusedPanelID)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: leftArrowEvent, appOwnedWindowID: windowID),
+            .focusSplit(.left)
+        )
+        XCTAssertTrue(interceptor.handle(.focusSplit(.left), appOwnedWindowID: windowID))
+
+        let workspaceAfterFocus = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertNotEqual(workspaceAfterFocus.focusedPanelID, browserPanelID)
+    }
+
+    func testBrowserFocusedDirectionalFocusShortcutStillConsumesNoOpDirection() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let interceptor = makeInterceptor(store: store)
+        let workspaceBeforeFocus = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let browserPanelID = try XCTUnwrap(workspaceBeforeFocus.focusedPanelID)
+        let upArrowEvent = try makeKeyEvent(
+            characters: String(UnicodeScalar(NSUpArrowFunctionKey)!),
+            modifiers: [.command, .option, .numericPad],
+            keyCode: 0x7E
+        )
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: upArrowEvent, appOwnedWindowID: windowID),
+            .focusSplit(.up)
+        )
+        XCTAssertTrue(interceptor.handle(.focusSplit(.up), appOwnedWindowID: windowID))
+
+        let workspaceAfterFocus = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterFocus.focusedPanelID, browserPanelID)
     }
 
     func testBrowserFocusedResizeShortcutPreservesBrowserFocusAndAdjustsLayout() throws {

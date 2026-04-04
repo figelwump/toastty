@@ -27,6 +27,10 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Ctrl+Shift+B` | New browser tab |
 | `Cmd+[` | Focus previous pane |
 | `Cmd+]` | Focus next pane |
+| `Cmd+Opt+Left Arrow` | Focus pane to the left |
+| `Cmd+Opt+Right Arrow` | Focus pane to the right |
+| `Cmd+Opt+Up Arrow` | Focus pane above |
+| `Cmd+Opt+Down Arrow` | Focus pane below |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
 | `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or errors, then working panels |
 | `Cmd+Ctrl+Left Arrow` | Resize split left |

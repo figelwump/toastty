@@ -788,6 +788,7 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
     private static let resizeSplitsMenuTitle = "Resize Splits"
 
     private let splitLayoutCommandController: SplitLayoutCommandController
+    private let preferredWindowIDProvider: () -> UUID?
     private lazy var separatorItem = NSMenuItem.toasttyManagedSeparator(marker: .windowSplit)
     private lazy var selectPreviousItem = makeManagedItem()
     private lazy var selectNextItem = makeManagedItem()
@@ -827,8 +828,12 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
         resizeDownItem,
     ]
 
-    init(splitLayoutCommandController: SplitLayoutCommandController) {
+    init(
+        splitLayoutCommandController: SplitLayoutCommandController,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
+    ) {
         self.splitLayoutCommandController = splitLayoutCommandController
+        self.preferredWindowIDProvider = preferredWindowIDProvider
     }
 
     func installIfNeeded() {
@@ -843,60 +848,75 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
 
     @objc
     func selectPreviousSplit(_: Any?) {
-        _ = splitLayoutCommandController.focusSplit(direction: .previous, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.focusSplit(direction: .previous, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func selectNextSplit(_: Any?) {
-        _ = splitLayoutCommandController.focusSplit(direction: .next, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.focusSplit(direction: .next, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func navigateUp(_: Any?) {
-        _ = splitLayoutCommandController.focusSplit(direction: .up, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.focusSplit(direction: .up, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func navigateDown(_: Any?) {
-        _ = splitLayoutCommandController.focusSplit(direction: .down, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.focusSplit(direction: .down, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func navigateLeft(_: Any?) {
-        _ = splitLayoutCommandController.focusSplit(direction: .left, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.focusSplit(direction: .left, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func navigateRight(_: Any?) {
-        _ = splitLayoutCommandController.focusSplit(direction: .right, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.focusSplit(direction: .right, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func equalizeSplits(_: Any?) {
-        _ = splitLayoutCommandController.equalizeSplits(preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.equalizeSplits(preferredWindowID: preferredWindowID)
     }
 
     @objc
     func resizeLeft(_: Any?) {
-        _ = splitLayoutCommandController.resizeSplit(direction: .left, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.resizeSplit(direction: .left, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func resizeRight(_: Any?) {
-        _ = splitLayoutCommandController.resizeSplit(direction: .right, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.resizeSplit(direction: .right, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func resizeUp(_: Any?) {
-        _ = splitLayoutCommandController.resizeSplit(direction: .up, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.resizeSplit(direction: .up, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func resizeDown(_: Any?) {
-        _ = splitLayoutCommandController.resizeSplit(direction: .down, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.resizeSplit(direction: .down, preferredWindowID: preferredWindowID)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+
         switch menuItem.action {
         case #selector(selectPreviousSplit(_:)),
             #selector(selectNextSplit(_:)),
@@ -904,14 +924,14 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
             #selector(navigateDown(_:)),
             #selector(navigateLeft(_:)),
             #selector(navigateRight(_:)):
-            return splitLayoutCommandController.canFocusSplit(preferredWindowID: nil)
+            return splitLayoutCommandController.canFocusSplit(preferredWindowID: preferredWindowID)
 
         case #selector(equalizeSplits(_:)),
             #selector(resizeLeft(_:)),
             #selector(resizeRight(_:)),
             #selector(resizeUp(_:)),
             #selector(resizeDown(_:)):
-            return splitLayoutCommandController.canAdjustSplitLayout(preferredWindowID: nil)
+            return splitLayoutCommandController.canAdjustSplitLayout(preferredWindowID: preferredWindowID)
 
         default:
             return true
@@ -919,8 +939,12 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     private func restoreOwnedItems() {
-        let focusEnabled = splitLayoutCommandController.canFocusSplit(preferredWindowID: nil)
-        let layoutEnabled = splitLayoutCommandController.canAdjustSplitLayout(preferredWindowID: nil)
+        let focusEnabled = currentKeyWindowID().map {
+            splitLayoutCommandController.canFocusSplit(preferredWindowID: $0)
+        } ?? false
+        let layoutEnabled = currentKeyWindowID().map {
+            splitLayoutCommandController.canAdjustSplitLayout(preferredWindowID: $0)
+        } ?? false
 
         separatorItem.representedObject = ManagedMenuSectionMarker.windowSplit.rawValue
         configureMenuItem(
@@ -941,10 +965,30 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
         resizeMenu.title = Self.resizeSplitsMenuTitle
         resizeMenu.autoenablesItems = true
 
-        configureMenuItem(navigateUpItem, title: "Navigate Up", action: #selector(navigateUp(_:)))
-        configureMenuItem(navigateDownItem, title: "Navigate Down", action: #selector(navigateDown(_:)))
-        configureMenuItem(navigateLeftItem, title: "Navigate Left", action: #selector(navigateLeft(_:)))
-        configureMenuItem(navigateRightItem, title: "Navigate Right", action: #selector(navigateRight(_:)))
+        configureMenuItem(
+            navigateUpItem,
+            title: "Navigate Up",
+            action: #selector(navigateUp(_:)),
+            shortcut: ToasttyKeyboardShortcuts.focusPaneUp
+        )
+        configureMenuItem(
+            navigateDownItem,
+            title: "Navigate Down",
+            action: #selector(navigateDown(_:)),
+            shortcut: ToasttyKeyboardShortcuts.focusPaneDown
+        )
+        configureMenuItem(
+            navigateLeftItem,
+            title: "Navigate Left",
+            action: #selector(navigateLeft(_:)),
+            shortcut: ToasttyKeyboardShortcuts.focusPaneLeft
+        )
+        configureMenuItem(
+            navigateRightItem,
+            title: "Navigate Right",
+            action: #selector(navigateRight(_:)),
+            shortcut: ToasttyKeyboardShortcuts.focusPaneRight
+        )
         ensureOwnedSubmenuItemsAttached(ownedNavigateItems, to: navigateMenu)
 
         configureMenuItem(
@@ -1050,6 +1094,10 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
         )
         item.isEnabled = true
         return item
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
     }
 
     private func configureMenuItem(
@@ -1322,6 +1370,33 @@ func currentToasttyKeyWindowID(keyWindow: NSWindow?, in store: AppStore) -> UUID
     guard let rawWindowID = keyWindow?.identifier?.rawValue,
           let windowID = UUID(uuidString: rawWindowID),
           store.window(id: windowID) != nil else {
+        return nil
+    }
+    return windowID
+}
+
+@MainActor
+func currentToasttyAppOwnedWindowID(in store: AppStore) -> UUID? {
+    currentToasttyAppOwnedWindowID(
+        keyWindow: NSApp.keyWindow,
+        modalWindow: NSApp.modalWindow,
+        in: store
+    )
+}
+
+@MainActor
+func currentToasttyAppOwnedWindowID(
+    keyWindow: NSWindow?,
+    modalWindow: NSWindow?,
+    in store: AppStore
+) -> UUID? {
+    guard let windowID = DisplayShortcutInterceptor.closePanelShortcutWindowID(
+        keyWindow: keyWindow,
+        modalWindow: modalWindow
+    ) else {
+        return nil
+    }
+    guard store.window(id: windowID) != nil else {
         return nil
     }
     return windowID

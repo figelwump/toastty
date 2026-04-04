@@ -883,7 +883,14 @@ final class WindowCommandControllerTests: XCTestCase {
         fileItem.submenu = rebuiltFileMenu
 
         NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
-        await flushMainActorTasks()
+        for _ in 0 ..< 5 {
+            await flushMainActorTasks()
+            if rebuiltNewWindowItem.isHidden,
+               rebuiltOpenRecentItem.isHidden == false,
+               rebuiltFileMenu.delegate === bridge {
+                break
+            }
+        }
 
         XCTAssertTrue(rebuiltNewWindowItem.isHidden)
         XCTAssertFalse(rebuiltOpenRecentItem.isHidden)
@@ -922,7 +929,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
         XCTAssertEqual(refreshCount, 1)
 
-        bridge.menuWillOpen(rebuiltFileMenu)
+        bridge.installIfNeeded()
         XCTAssertEqual(refreshCount, 2)
     }
 
@@ -1019,9 +1026,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
     func testHiddenSystemMenuItemsBridgeRefreshesOwnedWindowSplitSectionForMenuTreeRefresh() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
-        let windowSplitBridge = WindowSplitMenuBridge(
-            splitLayoutCommandController: SplitLayoutCommandController(store: store)
-        )
+        let windowSplitBridge = makeWindowSplitMenuBridge(store: store)
         let hiddenBridge = HiddenSystemMenuItemsBridge(
             onOwnedMenuSectionRefreshRequested: {
                 windowSplitBridge.installIfNeeded()
@@ -1220,9 +1225,7 @@ final class WindowCommandControllerTests: XCTestCase {
 
     func testWindowSplitMenuBridgeInsertsSectionBeforeWindowList() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
-        let bridge = WindowSplitMenuBridge(
-            splitLayoutCommandController: SplitLayoutCommandController(store: store)
-        )
+        let bridge = makeWindowSplitMenuBridge(store: store)
 
         let mainMenu = NSMenu(title: "Main")
         let windowRootItem = NSMenuItem(title: "Fenster", action: nil, keyEquivalent: "")
@@ -1267,6 +1270,26 @@ final class WindowCommandControllerTests: XCTestCase {
 
         let navigateMenu = try XCTUnwrap(windowMenu.items[5].submenu)
         XCTAssertEqual(menuItemTitles(in: navigateMenu), ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"])
+        XCTAssertEqual(
+            navigateMenu.items[0].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.focusPaneUp.key.character)
+        )
+        XCTAssertEqual(navigateMenu.items[0].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(
+            navigateMenu.items[1].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.focusPaneDown.key.character)
+        )
+        XCTAssertEqual(navigateMenu.items[1].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(
+            navigateMenu.items[2].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.focusPaneLeft.key.character)
+        )
+        XCTAssertEqual(navigateMenu.items[2].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(
+            navigateMenu.items[3].keyEquivalent,
+            String(ToasttyKeyboardShortcuts.focusPaneRight.key.character)
+        )
+        XCTAssertEqual(navigateMenu.items[3].keyEquivalentModifierMask, [.command, .option])
 
         let resizeMenu = try XCTUnwrap(windowMenu.items[6].submenu)
         XCTAssertEqual(
@@ -1310,11 +1333,40 @@ final class WindowCommandControllerTests: XCTestCase {
         )
     }
 
+    func testWindowSplitMenuBridgeDisablesCommandsWithoutOwnedWindow() throws {
+        let state = try XCTUnwrap(AutomationFixtureLoader.load(named: "split-workspace"))
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let bridge = makeWindowSplitMenuBridge(store: store, preferredWindowIDProvider: { nil })
+
+        let mainMenu = NSMenu(title: "Main")
+        let windowRootItem = NSMenuItem(title: "Fenster", action: nil, keyEquivalent: "")
+        let windowMenu = NSMenu(title: "Fenster")
+        windowMenu.addItem(NSMenuItem(title: "Minimize", action: nil, keyEquivalent: "m"))
+        windowMenu.addItem(NSMenuItem(title: "Arrange in Front", action: nil, keyEquivalent: ""))
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(NSMenuItem(title: "Window 1", action: nil, keyEquivalent: ""))
+        windowRootItem.submenu = windowMenu
+        mainMenu.addItem(windowRootItem)
+
+        let application = NSApplication.shared
+        let previousMainMenu = application.mainMenu
+        application.mainMenu = mainMenu
+        defer { application.mainMenu = previousMainMenu }
+
+        bridge.installIfNeeded()
+
+        let previousItem = windowMenu.items[3]
+        XCTAssertFalse(bridge.validateMenuItem(previousItem))
+
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let focusedPanelID = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.focusedPanelID)
+        bridge.navigateLeft(nil)
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.focusedPanelID, focusedPanelID)
+    }
+
     func testWindowSplitMenuBridgeReinstallsManagedItemsWhenSubmenuDrifts() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
-        let bridge = WindowSplitMenuBridge(
-            splitLayoutCommandController: SplitLayoutCommandController(store: store)
-        )
+        let bridge = makeWindowSplitMenuBridge(store: store)
 
         let mainMenu = NSMenu(title: "Main")
         let windowRootItem = NSMenuItem(title: "Fenster", action: nil, keyEquivalent: "")
@@ -1534,6 +1586,17 @@ final class WindowCommandControllerTests: XCTestCase {
                 sessionRuntimeStore: makeSessionRuntimeStore(store: store),
                 preferredWindowIDProvider: resolvedWindowIDProvider
             )
+        )
+    }
+
+    private func makeWindowSplitMenuBridge(
+        store: AppStore,
+        preferredWindowIDProvider: (() -> UUID?)? = nil
+    ) -> WindowSplitMenuBridge {
+        let resolvedWindowIDProvider = preferredWindowIDProvider ?? { store.state.selectedWindowID }
+        return WindowSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store),
+            preferredWindowIDProvider: resolvedWindowIDProvider
         )
     }
 

@@ -152,6 +152,26 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command]
     )
 
+    static let focusPaneLeft = ToasttyKeyboardShortcut(
+        .leftArrow,
+        modifiers: [.command, .option]
+    )
+
+    static let focusPaneRight = ToasttyKeyboardShortcut(
+        .rightArrow,
+        modifiers: [.command, .option]
+    )
+
+    static let focusPaneUp = ToasttyKeyboardShortcut(
+        .upArrow,
+        modifiers: [.command, .option]
+    )
+
+    static let focusPaneDown = ToasttyKeyboardShortcut(
+        .downArrow,
+        modifiers: [.command, .option]
+    )
+
     static let resizeSplitLeft = ToasttyKeyboardShortcut(
         .leftArrow,
         modifiers: [.command, .control]

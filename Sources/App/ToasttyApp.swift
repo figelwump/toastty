@@ -519,6 +519,11 @@ final class DisplayShortcutInterceptor {
             return .focusSplit(direction)
         }
 
+        if let direction = Self.directionalFocusSplitDirection(for: event),
+           appOwnedWindowID != nil {
+            return .focusSplit(direction)
+        }
+
         if let direction = Self.resizeSplitDirection(for: event),
            appOwnedWindowID != nil {
             return .resizeSplit(direction)
@@ -732,6 +737,30 @@ final class DisplayShortcutInterceptor {
         }
     }
 
+    static func directionalFocusSplitDirection(for event: NSEvent) -> SlotFocusDirection? {
+        guard event.type == .keyDown, event.isARepeat == false else { return nil }
+        // AppKit marks arrow-key events with .numericPad even on the main
+        // keyboard, so strip that flag before matching the app-owned chord.
+        let modifiers = event
+            .modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting(.numericPad)
+        guard modifiers == [.command, .option] else { return nil }
+
+        switch Int(event.keyCode) {
+        case Int(kVK_LeftArrow):
+            return .left
+        case Int(kVK_RightArrow):
+            return .right
+        case Int(kVK_UpArrow):
+            return .up
+        case Int(kVK_DownArrow):
+            return .down
+        default:
+            return nil
+        }
+    }
+
     static func resizeSplitDirection(for event: NSEvent) -> SplitResizeDirection? {
         guard event.type == .keyDown, event.isARepeat == false else { return nil }
         // AppKit marks arrow-key events with .numericPad even on the main
@@ -802,14 +831,7 @@ final class DisplayShortcutInterceptor {
 
     private func appOwnedShortcutWindowID() -> UUID? {
         guard let store else { return nil }
-        guard let windowID = Self.closePanelShortcutWindowID(
-            keyWindow: NSApp.keyWindow,
-            modalWindow: NSApp.modalWindow
-        ) else {
-            return nil
-        }
-        guard store.window(id: windowID) != nil else { return nil }
-        return windowID
+        return currentToasttyAppOwnedWindowID(in: store)
     }
 
     private func closeFocusedPanel() -> Bool {
@@ -945,9 +967,9 @@ final class DisplayShortcutInterceptor {
             return false
         }
         _ = store.send(.focusSlot(workspaceID: workspaceID, direction: direction))
-        // Cmd+[ and Cmd+] are Toastty-owned pane-focus shortcuts. Once the
-        // current workspace window resolves, keep them out of WebKit's back
-        // and forward navigation even if no adjacent split exists.
+        // Toastty-owned pane-focus shortcuts should not fall through to
+        // embedded views once the current workspace window resolves, even if
+        // there is no adjacent split target in that direction.
         return true
     }
 
@@ -1241,7 +1263,8 @@ struct ToasttyApp: App {
             closeWorkspaceCommandController: closeWorkspaceCommandController
         )
         windowSplitMenuBridge = WindowSplitMenuBridge(
-            splitLayoutCommandController: splitLayoutCommandController
+            splitLayoutCommandController: splitLayoutCommandController,
+            preferredWindowIDProvider: { currentToasttyAppOwnedWindowID(in: store) }
         )
         workspaceMenuBridge = WorkspaceMenuBridge(
             createWorkspaceCommandController: createWorkspaceCommandController,

@@ -42,6 +42,8 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
         XCTAssertEqual(ToasttyKeyboardShortcuts.findPrevious.symbolLabel, "⇧⌘G")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusPreviousPane.symbolLabel, "⌘[")
         XCTAssertEqual(ToasttyKeyboardShortcuts.focusNextPane.symbolLabel, "⌘]")
+        XCTAssertTrue(ToasttyKeyboardShortcuts.focusPaneLeft.symbolLabel.hasPrefix("⌥⌘"))
+        XCTAssertTrue(ToasttyKeyboardShortcuts.focusPaneRight.symbolLabel.hasPrefix("⌥⌘"))
     }
 
     func testShortcutDefinitionsRemainUnique() {
@@ -60,6 +62,10 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.splitVertical,
             ToasttyKeyboardShortcuts.focusPreviousPane,
             ToasttyKeyboardShortcuts.focusNextPane,
+            ToasttyKeyboardShortcuts.focusPaneLeft,
+            ToasttyKeyboardShortcuts.focusPaneRight,
+            ToasttyKeyboardShortcuts.focusPaneUp,
+            ToasttyKeyboardShortcuts.focusPaneDown,
         ]
         let identifiers = shortcuts.map { "\($0.key.character)|\($0.modifiers.rawValue)" }
 
