@@ -22,7 +22,7 @@ private extension NSView {
 
 final class TerminalHostView: NSView {
     var activatePanelIfNeeded: (() -> Bool)?
-    var openCommandClickLink: ((URL) -> Bool)?
+    var openCommandClickLink: ((URL, Bool) -> Bool)?
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
@@ -39,6 +39,7 @@ final class TerminalHostView: NSView {
     private var markedText = NSMutableAttributedString(string: "")
     private var keyTextAccumulator: [String]?
     private var pendingCommandClickLinkURL: URL?
+    private var pendingCommandClickLinkUsesAlternatePlacement = false
     private(set) var isEffectivelyVisible = false
     var applicationIsActiveProvider: () -> Bool = { NSApp.isActive }
 
@@ -813,7 +814,7 @@ final class TerminalHostView: NSView {
 
     override func mouseDragged(with event: NSEvent) {
         if pendingCommandClickLinkURL != nil {
-            pendingCommandClickLinkURL = nil
+            clearPendingCommandClickLinkOpen()
             return
         }
         guard forwardMousePosition(event) else {
@@ -1166,17 +1167,23 @@ final class TerminalHostView: NSView {
         window.makeFirstResponder(self)
     }
 
+    private func clearPendingCommandClickLinkOpen() {
+        pendingCommandClickLinkURL = nil
+        pendingCommandClickLinkUsesAlternatePlacement = false
+    }
+
     private func preparePendingCommandClickLinkOpen(with event: NSEvent) -> Bool {
         guard openCommandClickLink != nil,
               event.modifierFlags.contains(.command),
               let url = hoveredGhosttyLinkURL() else {
-            pendingCommandClickLinkURL = nil
+            clearPendingCommandClickLinkOpen()
             return false
         }
 
         // Reclaim explicit terminal Command-clicks before Ghostty sees the
         // mouse press so we do not leave its internal button state half-forwarded.
         pendingCommandClickLinkURL = url
+        pendingCommandClickLinkUsesAlternatePlacement = event.modifierFlags.contains(.shift)
         return true
     }
 
@@ -1184,13 +1191,14 @@ final class TerminalHostView: NSView {
         guard let url = pendingCommandClickLinkURL else {
             return false
         }
-        pendingCommandClickLinkURL = nil
+        let useAlternatePlacement = pendingCommandClickLinkUsesAlternatePlacement
+        clearPendingCommandClickLinkOpen()
         // Once the press is reclaimed for app-owned Command-click handling, the
         // matching release must stay local too, even if Command is released first.
         guard event.modifierFlags.contains(.command) else {
             return true
         }
-        _ = openCommandClickLink?(url)
+        _ = openCommandClickLink?(url, useAlternatePlacement)
         return true
     }
 

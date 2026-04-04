@@ -152,9 +152,13 @@ final class TerminalSurfaceController: PanelHostLifecycleControlling {
             guard let self else { return false }
             return self.delegate?.activatePanelIfNeeded(self.panelID) ?? false
         }
-        terminalHostView.openCommandClickLink = { [weak self] url in
+        terminalHostView.openCommandClickLink = { [weak self] url, useAlternatePlacement in
             guard let self else { return false }
-            return self.delegate?.openCommandClickLink(url, from: self.panelID) ?? false
+            return self.delegate?.openCommandClickLink(
+                url,
+                useAlternatePlacement: useAlternatePlacement,
+                from: self.panelID
+            ) ?? false
         }
         terminalHostView.resolveImageFileDrop = { [weak self] urls in
             guard let self else { return nil }

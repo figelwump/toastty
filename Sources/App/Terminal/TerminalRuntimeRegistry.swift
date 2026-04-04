@@ -912,13 +912,14 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     }
 
     @discardableResult
-    func openCommandClickLink(_ url: URL, from panelID: UUID) -> Bool {
+    func openCommandClickLink(_ url: URL, useAlternatePlacement: Bool, from panelID: UUID) -> Bool {
         guard let store else { return false }
         let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
         return AppURLRouter.open(
             url,
             preferredWindowID: preferredWindowID,
-            appStore: store
+            appStore: store,
+            useAlternatePlacement: useAlternatePlacement
         )
     }
 

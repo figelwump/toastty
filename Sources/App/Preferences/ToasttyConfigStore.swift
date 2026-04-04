@@ -14,6 +14,7 @@ enum ToasttyConfigStore {
     private static let enableAgentCommandShimsKey = "enable-agent-command-shims"
     private static let urlOpeningDestinationKey = "url-opening-destination"
     private static let urlOpeningBrowserPlacementKey = "url-opening-browser-placement"
+    private static let urlOpeningAlternateBrowserPlacementKey = "url-opening-alternate-browser-placement"
     private static let configDirectoryName = ".toastty"
     private static let legacyConfigDirectoryName = ".config/toastty"
     private static let configFileName = "config"
@@ -150,6 +151,11 @@ enum ToasttyConfigStore {
                       let parsed = URLBrowserOpenPlacement(rawValue: parsedValue) else { continue }
                 config.urlRoutingPreferences.browserPlacement = parsed
 
+            case urlOpeningAlternateBrowserPlacementKey:
+                guard let parsedValue = parseString(value),
+                      let parsed = URLBrowserOpenPlacement(rawValue: parsedValue) else { continue }
+                config.urlRoutingPreferences.alternateBrowserPlacement = parsed
+
             default:
                 continue
             }
@@ -187,10 +193,18 @@ enum ToasttyConfigStore {
             "# url-opening-destination = toastty-browser",
             "",
             "# url-opening-browser-placement controls how Toastty places those",
-            "# internally opened browser panels.",
+            "# internally opened browser panels for default opens such as",
+            "# terminal Cmd-click links.",
             "# Supported values: rootRight, newTab.",
             "# The default is newTab.",
             "# url-opening-browser-placement = newTab",
+            "",
+            "# url-opening-alternate-browser-placement controls how Toastty",
+            "# places alternate browser opens such as terminal",
+            "# Cmd+Shift+click links.",
+            "# Supported values: rootRight, newTab.",
+            "# The default is rootRight.",
+            "# url-opening-alternate-browser-placement = rootRight",
         ]
 
         if config.terminalFontSizePoints != nil
@@ -221,6 +235,12 @@ enum ToasttyConfigStore {
         if config.urlRoutingPreferences.browserPlacement != .newTab {
             lines.append(
                 "\(urlOpeningBrowserPlacementKey) = \(config.urlRoutingPreferences.browserPlacement.rawValue)"
+            )
+        }
+
+        if config.urlRoutingPreferences.alternateBrowserPlacement != .rootRight {
+            lines.append(
+                "\(urlOpeningAlternateBrowserPlacementKey) = \(config.urlRoutingPreferences.alternateBrowserPlacement.rawValue)"
             )
         }
 

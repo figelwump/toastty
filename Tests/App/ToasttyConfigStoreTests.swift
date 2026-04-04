@@ -19,6 +19,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         enable-agent-command-shims = false
         url-opening-destination = system-browser
         url-opening-browser-placement = newTab
+        url-opening-alternate-browser-placement = newTab
         """.write(to: configURL, atomically: true, encoding: .utf8)
 
         let config = ToasttyConfigStore.load(
@@ -33,7 +34,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
             config.urlRoutingPreferences,
             URLRoutingPreferences(
                 destination: .systemBrowser,
-                browserPlacement: .newTab
+                browserPlacement: .newTab,
+                alternateBrowserPlacement: .newTab
             )
         )
     }
@@ -129,10 +131,18 @@ final class ToasttyConfigStoreTests: XCTestCase {
             # url-opening-destination = toastty-browser
 
             # url-opening-browser-placement controls how Toastty places those
-            # internally opened browser panels.
+            # internally opened browser panels for default opens such as
+            # terminal Cmd-click links.
             # Supported values: rootRight, newTab.
             # The default is newTab.
             # url-opening-browser-placement = newTab
+
+            # url-opening-alternate-browser-placement controls how Toastty
+            # places alternate browser opens such as terminal
+            # Cmd+Shift+click links.
+            # Supported values: rootRight, newTab.
+            # The default is rootRight.
+            # url-opening-alternate-browser-placement = rootRight
 
             """
         )
@@ -194,6 +204,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertTrue(contents.contains("# default-terminal-profile"))
         XCTAssertTrue(contents.contains("# url-opening-destination"))
         XCTAssertTrue(contents.contains("# url-opening-browser-placement"))
+        XCTAssertTrue(contents.contains("# url-opening-alternate-browser-placement"))
     }
 
     func testWriteConfigReferenceOverwritesExistingFile() throws {
@@ -227,7 +238,7 @@ final class ToasttyConfigStoreTests: XCTestCase {
         XCTAssertEqual(referenceURL.path, "/tmp/toastty-runtime-home-tests/ref-runtime/config-reference")
     }
 
-    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserInNewTab() throws {
+    func testLoadDefaultsURLRoutingPreferencesToToasttyBrowserInNewTabWithRootRightAlternate() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let configURL = ToasttyConfigStore.configFileURL(
             homeDirectoryPath: homeDirectoryURL.path,
@@ -250,7 +261,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
             config.urlRoutingPreferences,
             URLRoutingPreferences(
                 destination: .toasttyBrowser,
-                browserPlacement: .newTab
+                browserPlacement: .newTab,
+                alternateBrowserPlacement: .rootRight
             )
         )
     }

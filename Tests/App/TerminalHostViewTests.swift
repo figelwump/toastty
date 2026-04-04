@@ -524,12 +524,14 @@ final class TerminalHostViewTests: XCTestCase {
         let window = TestWindow()
         let contentView = NSView(frame: window.frame)
         var openedURL: URL?
+        var usedAlternatePlacement = true
 
         window.contentView = contentView
         contentView.addSubview(hostView)
         hostView.setGhosttyMouseOverLink("https://example.com/docs")
-        hostView.openCommandClickLink = { url in
+        hostView.openCommandClickLink = { url, useAlternatePlacement in
             openedURL = url
+            usedAlternatePlacement = useAlternatePlacement
             return true
         }
 
@@ -549,6 +551,106 @@ final class TerminalHostViewTests: XCTestCase {
         )
 
         XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+        XCTAssertFalse(usedAlternatePlacement)
+    }
+
+    func testCommandShiftClickHoveredLinkUsesAlternatePlacement() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openedURL: URL?
+        var usedAlternatePlacement = false
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { url, useAlternatePlacement in
+            openedURL = url
+            usedAlternatePlacement = useAlternatePlacement
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+        XCTAssertTrue(usedAlternatePlacement)
+    }
+
+    func testCommandShiftClickKeepsAlternatePlacementWhenShiftReleasesBeforeMouseUp() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var usedAlternatePlacement = false
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { _, useAlternatePlacement in
+            usedAlternatePlacement = useAlternatePlacement
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+
+        XCTAssertTrue(usedAlternatePlacement)
+    }
+
+    func testCommandClickStaysPrimaryWhenShiftAppearsOnlyOnMouseUp() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var usedAlternatePlacement = true
+
+        window.contentView = contentView
+        contentView.addSubview(hostView)
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { _, useAlternatePlacement in
+            usedAlternatePlacement = useAlternatePlacement
+            return true
+        }
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+
+        XCTAssertFalse(usedAlternatePlacement)
     }
 
     func testCommandClickHoveredLinkDragCancelsOpen() throws {
@@ -560,7 +662,7 @@ final class TerminalHostViewTests: XCTestCase {
         window.contentView = contentView
         contentView.addSubview(hostView)
         hostView.setGhosttyMouseOverLink("https://example.com/docs")
-        hostView.openCommandClickLink = { _ in
+        hostView.openCommandClickLink = { _, _ in
             openCallCount += 1
             return true
         }

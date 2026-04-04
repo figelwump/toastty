@@ -24,6 +24,11 @@ enum URLBrowserOpenPlacement: String, Equatable {
 struct URLRoutingPreferences: Equatable {
     var destination: URLOpenDestination = .toasttyBrowser
     var browserPlacement: URLBrowserOpenPlacement = .newTab
+    var alternateBrowserPlacement: URLBrowserOpenPlacement = .rootRight
+
+    func resolvedBrowserPlacement(alternateOpen: Bool) -> URLBrowserOpenPlacement {
+        alternateOpen ? alternateBrowserPlacement : browserPlacement
+    }
 }
 
 enum AppURLRoute: Equatable {
@@ -32,14 +37,18 @@ enum AppURLRoute: Equatable {
 }
 
 enum AppURLRouter {
-    static func route(for url: URL, preferences: URLRoutingPreferences) -> AppURLRoute {
+    static func route(
+        for url: URL,
+        preferences: URLRoutingPreferences,
+        useAlternatePlacement: Bool = false
+    ) -> AppURLRoute {
         guard preferences.destination == .toasttyBrowser,
               let scheme = url.scheme?.lowercased(),
               scheme == "http" || scheme == "https" else {
             return .external
         }
 
-        return .toasttyBrowser(placement: preferences.browserPlacement)
+        return .toasttyBrowser(placement: preferences.resolvedBrowserPlacement(alternateOpen: useAlternatePlacement))
     }
 
     @discardableResult
@@ -48,11 +57,12 @@ enum AppURLRouter {
         _ url: URL,
         preferredWindowID: UUID?,
         appStore: AppStore,
+        useAlternatePlacement: Bool = false,
         preferences: URLRoutingPreferences? = nil,
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) -> Bool {
         let resolvedPreferences = preferences ?? appStore.urlRoutingPreferences
-        switch route(for: url, preferences: resolvedPreferences) {
+        switch route(for: url, preferences: resolvedPreferences, useAlternatePlacement: useAlternatePlacement) {
         case .external:
             return openExternally(url)
         case .toasttyBrowser(let placement):

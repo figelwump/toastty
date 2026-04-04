@@ -301,6 +301,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertTrue(
             registry.openCommandClickLink(
                 URL(string: "https://example.com/inside-terminal")!,
+                useAlternatePlacement: false,
                 from: sourcePanelID
             )
         )
@@ -326,6 +327,54 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         }
         XCTAssertEqual(webState.definition, .browser)
         XCTAssertEqual(webState.initialURL, "https://example.com/inside-terminal")
+        try StateValidator.validate(store.state)
+    }
+
+    func testAlternateOpenCommandClickLinkUsesConfiguredAlternatePlacement() throws {
+        let workspace = WorkspaceState.bootstrap(title: "One")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        store.setURLRoutingPreferences(
+            URLRoutingPreferences(
+                destination: .toasttyBrowser,
+                browserPlacement: .newTab,
+                alternateBrowserPlacement: .rootRight
+            )
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                URL(string: "https://example.com/root-right")!,
+                useAlternatePlacement: true,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count + 1)
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected root-right browser panel in source workspace")
+            return
+        }
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, "https://example.com/root-right")
         try StateValidator.validate(store.state)
     }
 

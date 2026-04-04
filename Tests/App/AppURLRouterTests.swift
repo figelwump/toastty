@@ -20,6 +20,23 @@ final class AppURLRouterTests: XCTestCase {
         )
     }
 
+    func testRouteUsesConfiguredAlternateBrowserPlacementForAlternateOpen() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.com/docs"))
+
+        XCTAssertEqual(
+            AppURLRouter.route(
+                for: url,
+                preferences: URLRoutingPreferences(
+                    destination: .toasttyBrowser,
+                    browserPlacement: .newTab,
+                    alternateBrowserPlacement: .rootRight
+                ),
+                useAlternatePlacement: true
+            ),
+            .toasttyBrowser(placement: .rootRight)
+        )
+    }
+
     func testRouteKeepsFileURLsExternalEvenWhenToasttyBrowserIsEnabled() throws {
         let url = try XCTUnwrap(URL(string: "file:///tmp/readme.md"))
 
@@ -105,6 +122,43 @@ final class AppURLRouterTests: XCTestCase {
         let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
         guard case .web(let webState) = selectedTab.panels[panelID] else {
             XCTFail("expected new browser tab")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, url.absoluteString)
+        XCTAssertNil(webState.currentURL)
+    }
+
+    func testOpenUsesAlternatePlacementWhenRequested() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let url = try XCTUnwrap(URL(string: "https://example.com/right-side"))
+
+        XCTAssertTrue(
+            AppURLRouter.open(
+                url,
+                preferredWindowID: nil,
+                appStore: store,
+                useAlternatePlacement: true,
+                preferences: URLRoutingPreferences(
+                    destination: .toasttyBrowser,
+                    browserPlacement: .newTab,
+                    alternateBrowserPlacement: .rootRight
+                ),
+                openExternally: { _ in
+                    XCTFail("router should not fall back to external open")
+                    return false
+                }
+            )
+        )
+
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.panels.count, 2)
+        let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[focusedPanelID] else {
+            XCTFail("expected root-right browser panel")
             return
         }
 
