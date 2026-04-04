@@ -887,6 +887,96 @@ final class TerminalMetadataServiceTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testRequestImmediateWorkingDirectoryRefreshDefersFirstAttemptOffCallerStack() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+        XCTAssertTrue(
+            store.send(.updateTerminalPanelMetadata(panelID: panelID, title: nil, cwd: "/tmp/stale"))
+        )
+
+        var resolveAttemptCount = 0
+        let initialDeferralGate = AsyncGate()
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in
+                resolveAttemptCount += 1
+                return "/tmp/fresh"
+            },
+            initialProcessRefreshDeferral: {
+                await initialDeferralGate.wait()
+            },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        service.requestImmediateWorkingDirectoryRefresh(
+            panelID: panelID,
+            source: "surface_create_process"
+        )
+
+        XCTAssertEqual(resolveAttemptCount, 0)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/stale")
+
+        await initialDeferralGate.open()
+        await waitUntil {
+            resolveAttemptCount == 1 &&
+                (try? terminalState(panelID: panelID, state: store.state).cwd) == "/tmp/fresh"
+        }
+
+        XCTAssertEqual(resolveAttemptCount, 1)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/fresh")
+        try StateValidator.validate(store.state)
+    }
+
+    func testImmediateProcessRefreshSkipsDeferredFirstAttemptAfterNativeGhosttyCWDSignal() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let panelID = try XCTUnwrap(store.selectedWorkspace?.focusedPanelID)
+
+        var resolveAttemptCount = 0
+        let initialDeferralGate = AsyncGate()
+        let service = TerminalMetadataService(
+            store: store,
+            registry: registry,
+            resolveWorkingDirectoryFromProcessOverride: { _ in
+                resolveAttemptCount += 1
+                return "/tmp/process"
+            },
+            initialProcessRefreshDeferral: {
+                await initialDeferralGate.wait()
+            },
+            processRefreshRetryDelay: { _ in
+                await Task.yield()
+            }
+        )
+
+        service.requestImmediateWorkingDirectoryRefresh(
+            panelID: panelID,
+            source: "surface_create_process"
+        )
+
+        XCTAssertTrue(
+            service.handleRuntimeMetadataAction(
+                .setTerminalCWD("/tmp/native"),
+                workspaceID: workspaceID,
+                panelID: panelID,
+                state: store.state
+            )
+        )
+
+        await initialDeferralGate.open()
+        await settleMetadataTasks()
+
+        XCTAssertEqual(resolveAttemptCount, 0)
+        XCTAssertEqual(try terminalState(panelID: panelID, state: store.state).cwd, "/tmp/native")
+        XCTAssertTrue(service.prefersNativeCWDSignal(panelID: panelID))
+        try StateValidator.validate(store.state)
+    }
+
     func testImmediateProcessRefreshStopsRetryingAfterNativeGhosttyCWDSignal() async throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()

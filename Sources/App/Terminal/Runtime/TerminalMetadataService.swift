@@ -36,6 +36,7 @@ final class TerminalMetadataService {
     private var nativeCWDLastProcessFallbackPollAtByPanelID: [UUID: Date] = [:]
     private let processWorkingDirectoryResolver = TerminalProcessWorkingDirectoryResolver()
     private let resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?
+    private let initialProcessRefreshDeferral: @Sendable () async -> Void
     private let processRefreshRetryDelay: @Sendable (UInt64) async -> Void
     private var immediateProcessRefreshTaskByPanelID: [UUID: Task<Void, Never>] = [:]
     private var immediateProcessRefreshTokenByPanelID: [UUID: UUID] = [:]
@@ -56,7 +57,25 @@ final class TerminalMetadataService {
             registry: registry,
             sessionLifecycleTracker: sessionLifecycleTracker,
             resolveWorkingDirectoryFromProcessOverride: nil,
+            initialProcessRefreshDeferral: Self.defaultInitialProcessRefreshDeferral,
             processRefreshRetryDelay: Self.defaultProcessRefreshRetryDelay
+        )
+    }
+
+    convenience init(
+        store: AppStore,
+        registry: TerminalRuntimeRegistry,
+        sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)? = nil,
+        resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?,
+        processRefreshRetryDelay: @escaping @Sendable (UInt64) async -> Void
+    ) {
+        self.init(
+            store: store,
+            registry: registry,
+            sessionLifecycleTracker: sessionLifecycleTracker,
+            resolveWorkingDirectoryFromProcessOverride: resolveWorkingDirectoryFromProcessOverride,
+            initialProcessRefreshDeferral: Self.defaultInitialProcessRefreshDeferral,
+            processRefreshRetryDelay: processRefreshRetryDelay
         )
     }
 
@@ -65,12 +84,14 @@ final class TerminalMetadataService {
         registry: TerminalRuntimeRegistry,
         sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)? = nil,
         resolveWorkingDirectoryFromProcessOverride: ((UUID) -> String?)?,
+        initialProcessRefreshDeferral: @escaping @Sendable () async -> Void,
         processRefreshRetryDelay: @escaping @Sendable (UInt64) async -> Void
     ) {
         self.store = store
         self.registry = registry
         self.sessionLifecycleTracker = sessionLifecycleTracker
         self.resolveWorkingDirectoryFromProcessOverride = resolveWorkingDirectoryFromProcessOverride
+        self.initialProcessRefreshDeferral = initialProcessRefreshDeferral
         self.processRefreshRetryDelay = processRefreshRetryDelay
     }
 
@@ -312,74 +333,72 @@ final class TerminalMetadataService {
 
     func requestImmediateWorkingDirectoryRefresh(panelID: UUID, source: String) {
         immediateProcessRefreshTaskByPanelID.removeValue(forKey: panelID)?.cancel()
-        if let refreshedWorkingDirectory = refreshWorkingDirectoryFromProcessIfNeeded(
-            panelID: panelID,
-            source: source
-        ) {
-            ToasttyLog.debug(
-                "Resolved terminal cwd from process immediately after surface creation",
-                category: .terminal,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                    "source": source,
-                    "cwd_sample": String(refreshedWorkingDirectory.prefix(120)),
-                ]
-            )
-            immediateProcessRefreshTokenByPanelID.removeValue(forKey: panelID)
-            return
-        }
-
         let refreshToken = UUID()
         immediateProcessRefreshTokenByPanelID[panelID] = refreshToken
 
         let retryDelays = Self.immediateProcessRefreshRetryDelaysNanoseconds
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
+            // This request can originate from NSViewRepresentable/layout-driven
+            // surface creation. Hop off the caller's stack before attempting any
+            // process refresh that could publish AppStore state.
+            await self.initialProcessRefreshDeferral()
+            guard Task.isCancelled == false else { return }
+            guard self.immediateProcessRefreshTokenByPanelID[panelID] == refreshToken else { return }
             var didResolveWorkingDirectory = false
+            var suppressedByNativeSignal = false
 
-            for (attempt, delay) in retryDelays.enumerated() {
-                guard Task.isCancelled == false else { return }
-
-                await self.processRefreshRetryDelay(delay)
-                guard Task.isCancelled == false else { return }
-                guard self.prefersNativeCWDSignal(panelID: panelID) == false else {
-                    break
-                }
-
-                let attemptSource = "\(source)_retry_\(attempt + 1)"
-                if let refreshedWorkingDirectory = self.refreshWorkingDirectoryFromProcessIfNeeded(
+            if self.prefersNativeCWDSignal(panelID: panelID) {
+                suppressedByNativeSignal = true
+            } else if let refreshedWorkingDirectory = self.refreshWorkingDirectoryFromProcessIfNeeded(
+                panelID: panelID,
+                source: source
+            ) {
+                Self.logImmediateProcessRefreshResolution(
                     panelID: panelID,
-                    source: attemptSource
-                ) {
-                    ToasttyLog.debug(
-                        "Resolved terminal cwd from process immediately after surface creation",
-                        category: .terminal,
-                        metadata: [
-                            "panel_id": panelID.uuidString,
-                            "source": attemptSource,
-                            "cwd_sample": String(refreshedWorkingDirectory.prefix(120)),
-                        ]
-                    )
-                    didResolveWorkingDirectory = true
-                    break
+                    source: source,
+                    workingDirectory: refreshedWorkingDirectory
+                )
+                didResolveWorkingDirectory = true
+            }
+
+            if didResolveWorkingDirectory == false && suppressedByNativeSignal == false {
+                for (attempt, delay) in retryDelays.enumerated() {
+                    guard Task.isCancelled == false else { return }
+                    guard self.immediateProcessRefreshTokenByPanelID[panelID] == refreshToken else { return }
+
+                    await self.processRefreshRetryDelay(delay)
+                    guard Task.isCancelled == false else { return }
+                    guard self.immediateProcessRefreshTokenByPanelID[panelID] == refreshToken else { return }
+                    guard self.prefersNativeCWDSignal(panelID: panelID) == false else {
+                        suppressedByNativeSignal = true
+                        break
+                    }
+
+                    let attemptSource = "\(source)_retry_\(attempt + 1)"
+                    if let refreshedWorkingDirectory = self.refreshWorkingDirectoryFromProcessIfNeeded(
+                        panelID: panelID,
+                        source: attemptSource
+                    ) {
+                        Self.logImmediateProcessRefreshResolution(
+                            panelID: panelID,
+                            source: attemptSource,
+                            workingDirectory: refreshedWorkingDirectory
+                        )
+                        didResolveWorkingDirectory = true
+                        break
+                    }
                 }
             }
 
-            if self.immediateProcessRefreshTokenByPanelID[panelID] == refreshToken {
-                if !didResolveWorkingDirectory {
-                    ToasttyLog.debug(
-                        "Immediate terminal cwd refresh exhausted retries after surface creation",
-                        category: .terminal,
-                        metadata: [
-                            "panel_id": panelID.uuidString,
-                            "source": source,
-                            "attempt_count": String(retryDelays.count + 1),
-                        ]
-                    )
-                }
-                self.immediateProcessRefreshTaskByPanelID.removeValue(forKey: panelID)
-                self.immediateProcessRefreshTokenByPanelID.removeValue(forKey: panelID)
-            }
+            self.finishImmediateProcessRefreshIfCurrent(
+                panelID: panelID,
+                token: refreshToken,
+                source: source,
+                didResolveWorkingDirectory: didResolveWorkingDirectory,
+                suppressedByNativeSignal: suppressedByNativeSignal,
+                attemptCount: retryDelays.count + 1
+            )
         }
 
         immediateProcessRefreshTaskByPanelID[panelID] = task
@@ -531,6 +550,54 @@ final class TerminalMetadataService {
 
     private static func defaultProcessRefreshRetryDelay(_ nanoseconds: UInt64) async {
         try? await Task.sleep(nanoseconds: nanoseconds)
+    }
+
+    private static func defaultInitialProcessRefreshDeferral() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async {
+                continuation.resume()
+            }
+        }
+    }
+
+    private static func logImmediateProcessRefreshResolution(
+        panelID: UUID,
+        source: String,
+        workingDirectory: String
+    ) {
+        ToasttyLog.debug(
+            "Resolved terminal cwd from process immediately after surface creation",
+            category: .terminal,
+            metadata: [
+                "panel_id": panelID.uuidString,
+                "source": source,
+                "cwd_sample": String(workingDirectory.prefix(120)),
+            ]
+        )
+    }
+
+    private func finishImmediateProcessRefreshIfCurrent(
+        panelID: UUID,
+        token: UUID,
+        source: String,
+        didResolveWorkingDirectory: Bool,
+        suppressedByNativeSignal: Bool,
+        attemptCount: Int
+    ) {
+        guard immediateProcessRefreshTokenByPanelID[panelID] == token else { return }
+        if didResolveWorkingDirectory == false, suppressedByNativeSignal == false {
+            ToasttyLog.debug(
+                "Immediate terminal cwd refresh exhausted retries after surface creation",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "source": source,
+                    "attempt_count": String(attemptCount),
+                ]
+            )
+        }
+        immediateProcessRefreshTaskByPanelID.removeValue(forKey: panelID)
+        immediateProcessRefreshTokenByPanelID.removeValue(forKey: panelID)
     }
 
     private func handleDesktopNotification(
