@@ -405,14 +405,14 @@ struct WorkspaceView: View {
                         workspaceUnreadSummaryLabel(for: workspace)
                         workspaceHeaderTabStrip(for: workspace)
                         topBarTrailingControls
-                            .fixedSize(horizontal: true, vertical: false)
+                            .fixedSize(horizontal: true, vertical: true)
                     }
                 } else {
                     HStack(alignment: .center, spacing: Self.workspaceTabsToControlsSpacing) {
                         workspaceTitleLabel
                         Spacer(minLength: 0)
                         topBarTrailingControls
-                            .fixedSize(horizontal: true, vertical: false)
+                            .fixedSize(horizontal: true, vertical: true)
                     }
                 }
             }
@@ -1523,16 +1523,11 @@ struct WorkspaceView: View {
         @ViewBuilder label: () -> Label
     ) -> some View {
         Button(action: action) {
-            label()
+            TopBarButtonChrome(highlighted: active) {
+                label()
+            }
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(active ? ToastyTheme.elevatedBackground : Color.clear)
-        .overlay(
-            Rectangle()
-                .strokeBorder(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
-        )
     }
 
     /// Top bar button for momentary actions (e.g. split). Briefly flashes the "active"
@@ -1623,7 +1618,13 @@ private struct WorkspaceHeaderLayout: Layout {
         let tabsSize = subviews[2].sizeThatFits(
             ProposedViewSize(width: nil, height: ToastyTheme.workspaceTabHeight)
         )
-        let trailingSize = subviews[3].sizeThatFits(.unspecified)
+        // Keep the trailing top-bar controls measured inside the visible bar.
+        // Plain buttons in the hidden titlebar region can otherwise report a
+        // taller hit target than the visible chrome, which leaks active fills
+        // above the intended button bounds.
+        let trailingSize = subviews[3].sizeThatFits(
+            ProposedViewSize(width: nil, height: ToastyTheme.topBarHeight)
+        )
         let titleColumnWidth = min(
             WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
                 titleWidth: titleSize.width,
@@ -1660,7 +1661,9 @@ private struct WorkspaceHeaderLayout: Layout {
 
         let titleSize = subviews[0].sizeThatFits(.unspecified)
         let unreadSummarySize = subviews[1].sizeThatFits(.unspecified)
-        let trailingSize = subviews[3].sizeThatFits(.unspecified)
+        let trailingSize = subviews[3].sizeThatFits(
+            ProposedViewSize(width: nil, height: bounds.height)
+        )
         let trailingX = max(bounds.minX, bounds.maxX - trailingSize.width)
         let titleColumnPreferredWidth = WorkspaceView.workspaceHeaderTitleColumnPreferredWidth(
             titleWidth: titleSize.width,
@@ -2347,14 +2350,9 @@ private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         let highlighted = configuration.isPressed
-        icon(highlighted)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
-            .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
-            .overlay(
-                Rectangle()
-                    .strokeBorder(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
-            )
+        TopBarButtonChrome(highlighted: highlighted, horizontalPadding: 6) {
+            icon(highlighted)
+        }
             .animation(.easeOut(duration: 0.15), value: highlighted)
     }
 }
@@ -2362,17 +2360,43 @@ private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
 private struct TopBarFlashTextButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         let highlighted = configuration.isPressed
-        configuration.label
-            .font(ToastyTheme.fontSubtext)
-            .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
+        TopBarButtonChrome(highlighted: highlighted) {
+            configuration.label
+                .font(ToastyTheme.fontSubtext)
+                .foregroundStyle(highlighted ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+                .lineLimit(1)
+        }
+            .animation(.easeOut(duration: 0.15), value: highlighted)
+    }
+}
+
+private struct TopBarButtonChrome<Content: View>: View {
+    let highlighted: Bool
+    let horizontalPadding: CGFloat
+    let verticalPadding: CGFloat
+    let content: Content
+
+    init(
+        highlighted: Bool,
+        horizontalPadding: CGFloat = 8,
+        verticalPadding: CGFloat = 3,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.highlighted = highlighted
+        self.horizontalPadding = horizontalPadding
+        self.verticalPadding = verticalPadding
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .fixedSize(horizontal: true, vertical: true)
             .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
             .overlay(
                 Rectangle()
                     .strokeBorder(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
             )
-            .animation(.easeOut(duration: 0.15), value: highlighted)
     }
 }
