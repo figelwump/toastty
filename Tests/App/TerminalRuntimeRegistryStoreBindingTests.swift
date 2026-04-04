@@ -124,6 +124,66 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         )
     }
 
+    func testSurfaceLaunchConfigurationUsesRestoreReasonWithoutProfileBinding() throws {
+        let workspaceID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let windowID = UUID()
+        let paneJournalFilePath = "/tmp/toastty-history/\(panelID.uuidString).journal"
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: WorkspaceState(
+                    id: workspaceID,
+                    title: "Plain",
+                    layoutTree: .slot(slotID: slotID, panelID: panelID),
+                    panels: [
+                        panelID: .terminal(
+                            TerminalPanelState(
+                                title: "Terminal 1",
+                                shell: "zsh",
+                                cwd: "/tmp"
+                            )
+                        ),
+                    ],
+                    focusedPanelID: panelID
+                ),
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.setTerminalProfileProvider(
+            TestTerminalProfileProvider(catalog: TerminalProfileCatalog(profiles: [])),
+            restoredTerminalPanelIDs: [panelID]
+        )
+        registry.setBaseLaunchEnvironmentProvider { requestedPanelID in
+            [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: "/tmp/toastty-history/\(requestedPanelID.uuidString).journal",
+            ]
+        }
+        registry.bind(store: store)
+
+        let launchConfiguration = registry.surfaceLaunchConfiguration(for: panelID)
+
+        XCTAssertEqual(
+            launchConfiguration.environmentVariables,
+            [
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: paneJournalFilePath,
+            ]
+        )
+        XCTAssertNil(launchConfiguration.initialInput)
+    }
+
     func testMarkInitialSurfaceLaunchCompletedSuppressesRepeatProfileLaunch() throws {
         let workspaceID = UUID()
         let panelID = UUID()
