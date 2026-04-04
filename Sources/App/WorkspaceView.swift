@@ -1531,7 +1531,7 @@ struct WorkspaceView: View {
         .background(active ? ToastyTheme.elevatedBackground : Color.clear)
         .overlay(
             Rectangle()
-                .stroke(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+                .strokeBorder(active ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
         )
     }
 
@@ -2353,7 +2353,7 @@ private struct TopBarFlashButtonStyle<Icon: View>: ButtonStyle {
             .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
             .overlay(
                 Rectangle()
-                    .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+                    .strokeBorder(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
             )
             .animation(.easeOut(duration: 0.15), value: highlighted)
     }
@@ -2371,7 +2371,7 @@ private struct TopBarFlashTextButtonStyle: ButtonStyle {
             .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
             .overlay(
                 Rectangle()
-                    .stroke(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
+                    .strokeBorder(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
             )
             .animation(.easeOut(duration: 0.15), value: highlighted)
     }
