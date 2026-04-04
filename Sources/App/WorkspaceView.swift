@@ -2476,11 +2476,11 @@ private struct TopBarButtonChrome<Content: View>: View {
         content
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
-            .fixedSize(horizontal: true, vertical: true)
             .background(highlighted ? ToastyTheme.elevatedBackground : Color.clear)
             .overlay(
                 Rectangle()
                     .strokeBorder(highlighted ? ToastyTheme.subtleBorder : Color.clear, lineWidth: 1)
             )
+            .fixedSize(horizontal: true, vertical: true)
     }
 }
