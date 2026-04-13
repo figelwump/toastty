@@ -8,12 +8,57 @@ struct BrowserPanelHostView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator {
+        typealias MainActorScheduler = (@escaping @MainActor @Sendable () -> Void) -> Void
+
         let containerCoordinator = PanelHostContainerCoordinator()
         var lastAppliedWebState: WebPanelState?
+        private var pendingWebState: WebPanelState?
+        private var pendingApplyRequestID: UUID?
+        private let scheduleOnMainActor: MainActorScheduler
+
+        init(
+            scheduleOnMainActor: @escaping MainActorScheduler = { operation in
+                Task { @MainActor in
+                    operation()
+                }
+            }
+        ) {
+            self.scheduleOnMainActor = scheduleOnMainActor
+        }
+
+        func scheduleApply(webState: WebPanelState, runtime: BrowserPanelRuntime) {
+            guard lastAppliedWebState != webState,
+                  pendingWebState != webState else {
+                return
+            }
+
+            // Only the latest pending browser state should apply; superseded
+            // snapshots are intentionally dropped before they reach the runtime.
+            pendingWebState = webState
+            let requestID = UUID()
+            pendingApplyRequestID = requestID
+
+            // Hop off updateNSView so BrowserPanelRuntime can publish its
+            // navigation state without tripping SwiftUI's view-update warning.
+            scheduleOnMainActor { [weak self, weak runtime] in
+                guard let self,
+                      self.pendingApplyRequestID == requestID,
+                      self.pendingWebState == webState else {
+                    return
+                }
+
+                self.pendingApplyRequestID = nil
+                self.pendingWebState = nil
+                self.lastAppliedWebState = webState
+                runtime?.apply(webState: webState)
+            }
+        }
 
         func reset() {
             containerCoordinator.reset()
             lastAppliedWebState = nil
+            pendingWebState = nil
+            pendingApplyRequestID = nil
         }
     }
 
@@ -38,10 +83,7 @@ struct BrowserPanelHostView: NSViewRepresentable {
         containerView.onLayout = attach
         attach(containerView)
 
-        if context.coordinator.lastAppliedWebState != webState {
-            runtime.apply(webState: webState)
-            context.coordinator.lastAppliedWebState = webState
-        }
+        context.coordinator.scheduleApply(webState: webState, runtime: runtime)
     }
 
     static func dismantleNSView(_ containerView: BrowserPanelContainerView, coordinator: Coordinator) {
