@@ -283,6 +283,7 @@ Implemented behavior:
 - reopen the panel after close
 - reuse an existing markdown panel in the current workspace when opening the
   same file
+- live reload the panel when the backing file changes on disk
 - allow both `newTab` and explicit split placement variants
 - keep the panel local-only
 
@@ -332,18 +333,18 @@ Current bootstrap fields are intentionally narrow:
 
 ### markdown v1 file watching
 
-File watching is useful, but it is optional for the first cut.
+Markdown file watching is now part of the implemented v1 hardening work.
 
-Priority order:
+Current implementation direction:
 
-1. open
-2. render
-3. restore/reopen
-4. reuse
-5. optional live reload on file changes
+- keep runtime-owned watching inside `MarkdownPanelRuntime`
+- watch the persisted file path and its parent directory so atomic-save
+  rename/recreate flows still recover
+- debounce reload requests in the runtime instead of persisting watcher state
+- keep missing-file rendering path-based rather than mutating `WebPanelState`
 
-If file watching materially delays the first usable markdown panel, defer it to
-follow-up work.
+This keeps the implementation markdown-specific while still leaving room for a
+small internal watcher helper to be reused later by another file-backed panel.
 
 ## scratchpad follows markdown
 
@@ -405,7 +406,6 @@ Completed in this worktree:
 
 ### step 3: expand markdown only if the first cut proves sound
 
-- optional file watching
 - optional richer review affordances
 - optional app-owned feedback routing for markdown-specific review flows
 - decide whether the flat `WebPanelState` shape should be replaced before edit
@@ -447,7 +447,8 @@ Validation for markdown work should include:
 
 - reducer tests for creation, placement, reuse, close, and reopen
 - restore/snapshot tests for persisted markdown state
-- runtime tests for bundled asset lookup and local-only behavior
+- runtime tests for bundled asset lookup, live reload, delete/recreate recovery,
+  and retargeting behavior
 - automation coverage or an equivalent smoke path for opening and rendering a
   markdown file
 
@@ -455,8 +456,6 @@ Validation for markdown work should include:
 
 - Is the current flat `WebPanelState` still acceptable for markdown edit/comment
   mode, or should that be the forcing function for typed per-definition payloads?
-- Is file watching worth including as the next markdown follow-up, or should it
-  wait until richer review flows exist?
 - What is the right enforcement mechanism for the local-only web profile?
 - Does markdown review/comment mode need a richer typed bridge, or does
   scratchpad remain the first real consumer?

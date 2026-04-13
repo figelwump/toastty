@@ -19,17 +19,23 @@ enum MarkdownPanelAssetLocator {
 
 @MainActor
 final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
+    typealias BootstrapProvider = @Sendable (WebPanelState) async -> MarkdownPanelBootstrap
+
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
     private let webView: FocusAwareWKWebView
     private let entryURL: URL?
     private let assetDirectoryURL: URL?
+    private let bootstrapProvider: BootstrapProvider
+    private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
     private var pendingDetachAttachment: PanelHostAttachmentToken?
     private var pendingDetachTask: Task<Void, Never>?
-    private var applyTask: Task<Void, Never>?
-    private var applyGeneration: UInt64 = 0
+    private var currentWebState: WebPanelState?
+    private var fileObserver: FilePathObserver?
+    private var reloadTask: Task<Void, Never>?
+    private var reloadGeneration: UInt64 = 0
     private var pendingBootstrapScript: String?
     private var currentAssetURL: URL?
 
@@ -38,12 +44,16 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
         bundle: Bundle = .main,
-        entryURL: URL? = nil
+        entryURL: URL? = nil,
+        bootstrapProvider: @escaping BootstrapProvider = { await MarkdownPanelRuntime.bootstrap(for: $0) },
+        reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
         self.entryURL = entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle)
         self.assetDirectoryURL = (entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
+        self.bootstrapProvider = bootstrapProvider
+        self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
@@ -62,7 +72,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 
     deinit {
         pendingDetachTask?.cancel()
-        applyTask?.cancel()
+        reloadTask?.cancel()
         let webView = webView
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
@@ -128,30 +138,12 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     }
 
     func apply(webState: WebPanelState) {
-        applyGeneration &+= 1
-        let generation = applyGeneration
-        applyTask?.cancel()
-        pendingBootstrapScript = nil
+        let didChangeState = currentWebState != webState
+        currentWebState = webState
+        synchronizeFileObservation(with: webState.filePath)
 
-        applyTask = Task { [weak self] in
-            let bootstrap = await Self.bootstrap(for: webState)
-            guard let self else { return }
-            defer {
-                if generation == self.applyGeneration {
-                    self.applyTask = nil
-                }
-            }
-            guard Task.isCancelled == false, generation == self.applyGeneration else {
-                return
-            }
-
-            self.metadataDidChange(self.panelID, bootstrap.displayName, nil)
-            guard let script = Self.bootstrapJavaScript(for: bootstrap) else {
-                return
-            }
-            self.pendingBootstrapScript = script
-            self.ensurePanelAppLoaded()
-        }
+        guard didChangeState else { return }
+        requestReload(debounced: false)
     }
 
     nonisolated static func bootstrap(for webState: WebPanelState) async -> MarkdownPanelBootstrap {
@@ -201,6 +193,61 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 }
 
 private extension MarkdownPanelRuntime {
+    func synchronizeFileObservation(with filePath: String?) {
+        guard let normalizedFilePath = WebPanelState.normalizedFilePath(filePath) else {
+            fileObserver?.invalidate()
+            fileObserver = nil
+            return
+        }
+
+        if let fileObserver {
+            fileObserver.update(path: normalizedFilePath)
+            return
+        }
+
+        fileObserver = FilePathObserver(path: normalizedFilePath) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.requestReload(debounced: true)
+            }
+        }
+    }
+
+    func requestReload(debounced: Bool) {
+        guard let webState = currentWebState else { return }
+
+        reloadGeneration &+= 1
+        let generation = reloadGeneration
+        let bootstrapProvider = bootstrapProvider
+        let reloadDelayNanoseconds = debounced ? reloadDebounceNanoseconds : 0
+
+        reloadTask?.cancel()
+        pendingBootstrapScript = nil
+
+        reloadTask = Task { [weak self] in
+            if reloadDelayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: reloadDelayNanoseconds)
+            }
+
+            let bootstrap = await bootstrapProvider(webState)
+            guard let self else { return }
+            defer {
+                if generation == self.reloadGeneration {
+                    self.reloadTask = nil
+                }
+            }
+            guard Task.isCancelled == false, generation == self.reloadGeneration else {
+                return
+            }
+
+            self.metadataDidChange(self.panelID, bootstrap.displayName, nil)
+            guard let script = Self.bootstrapJavaScript(for: bootstrap) else {
+                return
+            }
+            self.pendingBootstrapScript = script
+            self.ensurePanelAppLoaded()
+        }
+    }
+
     func ensurePanelAppLoaded() {
         guard let entryURL, let assetDirectoryURL else {
             let fallbackHTML = Self.fallbackHTML(
