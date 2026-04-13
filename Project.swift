@@ -112,6 +112,10 @@ let ghosttyDebugSelection = ghosttyDebugVariantSelection ?? ghosttyReleaseVarian
 let ghosttyReleaseSelection = ghosttyReleaseVariantSelection ?? ghosttyDebugVariantSelection
 let hasGhosttyXCFrameworkArtifact = ghosttyDebugSelection != nil && ghosttyReleaseSelection != nil
 let hasGhosttyXCFramework = hasGhosttyXCFrameworkArtifact && !ghosttyIntegrationDisabled
+let debugFishShellPath = [
+    "/opt/homebrew/bin/fish",
+    "/usr/local/bin/fish",
+].first(where: { FileManager.default.fileExists(atPath: $0) }) ?? "/path/to/fish"
 
 func applyGhosttyVariantModuleSettings(
     configurationName: String,
@@ -403,6 +407,7 @@ let project = Project(
                     environmentVariables: [
                         "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
                         "TOASTTY_LOG_LEVEL": .environmentVariable(value: "debug", isEnabled: true),
+                        "TOASTTY_DEBUG_LOGIN_SHELL": .environmentVariable(value: debugFishShellPath, isEnabled: false),
                     ]
                 )
             )
@@ -422,6 +427,7 @@ let project = Project(
                 arguments: .arguments(
                     environmentVariables: [
                         "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
+                        "TOASTTY_DEBUG_LOGIN_SHELL": .environmentVariable(value: debugFishShellPath, isEnabled: false),
                     ]
                 )
             ),

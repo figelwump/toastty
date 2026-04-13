@@ -884,7 +884,9 @@ final class GhosttyRuntimeManager {
         Self.logGhosttyConfigDiagnostics(config, source: configSource)
         configuredTerminalFontPoints = Self.resolveConfiguredTerminalFontPoints(config)
         Self.applyHostStyle(config)
-        ghostty_config_finalize(config)
+        Self.withDebugLoginShellOverrideIfNeeded {
+            ghostty_config_finalize(config)
+        }
 
         var runtimeConfig = makeGhosttyRuntimeConfig(
             userdata: Unmanaged.passUnretained(self).toOpaque()
@@ -1148,7 +1150,9 @@ final class GhosttyRuntimeManager {
         Self.logGhosttyConfigDiagnostics(newConfig, source: configSource)
         configuredTerminalFontPoints = Self.resolveConfiguredTerminalFontPoints(newConfig)
         Self.applyHostStyle(newConfig)
-        ghostty_config_finalize(newConfig)
+        Self.withDebugLoginShellOverrideIfNeeded {
+            ghostty_config_finalize(newConfig)
+        }
 
         // Ghostty's App.updateConfig docs state the caller retains ownership and
         // may free its config buffers immediately after this call returns.
@@ -1174,6 +1178,71 @@ final class GhosttyRuntimeManager {
     private static func initializeGhosttyRuntime() -> Bool {
         configureGhosttyResourcesDirectoryEnvironmentIfNeeded()
         return ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == GHOSTTY_SUCCESS
+    }
+
+    private static func withDebugLoginShellOverrideIfNeeded<T>(_ body: () -> T) -> T {
+        let environment = ProcessInfo.processInfo.environment
+        guard let plan = GhosttyDebugLoginShellOverride.plan(environment: environment) else {
+            return body()
+        }
+
+        let originalShell = currentEnvironmentValue(forKey: "SHELL")
+        let originalTermProgram = currentEnvironmentValue(forKey: GhosttyDebugLoginShellOverride.termProgramKey)
+
+        let didSetShell = setEnvironmentValue(key: "SHELL", value: plan.shellPath, overwrite: true)
+        if plan.requiresTermProgramShim,
+           setEnvironmentValue(
+               key: GhosttyDebugLoginShellOverride.termProgramKey,
+               value: GhosttyDebugLoginShellOverride.shimmedTermProgramValue,
+               overwrite: true
+           ) == false {
+            ToasttyLog.warning(
+                "Failed to apply TERM_PROGRAM shim for Ghostty debug shell override",
+                category: .ghostty,
+                metadata: [
+                    "env_key": GhosttyDebugLoginShellOverride.environmentKey,
+                    "term_program_key": GhosttyDebugLoginShellOverride.termProgramKey,
+                    "term_program_value": GhosttyDebugLoginShellOverride.shimmedTermProgramValue,
+                ]
+            )
+        }
+
+        if didSetShell {
+            var metadata: [String: String] = [
+                "env_key": GhosttyDebugLoginShellOverride.environmentKey,
+                "shell_path": plan.shellPath,
+                "shimmed_term_program": plan.requiresTermProgramShim ? "true" : "false",
+            ]
+            if let currentTermProgram = currentEnvironmentValue(forKey: GhosttyDebugLoginShellOverride.termProgramKey) {
+                metadata["term_program"] = currentTermProgram
+            }
+            ToasttyLog.info(
+                "Temporarily overriding Ghostty default shell for this app launch",
+                category: .ghostty,
+                metadata: metadata
+            )
+        } else {
+            ToasttyLog.warning(
+                "Failed to apply Ghostty debug shell override; continuing with default shell detection",
+                category: .ghostty,
+                metadata: [
+                    "env_key": GhosttyDebugLoginShellOverride.environmentKey,
+                    "shell_path": plan.shellPath,
+                ]
+            )
+        }
+
+        defer {
+            restoreEnvironmentValue(key: "SHELL", value: originalShell)
+            if plan.requiresTermProgramShim {
+                restoreEnvironmentValue(
+                    key: GhosttyDebugLoginShellOverride.termProgramKey,
+                    value: originalTermProgram
+                )
+            }
+        }
+
+        return body()
     }
 
     private static func loadGhosttyConfig(_ config: ghostty_config_t) -> GhosttyConfigSource {
@@ -1351,6 +1420,29 @@ final class GhosttyRuntimeManager {
                 "source": "auto_detect",
             ]
         )
+    }
+
+    private static func currentEnvironmentValue(forKey key: String) -> String? {
+        guard let pointer = getenv(key) else {
+            return nil
+        }
+
+        let value = String(cString: pointer)
+        return value.isEmpty ? nil : value
+    }
+
+    private static func setEnvironmentValue(key: String, value: String, overwrite: Bool) -> Bool {
+        value.withCString { valuePointer in
+            setenv(key, valuePointer, overwrite ? 1 : 0) == 0
+        }
+    }
+
+    private static func restoreEnvironmentValue(key: String, value: String?) {
+        if let value {
+            _ = setEnvironmentValue(key: key, value: value, overwrite: true)
+        } else {
+            _ = unsetenv(key)
+        }
     }
 
     private static func detectGhosttyResourcesDirectory() -> String? {
