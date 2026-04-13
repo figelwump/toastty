@@ -27,11 +27,12 @@ final class FocusAwareWKWebView: WKWebView {
 
 final class WebPanelContainerView: NSView {
     var onLayout: ((NSView) -> Void)?
+    var onEffectiveAppearanceChange: ((NSAppearance?) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        updateBackgroundColor()
     }
 
     required init?(coder: NSCoder) {
@@ -45,7 +46,19 @@ final class WebPanelContainerView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        updateBackgroundColor()
         guard window != nil else { return }
+        onEffectiveAppearanceChange?(effectiveAppearance)
         onLayout?(self)
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        updateBackgroundColor()
+        onEffectiveAppearanceChange?(effectiveAppearance)
+    }
+
+    private func updateBackgroundColor() {
+        layer?.backgroundColor = window?.backgroundColor.cgColor ?? NSColor.windowBackgroundColor.cgColor
     }
 }

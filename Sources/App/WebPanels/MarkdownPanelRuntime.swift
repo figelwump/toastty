@@ -19,7 +19,7 @@ enum MarkdownPanelAssetLocator {
 
 @MainActor
 final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
-    typealias BootstrapProvider = @Sendable (WebPanelState) async -> MarkdownPanelBootstrap
+    typealias BootstrapProvider = @Sendable (WebPanelState, MarkdownPanelTheme) async -> MarkdownPanelBootstrap
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
@@ -38,6 +38,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     private var reloadGeneration: UInt64 = 0
     private var pendingBootstrapScript: String?
     private var currentAssetURL: URL?
+    private var currentBootstrap: MarkdownPanelBootstrap?
+    private var currentTheme: MarkdownPanelTheme = .dark
 
     init(
         panelID: UUID,
@@ -45,7 +47,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
         bundle: Bundle = .main,
         entryURL: URL? = nil,
-        bootstrapProvider: @escaping BootstrapProvider = { await MarkdownPanelRuntime.bootstrap(for: $0) },
+        bootstrapProvider: @escaping BootstrapProvider = { await MarkdownPanelRuntime.bootstrap(for: $0, theme: $1) },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -104,6 +106,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         pendingDetachAttachment = nil
         activeAttachment = attachment
         activeSourceContainer = container
+        applyEffectiveAppearance(container.effectiveAppearance)
 
         guard webView.superview !== container else { return }
         container.addSubview(webView)
@@ -146,7 +149,30 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         requestReload(debounced: false)
     }
 
-    nonisolated static func bootstrap(for webState: WebPanelState) async -> MarkdownPanelBootstrap {
+    func applyEffectiveAppearance(_ appearance: NSAppearance?) {
+        webView.appearance = appearance
+
+        let nextTheme = Self.theme(for: appearance)
+        guard nextTheme != currentTheme else { return }
+        currentTheme = nextTheme
+        pushThemeUpdateIfPossible()
+    }
+
+    nonisolated static func theme(for appearance: NSAppearance?) -> MarkdownPanelTheme {
+        switch appearance?.bestMatch(from: [.darkAqua, .aqua]) {
+        case .aqua:
+            return .light
+        case .darkAqua, nil:
+            return .dark
+        default:
+            return .dark
+        }
+    }
+
+    nonisolated static func bootstrap(
+        for webState: WebPanelState,
+        theme: MarkdownPanelTheme = .dark
+    ) async -> MarkdownPanelBootstrap {
         let filePath = webState.filePath ?? ""
         let displayName = resolvedDisplayName(for: webState, filePath: filePath)
 
@@ -158,7 +184,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
                     title: displayName,
                     filePath: nil,
                     message: "Toastty could not determine which markdown file this panel should render."
-                )
+                ),
+                theme: theme
             )
         }
 
@@ -167,7 +194,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             return MarkdownPanelBootstrap(
                 filePath: filePath,
                 displayName: displayName,
-                content: content
+                content: content,
+                theme: theme
             )
         } catch {
             return MarkdownPanelBootstrap(
@@ -177,7 +205,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
                     title: displayName,
                     filePath: filePath,
                     message: error.localizedDescription
-                )
+                ),
+                theme: theme
             )
         }
     }
@@ -219,6 +248,7 @@ private extension MarkdownPanelRuntime {
         let generation = reloadGeneration
         let bootstrapProvider = bootstrapProvider
         let reloadDelayNanoseconds = debounced ? reloadDebounceNanoseconds : 0
+        let requestedTheme = currentTheme
 
         reloadTask?.cancel()
         pendingBootstrapScript = nil
@@ -228,7 +258,7 @@ private extension MarkdownPanelRuntime {
                 try? await Task.sleep(nanoseconds: reloadDelayNanoseconds)
             }
 
-            let bootstrap = await bootstrapProvider(webState)
+            var bootstrap = await bootstrapProvider(webState, requestedTheme)
             guard let self else { return }
             defer {
                 if generation == self.reloadGeneration {
@@ -239,6 +269,8 @@ private extension MarkdownPanelRuntime {
                 return
             }
 
+            bootstrap = bootstrap.setting(theme: self.currentTheme)
+            self.currentBootstrap = bootstrap
             self.metadataDidChange(self.panelID, bootstrap.displayName, nil)
             guard let script = Self.bootstrapJavaScript(for: bootstrap) else {
                 return
@@ -276,6 +308,20 @@ private extension MarkdownPanelRuntime {
                 self.pendingBootstrapScript = nil
             }
         }
+    }
+
+    func pushThemeUpdateIfPossible() {
+        guard let currentBootstrap else { return }
+
+        let themedBootstrap = currentBootstrap.setting(theme: currentTheme)
+        guard themedBootstrap != currentBootstrap else { return }
+
+        self.currentBootstrap = themedBootstrap
+        guard let script = Self.bootstrapJavaScript(for: themedBootstrap) else {
+            return
+        }
+        pendingBootstrapScript = script
+        ensurePanelAppLoaded()
     }
 
     nonisolated static func readMarkdownContent(at filePath: String) async throws -> String {

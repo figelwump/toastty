@@ -1,15 +1,45 @@
-:root {
+:root[data-theme="light"] {
   color-scheme: light;
   --bg: #fbf5ee;
+  --bg-top: #fff8f1;
+  --bg-glow: rgba(255, 190, 92, 0.28);
   --panel: rgba(255, 251, 246, 0.92);
+  --header-bg: rgba(255, 249, 242, 0.92);
+  --header-shadow: rgba(255, 255, 255, 0.7);
   --border: rgba(103, 72, 37, 0.14);
   --text: #22170e;
+  --heading: #1d130b;
   --muted: #76593f;
   --accent: #b65c22;
   --accent-soft: rgba(182, 92, 34, 0.12);
   --code-bg: rgba(78, 53, 31, 0.08);
   --quote-bg: rgba(182, 92, 34, 0.06);
+  --quote-text: #5f422b;
+  --pre-bg: #21160f;
+  --pre-text: #f9ede1;
   --shadow: 0 20px 70px rgba(74, 46, 19, 0.08);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #15100d;
+  --bg-top: #1b140f;
+  --bg-glow: rgba(240, 162, 94, 0.18);
+  --panel: rgba(30, 23, 18, 0.92);
+  --header-bg: rgba(21, 16, 13, 0.82);
+  --header-shadow: rgba(255, 239, 226, 0.06);
+  --border: rgba(244, 232, 221, 0.12);
+  --text: #f3e8db;
+  --heading: #fcf0e3;
+  --muted: #c0a58e;
+  --accent: #f0a25e;
+  --accent-soft: rgba(240, 162, 94, 0.16);
+  --code-bg: rgba(255, 224, 191, 0.08);
+  --quote-bg: rgba(240, 162, 94, 0.1);
+  --quote-text: #e3c6af;
+  --pre-bg: #100b08;
+  --pre-text: #f6ebdf;
+  --shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
 }
 
 * {
@@ -24,8 +54,8 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(circle at top left, rgba(255, 190, 92, 0.28), transparent 24rem),
-    linear-gradient(180deg, #fff8f1 0%, var(--bg) 100%);
+    radial-gradient(circle at top left, var(--bg-glow), transparent 24rem),
+    linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 100%);
   color: var(--text);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
 }
@@ -54,9 +84,9 @@ body {
   gap: 14px;
   padding: 18px 24px 16px;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 249, 242, 0.92);
+  background: var(--header-bg);
   backdrop-filter: blur(18px);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+  box-shadow: 0 1px 0 var(--header-shadow);
 }
 
 .markdown-panel-badge {
@@ -115,7 +145,7 @@ body {
 .markdown-prose h5,
 .markdown-prose h6 {
   margin: 1.65em 0 0.45em;
-  color: #1d130b;
+  color: var(--heading);
   font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
   line-height: 1.12;
   letter-spacing: -0.03em;
@@ -164,8 +194,8 @@ body {
   overflow-x: auto;
   padding: 16px 18px;
   border-radius: 16px;
-  background: #21160f;
-  color: #f9ede1;
+  background: var(--pre-bg);
+  color: var(--pre-text);
 }
 
 .markdown-prose pre code {
@@ -180,7 +210,7 @@ body {
   border-left: 3px solid var(--accent);
   border-radius: 0 14px 14px 0;
   background: var(--quote-bg);
-  color: #5f422b;
+  color: var(--quote-text);
 }
 
 .markdown-prose table {

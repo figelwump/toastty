@@ -31,12 +31,17 @@ struct MarkdownPanelHostView: NSViewRepresentable {
             controller: runtime
         )
 
+        containerView.onEffectiveAppearanceChange = { appearance in
+            runtime.applyEffectiveAppearance(appearance)
+        }
+
         let attach = { (view: NSView) in
             runtime.attachHost(to: view, attachment: attachment)
         }
 
         containerView.onLayout = attach
         attach(containerView)
+        runtime.applyEffectiveAppearance(containerView.effectiveAppearance)
 
         if context.coordinator.lastAppliedWebState != webState {
             runtime.apply(webState: webState)
@@ -46,6 +51,7 @@ struct MarkdownPanelHostView: NSViewRepresentable {
 
     static func dismantleNSView(_ containerView: WebPanelContainerView, coordinator: Coordinator) {
         containerView.onLayout = nil
+        containerView.onEffectiveAppearanceChange = nil
         coordinator.reset()
     }
 }
