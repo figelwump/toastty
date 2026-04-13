@@ -1,49 +1,69 @@
 # toastty web panels
 
-Date: 2026-04-02
+Date: 2026-04-13
 
-This is the current spec for browser integration and extensible panels in Toastty. It is the source of truth for shared web-panel architecture.
+This document describes the current shared web-panel architecture in Toastty and
+the next steps after the browser panel shipped. It is the source of truth for
+near-term web-panel work.
 
 ## summary
 
-1. Toastty should have two renderer-level panel kinds: `terminal` and `web`.
-2. Browser, markdown, scratchpad, and future extensible panels should all use the same `web` panel substrate.
-3. The auxiliary-panel paradigm should be removed entirely. There is no permanent right-column panel class.
-4. The command palette should be for panel creation actions, not panel navigation.
-5. Default placement should be predictable and low-disruption:
-   - explicit placement override wins
-   - user config override for a definition wins next
-   - definition default placement wins next
-   - platform fallback is a new tab in the current workspace
-6. Panel reuse should be internal behavior based on a resolved `instanceKey`, not a separate global `Open` vs `New` UX concept.
-7. Launch data should distinguish between:
-   - `creationArguments`: what content/resource the panel should open
-   - `launchContext`: where the launch came from and what agent/session/repo context was active
-8. Feedback routing is an app concern, not an extension concern.
-9. V1 should harden built-in web panels first. Generic third-party manifest features should be extracted from real built-in needs afterward.
+1. Toastty already has two renderer-level panel kinds: `terminal` and `web`.
+2. Browser is the shipped proof of the shared `web` substrate.
+3. Markdown is the next built-in web panel to implement.
+4. Scratchpad should follow markdown, not precede it.
+5. Built-in panels should stay typed and native-first in v1. Generic
+   manifest-style abstractions should wait until real built-in needs force them.
+6. Feedback routing remains an app concern, not a panel-owned concern.
+7. Installed third-party panels are deferred until the built-in lifecycle is
+   stable across browser and markdown.
+
+## current baseline
+
+The following are already true in the repo:
+
+- `PanelKind` already has `terminal` and `web`.
+- `PanelState` already has `.terminal` and `.web`.
+- Browser already ships as a real `web` panel with:
+  - stable `WKWebView` ownership
+  - runtime registry ownership across view remounts
+  - split, tab, close, reopen, and restore behavior
+  - command/menu creation flows
+  - URL routing integration
+  - automation and reducer coverage
+- The old auxiliary-panel product concept is already gone. There is no remaining
+  permanent right-column panel class to migrate away from.
+
+This means Toastty is no longer in a speculative "phase 1 substrate" state. The
+browser panel is the substrate proof. The next work is to generalize that
+browser-first path so a second, non-browser panel can use it cleanly.
 
 ## goals
 
-- Add a browser panel without painting the app into a corner.
-- Support future built-in web panels such as markdown review and scratchpad.
-- Support installable web-panel definitions later without introducing a second runtime path.
-- Keep terminal creation and terminal-first workflows fast.
-- Preserve existing panel mobility expectations:
+- Keep a single `web` substrate for browser, markdown, scratchpad, diff, and
+  future built-in panels.
+- Preserve the mobility guarantees browser already proved:
   - move between splits
-  - move between tabs/workspaces/windows
+  - move between tabs, workspaces, and windows
   - persist and restore cleanly
-- Keep agent-to-panel and panel-to-agent communication as an app-owned capability.
+- Add markdown as the first non-browser built-in panel.
+- Keep terminal-first workflows fast and predictable.
+- Keep panel creation and placement rules concrete and understandable.
+- Keep agent-to-panel and panel-to-agent communication app-owned.
 
 ## non-goals
 
-- Designing a package registry or marketplace in v1.
-- Finalizing a broad public extension manifest schema in v1.
+- Designing a public package registry or marketplace in v1.
+- Finalizing a generic installed-panel manifest schema in v1.
+- Replacing typed built-in state with `String` identifiers and untyped payload
+  dictionaries before a real need exists.
+- Requiring every split action to prompt for a panel type.
 - Giving arbitrary installed panels a generic unrestricted command bridge in v1.
-- Requiring every split action to show a panel-type picker.
 
-## panel model
+## current model
 
-Toastty should converge on one content-panel substrate.
+Toastty should continue to treat `web` as the only non-terminal renderer-level
+panel kind.
 
 ```swift
 enum PanelKind: String, Codable, CaseIterable, Hashable, Sendable {
@@ -56,426 +76,341 @@ enum PanelState: Equatable, Sendable {
     case web(WebPanelState)
 }
 
-struct WebPanelState: Codable, Equatable, Sendable {
-    let panelID: UUID
-    var definitionID: String
-    var instanceKey: String?
-    var title: String
-    var creationArguments: [String: JSONValue]
-    var persistedState: Data?
-    var launchContext: LaunchContext?
-}
-
-struct LaunchContext: Codable, Equatable, Sendable {
-    var sourcePanelID: UUID?
-    var sessionID: String?
-    var cwd: String?
-    var repoRoot: String?
+enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendable {
+    case browser
+    case markdown
+    case scratchpad
+    case diff
 }
 ```
 
-`JSONValue` above is intended to be a neutral shared JSON value type in core state. It should not remain coupled to automation/socket naming such as `AutomationJSONValue`, even if the first implementation is extracted from the same underlying code.
+That high-level shape is correct and should stay.
 
-`definitionID` identifies the panel definition:
+The current `WebPanelState` is intentionally browser-centric because browser was
+the first shipped panel. That is acceptable as an as-built starting point, but
+it is no longer the right endpoint once markdown exists.
 
-- built-in examples:
-  - `toastty.browser`
-  - `toastty.markdown`
-  - `toastty.scratchpad`
-  - `toastty.diff`
-- installed examples:
-  - `ext.ci-status`
-  - `ext.notes`
+## near-term architecture direction
 
-`instanceKey` is an optional dedupe key resolved at launch time:
+### keep built-ins typed
 
-- markdown file: `file:/abs/path/README.md`
-- scratchpad for a session: `session:<session-id>`
-- diff for a repo: `repo:/abs/path/to/repo`
-- browser: `nil`
+For built-in panels, keep `WebPanelDefinition` as a Swift enum in v1.
 
-If `instanceKey` is present and the definition allows keyed reuse, Toastty may focus an existing matching instance instead of creating a duplicate. This is internal launch behavior, not a separate user-facing mode.
+Do not switch to:
 
-## remove auxiliary panels
+- `definitionID: String`
+- `creationArguments: [String: JSONValue]`
+- generic manifest lookup for built-ins
 
-The current auxiliary-panel behavior should be deleted as a product concept.
+Those abstractions become useful only when installed third-party panels are real
+product scope. Before that, they remove type safety and introduce migration
+surface without solving a current problem.
 
-What goes away:
+### evolve `WebPanelState` toward typed per-definition payload
 
-- dedicated right-column insertion logic
-- aux visibility state
-- aux toggle semantics for markdown, scratchpad, and diff
-- the assumption that some panels are second-class layout citizens
+The next state evolution should be typed and definition-aware.
 
-What remains valid:
+Requirements:
 
-- creation-time placement heuristics can still choose a right-side split when appropriate
-- a right rail can still exist later as launcher/library/inspector chrome
+- panel identity remains external to `WebPanelState`
+  - do not add `panelID` into the payload struct
+- browser-specific data should stay browser-specific
+- markdown-specific data should be modeled explicitly
+- restore should remain Codable and stable
 
-The right rail, if it exists, is UI chrome. It is not where web panels permanently live.
+Acceptable v1 directions:
 
-## built-in definitions
+1. a definition-specific associated payload model
+2. a flat but still typed struct with explicit browser and markdown fields
 
-Built-in panels should use the same host/runtime path as installed panels. The difference is trust level and shipping source, not runtime architecture.
+Preferred direction:
 
-### browser
+- use a typed per-definition payload if it stays reasonably small
 
-- `definitionID`: `toastty.browser`
-- default placement: `newTab`
-- default `instanceKey`: none
-- primary creation arguments:
-  - `url`
-- common actions:
-  - `New Browser Tab`
-  - `New Browser Beside Current`
+Acceptable simplification if the typed payload refactor is too large for the
+first markdown implementation:
 
-### markdown
+- add explicit markdown fields to `WebPanelState` and keep the struct flat for
+  one more iteration
 
-- `definitionID`: `toastty.markdown`
-- default placement: `newTab`
-- default `instanceKey`: file path when opening a specific file
-- primary creation arguments:
-  - `filePath`
-  - optional inline or agent-provided content in future
-- common actions:
-  - `Open Markdown File...`
-  - `Open Markdown Beside Current`
+What should be avoided:
 
-### scratchpad
+- replacing typed fields with a generic key-value bag before a second concrete
+  built-in panel exists
 
-- `definitionID`: `toastty.scratchpad`
-- default placement:
-  - `splitBesideSource` when launched with a source terminal/session
-  - otherwise `newTab`
-- default `instanceKey`: session ID when session-linked
-- primary creation arguments:
-  - none required for the empty state
-  - optional mode/settings later
-- common actions:
-  - `Show Scratchpad For Current Session`
-  - `New Scratchpad Tab`
+### keep reuse as host behavior, not user-facing mode
 
-### diff
+The product direction from the previous plan still stands: reuse should be host
+behavior, not a global "Open vs New" UX concept.
 
-- `definitionID`: `toastty.diff`
-- default placement: `newTab`
-- default `instanceKey`: repo root
-- primary creation arguments:
-  - repository binding, if not inferable from launch context
+For the next phase:
+
+- browser continues to create a new instance by default
+- markdown should reuse an existing instance within the current workspace when
+  opening the same normalized file path
+- reuse can be resolved from typed state
+  - do not add a generic persisted `instanceKey` field yet unless a concrete
+    implementation truly needs it
+
+### runtime registry must become definition-aware
+
+The real missing substrate work is not "create a registry." Toastty already has
+one. The missing work is to make it support more than browser.
+
+Required direction:
+
+- keep one app-owned `WebPanelRuntimeRegistry`
+- let that registry vend definition-specific runtimes
+- keep runtime ownership native and explicit
+- preserve deterministic reattachment after moves, restores, and tab switches
+
+The first extension of this model should be:
+
+- existing `BrowserPanelRuntime`
+- new `MarkdownPanelRuntime`
+
+This can be implemented with:
+
+- a small shared runtime protocol, or
+- separate typed runtime stores inside the same registry
+
+The simpler approach should win unless it creates obvious duplication.
+
+## web profiles
+
+Toastty needs a small set of app-owned web profiles that bundle runtime policy
+with `WKWebViewConfiguration`.
+
+Required near-term profiles:
+
+- browser profile
+  - outbound network allowed
+  - browser-like storage behavior as appropriate
+- local-only profile
+  - outbound network denied
+  - isolated storage/data-store behavior
+
+Markdown should use the local-only profile.
+
+The profile boundary matters more than the exact implementation class layout.
+The key product rule is that a file-backed markdown panel should not silently
+behave like a general browser.
 
 ## placement model
 
-Placement should be resolved by precedence:
+The broad placement idea remains right, but it should be grounded in current
+behavior rather than a more general future system.
+
+### current shipped placement behavior
+
+Browser already has concrete placement behavior:
+
+- `New Browser` uses `rootRight`
+- `New Browser Tab` uses `newTab`
+- `New Browser Split` uses `splitRight`
+- internal URL opens default to `newTab`
+- alternate URL opens default to `rootRight`
+
+### near-term rule
+
+For the next phase, placement precedence should stay simple:
 
 1. explicit invocation override
-2. user config override for the target definition
-3. definition default placement
-4. platform fallback: foreground new tab in the current workspace
+2. definition default
+3. platform fallback
 
-Examples of explicit overrides:
+Do not add a definition-override user config layer yet unless a concrete second
+panel needs it.
 
-- command palette action variant such as `New Browser Beside Current`
-- menu command variant
-- socket/CLI request with a placement field
-- agent-initiated creation that specifies `background: true`
+### supported vocabulary
 
-### default placements
+Current useful placement vocabulary:
 
-The platform should support a small placement vocabulary:
-
+- `rootRight`
 - `newTab`
-- `backgroundNewTab`
 - `splitRight`
-- `splitDown`
-- `splitBesideSource`
 
-`splitBesideSource` means:
+Future values such as `splitDown`, `backgroundNewTab`, or
+`splitBesideSource` can be added later when a built-in panel genuinely needs
+them.
 
-- if `launchContext.sourcePanelID` resolves to a visible panel, split to the right of that panel
-- otherwise fall back through the normal placement precedence
+## markdown is the next panel
 
-For v1, "beside source" means `splitRight`. If later definitions need more control, this can expand to a directional variant without changing the baseline behavior now.
+Markdown is the right next built-in web panel because it validates the parts of
+the substrate browser did not need to prove:
 
-The fallback default is intentionally `newTab` because it is predictable and does not mutate the user's current split layout unless they or the invoking agent explicitly ask for that.
+- a non-browser content model
+- a local-only web profile
+- file-backed panel state
+- workspace-local instance reuse
+- host-driven content loading into a web view
 
-## creation ux
+Markdown should remain narrower than scratchpad.
 
-The command palette should expose concrete creation actions, not a generic panel-type chooser that leaves placement unresolved.
+### markdown v1 scope
 
-Examples:
+Markdown v1 should focus on file-backed rendering and lifecycle correctness.
 
-- `New Browser Tab`
-- `New Browser Beside Current`
+Required behavior:
+
+- open a markdown file into a `web` panel
+- restore that panel from persisted state
+- reopen the panel after close
+- reuse an existing markdown panel in the current workspace when opening the
+  same file
+- allow both `newTab` and explicit split placement variants
+- keep the panel local-only
+
+Reasonable first creation actions:
+
 - `Open Markdown File...`
 - `Open Markdown Beside Current`
-- `Show Scratchpad For Current Session`
 
-Rules:
+### markdown v1 content loading
 
-- The command palette is for creation.
-- Panel navigation remains the job of normal tab/panel navigation, keyboard shortcuts, and pointer interactions.
-- Split shortcuts should continue to serve the terminal fast path. They should not require a mandatory type picker.
-- Built-ins may also expose direct shortcuts if they prove useful, but they should map to the same placement rules as palette and socket creation.
+Markdown v1 does not need a JS bridge.
 
-### definition-specific follow-up ui
+Initial direction:
 
-Some panel definitions need additional input at creation time.
+- read markdown in Swift
+- render markdown to HTML in Swift
+- load the rendered HTML with `WKWebView.loadHTMLString(_:baseURL:)`
 
-Examples:
+This is enough to prove the lifecycle and rendering model without introducing a
+bridge protocol too early.
 
-- browser needs a URL or can open empty
-- markdown usually needs a file path
-- scratchpad may want a source session
+### markdown v1 bridge stance
 
-In v1, built-in definitions should own these follow-up flows directly instead of forcing a generic manifest-driven UI schema too early.
+Do not block markdown on a generic typed bridge.
 
-Examples:
+What markdown v1 needs is simpler:
 
-- browser can show an optional URL field or open a blank/start page
-- markdown can show:
-  - file picker
-  - recent files
-  - files derived from current launch context
-- scratchpad can show:
-  - current session-linked option when available
-  - empty scratchpad option otherwise
+- host prepares content
+- host loads content into the panel runtime
 
-Third-party manifest extraction should happen after built-in create flows stabilize.
+A richer host-to-panel or panel-to-host bridge can arrive later when markdown
+review or scratchpad feedback needs it.
 
-## launch context
+### markdown v1 file watching
 
-`LaunchContext` is app-owned metadata captured at creation time.
+File watching is useful, but it is optional for the first cut.
 
-It exists to answer:
+Priority order:
 
-- what panel or session launched this panel
-- what repo/cwd/session was active
-- where feedback should route when the panel is agent-linked
+1. open
+2. render
+3. restore/reopen
+4. reuse
+5. optional live reload on file changes
 
-It does not replace `creationArguments`.
+If file watching materially delays the first usable markdown panel, defer it to
+follow-up work.
 
-Examples:
+## scratchpad follows markdown
 
-- markdown plan review:
-  - `creationArguments["filePath"] = "/Users/vishal/GiantThings/repos/toastty/docs/plans/foo.md"`
-  - `launchContext.sessionID = "<agent-session>"`
-  - `launchContext.repoRoot = "/Users/vishal/GiantThings/repos/toastty"`
-- browser:
-  - `creationArguments["url"] = "https://example.com"`
-  - `launchContext` may be empty
+Scratchpad remains a `web` panel, but it should not be the next panel built.
 
-### v1 launch-context resolution
+Scratchpad adds higher-risk concerns that markdown does not require:
 
-For v1, keep the resolution chain simple:
+- richer host-to-panel updates
+- panel-to-host feedback events
+- session-linked routing
+- more complicated durable state
+- more complicated security and collaboration semantics
 
-1. explicit invocation data
-2. focused terminal context
-3. none
+The correct order is:
 
-If there is no resolved launch context, the panel should still be creatable. The definition handles the empty state.
-
-## keyed instance reuse
-
-Keyed reuse is definition-driven internal behavior.
-
-Rules:
-
-- if launch resolves no `instanceKey`, create a new panel instance
-- if launch resolves an `instanceKey`, the host may search for an existing matching instance
-- matching requires:
-  - same `definitionID`
-  - same `instanceKey`
-
-V1 reuse scope:
-
-- current workspace
-
-If a matching keyed instance is found in another tab of the current workspace, Toastty may focus that tab instead of creating a duplicate. This is acceptable even though the command palette is primarily for creation, because the user intent is still "show me this exact keyed resource."
-
-Keyed reuse is intentionally workspace-local in v1. Opening the same keyed resource in a different workspace should create a separate instance so each workspace can maintain its own working context.
-
-The host should not dedupe browser panels by URL in v1.
-
-## configuration and definition overrides
-
-Panel definitions should declare defaults. User config should be able to override a definition's defaults without requiring code changes.
-
-Defaults worth exposing:
-
-- default placement
-- default foreground/background behavior
-- whether keyed instances should reuse existing matches when possible
-
-The exact storage format can be decided later. The important part is the precedence model:
-
-- invocation override
-- user override
-- definition default
-- platform fallback
-
-## runtime architecture
-
-Toastty should have one app-owned web-panel runtime path.
-
-Required native pieces:
-
-- `WebPanelRuntime` that owns `WKWebView` lifecycle for a panel instance
-- `WebPanelRuntimeRegistry` or equivalent host that keeps runtimes stable across view remounts and panel moves
-- app-owned web profiles / isolation profiles that select:
-  - `WKProcessPool`
-  - `WKWebsiteDataStore`
-  - network policy
-  - storage and cookie sharing behavior
-- app-owned `WKWebViewConfiguration` creation from those profiles
-- JS bridge implementation
-
-Rules:
-
-- runtime ownership stays native and explicit
-- `WebPanelState` remains serializable and resource-free
-- panel moves must preserve `panelID`
-- runtime reattachment must be deterministic after moves, restores, and tab switches
-
-### web profiles
-
-The host should not treat `WKProcessPool` as an isolated one-off choice. What Toastty actually needs is a small set of app-owned web profiles that bundle runtime isolation and policy together.
-
-Examples:
-
-- browser profile:
-  - outbound network allowed
-  - shared browser-like storage/session behavior as appropriate
-- local-only panel profile:
-  - no outbound network
-  - isolated non-browser storage behavior
-
-Built-in definitions should bind to one of these profiles from phase 1. Installed panels should default to a no-network profile unless explicitly elevated later.
-
-## bridge and capabilities
-
-The bridge should be minimal, typed, and capability-gated.
-
-V1 principles:
-
-- no generic unrestricted `toastty.command(...)`
-- no unrestricted `eval_js`
-- extension/panel code should not own agent routing logic
-- app routes feedback using launch context and session data
-
-V1 bridge flows should explicitly cover:
-
-- initial bootstrap payload delivery for first render
-- host-to-panel content updates for an existing panel
-- panel-to-host events
-- title updates
-- state persistence
-- typed feedback submission
-
-Examples:
-
-- markdown:
-  - bootstrap or update the currently shown content after the panel exists
-- scratchpad:
-  - apply repeated content or state updates during a linked session
-- all panels:
-  - emit typed events back to the host
-
-State queries beyond persistence, such as richer inspection or screenshot-style reads, should be treated as follow-up capabilities for specific panel types rather than assumed baseline bridge surface.
-
-### capabilities and network policy
-
-Some capabilities are bridge-level. Others are host/runtime-level. Toastty needs both layers.
-
-Host/runtime-level policy from phase 1:
-
-- outbound network allowed or denied
-- storage, cookie, and data-store sharing policy
-- local-only vs browser-like isolation profile
-
-Bridge-level capabilities can grow later:
-
-- file read
-- file write
-- session read
-- session write
-
-Built-ins can ship with trusted defaults. Installed panels should be designed so capability approval can be added cleanly later, with outbound network disabled by default.
+1. browser proves the substrate
+2. markdown proves non-browser content, local-only policy, and typed state
+3. scratchpad proves collaboration and feedback routing
 
 ## feedback routing
 
-Feedback routing is an app-level concern.
+The previous plan was right that feedback routing should be app-owned.
 
-The panel only needs to emit a typed feedback event such as:
+That remains true, but it should be introduced only when a concrete panel needs
+it.
 
-- comment submitted
-- annotation submitted
-- button action requested
+Near-term rule:
 
-Toastty then decides how to route it:
+- browser does not need feedback routing
+- markdown v1 does not need feedback routing
+- scratchpad and richer markdown review flows likely will
 
-- inject into a running linked session when possible
-- otherwise invoke a new or resumed agent session using stored context
-
-This keeps panel definitions simple and keeps the agent-feedback system reusable across markdown, scratchpad, and future panels.
+This means a formal `LaunchContext` type should be deferred until there is a
+real consumer for it.
 
 ## sequencing
 
-Recommended order:
+Recommended order from the current baseline:
 
-### phase 1: substrate
+### step 1: generalize the existing runtime path
 
-- add `PanelState.web(WebPanelState)`
-- remove aux-panel machinery
-- create stable `WKWebView` host/runtime
-- define web profiles / isolation profiles and their network policy
-- prove mobility, focus, persistence, and restore with a minimal browser panel
+- keep the shipped browser path working
+- make `WebPanelRuntimeRegistry` definition-aware
+- add the local-only web profile
+- evolve `WebPanelState` toward typed non-browser payload support
 
-Browser is the intentional phase-1 substrate test because it proves WebView hosting with the least bridge complexity. Markdown remains the first panel expected to prove the richer collaboration and feedback model.
+### step 2: ship markdown v1
 
-### phase 2: creation and placement
+- add markdown creation flows
+- implement markdown runtime and rendering
+- add markdown reuse within the current workspace by file path
+- validate close, reopen, move, and restore behavior
 
-- implement definition registry for built-ins
-- implement placement precedence and user overrides
-- implement concrete creation flows for browser, markdown, and scratchpad
-- add `creationArguments` and `launchContext`
+### step 3: expand markdown only if the first cut proves sound
 
-### phase 3: bridge and feedback
+- optional file watching
+- optional richer review affordances
+- optional app-owned feedback routing for markdown-specific review flows
 
-- add minimal typed bridge
-- add agent-linked markdown review flow
-- add app-level feedback routing
-- add session-linked scratchpad flow
+### step 4: build scratchpad
 
-### phase 4: installed panels
+- add session-linked behavior
+- add richer content updates
+- add typed feedback events and routing
 
-- support installed definitions under the same runtime path
-- extract shared built-in creation/config concepts into a real manifest/config schema
-- add development and hot-reload workflow only after the core lifecycle is stable
+### step 5: revisit generic extensibility
 
-## migration
+- extract built-in lessons into a real manifest/config schema
+- decide whether string identifiers and generic payload models are worth the
+  cost
+- add installed-panel workflows only after browser and markdown have stabilized
 
-When this work starts, Toastty should migrate from:
+## migration and validation
 
-- `terminal`
-- `diff`
-- `markdown`
-- `scratchpad`
+The primary migration risk is existing browser state, not legacy non-terminal
+panel kinds.
 
-to:
+Requirements:
 
-- `terminal`
-- `web`
+- existing persisted browser panels must continue to restore
+- browser reopen behavior must continue to work
+- browser placement and menu behavior must not regress while making the runtime
+  registry definition-aware
 
-Because the legacy non-terminal panel kinds never shipped, Toastty does not need a
-decode/load compatibility layer for `.diff`, `.markdown`, or `.scratchpad`.
-This can be a hard schema cutover in source and tests.
+If `WebPanelState` changes shape:
+
+- add an explicit compatibility path for existing browser payloads, or
+- consciously choose a restore reset and document it as a product decision
+
+Do not rely on an accidental hard cutover.
+
+Validation for markdown work should include:
+
+- reducer tests for creation, placement, reuse, close, and reopen
+- restore/snapshot tests for persisted markdown state
+- runtime tests for the local-only profile behavior
+- automation coverage or an equivalent smoke path for opening and rendering a
+  markdown file
 
 ## open questions
 
-These are still real product questions, but they should not block the core substrate work:
-
-- How much native chrome should browser own versus what lives inside the page?
-- Should browser creation default to a blank page, home page, or recent page?
-- How should installed panels advertise shortcuts, if at all?
-- What exact user-facing config surface should override placement defaults?
-- When a keyed instance already exists, should Toastty always focus it or allow per-definition override for duplicate creation?
+- What is the smallest typed `WebPanelState` evolution that keeps browser stable
+  while making markdown clean?
+- Is file watching worth including in markdown v1, or should it be follow-up?
+- What is the right enforcement mechanism for the local-only web profile?
+- After markdown exists, is a richer typed bridge still warranted, or does
+  scratchpad become the first real consumer?
+- Once two non-browser panels exist, is a generic `instanceKey` field still
+  justified, or is computed host-side reuse enough?
