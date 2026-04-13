@@ -678,8 +678,10 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
             return true
         }
 
-        guard currentStatus.kind == .working,
-              let nextStatus = CodexVisibleTextStatusParser.workingStatus(from: visibleText) else {
+        guard let nextStatus = refreshedWorkingCodexStatus(
+            currentStatus: currentStatus,
+            visibleText: visibleText
+        ) else {
             return false
         }
 
@@ -695,6 +697,27 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         updateStatus(sessionID: record.sessionID, status: nextStatus, at: now)
         return true
+    }
+
+    private func refreshedWorkingCodexStatus(
+        currentStatus: SessionStatus,
+        visibleText: String
+    ) -> SessionStatus? {
+        switch currentStatus.kind {
+        case .working:
+            return CodexVisibleTextStatusParser.workingStatus(from: visibleText)
+        case .idle, .ready, .needsApproval:
+            guard TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false else {
+                return nil
+            }
+
+            // Recover a stuck non-working row only from Codex's live status
+            // line. Actionable bullets can remain visible after Codex is back
+            // at its prompt, so they are too weak a signal for resurrection.
+            return CodexVisibleTextStatusParser.statusLineWorkingStatus(from: visibleText)
+        case .error:
+            return nil
+        }
     }
 
     func handleLocalInterruptForPanelIfActive(

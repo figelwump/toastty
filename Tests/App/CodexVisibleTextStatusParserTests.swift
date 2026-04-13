@@ -53,6 +53,30 @@ struct CodexVisibleTextStatusParserTests {
     }
 
     @Test
+    func parsesStatusLineWorkingStatusOnlyFromLiveStatusLine() {
+        let status = CodexVisibleTextStatusParser.statusLineWorkingStatus(
+            from: """
+            • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
+            Deciding on a test file (20s • esc to interrupt)
+            """
+        )
+
+        #expect(status == SessionStatus(kind: .working, summary: "Working", detail: "Deciding on a test file"))
+    }
+
+    @Test
+    func ignoresActionableBulletsForStatusLineWorkingStatus() {
+        let status = CodexVisibleTextStatusParser.statusLineWorkingStatus(
+            from: """
+            • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
+            • Ran git status --short
+            """
+        )
+
+        #expect(status == nil)
+    }
+
+    @Test
     func ignoresGenericErrorTextWithoutKnownFatalBanner() {
         let status = CodexVisibleTextStatusParser.fatalErrorStatus(
             from: """

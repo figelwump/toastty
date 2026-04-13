@@ -18,6 +18,14 @@ enum CodexVisibleTextStatusParser {
 
         return SessionStatus(kind: .working, summary: "Working", detail: detail)
     }
+
+    static func statusLineWorkingStatus(from visibleText: String) -> SessionStatus? {
+        guard let detail = statusLineWorkingDetail(from: visibleText) else {
+            return nil
+        }
+
+        return SessionStatus(kind: .working, summary: "Working", detail: detail)
+    }
 }
 
 private extension CodexVisibleTextStatusParser {
@@ -83,6 +91,21 @@ private extension CodexVisibleTextStatusParser {
             }
 
             if let detail = actionableBulletDetail(from: line) {
+                return detail
+            }
+        }
+
+        return nil
+    }
+
+    static func statusLineWorkingDetail(from visibleText: String) -> String? {
+        let visibleLines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
+        guard visibleLines.isEmpty == false else {
+            return nil
+        }
+
+        for line in visibleLines.reversed() {
+            if let detail = statusLineDetail(from: line) {
                 return detail
             }
         }

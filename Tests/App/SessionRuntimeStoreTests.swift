@@ -1089,6 +1089,121 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
+    func refreshManagedSessionStatusFromVisibleTextRecoversIdleCodexSessionFromLiveStatusLine() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-visible-text-idle-recovery",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-visible-text-idle-recovery",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: """
+            dev@host ~/repo % codex
+            • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
+            Deciding on a test file (20s • esc to interrupt)
+            """,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didRefresh)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Deciding on a test file")
+        )
+    }
+
+    @Test
+    func refreshManagedSessionStatusFromVisibleTextRecoversReadyCodexSessionFromLiveStatusLine() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-visible-text-ready-recovery",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-visible-text-ready-recovery",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Finished previous task"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: "Deciding on a test file (20s • esc to interrupt)",
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didRefresh)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .working, summary: "Working", detail: "Deciding on a test file")
+        )
+    }
+
+    @Test
+    func refreshManagedSessionStatusFromVisibleTextDoesNotRecoverIdleCodexSessionFromStaleBulletAtPrompt() {
+        let sessionStore = SessionRuntimeStore()
+        let panelID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-visible-text-stale-bullet",
+            agent: .codex,
+            panelID: panelID,
+            windowID: UUID(),
+            workspaceID: UUID(),
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-visible-text-stale-bullet",
+            status: SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
+            panelID: panelID,
+            visibleText: """
+            • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
+            dev@host ~/repo %
+            """,
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        #expect(didRefresh == false)
+        #expect(
+            sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
+                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
+        )
+    }
+
+    @Test
     func refreshManagedSessionStatusFromVisibleTextPromotesWorkingCodexSessionToErrorForUsageLimitBanner() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()
