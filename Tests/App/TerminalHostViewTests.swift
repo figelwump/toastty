@@ -350,9 +350,9 @@ final class TerminalHostViewTests: XCTestCase {
             selectionText: "git status"
         )
 
-        XCTAssertEqual(menu.items.map(\.title), ["Copy", "Search with Google", "Paste"])
-        XCTAssertTrue(menu.items[1].target === hostView)
-        XCTAssertEqual(menu.items[1].action, #selector(TerminalHostView.searchWithGoogle(_:)))
+        XCTAssertEqual(menu.items.map(\.title), ["Copy", "Paste", "Search with Google"])
+        XCTAssertTrue(menu.items[2].target === hostView)
+        XCTAssertEqual(menu.items[2].action, #selector(TerminalHostView.searchWithGoogle(_:)))
     }
 
     func testMakeContextMenuOmitsSearchWithGoogleForWhitespaceOnlySelection() {
@@ -371,7 +371,7 @@ final class TerminalHostViewTests: XCTestCase {
         let hostView = TerminalHostView()
         var openedURL: URL?
 
-        hostView.openSearchURL = { url in
+        hostView.openSearchSelectionURL = { url in
             openedURL = url
             return true
         }
@@ -389,7 +389,7 @@ final class TerminalHostViewTests: XCTestCase {
         let hostView = TerminalHostView()
         var openCallCount = 0
 
-        hostView.openSearchURL = { _ in
+        hostView.openSearchSelectionURL = { _ in
             openCallCount += 1
             return true
         }

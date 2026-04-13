@@ -25,7 +25,7 @@ final class TerminalHostView: NSView {
     var openCommandClickLink: ((URL, Bool) -> Bool)?
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
-    var openSearchURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    var openSearchSelectionURL: ((URL) -> Bool)?
     /// Gives the owning controller a chance to reclaim AppKit first responder
     /// when the host view finishes attaching or becomes visible again.
     var requestFirstResponderIfNeeded: (() -> Void)?
@@ -933,7 +933,7 @@ final class TerminalHostView: NSView {
         guard let url = Self.googleSearchURL(for: selectionText) else {
             return false
         }
-        return openSearchURL(url)
+        return openSearchSelectionURL?(url) ?? false
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1194,6 +1194,15 @@ final class TerminalHostView: NSView {
         copyItem.isEnabled = copyEnabled
         menu.addItem(copyItem)
 
+        let pasteItem = NSMenuItem(
+            title: "Paste",
+            action: #selector(paste(_:)),
+            keyEquivalent: ""
+        )
+        pasteItem.target = self
+        pasteItem.isEnabled = pasteEnabled
+        menu.addItem(pasteItem)
+
         if let selectionText,
            Self.normalizedSearchQuery(from: selectionText) != nil {
             let searchItem = NSMenuItem(
@@ -1204,15 +1213,6 @@ final class TerminalHostView: NSView {
             searchItem.target = self
             menu.addItem(searchItem)
         }
-
-        let pasteItem = NSMenuItem(
-            title: "Paste",
-            action: #selector(paste(_:)),
-            keyEquivalent: ""
-        )
-        pasteItem.target = self
-        pasteItem.isEnabled = pasteEnabled
-        menu.addItem(pasteItem)
 
         return menu
     }

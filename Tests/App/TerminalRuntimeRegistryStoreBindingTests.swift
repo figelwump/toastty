@@ -378,6 +378,54 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenSearchSelectionURLAlwaysUsesToasttyNewTabPlacement() throws {
+        let workspace = WorkspaceState.bootstrap(title: "One")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                ),
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        store.setURLRoutingPreferences(
+            URLRoutingPreferences(
+                destination: .systemBrowser,
+                browserPlacement: .rootRight,
+                alternateBrowserPlacement: .rootRight
+            )
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        XCTAssertTrue(
+            registry.openSearchSelectionURL(
+                URL(string: "https://www.google.com/search?q=toastty")!,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspace.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count + 1)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected search selection to open in a Toastty browser tab")
+            return
+        }
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, "https://www.google.com/search?q=toastty")
+        try StateValidator.validate(store.state)
+    }
+
     func testFocusPanelForImageDropActivatesAppAndRoutesToTargetWindow() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let leftPanelID = UUID()
