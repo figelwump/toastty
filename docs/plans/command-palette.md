@@ -66,7 +66,8 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - Provide a contextual file-open mode in v1 for markdown and HTML files.
 - Rank results by relevance and usage frequency so the palette gets faster the
   more it is used.
-- Keep the palette keyboard-native: open, type, arrow, enter, escape.
+- Keep the palette keyboard-native: open, type, navigate with arrows or
+  `Ctrl+N` / `Ctrl+P`, then execute or dismiss without needing the mouse.
 - Design the provider interface so future sources such as headings, symbols,
   screenshots, slash commands, or richer file types can plug in without
   changing the core palette shell.
@@ -277,11 +278,13 @@ VStack(spacing: 0) {
 | `Cmd+Shift+P` | Toggle palette |
 | typing | Filter results |
 | `Up` / `Down` | Move selection |
+| `Ctrl+P` / `Ctrl+N` | Move selection up / down |
 | `Return` | Execute selected result |
 | `Escape` | Dismiss palette |
 
-`PaletteSearchField` uses an `NSTextField` subclass so arrow keys can move the
-selection instead of moving the caret.
+`PaletteSearchField` uses an `NSTextField` subclass so arrow keys and
+`Ctrl+P` / `Ctrl+N` can move the selection instead of falling through to normal
+text-field handling.
 
 ## command source of truth
 
@@ -667,6 +670,7 @@ app-owned command paths; it does not add new reducer-owned core state.
 - `CommandPaletteViewModel`
   - mode detection
   - selection wraparound
+  - `Ctrl+N` / `Ctrl+P` navigation parity with Down / Up
   - dismissal
   - live provider refresh on query changes
 - origin-window targeting
@@ -765,6 +769,9 @@ New files:
 Changes:
 
 - `PaletteSearchField` intercepts Up, Down, Return, and Escape
+- `PaletteSearchField` also intercepts `Ctrl+N` and `Ctrl+P` as aliases for
+  Down and Up so the palette matches terminal/readline-style navigation muscle
+  memory
 - `CommandPaletteViewModel` owns:
   - `query`
   - `selectedIndex`
