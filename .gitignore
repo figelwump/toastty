@@ -11,3 +11,4 @@ DerivedData
 /Dependencies/GhosttyKit*.metadata.env
 *.xcodeproj
 *.xcworkspace
+node_modules/
