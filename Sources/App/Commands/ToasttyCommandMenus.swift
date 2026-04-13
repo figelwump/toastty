@@ -256,6 +256,16 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
+            Toggle(
+                "Ask Before Quitting",
+                isOn: Binding(
+                    get: { store.askBeforeQuitting },
+                    set: { store.setAskBeforeQuitting($0) }
+                )
+            )
+
+            Divider()
+
             Button(action: reloadConfiguration) {
                 Label("Reload Configuration", systemImage: "arrow.clockwise")
             }

@@ -87,6 +87,7 @@ final class AppStore: ObservableObject {
 
     @Published private(set) var state: AppState
     @Published private(set) var hasEverLaunchedAgent: Bool
+    @Published private(set) var askBeforeQuitting: Bool
     @Published private(set) var urlRoutingPreferences = URLRoutingPreferences()
 
     /// Set by workspace rename commands; the sidebar in the target window
@@ -114,11 +115,13 @@ final class AppStore: ObservableObject {
         state: AppState = .bootstrap(),
         persistTerminalFontPreference: Bool = true,
         initialHasEverLaunchedAgent: Bool = false,
+        initialAskBeforeQuitting: Bool = true,
         commandCreateWindowFrameProvider: @escaping CommandCreateWindowFrameProvider = AppStore.currentCommandCreateWindowFrame,
         windowActivationHandler: @escaping WindowActivationHandler = AppStore.activateWindowInAppKit
     ) {
         self.state = state
         hasEverLaunchedAgent = initialHasEverLaunchedAgent
+        askBeforeQuitting = initialAskBeforeQuitting
         // This flag suppresses all UserDefaults-backed writes in tests and automation runs.
         persistUserSettings = persistTerminalFontPreference
         self.commandCreateWindowFrameProvider = commandCreateWindowFrameProvider
@@ -657,6 +660,13 @@ final class AppStore: ObservableObject {
         hasEverLaunchedAgent = true
         guard persistUserSettings else { return }
         ToasttySettingsStore.persistHasEverLaunchedAgent(true)
+    }
+
+    func setAskBeforeQuitting(_ askBeforeQuitting: Bool) {
+        guard self.askBeforeQuitting != askBeforeQuitting else { return }
+        self.askBeforeQuitting = askBeforeQuitting
+        guard persistUserSettings else { return }
+        ToasttySettingsStore.persistAskBeforeQuitting(askBeforeQuitting)
     }
 
     func setURLRoutingPreferences(_ preferences: URLRoutingPreferences) {

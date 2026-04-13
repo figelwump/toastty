@@ -327,12 +327,34 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        _ = sender
         guard shouldConfirmQuit else { return .terminateNow }
+        guard let store else {
+            return presentQuitConfirmationAlert(assessment: nil, store: nil) ? .terminateNow : .terminateCancel
+        }
+        guard store.askBeforeQuitting else { return .terminateNow }
 
+        let assessment = quitConfirmationAssessment(state: store.state)
+        guard let assessment else {
+            return presentQuitConfirmationAlert(assessment: nil, store: nil) ? .terminateNow : .terminateCancel
+        }
+        guard assessment.requiresConfirmation else { return .terminateNow }
+
+        return presentQuitConfirmationAlert(assessment: assessment, store: store) ? .terminateNow : .terminateCancel
+    }
+
+    private func presentQuitConfirmationAlert(
+        assessment: AppQuitConfirmationAssessment?,
+        store: AppStore?
+    ) -> Bool {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Quit Toastty?"
-        confirmationAlert.informativeText = "Are you sure you want to quit?"
-        confirmationAlert.alertStyle = .informational
+        confirmationAlert.informativeText = assessment?.informativeText ?? "Are you sure you want to quit?"
+        confirmationAlert.alertStyle = .warning
+        if assessment != nil {
+            confirmationAlert.showsSuppressionButton = true
+            confirmationAlert.suppressionButton?.title = "Always quit without asking"
+        }
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
         confirmationAlert.addConfiguredButton(
             withTitle: "Quit",
@@ -340,7 +362,25 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         )
 
         let response = confirmationAlert.runModal()
-        return response == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+        // Toastty keeps the visual button order as Cancel, then Quit, so the
+        // confirmed quit response remains `.alertSecondButtonReturn`.
+        let didConfirmQuit = response == .alertSecondButtonReturn
+        if didConfirmQuit,
+           assessment != nil,
+           confirmationAlert.suppressionButton?.state == .on {
+            store?.setAskBeforeQuitting(false)
+            _ = ToasttyAppDefaults.current.synchronize()
+        }
+        return didConfirmQuit
+    }
+
+    private func quitConfirmationAssessment(state: AppState) -> AppQuitConfirmationAssessment? {
+        guard let terminalRuntimeRegistry else {
+            return nil
+        }
+        return AppQuitConfirmation.assess(state: state) { panelID in
+            terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -1158,7 +1198,8 @@ struct ToasttyApp: App {
         let store = AppStore(
             state: bootstrap.state,
             persistTerminalFontPreference: persistUserSettings,
-            initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent
+            initialHasEverLaunchedAgent: initialToasttySettings.hasEverLaunchedAgent,
+            initialAskBeforeQuitting: initialToasttySettings.askBeforeQuitting
         )
         let agentCatalogStore = AgentCatalogStore()
         let initialProfileShortcutRegistry = Self.makeProfileShortcutRegistry(
