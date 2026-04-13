@@ -341,6 +341,69 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
     }
 
+    func testMakeContextMenuIncludesSearchWithGoogleForSearchableSelection() {
+        let hostView = TerminalHostView()
+
+        let menu = hostView.makeContextMenu(
+            copyEnabled: true,
+            pasteEnabled: true,
+            selectionText: "git status"
+        )
+
+        XCTAssertEqual(menu.items.map(\.title), ["Copy", "Search with Google", "Paste"])
+        XCTAssertTrue(menu.items[1].target === hostView)
+        XCTAssertEqual(menu.items[1].action, #selector(TerminalHostView.searchWithGoogle(_:)))
+    }
+
+    func testMakeContextMenuOmitsSearchWithGoogleForWhitespaceOnlySelection() {
+        let hostView = TerminalHostView()
+
+        let menu = hostView.makeContextMenu(
+            copyEnabled: true,
+            pasteEnabled: true,
+            selectionText: " \n\t "
+        )
+
+        XCTAssertEqual(menu.items.map(\.title), ["Copy", "Paste"])
+    }
+
+    func testOpenGoogleSearchNormalizesSelectionWhitespace() {
+        let hostView = TerminalHostView()
+        var openedURL: URL?
+
+        hostView.openSearchURL = { url in
+            openedURL = url
+            return true
+        }
+
+        let opened = hostView.openGoogleSearch(for: "  brew   upgrade\npeekaboo  ")
+
+        XCTAssertTrue(opened)
+        XCTAssertEqual(
+            openedURL?.absoluteString,
+            "https://www.google.com/search?q=brew%20upgrade%20peekaboo"
+        )
+    }
+
+    func testOpenGoogleSearchSkipsWhitespaceOnlySelection() {
+        let hostView = TerminalHostView()
+        var openCallCount = 0
+
+        hostView.openSearchURL = { _ in
+            openCallCount += 1
+            return true
+        }
+
+        let opened = hostView.openGoogleSearch(for: " \n ")
+
+        XCTAssertFalse(opened)
+        XCTAssertEqual(openCallCount, 0)
+    }
+
+    func testGoogleSearchURLReturnsNilForWhitespaceOnlySelection() {
+        XCTAssertNil(TerminalHostView.googleSearchURL(for: "\n\t "))
+    }
+
     func testSurfaceScrollViewDisablesNativeScrollbarsByDefault() {
         let scrollView = TerminalSurfaceScrollView()
 

@@ -25,6 +25,7 @@ final class TerminalHostView: NSView {
     var openCommandClickLink: ((URL, Bool) -> Bool)?
     var resolveImageFileDrop: (([URL]) -> PreparedImageFileDrop?)?
     var performImageFileDrop: ((PreparedImageFileDrop) -> Bool)?
+    var openSearchURL: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     /// Gives the owning controller a chance to reclaim AppKit first responder
     /// when the host view finishes attaching or becomes visible again.
     var requestFirstResponderIfNeeded: (() -> Void)?
@@ -47,6 +48,7 @@ final class TerminalHostView: NSView {
         .urlReadingFileURLsOnly: true,
         .urlReadingContentsConformToTypes: [UTType.image.identifier],
     ]
+    private static let searchWithGoogleMenuItemTitle = "Search with Google"
 
     #if TOASTTY_HAS_GHOSTTY_KIT
     enum GhosttyMouseCursorStyle: Equatable {
@@ -894,29 +896,12 @@ final class TerminalHostView: NSView {
         }
 
         focusHostViewIfNeeded()
-
-        let menu = NSMenu(title: "Terminal")
-        menu.autoenablesItems = false
-
-        let copyItem = NSMenuItem(
-            title: "Copy",
-            action: #selector(copy(_:)),
-            keyEquivalent: ""
+        let selectedText = selectedText(from: ghosttySurface)
+        return makeContextMenu(
+            copyEnabled: Self.hasCopyableSelectionText(selectedText),
+            pasteEnabled: Self.hasStringContentInPasteboard(),
+            selectionText: selectedText
         )
-        copyItem.target = self
-        copyItem.isEnabled = hasCopyableSelection(on: ghosttySurface)
-        menu.addItem(copyItem)
-
-        let pasteItem = NSMenuItem(
-            title: "Paste",
-            action: #selector(paste(_:)),
-            keyEquivalent: ""
-        )
-        pasteItem.target = self
-        pasteItem.isEnabled = Self.hasStringContentInPasteboard()
-        menu.addItem(pasteItem)
-
-        return menu
     }
 
     @objc func copy(_ sender: Any?) {
@@ -933,6 +918,22 @@ final class TerminalHostView: NSView {
     @objc func paste(_ sender: Any?) {
         guard let ghosttySurface else { return }
         _ = invokeGhosttyBindingAction("paste_from_clipboard", on: ghosttySurface)
+    }
+
+    @objc func searchWithGoogle(_ sender: Any?) {
+        guard let ghosttySurface,
+              let selectedText = selectedText(from: ghosttySurface) else {
+            return
+        }
+        _ = openGoogleSearch(for: selectedText)
+    }
+
+    @discardableResult
+    func openGoogleSearch(for selectionText: String) -> Bool {
+        guard let url = Self.googleSearchURL(for: selectionText) else {
+            return false
+        }
+        return openSearchURL(url)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1176,6 +1177,46 @@ final class TerminalHostView: NSView {
         window.makeFirstResponder(self)
     }
 
+    func makeContextMenu(
+        copyEnabled: Bool,
+        pasteEnabled: Bool,
+        selectionText: String?
+    ) -> NSMenu {
+        let menu = NSMenu(title: "Terminal")
+        menu.autoenablesItems = false
+
+        let copyItem = NSMenuItem(
+            title: "Copy",
+            action: #selector(copy(_:)),
+            keyEquivalent: ""
+        )
+        copyItem.target = self
+        copyItem.isEnabled = copyEnabled
+        menu.addItem(copyItem)
+
+        if let selectionText,
+           Self.normalizedSearchQuery(from: selectionText) != nil {
+            let searchItem = NSMenuItem(
+                title: Self.searchWithGoogleMenuItemTitle,
+                action: #selector(searchWithGoogle(_:)),
+                keyEquivalent: ""
+            )
+            searchItem.target = self
+            menu.addItem(searchItem)
+        }
+
+        let pasteItem = NSMenuItem(
+            title: "Paste",
+            action: #selector(paste(_:)),
+            keyEquivalent: ""
+        )
+        pasteItem.target = self
+        pasteItem.isEnabled = pasteEnabled
+        menu.addItem(pasteItem)
+
+        return menu
+    }
+
     private func clearPendingCommandClickLinkOpen() {
         pendingCommandClickLinkURL = nil
         pendingCommandClickLinkUsesAlternatePlacement = false
@@ -1298,9 +1339,8 @@ final class TerminalHostView: NSView {
     @discardableResult
     private func copySelectionToPasteboard() -> Bool {
         guard let ghosttySurface,
-              hasCopyableSelection(on: ghosttySurface),
               let selectedText = selectedText(from: ghosttySurface),
-              selectedText.isEmpty == false else {
+              Self.hasCopyableSelectionText(selectedText) else {
             return false
         }
 
@@ -1328,12 +1368,38 @@ final class TerminalHostView: NSView {
     }
 
     private func hasCopyableSelection(on surface: ghostty_surface_t) -> Bool {
-        guard ghostty_surface_has_selection(surface),
-              let selectedText = selectedText(from: surface),
-              selectedText.isEmpty == false else {
+        Self.hasCopyableSelectionText(selectedText(from: surface))
+    }
+
+    private static func hasCopyableSelectionText(_ selectedText: String?) -> Bool {
+        guard let selectedText else {
             return false
         }
-        return true
+        return selectedText.isEmpty == false
+    }
+
+    static func googleSearchURL(for selectionText: String) -> URL? {
+        guard let query = normalizedSearchQuery(from: selectionText) else {
+            return nil
+        }
+
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "www.google.com"
+        components.path = "/search"
+        components.queryItems = [URLQueryItem(name: "q", value: query)]
+        return components.url
+    }
+
+    private static func normalizedSearchQuery(from selectionText: String) -> String? {
+        let normalizedSelection = selectionText
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { $0.isEmpty == false }
+            .joined(separator: " ")
+        guard normalizedSelection.isEmpty == false else {
+            return nil
+        }
+        return normalizedSelection
     }
 
     private func translatedKeyEvent(for event: NSEvent, on surface: ghostty_surface_t) -> NSEvent {
