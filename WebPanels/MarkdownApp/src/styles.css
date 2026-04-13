@@ -89,17 +89,6 @@ body {
   box-shadow: 0 1px 0 var(--header-shadow);
 }
 
-.markdown-panel-badge {
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font: 600 11px/1.1 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-
 .markdown-panel-title-wrap {
   min-width: 0;
   display: flex;
@@ -152,14 +141,65 @@ body {
 }
 
 .markdown-prose h1 { font-size: clamp(2rem, 4vw, 2.9rem); }
-.markdown-prose h2 { font-size: clamp(1.55rem, 3vw, 2.1rem); }
-.markdown-prose h3 { font-size: 1.3rem; }
+
+.markdown-prose h2 {
+  font-size: clamp(1.55rem, 3vw, 2.1rem);
+  margin-top: 2.2em;
+  padding-left: 14px;
+  border-left: 3px solid var(--accent);
+}
+
+.markdown-prose h3 {
+  font-size: 1.3rem;
+  margin-top: 1.9em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border);
+}
 
 .markdown-prose p,
 .markdown-prose li,
 .markdown-prose blockquote {
   font-size: 1.08rem;
   line-height: 1.75;
+}
+
+.markdown-prose li {
+  margin: 0.3em 0;
+}
+
+.markdown-prose li > p {
+  margin: 0.4em 0;
+}
+
+.markdown-prose ol {
+  list-style: none;
+  counter-reset: list-counter;
+  padding-left: 1.8em;
+}
+
+.markdown-prose ol > li {
+  counter-increment: list-counter;
+  position: relative;
+}
+
+.markdown-prose ol > li::before {
+  content: counter(list-counter) ".";
+  position: absolute;
+  left: -1.8em;
+  width: 1.5em;
+  text-align: right;
+  color: var(--accent);
+  font-weight: 600;
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  font-size: 0.95em;
+}
+
+.markdown-prose ul {
+  padding-left: 1.5em;
+}
+
+.markdown-prose ul > li::marker {
+  color: var(--accent);
 }
 
 .markdown-prose p,
@@ -255,6 +295,175 @@ body {
   margin: 0;
   color: var(--muted);
   font: 500 0.98rem/1.6 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+/* Themed scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
+}
+
+.markdown-prose pre::-webkit-scrollbar {
+  height: 6px;
+}
+
+.markdown-prose pre::-webkit-scrollbar-thumb {
+  background: rgba(255, 224, 191, 0.15);
+  border-radius: 3px;
+}
+
+.markdown-prose pre::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 224, 191, 0.3);
+}
+
+/* Syntax highlighting — warm palette */
+.hljs { color: var(--pre-text); background: var(--pre-bg); }
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-built_in,
+.hljs-type { color: #f0a25e; }
+.hljs-string,
+.hljs-regexp,
+.hljs-addition { color: #a8c77b; }
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet { color: #e8845c; }
+.hljs-title,
+.hljs-section { color: #e6c46a; font-weight: 600; }
+.hljs-comment,
+.hljs-quote,
+.hljs-meta { color: #8a7566; font-style: italic; }
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable { color: #d4977a; }
+.hljs-name,
+.hljs-tag { color: #e8b87a; }
+.hljs-deletion { color: #c75f5f; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+.hljs-link { color: var(--accent); text-decoration: underline; }
+
+/* Frontmatter metadata bar */
+.markdown-frontmatter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 10px 14px;
+  margin-bottom: 1.2em;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font: 500 0.82rem/1.5 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.markdown-frontmatter-key {
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.markdown-frontmatter-key::after {
+  content: " ";
+}
+
+.markdown-frontmatter-value {
+  color: var(--accent);
+}
+
+/* Header stats (replaces badge) */
+.markdown-panel-stats {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 600 11px/1.1 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  letter-spacing: 0.04em;
+}
+
+.markdown-panel-stat-sep {
+  opacity: 0.5;
+}
+
+/* TOC toggle button */
+.markdown-toc-toggle {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.markdown-toc-toggle:hover,
+.markdown-toc-toggle-open {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+/* TOC dropdown panel */
+.markdown-toc {
+  position: absolute;
+  top: 100%;
+  right: 16px;
+  z-index: 10;
+  width: min(340px, calc(100vw - 32px));
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 12px 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  backdrop-filter: blur(18px);
+  box-shadow: var(--shadow);
+}
+
+.markdown-toc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.markdown-toc-item {
+  margin: 0;
+}
+
+.markdown-toc-link {
+  display: block;
+  padding: 6px 16px;
+  color: var(--text);
+  font: 500 0.88rem/1.4 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  text-decoration: none;
+  transition: color 0.1s, background 0.1s;
+}
+
+.markdown-toc-link:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
 }
 
 @media (max-width: 720px) {
