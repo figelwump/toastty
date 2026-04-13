@@ -4,6 +4,14 @@ import Testing
 
 struct PanelStateCodableTests {
     @Test
+    func webPanelDefinitionsDeclareCapabilityProfiles() {
+        #expect(WebPanelDefinition.browser.capabilityProfile == .networkAllowed)
+        #expect(WebPanelDefinition.markdown.capabilityProfile == .localOnly)
+        #expect(WebPanelDefinition.scratchpad.capabilityProfile == .localOnly)
+        #expect(WebPanelDefinition.diff.capabilityProfile == .localOnly)
+    }
+
+    @Test
     func panelStateRoundTripsCodable() throws {
         let panels: [PanelState] = [
             .terminal(

@@ -52,8 +52,9 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     ) {
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
-        let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        let configuration = Self.makeWebViewConfiguration(
+            for: WebPanelDefinition.browser.capabilityProfile
+        )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         self.webView = webView
@@ -246,6 +247,10 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     }
 
     func apply(webState: WebPanelState) {
+        precondition(
+            webState.definition == .browser,
+            "BrowserPanelRuntime cannot host \(webState.definition.rawValue) panels."
+        )
         synchronizeDisplayedContent(with: webState)
     }
 
@@ -900,6 +905,17 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         </body>
         </html>
         """
+    }
+
+    static func makeWebViewConfiguration(
+        for capabilityProfile: WebPanelCapabilityProfile
+    ) -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        if capabilityProfile == .localOnly {
+            configuration.websiteDataStore = .nonPersistent()
+        }
+        return configuration
     }
 }
 

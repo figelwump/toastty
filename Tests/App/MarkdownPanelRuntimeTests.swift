@@ -5,6 +5,12 @@ import XCTest
 
 @MainActor
 final class MarkdownPanelRuntimeTests: XCTestCase {
+    func testLocalOnlyCapabilityProfileUsesNonPersistentWebsiteDataStore() {
+        let configuration = MarkdownPanelRuntime.makeWebViewConfiguration(for: .localOnly)
+
+        XCTAssertFalse(configuration.websiteDataStore.isPersistent)
+    }
+
     func testApplySkipsDuplicateReloadWhenWebStateIsUnchanged() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")

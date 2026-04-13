@@ -57,9 +57,9 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         self.bootstrapProvider = bootstrapProvider
         self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
-        let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
-        configuration.websiteDataStore = .nonPersistent()
+        let configuration = Self.makeWebViewConfiguration(
+            for: WebPanelDefinition.markdown.capabilityProfile
+        )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
         self.webView = webView
@@ -141,6 +141,10 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     }
 
     func apply(webState: WebPanelState) {
+        precondition(
+            webState.definition == .markdown,
+            "MarkdownPanelRuntime cannot host \(webState.definition.rawValue) panels."
+        )
         let didChangeState = currentWebState != webState
         currentWebState = webState
         synchronizeFileObservation(with: webState.filePath)
@@ -173,6 +177,10 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         for webState: WebPanelState,
         theme: MarkdownPanelTheme = .dark
     ) async -> MarkdownPanelBootstrap {
+        precondition(
+            webState.definition == .markdown,
+            "MarkdownPanelRuntime cannot host \(webState.definition.rawValue) panels."
+        )
         let filePath = webState.filePath ?? ""
         let displayName = resolvedDisplayName(for: webState, filePath: filePath)
 
@@ -218,6 +226,17 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             return nil
         }
         return "window.ToasttyMarkdownPanel?.receiveBootstrap(\(json));"
+    }
+
+    static func makeWebViewConfiguration(
+        for capabilityProfile: WebPanelCapabilityProfile
+    ) -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        if capabilityProfile == .localOnly {
+            configuration.websiteDataStore = .nonPersistent()
+        }
+        return configuration
     }
 }
 

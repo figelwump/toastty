@@ -1,5 +1,10 @@
 import Foundation
 
+public enum WebPanelCapabilityProfile: String, Hashable, Sendable {
+    case localOnly
+    case networkAllowed
+}
+
 public enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendable {
     case browser
     case markdown
@@ -16,6 +21,19 @@ public enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendabl
             return "Scratchpad"
         case .diff:
             return "Diff"
+        }
+    }
+
+    public var capabilityProfile: WebPanelCapabilityProfile {
+        switch self {
+        case .browser:
+            return .networkAllowed
+        case .markdown:
+            return .localOnly
+        case .scratchpad, .diff:
+            // Keep placeholder built-ins least-privilege until their concrete
+            // runtime requirements are real enough to justify more access.
+            return .localOnly
         }
     }
 }

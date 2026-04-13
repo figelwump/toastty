@@ -204,12 +204,20 @@ Required near-term profiles:
 
 Markdown should use the local-only profile.
 
+The current codebase now makes that contract explicit on
+`WebPanelDefinition.capabilityProfile` instead of leaving it as runtime-only
+convention. The current mapping is `browser -> networkAllowed` and
+`markdown -> localOnly`. Placeholder built-ins that do not have a concrete
+runtime yet default to `localOnly` until a real product need justifies broader
+access.
+
 The profile boundary matters more than the exact implementation class layout.
 The key product rule is that a file-backed markdown panel should not silently
 behave like a general browser.
 
 Current implementation status:
 
+- explicit capability profile on each `WebPanelDefinition`
 - non-persistent `WKWebsiteDataStore`
 - file-only navigation policy in the runtime
 - remote links blocked in the bundled markdown app

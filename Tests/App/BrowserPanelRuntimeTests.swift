@@ -5,6 +5,12 @@ import XCTest
 
 @MainActor
 final class BrowserPanelRuntimeTests: XCTestCase {
+    func testNetworkAllowedCapabilityProfileUsesPersistentWebsiteDataStore() {
+        let configuration = BrowserPanelRuntime.makeWebViewConfiguration(for: .networkAllowed)
+
+        XCTAssertTrue(configuration.websiteDataStore.isPersistent)
+    }
+
     func testNormalizedUserEnteredURLStringPrefixesHTTPSForBareHostname() {
         XCTAssertEqual(
             BrowserPanelRuntime.normalizedUserEnteredURLString("example.com/docs"),
