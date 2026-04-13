@@ -62,6 +62,7 @@ url-opening-alternate-browser-placement = rootRight
 
 ## Related behavior
 
+- Toastty handles Ghostty-highlighted local markdown file links separately from the web URL routing settings above. `Cmd`-click opens those files in a markdown tab, and `Cmd`-`Shift`-click opens them in a root-right markdown split.
 - `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` change the active window's persisted layout state instead of rewriting `config`
 - new windows inherit the source window's current effective terminal font size
 - runtime-isolated dev/test runs keep `config`, `config-reference`, and related UI-managed state inside the active runtime home instead of the shared user locations

@@ -914,13 +914,31 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     @discardableResult
     func openCommandClickLink(_ url: URL, useAlternatePlacement: Bool, from panelID: UUID) -> Bool {
         guard let store else { return false }
-        let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
-        return AppURLRouter.open(
-            url,
-            preferredWindowID: preferredWindowID,
-            appStore: store,
+        let state = store.state
+        let preferredWindowID = state.workspaceSelection(containingPanelID: panelID)?.windowID
+        let cwd = terminalPanelState(for: panelID, state: state)?.expectedProcessWorkingDirectory
+
+        switch TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: cwd,
             useAlternatePlacement: useAlternatePlacement
-        )
+        ) {
+        case .markdownFile(let path, let placement):
+            return store.createMarkdownPanelFromCommand(
+                preferredWindowID: preferredWindowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: path,
+                    placementOverride: placement
+                )
+            )
+        case .passthrough(let passthroughURL):
+            return AppURLRouter.open(
+                passthroughURL,
+                preferredWindowID: preferredWindowID,
+                appStore: store,
+                useAlternatePlacement: useAlternatePlacement
+            )
+        }
     }
 
     @discardableResult
@@ -932,6 +950,17 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             url: url,
             placement: .newTab
         )
+    }
+
+    private func terminalPanelState(
+        for panelID: UUID,
+        state: AppState
+    ) -> TerminalPanelState? {
+        guard let selection = state.workspaceSelection(containingPanelID: panelID),
+              case .terminal(let terminalState)? = selection.workspace.panelState(for: panelID) else {
+            return nil
+        }
+        return terminalState
     }
 
     #if TOASTTY_HAS_GHOSTTY_KIT

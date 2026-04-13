@@ -378,6 +378,226 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickMarkdownRelativePathOpensMarkdownTabInTerminalOwningWindow() throws {
+        let fixture = try makeMarkdownFixture()
+        let firstWorkspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let firstPanelID = try XCTUnwrap(firstWorkspace.layoutTree.allSlotInfos.first?.panelID)
+        let firstWorkspaceWithTerminal = WorkspaceState(
+            id: firstWorkspace.id,
+            title: firstWorkspace.title,
+            layoutTree: firstWorkspace.layoutTree,
+            panels: [
+                firstPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: firstPanelID
+        )
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [firstWorkspaceWithTerminal.id],
+                    selectedWorkspaceID: firstWorkspaceWithTerminal.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 80, y: 80, width: 1200, height: 800),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspaceWithTerminal.id: firstWorkspaceWithTerminal,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: secondWindowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md")),
+                useAlternatePlacement: false,
+                from: firstPanelID
+            )
+        )
+
+        let firstWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspaceWithTerminal.id])
+        let secondWorkspaceAfter = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
+        XCTAssertEqual(firstWorkspaceAfter.tabIDs.count, firstWorkspaceWithTerminal.tabIDs.count + 1)
+        XCTAssertEqual(secondWorkspaceAfter.tabIDs.count, secondWorkspace.tabIDs.count)
+
+        let selectedTabID = try XCTUnwrap(firstWorkspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(firstWorkspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected markdown panel in source workspace")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.title, "command-palette.md")
+        try StateValidator.validate(store.state)
+    }
+
+    func testAlternateOpenCommandClickMarkdownFileURLUsesRootRightPlacement() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                fixture.markdownURL,
+                useAlternatePlacement: true,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count + 1)
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected root-right markdown panel in source workspace")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testAlternateOpenCommandClickMarkdownKeepsExistingPanelDedupeBehavior() throws {
+        let fixture = try makeMarkdownFixture()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: windowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fixture.markdownPath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+        let workspaceAfterInitialOpen = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        let markdownTabID = try XCTUnwrap(workspaceAfterInitialOpen.resolvedSelectedTabID)
+        let markdownPanelID = try XCTUnwrap(workspaceAfterInitialOpen.tab(id: markdownTabID)?.focusedPanelID)
+        let originalTabID = try XCTUnwrap(workspaceAfterInitialOpen.tabIDs.first)
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: workspaceWithTerminal.id, tabID: originalTabID)))
+
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/command-palette.md")),
+                useAlternatePlacement: true,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfterDedupedOpen = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfterDedupedOpen.tabIDs.count, workspaceAfterInitialOpen.tabIDs.count)
+        XCTAssertEqual(workspaceAfterDedupedOpen.resolvedSelectedTabID, markdownTabID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, markdownPanelID)
+        try StateValidator.validate(store.state)
+    }
+
     func testOpenSearchSelectionURLAlwaysUsesToasttyNewTabPlacement() throws {
         let workspace = WorkspaceState.bootstrap(title: "One")
         let windowID = UUID()
@@ -651,6 +871,28 @@ final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
                 preferNewestWhenAmbiguous: true,
                 allowUnmatchedFallback: false
             )
+        )
+    }
+}
+
+private extension TerminalRuntimeRegistryStoreBindingTests {
+    func makeMarkdownFixture() throws -> (rootPath: String, markdownPath: String, markdownURL: URL) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-markdown-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let docsURL = rootURL.appendingPathComponent("docs", isDirectory: true)
+        let markdownURL = docsURL.appendingPathComponent("command-palette.md", isDirectory: false)
+
+        try fileManager.createDirectory(at: docsURL, withIntermediateDirectories: true)
+        try Data("# Command Palette\n".utf8).write(to: markdownURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            markdownPath: markdownURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            markdownURL: markdownURL
         )
     }
 }
