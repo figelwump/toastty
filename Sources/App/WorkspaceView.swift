@@ -1911,7 +1911,6 @@ private struct SlotPlacementView: View {
                     focusedPanelID: tab.focusedPanelID,
                     hasUnreadNotification: tab.unreadPanelIDs.contains(placement.panelID),
                     panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
-                    terminalDisplayTitleOverride: terminalRuntimeRegistry.panelDisplayTitleOverride(for: placement.panelID),
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
                     windowFontPoints: windowFontPoints,
                     appIsActive: appIsActive,
@@ -1951,7 +1950,6 @@ private struct PanelCardView: View {
     let focusedPanelID: UUID?
     let hasUnreadNotification: Bool
     let panelSessionStatus: WorkspaceSessionStatus?
-    let terminalDisplayTitleOverride: String?
     let shortcutNumber: Int?
     let windowFontPoints: Double
     let appIsActive: Bool
@@ -2129,7 +2127,7 @@ private struct PanelCardView: View {
             if let panelSessionStatus, panelSessionStatus.isActive {
                 return panelSessionStatus.agent.displayName
             }
-            return terminalDisplayTitleOverride ?? terminal.displayPanelLabel
+            return terminal.displayPanelLabel
         case .web(let webState):
             return webState.displayPanelLabel
         }

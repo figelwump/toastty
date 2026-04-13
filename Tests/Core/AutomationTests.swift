@@ -215,8 +215,8 @@ struct AutomationTests {
         )
 
         #expect(
-            AutomationConfig.resolveSocketPath(environment: environment)
-                == AutomationSocketLocator.legacySocketPath(environment: environment)
+            standardizedPath(AutomationConfig.resolveSocketPath(environment: environment))
+                == standardizedPath(AutomationSocketLocator.legacySocketPath(environment: environment))
         )
     }
 
@@ -228,7 +228,7 @@ struct AutomationTests {
 
         let environment = ["TMPDIR": tempDirectory.path]
         let socketPath = AutomationSocketLocator.socketDirectoryURL(environment: environment)
-            .appendingPathComponent("events-v1-1234.sock", isDirectory: false)
+            .appendingPathComponent("events-v1-999999.sock", isDirectory: false)
             .path
         try FileManager.default.createDirectory(
             at: AutomationSocketLocator.socketDirectoryURL(environment: environment),
@@ -242,8 +242,8 @@ struct AutomationTests {
         )
 
         #expect(
-            AutomationConfig.resolveSocketPath(environment: environment)
-                == AutomationSocketLocator.legacySocketPath(environment: environment)
+            standardizedPath(AutomationConfig.resolveSocketPath(environment: environment))
+                == standardizedPath(AutomationSocketLocator.legacySocketPath(environment: environment))
         )
     }
 

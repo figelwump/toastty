@@ -337,9 +337,8 @@ final class SessionRuntimeStore: ObservableObject {
             break
         case .ghosttyCommandFinished(let exitCode):
             metadata["exit_code"] = exitCode.map(String.init) ?? "none"
-        case .idleShellPrompt(let recentPromptCommandToken, let appearsBusy):
-            metadata["recent_prompt_command_token"] = recentPromptCommandToken ?? "none"
-            metadata["appears_busy"] = appearsBusy ? "true" : "false"
+        case .idleAtPrompt:
+            break
         }
 
         return metadata
@@ -658,6 +657,7 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     func refreshManagedSessionStatusFromVisibleTextIfNeeded(
         panelID: UUID,
         visibleText: String,
+        promptState: TerminalPromptState,
         at now: Date
     ) -> Bool {
         guard let record = sessionRegistry.activeSession(for: panelID),
@@ -680,7 +680,8 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
         guard let nextStatus = refreshedWorkingCodexStatus(
             currentStatus: currentStatus,
-            visibleText: visibleText
+            visibleText: visibleText,
+            promptState: promptState
         ) else {
             return false
         }
@@ -701,13 +702,15 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
 
     private func refreshedWorkingCodexStatus(
         currentStatus: SessionStatus,
-        visibleText: String
+        visibleText: String,
+        promptState: TerminalPromptState
     ) -> SessionStatus? {
         switch currentStatus.kind {
         case .working:
             return CodexVisibleTextStatusParser.workingStatus(from: visibleText)
         case .idle, .ready, .needsApproval:
-            guard TerminalVisibleTextInspector.showsIdleShellPrompt(visibleText) == false else {
+            guard promptState != .idleAtPrompt,
+                  promptState != .exited else {
                 return nil
             }
 

@@ -69,8 +69,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private var exitedTerminalPanelIDs: Set<UUID> = []
     private var loggedLaunchEnvironmentPanelIDs: Set<UUID> = []
     private var baseLaunchEnvironmentProvider: (@Sendable (UUID) -> [String: String])?
-    @Published private(set) var panelDisplayTitleOverrideByID: [UUID: String] = [:]
-    @Published private(set) var workspaceActivitySubtextByID: [UUID: String] = [:]
     @Published private(set) var searchStateByPanelID: [UUID: TerminalSearchState] = [:]
     @Published private(set) var searchFieldFocusedPanelID: UUID?
     private var ghosttyCloseSurfaceHandler: ((UUID, Bool) -> Bool)?
@@ -79,7 +77,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
     #if TOASTTY_HAS_GHOSTTY_KIT
     private var actionRouter: TerminalActionRouter?
     private var metadataService: TerminalMetadataService?
-    private var activityInferenceService: TerminalActivityInferenceService?
     private var storeActionCoordinator: TerminalStoreActionCoordinator?
     private var workspaceMaintenanceService: TerminalWorkspaceMaintenanceService?
     #endif
@@ -109,14 +106,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
             registry: self,
             sessionLifecycleTracker: sessionLifecycleTracker
         )
-        let activityInferenceService = TerminalActivityInferenceService(
-            readVisibleText: { [weak self] panelID in
-                self?.automationReadVisibleText(panelID: panelID)
-            },
-            sessionLifecycleTracker: sessionLifecycleTracker
-        )
         self.metadataService = metadataService
-        self.activityInferenceService = activityInferenceService
         actionRouter = TerminalActionRouter(store: store, registry: self)
         let storeActionCoordinator = TerminalStoreActionCoordinator(
             metadataService: metadataService,
@@ -148,22 +138,11 @@ final class TerminalRuntimeRegistry: ObservableObject {
         workspaceMaintenanceService = TerminalWorkspaceMaintenanceService(
             store: store,
             metadataService: metadataService,
-            activityInferenceService: activityInferenceService,
-            containsController: { [weak self] panelID in
-                self?.runtimeStore.containsController(for: panelID) ?? false
-            },
+            sessionLifecycleTracker: sessionLifecycleTracker,
             controllerForPanelID: { [weak self] panelID in
                 self?.runtimeStore.existingController(for: panelID)
-            },
-            updatePanelDisplayTitleOverrides: { [weak self] nextOverridesByPanelID in
-                self?.setPanelDisplayTitleOverrides(nextOverridesByPanelID)
-            },
-            updateWorkspaceActivitySubtext: { [weak self] nextSubtextByWorkspaceID in
-                self?.setWorkspaceActivitySubtext(nextSubtextByWorkspaceID)
             }
         )
-        workspaceMaintenanceService?.publishPanelDisplayTitleOverrides()
-        workspaceMaintenanceService?.publishWorkspaceActivitySubtext()
         workspaceMaintenanceService?.startProcessWorkingDirectoryRefreshLoopIfNeeded()
         #endif
         configureGhosttyActionHandler()
@@ -174,7 +153,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         self.sessionLifecycleTracker = sessionLifecycleTracker
         #if TOASTTY_HAS_GHOSTTY_KIT
         metadataService?.bind(sessionLifecycleTracker: sessionLifecycleTracker)
-        activityInferenceService?.bind(sessionLifecycleTracker: sessionLifecycleTracker)
+        workspaceMaintenanceService?.bind(sessionLifecycleTracker: sessionLifecycleTracker)
         #endif
     }
 
@@ -376,6 +355,14 @@ final class TerminalRuntimeRegistry: ObservableObject {
         automationReadVisibleText(panelID: panelID)
     }
 
+    func promptState(panelID: UUID) -> TerminalPromptState {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        GhosttySurfaceSemanticState.promptState(for: runtimeStore.currentGhosttySurface(for: panelID))
+        #else
+        .unavailable
+        #endif
+    }
+
     func automationSendText(_ text: String, submit: Bool, panelID: UUID) -> Bool {
         guard let controller = runtimeStore.existingController(for: panelID) else {
             return false
@@ -465,7 +452,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
         if exitedTerminalPanelIDs.contains(panelID) {
             return TerminalCloseConfirmationAssessment(requiresConfirmation: false)
         }
-        guard let controller = runtimeStore.existingController(for: panelID) else {
+        guard runtimeStore.existingController(for: panelID) != nil else {
             ToasttyLog.warning(
                 "Skipping terminal close confirmation because the surface controller is unavailable",
                 category: .terminal,
@@ -473,15 +460,21 @@ final class TerminalRuntimeRegistry: ObservableObject {
             )
             return nil
         }
-        guard let visibleText = controller.automationReadVisibleText() else {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let assessment = GhosttySurfaceSemanticState.closeConfirmationAssessment(
+            for: runtimeStore.currentGhosttySurface(for: panelID)
+        ) else {
             ToasttyLog.warning(
-                "Skipping terminal close confirmation because visible terminal text is unavailable",
+                "Skipping terminal close confirmation because the Ghostty surface is unavailable",
                 category: .terminal,
                 metadata: ["panel_id": panelID.uuidString]
             )
             return nil
         }
-        return TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
+        return assessment
+        #else
+        return nil
+        #endif
     }
 
     func automationRenderSnapshot(panelID: UUID) -> TerminalPanelRenderAttachmentSnapshot {
@@ -544,14 +537,6 @@ final class TerminalRuntimeRegistry: ObservableObject {
         ) { [weak self] in
             self?.store?.state.workspacesByID[workspaceID]?.focusedPanelID
         }
-    }
-
-    func workspaceActivitySubtext(for workspaceID: UUID) -> String? {
-        workspaceActivitySubtextByID[workspaceID]
-    }
-
-    func panelDisplayTitleOverride(for panelID: UUID) -> String? {
-        panelDisplayTitleOverrideByID[panelID]
     }
 
     func searchState(for panelID: UUID) -> TerminalSearchState? {
@@ -1095,20 +1080,6 @@ private extension TerminalRuntimeRegistry {
     }
 }
 
-extension TerminalRuntimeRegistry {
-    func setWorkspaceActivitySubtext(_ nextSubtextByWorkspaceID: [UUID: String]) {
-        if workspaceActivitySubtextByID != nextSubtextByWorkspaceID {
-            workspaceActivitySubtextByID = nextSubtextByWorkspaceID
-        }
-    }
-
-    func setPanelDisplayTitleOverrides(_ nextOverridesByPanelID: [UUID: String]) {
-        if panelDisplayTitleOverrideByID != nextOverridesByPanelID {
-            panelDisplayTitleOverrideByID = nextOverridesByPanelID
-        }
-    }
-}
-
 #if TOASTTY_HAS_GHOSTTY_KIT
 private extension TerminalRuntimeRegistry {
     func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {
@@ -1350,34 +1321,7 @@ extension TerminalRuntimeRegistry {
             panelID: panelID,
             state: state
         ) ?? false
-
-        switch intent {
-        case .commandFinished:
-            let activityHandled = handleCommandFinishedActivityUpdate(
-                panelID: panelID,
-                state: state
-            )
-            return metadataHandled || activityHandled
-
-        default:
-            return metadataHandled
-        }
-    }
-
-    private func handleCommandFinishedActivityUpdate(
-        panelID: UUID,
-        state: AppState
-    ) -> Bool {
-        guard let activityInferenceService else { return false }
-        let handled = activityInferenceService.handleCommandFinished(
-            panelID: panelID,
-            liveWorkspaceIDs: Set(state.workspacesByID.keys)
-        )
-        guard handled else { return false }
-
-        setPanelDisplayTitleOverrides(activityInferenceService.panelDisplayTitleOverrideByID)
-        setWorkspaceActivitySubtext(activityInferenceService.workspaceActivitySubtextByID)
-        return true
+        return metadataHandled
     }
 
     static func normalizedMetadataValue(_ value: String?) -> String? {
@@ -1442,133 +1386,6 @@ extension TerminalRuntimeRegistry {
         return predictedCWD(fromCDCommandTitle: trimmed, currentCWD: currentCWD)
     }
 
-    static func inferredCWDFromVisibleTerminalText(_ visibleText: String, currentCWD: String) -> String? {
-        let lines = sanitizedVisibleTerminalLines(visibleText)
-        guard lines.isEmpty == false else { return nil }
-
-        for line in lines.reversed() {
-            if let promptLine = parsedPromptLine(line) {
-                if let command = promptLine.command,
-                   let predicted = predictedCWD(fromCDCommandTitle: command, currentCWD: currentCWD) {
-                    return predicted
-                }
-
-                if let normalizedPromptCWD = normalizedPromptPathToken(promptLine.cwdToken) {
-                    return normalizedPromptCWD
-                }
-            }
-
-            if let loosePromptCWD = inferredCWDFromLoosePromptLine(line) {
-                return loosePromptCWD
-            }
-        }
-
-        return nil
-    }
-
-    private static func sanitizedVisibleTerminalLines(_ visibleText: String) -> [String] {
-        let filteredScalars = visibleText.unicodeScalars.filter { scalar in
-            switch scalar.value {
-            case 0x0A, 0x0D:
-                return true
-            default:
-                return scalar.value >= 0x20 && scalar.value != 0x7F
-            }
-        }
-        let sanitized = String(String.UnicodeScalarView(filteredScalars))
-        return sanitized
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { $0.isEmpty == false }
-    }
-
-    private static func parsedPromptLine(_ line: String) -> (cwdToken: String, command: String?)? {
-        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        guard parts.count >= 3 else { return nil }
-        guard parts[0].contains("@") else { return nil }
-        let promptMarker = parts[2]
-        guard promptMarker == "%" || promptMarker == "#" || promptMarker == "$" else {
-            return nil
-        }
-
-        let cwdToken = parts[1]
-        let command: String?
-        if parts.count > 3 {
-            command = parts.dropFirst(3).joined(separator: " ")
-        } else {
-            command = nil
-        }
-        return (cwdToken: cwdToken, command: command)
-    }
-
-    private static func inferredCWDFromLoosePromptLine(_ line: String) -> String? {
-        let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
-        guard parts.isEmpty == false else { return nil }
-
-        for index in stride(from: parts.count - 1, through: 0, by: -1) {
-            let token = parts[index]
-            if promptMarkerTokens.contains(token) {
-                if index > 0,
-                   let normalized = normalizedPromptPathCandidate(parts[index - 1]) {
-                    return normalized
-                }
-                continue
-            }
-
-            guard token.count > 1,
-                  let trailingCharacter = token.last,
-                  promptMarkerTokens.contains(String(trailingCharacter)) else {
-                continue
-            }
-            let tokenWithoutPromptMarker = String(token.dropLast())
-            if let normalized = normalizedPromptPathCandidate(tokenWithoutPromptMarker) {
-                return normalized
-            }
-        }
-
-        return nil
-    }
-
-    private static func normalizedPromptPathCandidate(_ token: String) -> String? {
-        var candidate = token.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard candidate.isEmpty == false else { return nil }
-
-        while let firstScalar = candidate.unicodeScalars.first,
-              promptPathWrapperCharacters.contains(firstScalar) {
-            candidate.removeFirst()
-        }
-        while let lastScalar = candidate.unicodeScalars.last,
-              promptPathWrapperCharacters.contains(lastScalar)
-                || promptPathTrailingPunctuationCharacters.contains(lastScalar) {
-            candidate.removeLast()
-        }
-        guard candidate.isEmpty == false else { return nil }
-
-        if candidate.hasPrefix("/") || candidate.hasPrefix("~") || candidate.hasPrefix("file://") {
-            return normalizedPromptPathToken(candidate)
-        }
-        if let colonIndex = candidate.lastIndex(of: ":") {
-            let suffix = String(candidate[candidate.index(after: colonIndex)...])
-            if suffix.hasPrefix("/") || suffix.hasPrefix("~") || suffix.hasPrefix("file://") {
-                return normalizedPromptPathToken(suffix)
-            }
-        }
-
-        return nil
-    }
-
-    private static func normalizedPromptPathToken(_ token: String) -> String? {
-        guard token.hasPrefix("/") || token.hasPrefix("~") || token.hasPrefix("file://") else {
-            return nil
-        }
-        guard let normalized = normalizedCWDValue(token) else { return nil }
-        let expanded = (normalized as NSString).expandingTildeInPath
-        return URL(fileURLWithPath: expanded)
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-            .path
-    }
-
     private static func predictedCWD(fromCDCommandTitle title: String, currentCWD: String) -> String? {
         let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmedTitle.isEmpty == false else { return nil }
@@ -1622,9 +1439,5 @@ extension TerminalRuntimeRegistry {
         guard normalizedPath.isEmpty == false else { return nil }
         return normalizedPath
     }
-
-    private static let promptMarkerTokens: Set<String> = ["%", "#", "$", ">"]
-    private static let promptPathWrapperCharacters = CharacterSet(charactersIn: "\"'`()[]{}<>")
-    private static let promptPathTrailingPunctuationCharacters = CharacterSet(charactersIn: ",;")
 }
 #endif

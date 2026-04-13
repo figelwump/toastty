@@ -297,6 +297,9 @@ struct AutomationSocketServerTests {
     func automationLaunchAgentUsesSharedLaunchService() async throws {
         let socketPath = temporarySocketPath()
         let terminalRouter = TestTerminalCommandRouter()
+        await MainActor.run {
+            terminalRouter.defaultPromptState = .idleAtPrompt
+        }
         let server = try await MainActor.run {
             try makeServer(
                 socketPath: socketPath,

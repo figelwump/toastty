@@ -390,7 +390,7 @@ struct SidebarView: View {
 
     private func selectionSubtitle(for workspace: WorkspaceState) -> String? {
         let paneCount = workspace.layoutTree.allSlotInfos.count
-        return workspaceSubtitle(workspace: workspace, paneCount: paneCount)
+        return workspaceSubtitle(paneCount: paneCount)
     }
 
     @ViewBuilder
@@ -795,13 +795,8 @@ struct SidebarView: View {
         }
     }
 
-    private func workspaceSubtitle(workspace: WorkspaceState, paneCount: Int) -> String {
-        let paneLabel = paneCount == 1 ? "1 pane" : "\(paneCount) panes"
-        if let activitySubtext = terminalRuntimeRegistry.workspaceActivitySubtext(for: workspace.id),
-           activitySubtext.isEmpty == false {
-            return "\(paneLabel) · \(activitySubtext)"
-        }
-        return paneLabel
+    private func workspaceSubtitle(paneCount: Int) -> String {
+        paneCount == 1 ? "1 pane" : "\(paneCount) panes"
     }
 
     private func showsUnreadSessionAccent(

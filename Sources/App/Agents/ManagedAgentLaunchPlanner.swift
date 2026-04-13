@@ -17,6 +17,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
     private let cliExecutablePathProvider: @Sendable () -> String?
     private let socketPathProvider: @Sendable () -> String
     private let readVisibleText: @MainActor (UUID) -> String?
+    private let promptState: @MainActor (UUID) -> TerminalPromptState
     private var sessionRegistryObservation: AnyCancellable?
     private var managedArtifactsBySessionID: [String: ManagedLaunchArtifacts] = [:]
 
@@ -27,7 +28,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         nowProvider: @escaping @Sendable () -> Date = Date.init,
         cliExecutablePathProvider: @escaping @Sendable () -> String?,
         socketPathProvider: @escaping @Sendable () -> String,
-        readVisibleText: @escaping @MainActor (UUID) -> String?
+        readVisibleText: @escaping @MainActor (UUID) -> String?,
+        promptState: @escaping @MainActor (UUID) -> TerminalPromptState
     ) {
         self.store = store
         self.sessionRuntimeStore = sessionRuntimeStore
@@ -36,6 +38,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
         self.cliExecutablePathProvider = cliExecutablePathProvider
         self.socketPathProvider = socketPathProvider
         self.readVisibleText = readVisibleText
+        self.promptState = promptState
         sessionRegistryObservation = sessionRuntimeStore.$sessionRegistry.sink { [weak self] registry in
             Task { @MainActor in
                 await self?.cleanupManagedArtifacts(forInactiveSessionsIn: registry)
@@ -222,6 +225,7 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
                     _ = sessionRuntimeStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
                         panelID: panelID,
                         visibleText: visibleText,
+                        promptState: self.promptState(panelID),
                         at: self.nowProvider()
                     )
                     return

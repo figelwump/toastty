@@ -1038,6 +1038,7 @@ struct SessionRuntimeStoreTests {
             dev@host ~/repo % codex
             • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
             """,
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1078,6 +1079,7 @@ struct SessionRuntimeStoreTests {
         let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: "Working (7s • esc to interrupt)",
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1118,6 +1120,7 @@ struct SessionRuntimeStoreTests {
             • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
             Deciding on a test file (20s • esc to interrupt)
             """,
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1154,6 +1157,7 @@ struct SessionRuntimeStoreTests {
         let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: "Deciding on a test file (20s • esc to interrupt)",
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1193,6 +1197,7 @@ struct SessionRuntimeStoreTests {
             • Running pwd and git status --short in the current repo now, then I’ll report the modified-entry count.
             dev@host ~/repo %
             """,
+            promptState: .idleAtPrompt,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1232,6 +1237,7 @@ struct SessionRuntimeStoreTests {
         let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: usageLimitBanner,
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1271,6 +1277,7 @@ struct SessionRuntimeStoreTests {
         let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: "• Running pwd",
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1316,16 +1323,19 @@ struct SessionRuntimeStoreTests {
         let didRefreshStaleBanner = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: usageLimitBanner,
+            promptState: .busy,
             at: startedAt.addingTimeInterval(3)
         )
         let didRefreshWorkingDetail = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: "• Running pwd",
+            promptState: .busy,
             at: startedAt.addingTimeInterval(4)
         )
         let didRefreshRecoveredError = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: usageLimitBanner,
+            promptState: .busy,
             at: startedAt.addingTimeInterval(5)
         )
 
@@ -1376,11 +1386,13 @@ struct SessionRuntimeStoreTests {
             dev@host ~/repo % codex
             OpenAI Codex (v0.1)
             """,
+            promptState: .busy,
             at: startedAt.addingTimeInterval(3)
         )
         let didRefreshStaleBanner = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: usageLimitBanner,
+            promptState: .busy,
             at: startedAt.addingTimeInterval(4)
         )
 
@@ -1418,6 +1430,7 @@ struct SessionRuntimeStoreTests {
         let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: "• Running pwd",
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 
@@ -1449,6 +1462,7 @@ struct SessionRuntimeStoreTests {
         let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: "• Running pwd",
+            promptState: .busy,
             at: startedAt.addingTimeInterval(1)
         )
 
@@ -1482,6 +1496,7 @@ struct SessionRuntimeStoreTests {
         let didRefresh = sessionStore.refreshManagedSessionStatusFromVisibleTextIfNeeded(
             panelID: panelID,
             visibleText: "• Running pwd",
+            promptState: .busy,
             at: startedAt.addingTimeInterval(2)
         )
 

@@ -5,7 +5,9 @@ import Foundation
 final class TestTerminalCommandRouter: TerminalCommandRouting {
     var sendSucceeds = true
     var defaultVisibleText: String?
+    var defaultPromptState: TerminalPromptState = .unavailable
     var visibleTextByPanelID: [UUID: String] = [:]
+    var promptStateByPanelID: [UUID: TerminalPromptState] = [:]
     private(set) var sentTextByPanelID: [UUID: String] = [:]
 
     @discardableResult
@@ -16,5 +18,9 @@ final class TestTerminalCommandRouter: TerminalCommandRouting {
 
     func readVisibleText(panelID: UUID) -> String? {
         visibleTextByPanelID[panelID] ?? defaultVisibleText
+    }
+
+    func promptState(panelID: UUID) -> TerminalPromptState {
+        promptStateByPanelID[panelID] ?? defaultPromptState
     }
 }

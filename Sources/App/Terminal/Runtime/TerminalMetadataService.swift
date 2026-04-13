@@ -801,27 +801,13 @@ final class TerminalMetadataService {
                 cwdSource = "title_inference"
             }
         }
-        if allowLegacyCWDInference,
-           normalizedCWD == nil,
-           cwd == nil,
-           let normalizedTitle,
-           normalizedTitle != terminalState.title,
-           let registry,
-           let visibleText = registry.automationReadVisibleText(panelID: panelID),
-           let inferredCWD = TerminalRuntimeRegistry.inferredCWDFromVisibleTerminalText(
-               visibleText,
-               currentCWD: terminalState.cwd
-           ) {
-            normalizedCWD = inferredCWD
-            cwdSource = "visible_text_inference"
-        }
         // Profiled terminals may run inside multiplexers (tmux, zmx, etc.)
         // that forward title-setting sequences (OSC 0/2) but not CWD
         // sequences (OSC 7). The bootstrap shell's CWD signal confirms
         // native CWD support, but once the multiplexer takes over, CWD
-        // signals stop arriving. Use path-like title inference as a
-        // targeted fallback — but not the heavier visible-text heuristic,
-        // which could produce false positives from stale prompt lines.
+        // signals stop arriving. Use path-like title inference as the only
+        // remaining fallback here; visible-text prompt parsing is too brittle
+        // for authoritative CWD recovery.
         if normalizedCWD == nil,
            let normalizedTitle,
            terminalState.profileBinding != nil {
@@ -1054,28 +1040,7 @@ final class TerminalMetadataService {
         guard exitCode == nil || exitCode == 0 else {
             return true
         }
-
-        guard let registry,
-              let visibleText = registry.automationReadVisibleText(panelID: panelID),
-              let inferredCWD = TerminalRuntimeRegistry.inferredCWDFromVisibleTerminalText(
-                  visibleText,
-                  currentCWD: terminalState.cwd
-              ) else {
-            return true
-        }
-
-        guard TerminalRuntimeRegistry.cwdValuesDiffer(inferredCWD, terminalState.cwd) else {
-            return true
-        }
-
-        return handleTerminalMetadataUpdate(
-            title: nil,
-            cwd: inferredCWD,
-            allowLegacyCWDInference: true,
-            workspaceID: workspaceID,
-            panelID: panelID,
-            state: state
-        )
+        return true
     }
 
     private func resolvedActionPanelID(in workspace: WorkspaceState) -> UUID? {

@@ -53,6 +53,12 @@ final class TerminalWindowRuntimeStore {
         existingController(for: panelID) != nil
     }
 
+    #if TOASTTY_HAS_GHOSTTY_KIT
+    func currentGhosttySurface(for panelID: UUID) -> ghostty_surface_t? {
+        existingController(for: panelID)?.currentGhosttySurface()
+    }
+    #endif
+
     @discardableResult
     func synchronize(with state: AppState) -> Set<UUID> {
         let previousWindowIDByWorkspaceID = windowIDByWorkspaceID

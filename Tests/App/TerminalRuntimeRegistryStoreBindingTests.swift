@@ -672,10 +672,12 @@ private final class SessionLifecycleTrackerSpy: TerminalSessionLifecycleTracking
     func refreshManagedSessionStatusFromVisibleTextIfNeeded(
         panelID: UUID,
         visibleText: String,
+        promptState: TerminalPromptState,
         at now: Date
     ) -> Bool {
         _ = panelID
         _ = visibleText
+        _ = promptState
         _ = now
         return false
     }

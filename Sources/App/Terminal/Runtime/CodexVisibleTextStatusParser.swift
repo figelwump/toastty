@@ -3,7 +3,7 @@ import Foundation
 
 enum CodexVisibleTextStatusParser {
     static func fatalErrorStatus(from visibleText: String) -> SessionStatus? {
-        let visibleLines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
+        let visibleLines = TerminalVisibleTextSanitizer.sanitizedLines(visibleText)
         guard let detail = usageLimitErrorDetail(from: visibleLines) else {
             return nil
         }
@@ -80,7 +80,7 @@ private extension CodexVisibleTextStatusParser {
     }
 
     static func workingDetail(from visibleText: String) -> String? {
-        let visibleLines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
+        let visibleLines = TerminalVisibleTextSanitizer.sanitizedLines(visibleText)
         guard visibleLines.isEmpty == false else {
             return nil
         }
@@ -99,7 +99,7 @@ private extension CodexVisibleTextStatusParser {
     }
 
     static func statusLineWorkingDetail(from visibleText: String) -> String? {
-        let visibleLines = TerminalVisibleTextInspector.sanitizedLines(visibleText)
+        let visibleLines = TerminalVisibleTextSanitizer.sanitizedLines(visibleText)
         guard visibleLines.isEmpty == false else {
             return nil
         }

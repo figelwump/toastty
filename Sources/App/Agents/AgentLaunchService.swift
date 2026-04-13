@@ -6,6 +6,7 @@ protocol TerminalCommandRouting: AnyObject {
     @discardableResult
     func sendText(_ text: String, submit: Bool, panelID: UUID) -> Bool
     func readVisibleText(panelID: UUID) -> String?
+    func promptState(panelID: UUID) -> TerminalPromptState
 }
 
 extension TerminalRuntimeRegistry: TerminalCommandRouting {}
@@ -101,6 +102,9 @@ final class AgentLaunchService {
             socketPathProvider: socketPathProvider,
             readVisibleText: { [weak terminalCommandRouter] panelID in
                 terminalCommandRouter?.readVisibleText(panelID: panelID)
+            },
+            promptState: { [weak terminalCommandRouter] panelID in
+                terminalCommandRouter?.promptState(panelID: panelID) ?? .unavailable
             }
         )
     }
@@ -252,13 +256,8 @@ final class AgentLaunchService {
         panelID: UUID,
         terminalCommandRouter: any TerminalCommandRouting
     ) throws {
-        guard let visibleText = terminalCommandRouter.readVisibleText(panelID: panelID) else {
-            return
-        }
-
-        let assessment = TerminalVisibleTextInspector.assessCloseConfirmation(for: visibleText)
-        guard assessment.requiresConfirmation == false else {
-            throw AgentLaunchError.panelBusy(runningCommand: assessment.runningCommand)
+        guard terminalCommandRouter.promptState(panelID: panelID).isIdleAtPrompt else {
+            throw AgentLaunchError.panelBusy(runningCommand: nil)
         }
     }
 

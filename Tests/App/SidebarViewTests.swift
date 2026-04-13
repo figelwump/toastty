@@ -382,7 +382,6 @@ final class SidebarViewTests: XCTestCase {
     func testWorkspaceSubtitleIsHidden() throws {
         let state = AppState.bootstrap()
         let windowID = try XCTUnwrap(state.windows.first?.id)
-        let workspaceID = try XCTUnwrap(state.windows.first?.workspaceIDs.first)
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
@@ -408,17 +407,6 @@ final class SidebarViewTests: XCTestCase {
         // Subtitle should not appear even without activity
         XCTAssertFalse(
             renderedTextValues(in: hostingView).contains(where: { $0.contains("pane") })
-        )
-
-        // Subtitle should remain hidden even after runtime activity updates
-        registry.setWorkspaceActivitySubtext([workspaceID: "1 busy"])
-        pumpMainRunLoop()
-        hostingView.layoutSubtreeIfNeeded()
-
-        let textValues = renderedTextValues(in: hostingView)
-        XCTAssertFalse(
-            textValues.contains(where: { $0.contains("pane") }),
-            "Workspace subtitle should be hidden but found: \(textValues)"
         )
     }
 

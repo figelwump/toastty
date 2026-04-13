@@ -8,7 +8,7 @@ enum TerminalLocalInterruptKind: Equatable, Sendable {
 enum ManagedSessionStopReason: Equatable, Sendable {
     case explicit
     case ghosttyCommandFinished(exitCode: Int?)
-    case idleShellPrompt(recentPromptCommandToken: String?, appearsBusy: Bool)
+    case idleAtPrompt
     case panelRemovedFromAppState
 
     var code: String {
@@ -17,8 +17,8 @@ enum ManagedSessionStopReason: Equatable, Sendable {
             return "explicit"
         case .ghosttyCommandFinished:
             return "ghostty_command_finished"
-        case .idleShellPrompt:
-            return "idle_shell_prompt"
+        case .idleAtPrompt:
+            return "idle_at_prompt"
         case .panelRemovedFromAppState:
             return "panel_removed_from_app_state"
         }
@@ -28,7 +28,7 @@ enum ManagedSessionStopReason: Equatable, Sendable {
         switch self {
         case .explicit:
             return false
-        case .ghosttyCommandFinished, .idleShellPrompt, .panelRemovedFromAppState:
+        case .ghosttyCommandFinished, .idleAtPrompt, .panelRemovedFromAppState:
             return true
         }
     }
@@ -41,6 +41,7 @@ protocol TerminalSessionLifecycleTracking: AnyObject {
     func refreshManagedSessionStatusFromVisibleTextIfNeeded(
         panelID: UUID,
         visibleText: String,
+        promptState: TerminalPromptState,
         at now: Date
     ) -> Bool
     func handleLocalInterruptForPanelIfActive(

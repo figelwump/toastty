@@ -129,6 +129,7 @@ struct AgentLaunchServiceTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
         let agentCatalogProvider = TestAgentCatalogProvider()
 
         let workspace = try #require(store.selectedWorkspace)
@@ -187,7 +188,7 @@ struct AgentLaunchServiceTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
-        terminalRouter.defaultVisibleText = "vishal ~/toastty % npm run dev"
+        terminalRouter.defaultPromptState = .busy
         let agentCatalogProvider = TestAgentCatalogProvider()
 
         let service = AgentLaunchService(
@@ -199,7 +200,7 @@ struct AgentLaunchServiceTests {
             socketPathProvider: { "/tmp/toastty-tests.sock" }
         )
 
-        #expect(throws: AgentLaunchError.panelBusy(runningCommand: "npm run dev")) {
+        #expect(throws: AgentLaunchError.panelBusy(runningCommand: nil)) {
             try service.launch(profileID: "claude")
         }
         #expect(store.hasEverLaunchedAgent == false)
@@ -211,7 +212,7 @@ struct AgentLaunchServiceTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
-        terminalRouter.defaultVisibleText = "vishal ~/toastty % npm run dev"
+        terminalRouter.defaultPromptState = .busy
         let agentCatalogProvider = TestAgentCatalogProvider()
 
         let workspace = try #require(store.selectedWorkspace)
@@ -246,6 +247,7 @@ struct AgentLaunchServiceTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
         let agentCatalogProvider = TestAgentCatalogProvider(
             profiles: [
                 AgentProfile(
@@ -293,6 +295,7 @@ struct AgentLaunchServiceTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
         let agentCatalogProvider = TestAgentCatalogProvider(
             profiles: [
                 AgentProfile(
@@ -336,6 +339,7 @@ struct AgentLaunchServiceTests {
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         let terminalRouter = TestTerminalCommandRouter()
+        terminalRouter.defaultPromptState = .idleAtPrompt
         let agentCatalogProvider = TestAgentCatalogProvider()
 
         let workspace = try #require(store.selectedWorkspace)
@@ -343,6 +347,7 @@ struct AgentLaunchServiceTests {
         terminalRouter.visibleTextByPanelID[panelID] = """
         vishal@toastty ~/repo %
         """
+        terminalRouter.promptStateByPanelID[panelID] = .idleAtPrompt
 
         let service = AgentLaunchService(
             store: store,
@@ -355,6 +360,7 @@ struct AgentLaunchServiceTests {
 
         let result = try service.launch(profileID: "codex")
         let injectedCommand = try #require(terminalRouter.sentTextByPanelID[result.panelID])
+        terminalRouter.promptStateByPanelID[result.panelID] = .busy
         terminalRouter.visibleTextByPanelID[result.panelID] = """
         OpenAI Codex (v0.117.0)
         • Running pwd and git status --short now, then I'll return just the count.
