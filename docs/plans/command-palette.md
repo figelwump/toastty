@@ -14,8 +14,9 @@ window/panel targeting, `@` file-open mode, and future extensibility.
    before the terminal can consume it.
 3. The palette is anchored to the window it was opened from. Commands execute
    against live state in that origin window, even if the palette becomes key.
-4. Focused-panel commands target the currently focused panel in the origin
-   window at execution time. We do not snapshot a panel ID on open.
+4. Focused-panel commands target the origin workspace's current
+   `focusedPanelID` state at execution time. We do not snapshot a panel ID on
+   open.
 5. The palette does not introduce a second command system. It is a thin
    projection over existing command helpers, command controllers, menu titles,
    and shortcut definitions.
@@ -61,8 +62,8 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - Keep command execution scoped to the window the palette came from so palette
   actions feel local and predictable.
 - Make panel-local actions behave intuitively: split, close, detach, and
-  similar actions should apply to the panel currently focused in the origin
-  window.
+  similar actions should apply to the origin workspace's current focused-panel
+  state.
 - Provide a contextual file-open mode in v1 for markdown and HTML files.
 - Rank results by relevance and usage frequency so the palette gets faster the
   more it is used.
@@ -152,9 +153,10 @@ The palette needs a clear targeting model before any UI work starts.
 When the user opens the palette, it captures the current app-owned window ID as
 `originWindowID`. That ID is the routing anchor for the entire palette session.
 
-This is required because the palette itself may become key while typing, and the
-user may even click another window before pressing Return. Command routing
-should still resolve against the window that invoked the palette.
+This is required because the palette itself becomes key while typing, so
+default "current key window" routing is no longer trustworthy once the panel is
+open. In v1, the palette is intentionally ephemeral: click-away dismisses it
+rather than keeping it alive across window switches.
 
 ### live command resolution
 
@@ -165,12 +167,15 @@ That means:
 - we do not snapshot a workspace ID beyond what `originWindowID` already
   implies
 - we do not snapshot a focused panel ID on palette open
-- focused-panel commands resolve the currently focused panel in the origin
-  window when the user executes the result
+- focused-panel commands resolve the origin workspace's current
+  `focusedPanelID` state when the user executes the result
 
 This is the right UX for panel-local commands because the user expectation is
 "act on the panel I am working in", not "act on whatever panel happened to be
-focused when I opened the overlay five seconds ago."
+last focused when I opened the overlay." Once the palette is key, AppKit focus
+is no longer on the workspace window, so the implementation should be explicit
+that it is using persisted workspace focus state, not the current first
+responder.
 
 ### command scopes
 
@@ -180,8 +185,8 @@ focused when I opened the overlay five seconds ago."
   - Example: `Toggle Sidebar`
 - **Workspace-scoped:** target the selected workspace in the origin window
   - Example: `Rename Workspace`
-- **Focused-panel scoped:** target the currently focused panel inside the origin
-  window's selected workspace
+- **Focused-panel scoped:** target the origin workspace's current
+  `focusedPanelID` inside the selected workspace
   - Example: `Close Panel`, `Split Horizontal`, `Detach Panel to New Window`
 - **Explicit-target:** the result itself carries the target
   - Example: `Switch to Workspace 3`
@@ -241,7 +246,7 @@ panel.level = .floating
 panel.hasShadow = true
 panel.isOpaque = false
 panel.backgroundColor = .clear
-panel.hidesOnDeactivate = true
+panel.hidesOnDeactivate = false
 panel.collectionBehavior = [.moveToActiveSpace, .transient]
 ```
 
@@ -250,13 +255,31 @@ search field can reliably accept input.
 
 ### panel lifecycle
 
+The controller should use explicit dismiss reasons instead of relying on a
+single generic resign-key path.
+
+```swift
+enum CommandPaletteDismissReason {
+    case cancelled
+    case executed
+    case toggled
+    case clickAway
+    case originWindowClosed
+    case appDeactivated
+}
+```
+
 - `show(relativeTo originWindow: NSWindow, originWindowID: UUID)` records the
   origin window, centers the panel on that window's screen, restores the last
   query policy for the session, and focuses the search field.
-- `dismiss()` orders the panel out and restores first responder to the origin
-  window when it is still alive.
-- The panel auto-dismisses when it resigns key, the origin window closes, or
-  the app deactivates.
+- `dismiss(reason:)` orders the panel out and handles focus restoration based on
+  the reason.
+- Escape, explicit toggle-close, and successful execution restore focus to the
+  origin window when it is still alive.
+- Click-away, app deactivation, and origin-window close dismiss silently with no
+  focus restoration.
+- In v1, click-away dismisses the palette. We do not keep the palette alive
+  after the user activates another window.
 - Panel height is dynamic up to a fixed max row count.
 
 ### SwiftUI content structure
@@ -307,9 +330,16 @@ should reuse that value instead of retyping it.
 ### command execution context
 
 ```swift
+protocol CommandPaletteActionHandling: AnyObject {
+    func canCreateWorkspace(originWindowID: UUID) -> Bool
+    func createWorkspace(originWindowID: UUID) -> Bool
+    // ... other command-specific adapter methods ...
+}
+
 struct CommandExecutionContext {
     let originWindowID: UUID
     let store: AppStore
+    let actions: CommandPaletteActionHandling
 }
 ```
 
@@ -317,7 +347,11 @@ struct CommandExecutionContext {
 
 - `commandSelection(preferredWindowID: originWindowID)`
 - the selected workspace in the origin window
-- the currently focused panel in that workspace
+- the workspace's current `focusedPanelID` state
+
+`actions` is a thin adapter over the existing command layer. It should own or be
+constructed with the command controllers and helper paths the palette needs,
+rather than forcing the catalog to reach into controllers ad hoc.
 
 ### command descriptor
 
@@ -354,14 +388,10 @@ CommandPaletteCommand(
     shortcut: ToasttyKeyboardShortcuts.newWorkspace,
     icon: .systemImage("square.stack.badge.plus"),
     isAvailable: { context in
-        context.store.canCreateWorkspaceFromCommand(
-            preferredWindowID: context.originWindowID
-        )
+        context.actions.canCreateWorkspace(originWindowID: context.originWindowID)
     },
     execute: { context in
-        context.store.createWorkspaceFromCommand(
-            preferredWindowID: context.originWindowID
-        )
+        context.actions.createWorkspace(originWindowID: context.originWindowID)
     }
 )
 ```
@@ -393,6 +423,9 @@ including:
 The palette should not invent titles that differ from the menu bar. If the
 existing title values are not currently shareable, the implementation should
 factor them into shared constants rather than duplicate strings.
+
+That metadata extraction should happen before or alongside the catalog work, not
+as an afterthought once duplicate strings already exist.
 
 ## search and ranking
 
@@ -463,6 +496,7 @@ panels and richer navigation exist.
 struct PaletteQueryContext {
     let originWindowID: UUID
     let store: AppStore
+    let actions: CommandPaletteActionHandling
 }
 
 protocol PaletteProvider {
@@ -515,17 +549,22 @@ The provider scans a contextual tree, not the whole machine.
 
 Root resolution priority:
 
-1. repo root for the origin window when that metadata exists
-2. the focused terminal panel's current working directory in the origin window
-3. another live terminal cwd in the origin workspace
-4. empty state if no contextual root can be resolved
+1. resolve the selected workspace in the origin window
+2. if the focused panel is a terminal with a live cwd:
+   - ask `RepositoryRootLocator.inferRepoRoot(from:)` for a repo root
+   - use the repo root when found, otherwise use that cwd directly
+3. otherwise fall back to the first terminal panel in slot order in the
+   selected tab that has a live cwd:
+   - again prefer inferred repo root over raw cwd
+4. otherwise show an empty state because no contextual root can be resolved
 
 This keeps `@` useful without turning it into a general-purpose file finder.
 
 #### scanning behavior
 
 - use `FileManager.default.enumerator` in a background `Task`
-- stream partial results into the provider
+- v1 uses bounded async search and returns one batch of results per query
+- cancel the in-flight task when the query changes
 - cache results for the life of the palette session
 - invalidate the cache on the next palette open
 - skip hidden directories and common heavy build/vendor directories:
@@ -573,12 +612,17 @@ results.
 
 ## shortcut interception
 
-`Cmd+Shift+P` should be added to `DisplayShortcutInterceptor.ShortcutAction`.
+`Cmd+Shift+P` should be added to
+`DisplayShortcutInterceptor.ShortcutAction` in `ToasttyApp.swift`.
 
 Behavior:
 
-- detect the shortcut only when `appOwnedWindowID` is non-`nil`
-- in `handle(_:appOwnedWindowID:)`, forward that window ID to
+- if a palette session is already active, `Cmd+Shift+P` should toggle it closed
+  even though the palette panel is currently key and `appOwnedWindowID` for the
+  workspace window is `nil`
+- if no palette session is active, detect the shortcut only when
+  `appOwnedWindowID` is non-`nil`
+- in `handle(_:appOwnedWindowID:)`, forward the live window ID to
   `CommandPaletteController.toggle(originWindowID:)`
 - add `ToasttyKeyboardShortcuts.commandPalette`
 - add a menu item for discoverability
@@ -598,6 +642,7 @@ Sources/
       PaletteSearchField.swift            // NSTextField bridge
       PaletteResultRow.swift              // result row rendering
       PaletteProvider.swift               // provider protocol + result types
+      CommandPaletteActionHandler.swift   // adapter over store + controllers
       CommandPaletteCatalog.swift         // thin projection over existing commands
       CommandPaletteContext.swift         // origin-window execution/query context
       FuzzyScorer.swift                   // fuzzy matching
@@ -613,13 +658,15 @@ app-owned command paths; it does not add new reducer-owned core state.
 
 ## sequencing
 
-### step 1: core shell and origin-window routing
+### step 1: core shell, origin-window routing, and validation strategy
 
 - add the shortcut
 - add `CommandPaletteController`
 - add `CommandPalettePanel`
+- add `CommandPaletteActionHandler`
 - capture `originWindowID` on open
 - ensure execution routes through that origin window
+- choose the automation strategy up front for wave 1
 - implement the search field, selection movement, return/escape behavior
 
 ### step 2: command catalog projection
@@ -675,24 +722,35 @@ app-owned command paths; it does not add new reducer-owned core state.
   - live provider refresh on query changes
 - origin-window targeting
   - open from window A
-  - switch key focus to window B
+  - let the palette become key
   - execute from palette
-  - verify command still targets A
+  - verify the command still targets A
+- toggle behavior
+  - open the palette
+  - press `Cmd+Shift+P` while the palette is key
+  - verify it dismisses cleanly
+- dismiss reasons
+  - Escape restores focus to the origin window
+  - click-away dismisses without focus restoration
+  - origin window closing while the palette is open dismisses safely
 - focused-panel targeting
   - open from a workspace window
   - change the focused panel inside that origin window
   - execute `Close Panel` or `Split`
-  - verify the currently focused panel is the target
+  - verify the workspace's current `focusedPanelID` is the target
 - `UsageTracker`
   - round trip
   - missing file
   - corrupt file recovery
   - runtime-home path handling
+  - config directory creation failure
 - `FileOpenProvider`
   - root resolution priority
   - skip-list behavior
   - supported extension filtering
   - markdown vs HTML routing
+  - file-scan cancellation on query change
+  - symlink-loop safety
 
 ### integration tests
 
@@ -722,6 +780,9 @@ Path 1 is more deterministic for CI-like validation. Path 2 gives more faithful
 UI coverage. Either is fine, but the implementation plan should pick one rather
 than assuming the socket can already send `Cmd+Shift+P`.
 
+This decision should be made in wave 1 because the highest-risk behavior ships
+there, not deferred until later polish.
+
 ## implementation plan
 
 ### wave 1: core palette shell
@@ -742,6 +803,8 @@ Changes:
 - add `isCommandPaletteShortcut(_:)`
 - in `handle(_:appOwnedWindowID:)`, forward the live `appOwnedWindowID` to the
   palette controller
+- if the palette is already active, let the active session consume
+  `Cmd+Shift+P` and close itself before normal `appOwnedWindowID` gating runs
 - add `ToasttyKeyboardShortcuts.commandPalette`
 
 **1b. Controller and panel**
@@ -754,10 +817,13 @@ New files:
 Changes:
 
 - `CommandPaletteController` owns the panel and the current palette session
+- `CommandPaletteActionHandler` adapts `AppStore` helpers and command
+  controllers into palette-facing methods
 - `toggle(originWindowID:)` resolves the `NSWindow`, creates/shows the panel,
   and records `originWindowID`
 - panel becomes key for typing
-- dismiss restores focus to the origin window when possible
+- controller tracks explicit dismiss reasons and restores focus only for
+  cancellation/toggle-close/success
 
 **1c. Search field and view model**
 
@@ -780,6 +846,7 @@ Changes:
   - active provider
 - the view model no longer stores an `AppState` snapshot as the command source
   of truth
+- query work must cancel cleanly when the user types again
 
 **1d. Wave-1 command set**
 
@@ -801,13 +868,17 @@ Each command must execute through existing helpers/controllers scoped to
 - unit tests for `FuzzyScorer`
 - unit tests for `CommandPaletteViewModel`
 - integration test for origin-window targeting
-- manual smoke: open palette in one window, click another Toastty window, press
-  Return on `Split Horizontal`, verify the split lands in the origin window
+- manual smoke:
+  - open the palette and execute `Split Horizontal` while the palette panel is
+    key, verifying the split lands in the origin window
+  - press `Cmd+Shift+P` again while the palette is key and verify it dismisses
+  - click outside the palette and verify it dismisses without trying to persist
+    across the window switch
 
 ### wave 2: full command catalog
 
 Goal: all built-in user-facing commands are searchable without introducing a
-parallel command system.
+parallel command system or duplicating command metadata inline.
 
 **2a. Catalog**
 
@@ -817,6 +888,8 @@ New file:
 
 Changes:
 
+- extract shareable command titles and shortcut metadata before wiring the full
+  catalog so menus and palette results stay in lockstep
 - define the full command list as a thin projection over existing helpers and
   controllers
 - factor shared titles/shortcuts into reusable constants where needed
@@ -866,6 +939,11 @@ Changes:
 
 Goal: `@` opens markdown and HTML files from a contextual tree, routing each
 result to the right destination.
+
+Prerequisite: the markdown APIs from `../toastty-markdown-panel` must be merged
+before wave 4 ships with markdown support. If that merge is not available yet,
+ship HTML-only routing first or hold `@` mode until the markdown command path is
+present.
 
 **4a. Provider and routing**
 
@@ -937,8 +1015,10 @@ Update:
 - **Design direction:** centered minimal spotlight panel.
 - **Window routing:** commands always target the window the palette was opened
   from.
-- **Focused-panel UX:** panel-local commands act on the currently focused panel
-  in the origin window at execution time.
+- **Dismiss behavior:** click-away dismisses the palette in v1; we do not keep
+  it alive across window switches.
+- **Focused-panel UX:** panel-local commands act on the origin workspace's
+  current `focusedPanelID` state at execution time.
 - **Command sourcing:** the palette is a thin projection over existing
   command/menu/controller paths, not a second command system.
 - **Default mode:** no-prefix = commands.
@@ -946,12 +1026,26 @@ Update:
 - **Reserved prefix:** `#` stays available for future heading/symbol queries.
 - **V1 file routing:** markdown files open markdown panels; HTML files open
   browser panels.
+- **File-search execution model:** bounded async search in v1, not streaming
+  partial results.
 - **Usage storage:** runtime-aware config directory, not a hardcoded home path.
+
+## accessibility and performance
+
+- Provide accessibility labels and identifiers for the search field, results
+  list, and selected result state before shipping.
+- Respect reduced-motion preferences by making palette animations optional.
+- Prefer keyboard-only interaction paths to remain complete even without arrow
+  keys, including `Ctrl+N` / `Ctrl+P`.
+- Initial command-mode open should feel effectively instant.
+- Query updates in command mode should stay under a tight interactive budget.
+- `@` mode may take longer on first uncached scan, but cached queries should
+  remain responsive enough that streaming is unnecessary in v1.
 
 ## open questions
 
-- Should `@` prefer repo root over focused terminal cwd whenever both are
-  available, or should cwd stay first for tighter locality?
+- Should a later version of `@` expose a user-visible toggle between repo-root
+  scope and raw cwd scope?
 - Should v1 file-open results always use the destination opener's default
   placement, or should the palette support an alternate placement modifier in
   the first release?
