@@ -4,6 +4,29 @@ import XCTest
 
 @MainActor
 final class MarkdownPanelRuntimeTests: XCTestCase {
+    func testAssetLocatorResolvesFolderReferencedPanelBundle() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let resourcesDirectoryURL = tempDirectoryURL
+            .appendingPathComponent("Test.app", isDirectory: true)
+            .appendingPathComponent("Contents", isDirectory: true)
+            .appendingPathComponent("Resources", isDirectory: true)
+        let panelDirectoryURL = resourcesDirectoryURL
+            .appendingPathComponent("WebPanels", isDirectory: true)
+            .appendingPathComponent("markdown-panel", isDirectory: true)
+        let entryURL = panelDirectoryURL.appendingPathComponent("index.html")
+
+        try FileManager.default.createDirectory(at: panelDirectoryURL, withIntermediateDirectories: true)
+        try Data("<!doctype html>".utf8).write(to: entryURL)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let bundleURL = tempDirectoryURL.appendingPathComponent("Test.app", isDirectory: true)
+        let bundle = try XCTUnwrap(Bundle(path: bundleURL.path))
+
+        XCTAssertEqual(MarkdownPanelAssetLocator.entryURL(bundle: bundle), entryURL)
+        XCTAssertEqual(MarkdownPanelAssetLocator.directoryURL(bundle: bundle), panelDirectoryURL)
+    }
+
     func testBootstrapReadsMarkdownFileContents() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

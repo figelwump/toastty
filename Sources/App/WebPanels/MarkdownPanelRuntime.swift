@@ -3,7 +3,7 @@ import CoreState
 import Foundation
 import WebKit
 
-private enum MarkdownPanelAssetLocator {
+enum MarkdownPanelAssetLocator {
     private static let directory = "WebPanels/markdown-panel"
     private static let fileName = "index"
     private static let fileExtension = "html"
