@@ -185,13 +185,15 @@ body {
 .markdown-prose ol > li::before {
   content: counter(list-counter) ".";
   position: absolute;
+  top: 0;
   left: -1.8em;
   width: 1.5em;
   text-align: right;
   color: var(--accent);
   font-weight: 600;
   font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
-  font-size: 0.95em;
+  font-size: 1.08rem;
+  line-height: 1.75;
 }
 
 .markdown-prose ul {
@@ -394,10 +396,6 @@ body {
   color: var(--accent);
   font: 600 11px/1.1 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
   letter-spacing: 0.04em;
-}
-
-.markdown-panel-stat-sep {
-  opacity: 0.5;
 }
 
 /* TOC toggle button */

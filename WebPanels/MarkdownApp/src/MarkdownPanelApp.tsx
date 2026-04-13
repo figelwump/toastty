@@ -57,7 +57,7 @@ function shortenPath(filePath: string, displayName: string): string {
   return "\u2026/" + segments.slice(-2).join("/");
 }
 
-function computeStats(content: string): { wordCount: string; readingTime: string } {
+function computeWordCount(content: string): string {
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
   const cleaned = body
     .replace(/```[\s\S]*?```/g, "")
@@ -66,13 +66,7 @@ function computeStats(content: string): { wordCount: string; readingTime: string
     .replace(/#+\s/g, "")
     .replace(/[*_~`>|-]/g, "");
   const words = cleaned.split(/\s+/).filter((w) => w.length > 0);
-  const count = words.length;
-  const minutes = Math.max(1, Math.ceil(count / 230));
-
-  return {
-    wordCount: count.toLocaleString(),
-    readingTime: minutes === 1 ? "1 min read" : `${minutes} min read`,
-  };
+  return words.length.toLocaleString();
 }
 
 interface TocEntry {
@@ -230,14 +224,25 @@ function Header(props: { bootstrap: MarkdownPanelBootstrap }) {
   const [tocOpen, setTocOpen] = React.useState(false);
   const shortPath = shortenPath(bootstrap.filePath, bootstrap.displayName);
   const tocEntries = React.useMemo(() => parseToc(bootstrap.content), [bootstrap.content]);
-  const stats = React.useMemo(() => computeStats(bootstrap.content), [bootstrap.content]);
+  const wordCount = React.useMemo(() => computeWordCount(bootstrap.content), [bootstrap.content]);
+
+  // Close TOC when clicking outside
+  React.useEffect(() => {
+    if (!tocOpen) return;
+    function handleClick(e: MouseEvent) {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".markdown-toc") && !target.closest(".markdown-toc-toggle")) {
+        setTocOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [tocOpen]);
 
   return (
     <header className="markdown-panel-header">
       <div className="markdown-panel-stats">
-        <span className="markdown-panel-stat">{stats.readingTime}</span>
-        <span className="markdown-panel-stat-sep" aria-hidden="true">&middot;</span>
-        <span className="markdown-panel-stat">{stats.wordCount} words</span>
+        <span className="markdown-panel-stat">{wordCount} words</span>
       </div>
       <div className="markdown-panel-title-wrap">
         <div className="markdown-panel-title">{bootstrap.displayName}</div>
