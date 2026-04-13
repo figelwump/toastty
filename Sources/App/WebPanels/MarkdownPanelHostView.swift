@@ -2,8 +2,8 @@ import AppKit
 import CoreState
 import SwiftUI
 
-struct BrowserPanelHostView: NSViewRepresentable {
-    @ObservedObject var runtime: BrowserPanelRuntime
+struct MarkdownPanelHostView: NSViewRepresentable {
+    @ObservedObject var runtime: MarkdownPanelRuntime
     let webState: WebPanelState
 
     @MainActor

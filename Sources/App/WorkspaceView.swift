@@ -2258,6 +2258,16 @@ private struct PanelCardView: View {
                 maxHeight: .infinity,
                 alignment: .topLeading
             )
+        } else if state.definition == .markdown {
+            MarkdownPanelView(
+                webState: state,
+                runtime: webPanelRuntimeRegistry.markdownRuntime(for: panelID)
+            )
+            .frame(
+                maxWidth: .infinity,
+                maxHeight: .infinity,
+                alignment: .topLeading
+            )
         } else {
             webPanelPlaceholder(state: state)
         }
@@ -2270,7 +2280,12 @@ private struct PanelCardView: View {
                 .font(ToastyTheme.fontMonoHeader)
                 .foregroundStyle(ToastyTheme.primaryText)
 
-            if let url = state.restorableURL {
+            if let filePath = state.filePath {
+                Text(filePath)
+                    .font(ToastyTheme.fontWorkspaceSubtitle)
+                    .foregroundStyle(ToastyTheme.mutedText)
+                    .textSelection(.enabled)
+            } else if let url = state.restorableURL {
                 Text(url)
                     .font(ToastyTheme.fontWorkspaceSubtitle)
                     .foregroundStyle(ToastyTheme.mutedText)

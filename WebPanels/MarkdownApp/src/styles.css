@@ -1,0 +1,241 @@
+:root {
+  color-scheme: light;
+  --bg: #fbf5ee;
+  --panel: rgba(255, 251, 246, 0.92);
+  --border: rgba(103, 72, 37, 0.14);
+  --text: #22170e;
+  --muted: #76593f;
+  --accent: #b65c22;
+  --accent-soft: rgba(182, 92, 34, 0.12);
+  --code-bg: rgba(78, 53, 31, 0.08);
+  --quote-bg: rgba(182, 92, 34, 0.06);
+  --shadow: 0 20px 70px rgba(74, 46, 19, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(255, 190, 92, 0.28), transparent 24rem),
+    linear-gradient(180deg, #fff8f1 0%, var(--bg) 100%);
+  color: var(--text);
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.markdown-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.markdown-shell-loading {
+  align-items: center;
+  justify-content: center;
+}
+
+.markdown-panel-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 24px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 249, 242, 0.92);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.markdown-panel-badge {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font: 600 11px/1.1 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.markdown-panel-title-wrap {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.markdown-panel-title {
+  font: 600 18px/1.2 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.markdown-panel-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font: 500 12px/1.3 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+.markdown-prose {
+  width: min(820px, calc(100vw - 40px));
+  margin: 28px auto 52px;
+  padding: 34px 38px 44px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+}
+
+.markdown-prose > :first-child {
+  margin-top: 0;
+}
+
+.markdown-prose > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-prose h1,
+.markdown-prose h2,
+.markdown-prose h3,
+.markdown-prose h4,
+.markdown-prose h5,
+.markdown-prose h6 {
+  margin: 1.65em 0 0.45em;
+  color: #1d130b;
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
+}
+
+.markdown-prose h1 { font-size: clamp(2rem, 4vw, 2.9rem); }
+.markdown-prose h2 { font-size: clamp(1.55rem, 3vw, 2.1rem); }
+.markdown-prose h3 { font-size: 1.3rem; }
+
+.markdown-prose p,
+.markdown-prose li,
+.markdown-prose blockquote {
+  font-size: 1.08rem;
+  line-height: 1.75;
+}
+
+.markdown-prose p,
+.markdown-prose ul,
+.markdown-prose ol,
+.markdown-prose blockquote,
+.markdown-prose pre,
+.markdown-prose table {
+  margin: 1em 0;
+}
+
+.markdown-prose a {
+  color: var(--accent);
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 0.15em;
+}
+
+.markdown-prose hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 2rem 0;
+}
+
+.markdown-prose code {
+  padding: 0.18em 0.4em;
+  border-radius: 7px;
+  background: var(--code-bg);
+  font: 500 0.9em/1.5 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+}
+
+.markdown-prose pre {
+  overflow-x: auto;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: #21160f;
+  color: #f9ede1;
+}
+
+.markdown-prose pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+}
+
+.markdown-prose blockquote {
+  margin-left: 0;
+  padding: 14px 18px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 14px 14px 0;
+  background: var(--quote-bg);
+  color: #5f422b;
+}
+
+.markdown-prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 500 0.95rem/1.5 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.markdown-prose th,
+.markdown-prose td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.markdown-prose img {
+  max-width: 100%;
+}
+
+.markdown-link-blocked,
+.markdown-image-blocked {
+  color: var(--muted);
+  font: 500 0.95em/1.6 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.markdown-empty-state {
+  max-width: 460px;
+  padding: 28px 30px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.markdown-empty-title {
+  margin: 0 0 10px;
+  font: 600 1.1rem/1.2 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.markdown-empty-copy {
+  margin: 0;
+  color: var(--muted);
+  font: 500 0.98rem/1.6 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+@media (max-width: 720px) {
+  .markdown-panel-header {
+    padding: 16px 16px 14px;
+  }
+
+  .markdown-prose {
+    width: min(100vw - 20px, 820px);
+    margin: 16px auto 26px;
+    padding: 24px 18px 28px;
+    border-radius: 18px;
+  }
+}

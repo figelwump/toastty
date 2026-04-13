@@ -1540,7 +1540,19 @@ struct ToasttyApp: App {
                 reloadConfiguration: reloadConfiguration,
                 openManageConfig: openManageConfig,
                 openConfigReference: openConfigReference,
-                openAgentProfilesConfiguration: openAgentProfilesConfiguration
+                openAgentProfilesConfiguration: openAgentProfilesConfiguration,
+                openMarkdownFile: { preferredWindowID in
+                    self.openMarkdownFile(
+                        preferredWindowID: preferredWindowID,
+                        placement: WebPanelPlacement.newTab
+                    )
+                },
+                openMarkdownBesideCurrent: { preferredWindowID in
+                    self.openMarkdownFile(
+                        preferredWindowID: preferredWindowID,
+                        placement: WebPanelPlacement.splitRight
+                    )
+                }
             )
         }
     }
@@ -1729,6 +1741,33 @@ struct ToasttyApp: App {
             alert.runModal()
             return
         }
+    }
+
+    @MainActor
+    private func openMarkdownFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
+        guard let fileURL = MarkdownOpenPanel.chooseFile(
+            title: placement == .splitRight ? "Open Markdown Beside Current" : "Open Markdown File"
+        ) else {
+            return
+        }
+
+        let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let didOpen = store.createMarkdownPanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            request: MarkdownPanelCreateRequest(
+                filePath: normalizedFilePath,
+                placementOverride: placement
+            )
+        )
+
+        guard didOpen == false else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Unable to Open Markdown File"
+        alert.informativeText = "Toastty couldn't open \(normalizedFilePath) in the current workspace."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     @MainActor

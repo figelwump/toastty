@@ -20,30 +20,6 @@ struct FaviconLinkReference: Equatable, Sendable {
     var rel: String
 }
 
-private final class FocusAwareWKWebView: WKWebView {
-    var interactionDidRequestFocus: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        interactionDidRequestFocus?()
-        super.mouseDown(with: event)
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        interactionDidRequestFocus?()
-        super.rightMouseDown(with: event)
-    }
-
-    override func otherMouseDown(with event: NSEvent) {
-        interactionDidRequestFocus?()
-        super.otherMouseDown(with: event)
-    }
-
-    override func becomeFirstResponder() -> Bool {
-        interactionDidRequestFocus?()
-        return super.becomeFirstResponder()
-    }
-}
-
 @MainActor
 final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     @Published private(set) var navigationState = BrowserPanelNavigationState()
@@ -99,10 +75,13 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         canGoBackObservation?.invalidate()
         canGoForwardObservation?.invalidate()
         loadingObservation?.invalidate()
-        webView.interactionDidRequestFocus = nil
-        webView.navigationDelegate = nil
-        webView.uiDelegate = nil
-        webView.removeFromSuperview()
+        let webView = webView
+        Task { @MainActor in
+            webView.interactionDidRequestFocus = nil
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+            webView.removeFromSuperview()
+        }
     }
 
     static func normalizedUserEnteredURLString(_ value: String) -> String? {

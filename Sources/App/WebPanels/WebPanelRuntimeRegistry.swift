@@ -8,6 +8,8 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     private var stateObservation: AnyCancellable?
     private var browserRuntimeByPanelID: [UUID: BrowserPanelRuntime] = [:]
     private var browserRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
+    private var markdownRuntimeByPanelID: [UUID: MarkdownPanelRuntime] = [:]
+    private var markdownRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
 
     func bind(store: AppStore) {
         if let existingStore = self.store {
@@ -39,6 +41,29 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         }
         return runtime
     }
+
+    func markdownRuntime(for panelID: UUID) -> MarkdownPanelRuntime {
+        if let runtime = markdownRuntimeByPanelID[panelID] {
+            return runtime
+        }
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: panelID,
+            metadataDidChange: { [weak self] panelID, title, url in
+                guard let self else { return }
+                _ = self.store?.send(.updateWebPanelMetadata(panelID: panelID, title: title, url: url))
+            },
+            interactionDidRequestFocus: { [weak self] panelID in
+                guard let self else { return }
+                _ = self.store?.focusPanel(containing: panelID)
+            }
+        )
+        markdownRuntimeByPanelID[panelID] = runtime
+        markdownRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        return runtime
+    }
 }
 
 private extension WebPanelRuntimeRegistry {
@@ -58,6 +83,14 @@ private extension WebPanelRuntimeRegistry {
         browserRuntimeObservationByPanelID = browserRuntimeObservationByPanelID.filter { panelID, _ in
             liveBrowserPanelIDs.contains(panelID)
         }
+
+        let liveMarkdownPanelIDs = liveMarkdownPanelIDs(in: state)
+        markdownRuntimeByPanelID = markdownRuntimeByPanelID.filter { panelID, _ in
+            liveMarkdownPanelIDs.contains(panelID)
+        }
+        markdownRuntimeObservationByPanelID = markdownRuntimeObservationByPanelID.filter { panelID, _ in
+            liveMarkdownPanelIDs.contains(panelID)
+        }
     }
 
     func liveBrowserPanelIDs(in state: AppState) -> Set<UUID> {
@@ -66,6 +99,20 @@ private extension WebPanelRuntimeRegistry {
                 for (panelID, panelState) in tab.panels {
                     guard case .web(let webState) = panelState,
                           webState.definition == .browser else {
+                        continue
+                    }
+                    result.insert(panelID)
+                }
+            }
+        }
+    }
+
+    func liveMarkdownPanelIDs(in state: AppState) -> Set<UUID> {
+        state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
+            for tab in workspace.orderedTabs {
+                for (panelID, panelState) in tab.panels {
+                    guard case .web(let webState) = panelState,
+                          webState.definition == .markdown else {
                         continue
                     }
                     result.insert(panelID)

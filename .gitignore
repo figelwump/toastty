@@ -7,6 +7,8 @@ DerivedData
 /Derived/
 /Derived-*/
 /artifacts/
+/node_modules/
+/WebPanels/MarkdownApp/node_modules/
 /Dependencies/GhosttyKit*.xcframework/
 /Dependencies/GhosttyKit*.metadata.env
 *.xcodeproj

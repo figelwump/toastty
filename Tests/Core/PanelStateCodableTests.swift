@@ -21,6 +21,13 @@ struct PanelStateCodableTests {
                     currentURL: "https://example.com/docs"
                 )
             ),
+            .web(
+                WebPanelState(
+                    definition: .markdown,
+                    title: "README.md",
+                    filePath: "/tmp/project/README.md"
+                )
+            ),
         ]
 
         let encoder = JSONEncoder()
