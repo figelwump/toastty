@@ -1544,10 +1544,16 @@ struct ToasttyApp: App {
                 openMarkdownFile: { preferredWindowID in
                     self.openMarkdownFile(
                         preferredWindowID: preferredWindowID,
+                        placement: WebPanelPlacement.rootRight
+                    )
+                },
+                openMarkdownFileInTab: { preferredWindowID in
+                    self.openMarkdownFile(
+                        preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.newTab
                     )
                 },
-                openMarkdownBesideCurrent: { preferredWindowID in
+                openMarkdownFileInSplit: { preferredWindowID in
                     self.openMarkdownFile(
                         preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.splitRight
@@ -1746,7 +1752,7 @@ struct ToasttyApp: App {
     @MainActor
     private func openMarkdownFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
         guard let fileURL = MarkdownOpenPanel.chooseFile(
-            title: placement == .splitRight ? "Open Markdown Beside Current" : "Open Markdown File"
+            title: markdownOpenTitle(for: placement)
         ) else {
             return
         }
@@ -1768,6 +1774,17 @@ struct ToasttyApp: App {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    private func markdownOpenTitle(for placement: WebPanelPlacement) -> String {
+        switch placement {
+        case .rootRight:
+            return "Open Markdown File"
+        case .newTab:
+            return "Open Markdown File in Tab"
+        case .splitRight:
+            return "Open Markdown File in Split"
+        }
     }
 
     @MainActor

@@ -537,6 +537,34 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(webState.currentURL)
     }
 
+    func testCreateMarkdownPanelFromCommandDefaultsToRootRightPlacement() throws {
+        let fixture = try makeMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: MarkdownPanelCreateRequest(filePath: fixture.canonicalPath)
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[panelID] else {
+            XCTFail("expected focused panel to be markdown")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.title, "README.md")
+        XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+    }
+
     func testCreateMarkdownPanelDeduplicatesByNormalizedFilePathInWorkspace() throws {
         let fixture = try makeMarkdownFixture()
         let state = AppState.bootstrap()

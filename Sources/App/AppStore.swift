@@ -63,7 +63,7 @@ struct BrowserPanelCreateRequest: Equatable, Sendable {
 }
 
 struct MarkdownPanelCreateRequest: Equatable, Sendable {
-    static let defaultPlacement: WebPanelPlacement = .newTab
+    static let defaultPlacement: WebPanelPlacement = .rootRight
 
     var filePath: String
     var placementOverride: WebPanelPlacement?

@@ -289,7 +289,8 @@ Implemented behavior:
 Implemented creation actions:
 
 - `Open Markdown File...`
-- `Open Markdown Beside Current`
+- `Open Markdown File in Tab...`
+- `Open Markdown File in Split...`
 
 ### markdown v1 content loading
 
