@@ -138,6 +138,7 @@ body {
   font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
   line-height: 1.12;
   letter-spacing: -0.03em;
+  scroll-margin-top: 70px;
 }
 
 .markdown-prose h1 { font-size: clamp(2rem, 4vw, 2.9rem); }
@@ -185,13 +186,13 @@ body {
 .markdown-prose ol > li::before {
   content: counter(list-counter) ".";
   position: absolute;
-  top: 0;
+  top: 0.04em;
   left: -1.8em;
   width: 1.5em;
   text-align: right;
   color: var(--accent);
   font-weight: 600;
-  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
   font-size: 1.08rem;
   line-height: 1.75;
 }
