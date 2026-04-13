@@ -3,17 +3,19 @@
 Date: 2026-04-13
 
 This document describes the current shared web-panel architecture in Toastty and
-the next steps after the browser panel shipped. It is the source of truth for
-near-term web-panel work.
+the next steps after browser and markdown v1. It is the source of truth for
+near-term web-panel work in this worktree.
 
 ## summary
 
 1. Toastty already has two renderer-level panel kinds: `terminal` and `web`.
 2. Browser is the shipped proof of the shared `web` substrate.
-3. Markdown is the next built-in web panel to implement.
+3. Markdown v1 is now implemented in this worktree as the first non-browser web
+   panel.
 4. Scratchpad should follow markdown, not precede it.
-5. Built-in panels should stay typed and native-first in v1. Generic
-   manifest-style abstractions should wait until real built-in needs force them.
+5. Built-in panels should stay typed and app-owned in v1. Generic
+   manifest-style abstractions should wait until real built-in or third-party
+   needs force them.
 6. Feedback routing remains an app concern, not a panel-owned concern.
 7. Installed third-party panels are deferred until the built-in lifecycle is
    stable across browser and markdown.
@@ -31,12 +33,21 @@ The following are already true in the repo:
   - command/menu creation flows
   - URL routing integration
   - automation and reducer coverage
+- This worktree also includes markdown v1 with:
+  - explicit `filePath` state in `WebPanelState`
+  - definition-aware runtime registry support
+  - host-owned file selection and workspace-local dedupe
+  - split and tab placement support
+  - restore and reopen coverage
+  - a bundled local web app rendered inside `WKWebView`
 - The old auxiliary-panel product concept is already gone. There is no remaining
   permanent right-column panel class to migrate away from.
 
 This means Toastty is no longer in a speculative "phase 1 substrate" state. The
-browser panel is the substrate proof. The next work is to generalize that
-browser-first path so a second, non-browser panel can use it cleanly.
+browser panel is the substrate proof, and markdown is now the second proof that
+the same substrate can host non-browser content cleanly. The next work is no
+longer "build markdown," but rather harden markdown and use it as the reference
+shape for future built-in and third-party web panels.
 
 ## goals
 
@@ -46,7 +57,7 @@ browser-first path so a second, non-browser panel can use it cleanly.
   - move between splits
   - move between tabs, workspaces, and windows
   - persist and restore cleanly
-- Add markdown as the first non-browser built-in panel.
+- Establish markdown as the reference non-browser built-in panel shape.
 - Keep terminal-first workflows fast and predictable.
 - Keep panel creation and placement rules concrete and understandable.
 - Keep agent-to-panel and panel-to-agent communication app-owned.
@@ -86,9 +97,14 @@ enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendable {
 
 That high-level shape is correct and should stay.
 
-The current `WebPanelState` is intentionally browser-centric because browser was
-the first shipped panel. That is acceptable as an as-built starting point, but
-it is no longer the right endpoint once markdown exists.
+The current `WebPanelState` is still intentionally flat because browser shipped
+first and markdown v1 chose the smallest stable state change:
+
+- browser keeps `initialURL` and `currentURL`
+- markdown adds explicit `filePath`
+
+That is acceptable as the current as-built state, but it should be revisited
+before edit/comment mode or more non-browser panel types land.
 
 ## near-term architecture direction
 
@@ -127,8 +143,7 @@ Preferred direction:
 
 - use a typed per-definition payload if it stays reasonably small
 
-Acceptable simplification if the typed payload refactor is too large for the
-first markdown implementation:
+Current implementation choice in this worktree:
 
 - add explicit markdown fields to `WebPanelState` and keep the struct flat for
   one more iteration
@@ -164,17 +179,14 @@ Required direction:
 - keep runtime ownership native and explicit
 - preserve deterministic reattachment after moves, restores, and tab switches
 
-The first extension of this model should be:
+The current implementation in this worktree uses:
 
 - existing `BrowserPanelRuntime`
 - new `MarkdownPanelRuntime`
-
-This can be implemented with:
-
-- a small shared runtime protocol, or
 - separate typed runtime stores inside the same registry
 
-The simpler approach should win unless it creates obvious duplication.
+That is the right near-term choice. A shared runtime protocol can wait until a
+third runtime makes the duplication worth addressing.
 
 ## web profiles
 
@@ -195,6 +207,17 @@ Markdown should use the local-only profile.
 The profile boundary matters more than the exact implementation class layout.
 The key product rule is that a file-backed markdown panel should not silently
 behave like a general browser.
+
+Current implementation status:
+
+- non-persistent `WKWebsiteDataStore`
+- file-only navigation policy in the runtime
+- remote links blocked in the bundled markdown app
+- remote images blocked in the bundled markdown app
+
+This is enough for markdown v1, but it is not the final word on enforcement.
+If stronger no-network guarantees are needed later, they should be added as
+explicit runtime policy rather than assumed from the current setup.
 
 ## placement model
 
@@ -234,9 +257,9 @@ Future values such as `splitDown`, `backgroundNewTab`, or
 `splitBesideSource` can be added later when a built-in panel genuinely needs
 them.
 
-## markdown is the next panel
+## markdown v1 status
 
-Markdown is the right next built-in web panel because it validates the parts of
+Markdown was the right next built-in web panel because it validates the parts of
 the substrate browser did not need to prove:
 
 - a non-browser content model
@@ -245,13 +268,15 @@ the substrate browser did not need to prove:
 - workspace-local instance reuse
 - host-driven content loading into a web view
 
-Markdown should remain narrower than scratchpad.
+Markdown remains narrower than scratchpad and should continue to act as the
+reference built-in non-browser panel.
 
 ### markdown v1 scope
 
-Markdown v1 should focus on file-backed rendering and lifecycle correctness.
+Markdown v1 in this worktree focuses on file-backed rendering and lifecycle
+correctness.
 
-Required behavior:
+Implemented behavior:
 
 - open a markdown file into a `web` panel
 - restore that panel from persisted state
@@ -261,35 +286,48 @@ Required behavior:
 - allow both `newTab` and explicit split placement variants
 - keep the panel local-only
 
-Reasonable first creation actions:
+Implemented creation actions:
 
 - `Open Markdown File...`
 - `Open Markdown Beside Current`
 
 ### markdown v1 content loading
 
-Markdown v1 does not need a JS bridge.
+Markdown v1 does not use Swift-side HTML rendering.
 
-Initial direction:
+Current implementation direction:
 
-- read markdown in Swift
-- render markdown to HTML in Swift
-- load the rendered HTML with `WKWebView.loadHTMLString(_:baseURL:)`
+- bundle a local markdown web app under `WebPanels/MarkdownApp/`
+- copy built assets into `Sources/App/Resources/WebPanels/markdown-panel/`
+- load that bundled app inside `WKWebView`
+- have the host read markdown source in Swift
+- inject a typed bootstrap payload into the page
+- render the source inside the page with `react-markdown`,
+  `remark-gfm`, and `rehype-sanitize`
 
-This is enough to prove the lifecycle and rendering model without introducing a
-bridge protocol too early.
+This better matches the intended third-party extension shape than a one-off
+Swift-side HTML renderer would.
 
 ### markdown v1 bridge stance
 
 Do not block markdown on a generic typed bridge.
 
-What markdown v1 needs is simpler:
+What markdown v1 currently uses is simpler:
 
-- host prepares content
-- host loads content into the panel runtime
+- host prepares bootstrap data
+- host injects bootstrap data into the bundled page
+- the page owns rendering from that source
 
 A richer host-to-panel or panel-to-host bridge can arrive later when markdown
 review or scratchpad feedback needs it.
+
+Current bootstrap fields are intentionally narrow:
+
+- contract version
+- mode
+- file path
+- display name
+- raw markdown content
 
 ### markdown v1 file watching
 
@@ -318,7 +356,7 @@ Scratchpad adds higher-risk concerns that markdown does not require:
 - more complicated durable state
 - more complicated security and collaboration semantics
 
-The correct order is:
+The correct order remains:
 
 1. browser proves the substrate
 2. markdown proves non-browser content, local-only policy, and typed state
@@ -346,6 +384,8 @@ Recommended order from the current baseline:
 
 ### step 1: generalize the existing runtime path
 
+Completed in this worktree:
+
 - keep the shipped browser path working
 - make `WebPanelRuntimeRegistry` definition-aware
 - add the local-only web profile
@@ -353,16 +393,22 @@ Recommended order from the current baseline:
 
 ### step 2: ship markdown v1
 
+Completed in this worktree:
+
 - add markdown creation flows
-- implement markdown runtime and rendering
+- implement markdown runtime and bundled web-app rendering
 - add markdown reuse within the current workspace by file path
 - validate close, reopen, move, and restore behavior
+- package the bundled markdown assets under `WebPanels/markdown-panel/` in the
+  app bundle
 
 ### step 3: expand markdown only if the first cut proves sound
 
 - optional file watching
 - optional richer review affordances
 - optional app-owned feedback routing for markdown-specific review flows
+- decide whether the flat `WebPanelState` shape should be replaced before edit
+  or comment mode
 
 ### step 4: build scratchpad
 
@@ -400,17 +446,18 @@ Validation for markdown work should include:
 
 - reducer tests for creation, placement, reuse, close, and reopen
 - restore/snapshot tests for persisted markdown state
-- runtime tests for the local-only profile behavior
+- runtime tests for bundled asset lookup and local-only behavior
 - automation coverage or an equivalent smoke path for opening and rendering a
   markdown file
 
 ## open questions
 
-- What is the smallest typed `WebPanelState` evolution that keeps browser stable
-  while making markdown clean?
-- Is file watching worth including in markdown v1, or should it be follow-up?
+- Is the current flat `WebPanelState` still acceptable for markdown edit/comment
+  mode, or should that be the forcing function for typed per-definition payloads?
+- Is file watching worth including as the next markdown follow-up, or should it
+  wait until richer review flows exist?
 - What is the right enforcement mechanism for the local-only web profile?
-- After markdown exists, is a richer typed bridge still warranted, or does
-  scratchpad become the first real consumer?
+- Does markdown review/comment mode need a richer typed bridge, or does
+  scratchpad remain the first real consumer?
 - Once two non-browser panels exist, is a generic `instanceKey` field still
   justified, or is computed host-side reuse enough?
