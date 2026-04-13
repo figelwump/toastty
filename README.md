@@ -10,7 +10,7 @@ It's a native macOS terminal multiplexer built with Swift and powered by the [li
 
 Toastty builds on the awesomeness of Ghostty with features that are tuned for working with coding agents: workspaces in vertical tabs, real-time coding agent status in the sidebar, notifications and unread badges when agents need attention, and jumping to the next unread/active agent session.
 
-There are also little features throughout: scrollback search, aconfigurable terminal profiles for setups like `tmux`, `zmx`, or `ssh`, keyboard shortcuts to navigate workspaces and panels, horizontal tabs per-workspace, and window-local font control.
+There are also little features throughout: scrollback search, configurable terminal profiles for setups like `tmux`, `zmx`, or `ssh`, keyboard shortcuts to navigate workspaces and panels, horizontal tabs per-workspace, and window-local font control.
 
 ## Getting Started
 
