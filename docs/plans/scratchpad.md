@@ -214,7 +214,10 @@ Scratchpad should not be the first web panel shipped.
 Recommended order:
 
 1. prove the shared web-panel host/runtime with browser
-2. prove creation arguments, launch context, and feedback routing with markdown review
-3. build scratchpad once the collaboration and bridge model are already working
+2. refactor file-backed markdown into a broader `localDocument` built-in panel
+   that is ready for upcoming editing work
+3. prove creation arguments, launch context, and feedback routing with
+   local-document review/edit flows if they arrive before scratchpad
+4. build scratchpad once the collaboration and bridge model are already working
 
 That sequencing keeps scratchpad focused on the genuinely unique product problems instead of forcing it to carry all substrate risk too early.
