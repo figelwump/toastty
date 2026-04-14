@@ -78,6 +78,7 @@ final class AutomationSocketServer: @unchecked Sendable {
         publishesDiscoveryRecord: Bool? = nil,
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
@@ -95,6 +96,7 @@ final class AutomationSocketServer: @unchecked Sendable {
         self.commandExecutor = AutomationCommandExecutor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
@@ -802,6 +804,7 @@ private final class AutomationSocketClient: @unchecked Sendable {
 private final class AutomationCommandExecutor: @unchecked Sendable {
     private let store: AppStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
     private let agentLaunchService: AgentLaunchService
@@ -816,6 +819,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     init(
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
         agentLaunchService: AgentLaunchService,
@@ -823,6 +827,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
         self.agentLaunchService = agentLaunchService
@@ -1107,6 +1112,18 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return try terminalStateSnapshot(
                 workspaceID: resolved.workspaceID,
                 panelID: resolved.panelID
+            )
+
+        case "automation.markdown_panel_state":
+            try requireAutomationMode(for: command)
+            let resolved = try resolveMarkdownTarget(payload: payload)
+            let runtime = webPanelRuntimeRegistry.markdownRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            return markdownPanelStateSnapshot(
+                workspaceID: resolved.workspaceID,
+                panelID: resolved.panelID,
+                webState: resolved.webState,
+                runtimeState: runtime.automationState()
             )
 
         case "automation.dump_state":
@@ -1501,6 +1518,18 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 )
             )
 
+        case "panel.create.markdown":
+            guard let filePath = normalizedOptionalText(args.string("filePath")) else {
+                throw AutomationSocketError.invalidPayload("filePath is required")
+            }
+            didMutate = store.createMarkdownPanel(
+                workspaceID: try workspaceID(),
+                request: MarkdownPanelCreateRequest(
+                    filePath: filePath,
+                    placementOverride: try webPanelPlacement()
+                )
+            )
+
         case "topbar.toggle.focused-panel":
             didMutate = terminalRuntimeRegistry.toggleFocusedPanelMode(workspaceID: try workspaceID())
 
@@ -1675,6 +1704,51 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
+    private func resolveMarkdownTarget(
+        payload: [String: AutomationJSONValue]
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        if let rawPanelID = payload.string("panelID") {
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let workspace = store.state.workspacesByID[location.workspaceID],
+                  let panelState = workspace.panelState(for: panelID),
+                  case .web(let webState) = panelState,
+                  webState.definition == .markdown else {
+                throw AutomationSocketError.invalidPayload("panelID is not a markdown panel")
+            }
+            return (location.workspaceID, panelID, webState)
+        }
+
+        let workspaceID = try resolveWorkspaceID(args: payload)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[focusedPanelID],
+           case .web(let webState) = panelState,
+           webState.definition == .markdown {
+            return (workspaceID, focusedPanelID, webState)
+        }
+
+        for leaf in workspace.layoutTree.allSlotInfos {
+            let panelID = leaf.panelID
+            guard let panelState = workspace.panels[panelID],
+                  case .web(let webState) = panelState,
+                  webState.definition == .markdown else {
+                continue
+            }
+            return (workspaceID, panelID, webState)
+        }
+
+        throw AutomationSocketError.invalidPayload("workspace has no markdown panel to target")
+    }
+
+    @MainActor
     private func encodedStateData(includeRuntime: Bool) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -1710,6 +1784,47 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             "shell": .string(terminalState.shell),
             "profileID": terminalState.profileBinding.map { .string($0.profileID) } ?? .null,
         ]
+    }
+
+    @MainActor
+    private func markdownPanelStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState,
+        runtimeState: MarkdownPanelRuntimeAutomationState
+    ) -> [String: AutomationJSONValue] {
+        var result: [String: AutomationJSONValue] = [
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "stateTitle": .string(webState.title),
+            "stateFilePath": webState.filePath.map { .string($0) } ?? .null,
+            "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
+            "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
+            "currentTheme": .string(runtimeState.currentTheme.rawValue),
+            "hasCurrentBootstrap": .bool(runtimeState.currentBootstrap != nil),
+            "pendingBootstrapScript": .bool(runtimeState.hasPendingBootstrapScript),
+            "currentAssetPath": runtimeState.currentAssetPath.map { .string($0) } ?? .null,
+        ]
+
+        if let bootstrap = runtimeState.currentBootstrap {
+            result["bootstrapContractVersion"] = .int(bootstrap.contractVersion)
+            result["bootstrapMode"] = .string(bootstrap.mode.rawValue)
+            result["bootstrapFilePath"] = .string(bootstrap.filePath)
+            result["bootstrapDisplayName"] = .string(bootstrap.displayName)
+            result["bootstrapTheme"] = .string(bootstrap.theme.rawValue)
+            result["bootstrapContentLength"] = .int(bootstrap.content.utf8.count)
+            result["bootstrapContentSHA256"] = .string(Self.sha256Hex(bootstrap.content))
+        } else {
+            result["bootstrapContractVersion"] = .null
+            result["bootstrapMode"] = .null
+            result["bootstrapFilePath"] = .null
+            result["bootstrapDisplayName"] = .null
+            result["bootstrapTheme"] = .null
+            result["bootstrapContentLength"] = .null
+            result["bootstrapContentSHA256"] = .null
+        }
+
+        return result
     }
 
     @MainActor
@@ -1881,6 +1996,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     private func normalizedOptionalText(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func sha256Hex(_ string: String) -> String {
+        SHA256.hash(data: Data(string.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
     private func automationObject<T: Encodable>(_ value: T) throws -> [String: AutomationJSONValue] {

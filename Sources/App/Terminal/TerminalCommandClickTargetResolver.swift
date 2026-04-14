@@ -1,0 +1,97 @@
+import CoreState
+import Foundation
+
+enum TerminalCommandClickTarget: Equatable, Sendable {
+    case markdownFile(path: String, placement: WebPanelPlacement)
+    case passthrough(URL)
+}
+
+enum TerminalCommandClickTargetResolver {
+    private static let markdownFileExtensions: Set<String> = [
+        "md",
+        "markdown",
+        "mdown",
+        "mkd",
+    ]
+
+    static func resolve(
+        hoveredURL: URL,
+        cwd: String?,
+        useAlternatePlacement: Bool,
+        fileManager: FileManager = .default
+    ) -> TerminalCommandClickTarget {
+        guard let localFilePath = resolvedLocalFilePath(for: hoveredURL, cwd: cwd),
+              let markdownFilePath = normalizedMarkdownFilePath(localFilePath, fileManager: fileManager) else {
+            return .passthrough(hoveredURL)
+        }
+
+        let placement: WebPanelPlacement = useAlternatePlacement ? .rootRight : .newTab
+        return .markdownFile(path: markdownFilePath, placement: placement)
+    }
+
+    private static func resolvedLocalFilePath(for hoveredURL: URL, cwd: String?) -> String? {
+        if let scheme = hoveredURL.scheme?.lowercased(),
+           scheme != "file" {
+            return nil
+        }
+
+        guard let rawPath = rawPath(for: hoveredURL),
+              let normalizedRawPath = WebPanelState.normalizedFilePath(rawPath) else {
+            return nil
+        }
+
+        let expandedPath = (normalizedRawPath as NSString).expandingTildeInPath
+        guard expandedPath.isEmpty == false else {
+            return nil
+        }
+
+        if expandedPath.hasPrefix("/") {
+            return expandedPath
+        }
+
+        guard let normalizedCWD = WebPanelState.normalizedFilePath(cwd) else {
+            return nil
+        }
+
+        return URL(
+            fileURLWithPath: expandedPath,
+            relativeTo: URL(fileURLWithPath: normalizedCWD, isDirectory: true)
+        )
+        .standardizedFileURL
+        .path
+    }
+
+    private static func rawPath(for hoveredURL: URL) -> String? {
+        let path = hoveredURL.path
+        guard path.isEmpty == false else {
+            return nil
+        }
+        return path
+    }
+
+    private static func normalizedMarkdownFilePath(
+        _ path: String,
+        fileManager: FileManager
+    ) -> String? {
+        let resolvedURL = URL(fileURLWithPath: path)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let resolvedPath = resolvedURL.path
+        guard resolvedPath.isEmpty == false else {
+            return nil
+        }
+
+        var isDirectory = ObjCBool(false)
+        guard fileManager.fileExists(atPath: resolvedPath, isDirectory: &isDirectory),
+              isDirectory.boolValue == false else {
+            return nil
+        }
+
+        let pathExtension = resolvedURL.pathExtension.lowercased()
+        guard markdownFileExtensions.contains(pathExtension) else {
+            return nil
+        }
+
+        return WebPanelState.normalizedFilePath(resolvedPath)
+    }
+}

@@ -1,5 +1,10 @@
 import Foundation
 
+public enum WebPanelCapabilityProfile: String, Hashable, Sendable {
+    case localOnly
+    case networkAllowed
+}
+
 public enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendable {
     case browser
     case markdown
@@ -18,6 +23,19 @@ public enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendabl
             return "Diff"
         }
     }
+
+    public var capabilityProfile: WebPanelCapabilityProfile {
+        switch self {
+        case .browser:
+            return .networkAllowed
+        case .markdown:
+            return .localOnly
+        case .scratchpad, .diff:
+            // Keep placeholder built-ins least-privilege until their concrete
+            // runtime requirements are real enough to justify more access.
+            return .localOnly
+        }
+    }
 }
 
 public struct WebPanelState: Codable, Equatable, Sendable {
@@ -27,12 +45,16 @@ public struct WebPanelState: Codable, Equatable, Sendable {
     // browser's live/restorable location after runtime navigation.
     public var initialURL: String?
     public var currentURL: String?
+    // Markdown keeps the selected file path in state for restore/reopen and
+    // workspace-local dedupe. Revisit this flat shape before editing lands.
+    public var filePath: String?
 
     public init(
         definition: WebPanelDefinition,
         title: String? = nil,
         initialURL: String? = nil,
-        currentURL: String? = nil
+        currentURL: String? = nil,
+        filePath: String? = nil
     ) {
         self.definition = definition
         self.title = Self.resolvedTitle(
@@ -41,6 +63,7 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         )
         self.initialURL = Self.normalizedInitialURL(initialURL)
         self.currentURL = Self.normalizedCurrentURL(currentURL)
+        self.filePath = Self.normalizedFilePath(filePath)
     }
 
     public var displayPanelLabel: String {
@@ -70,6 +93,10 @@ public struct WebPanelState: Codable, Equatable, Sendable {
     }
 
     public static func normalizedCurrentURL(_ value: String?) -> String? {
+        normalizedValue(value)
+    }
+
+    public static func normalizedFilePath(_ value: String?) -> String? {
         normalizedValue(value)
     }
 

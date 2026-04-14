@@ -66,11 +66,11 @@ struct BrowserPanelHostView: NSViewRepresentable {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> BrowserPanelContainerView {
-        BrowserPanelContainerView()
+    func makeNSView(context: Context) -> WebPanelContainerView {
+        WebPanelContainerView()
     }
 
-    func updateNSView(_ containerView: BrowserPanelContainerView, context: Context) {
+    func updateNSView(_ containerView: WebPanelContainerView, context: Context) {
         let attachment = context.coordinator.containerCoordinator.attachment(
             for: containerView,
             controller: runtime
@@ -86,33 +86,8 @@ struct BrowserPanelHostView: NSViewRepresentable {
         context.coordinator.scheduleApply(webState: webState, runtime: runtime)
     }
 
-    static func dismantleNSView(_ containerView: BrowserPanelContainerView, coordinator: Coordinator) {
+    static func dismantleNSView(_ containerView: WebPanelContainerView, coordinator: Coordinator) {
         containerView.onLayout = nil
         coordinator.reset()
-    }
-}
-
-final class BrowserPanelContainerView: NSView {
-    var onLayout: ((NSView) -> Void)?
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
-    }
-
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override func layout() {
-        super.layout()
-        onLayout?(self)
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil else { return }
-        onLayout?(self)
     }
 }

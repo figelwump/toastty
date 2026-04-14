@@ -120,6 +120,9 @@ struct ToasttyCommandMenus: Commands {
     let openManageConfig: () -> Void
     let openConfigReference: () -> Void
     let openAgentProfilesConfiguration: () -> Void
+    let openMarkdownFile: @MainActor (UUID?) -> Void
+    let openMarkdownFileInTab: @MainActor (UUID?) -> Void
+    let openMarkdownFileInSplit: @MainActor (UUID?) -> Void
 
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
 
@@ -429,6 +432,23 @@ struct ToasttyCommandMenus: Commands {
                         placementOverride: .splitRight
                     )
                 )
+            }
+            .disabled(commandWorkspace == nil)
+
+            Divider()
+
+            Button("Open Markdown File…") {
+                openMarkdownFile(preferredWindowID)
+            }
+            .disabled(commandWorkspace == nil)
+
+            Button("Open Markdown File in Tab…") {
+                openMarkdownFileInTab(preferredWindowID)
+            }
+            .disabled(commandWorkspace == nil)
+
+            Button("Open Markdown File in Split…") {
+                openMarkdownFileInSplit(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 

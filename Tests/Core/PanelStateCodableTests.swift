@@ -4,6 +4,14 @@ import Testing
 
 struct PanelStateCodableTests {
     @Test
+    func webPanelDefinitionsDeclareCapabilityProfiles() {
+        #expect(WebPanelDefinition.browser.capabilityProfile == .networkAllowed)
+        #expect(WebPanelDefinition.markdown.capabilityProfile == .localOnly)
+        #expect(WebPanelDefinition.scratchpad.capabilityProfile == .localOnly)
+        #expect(WebPanelDefinition.diff.capabilityProfile == .localOnly)
+    }
+
+    @Test
     func panelStateRoundTripsCodable() throws {
         let panels: [PanelState] = [
             .terminal(
@@ -19,6 +27,13 @@ struct PanelStateCodableTests {
                     definition: .browser,
                     initialURL: "https://example.com",
                     currentURL: "https://example.com/docs"
+                )
+            ),
+            .web(
+                WebPanelState(
+                    definition: .markdown,
+                    title: "README.md",
+                    filePath: "/tmp/project/README.md"
                 )
             ),
         ]

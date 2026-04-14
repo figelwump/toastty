@@ -297,7 +297,11 @@ let project = Project(
             ]),
             sources: ["Sources/App/**"],
             resources: [
-                "Sources/App/Resources/**",
+                .glob(
+                    pattern: "Sources/App/Resources/**",
+                    excluding: ["Sources/App/Resources/WebPanels/**"]
+                ),
+                .folderReference(path: "Sources/App/Resources/WebPanels"),
                 "docs/keyboard-shortcuts.md",
             ],
             dependencies: appDependencies,

@@ -1400,6 +1400,7 @@ struct ToasttyApp: App {
                 publishesDiscoveryRecord: true,
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService
@@ -1591,7 +1592,25 @@ struct ToasttyApp: App {
                 reloadConfiguration: reloadConfiguration,
                 openManageConfig: openManageConfig,
                 openConfigReference: openConfigReference,
-                openAgentProfilesConfiguration: openAgentProfilesConfiguration
+                openAgentProfilesConfiguration: openAgentProfilesConfiguration,
+                openMarkdownFile: { preferredWindowID in
+                    self.openMarkdownFile(
+                        preferredWindowID: preferredWindowID,
+                        placement: WebPanelPlacement.rootRight
+                    )
+                },
+                openMarkdownFileInTab: { preferredWindowID in
+                    self.openMarkdownFile(
+                        preferredWindowID: preferredWindowID,
+                        placement: WebPanelPlacement.newTab
+                    )
+                },
+                openMarkdownFileInSplit: { preferredWindowID in
+                    self.openMarkdownFile(
+                        preferredWindowID: preferredWindowID,
+                        placement: WebPanelPlacement.splitRight
+                    )
+                }
             )
         }
     }
@@ -1787,6 +1806,44 @@ struct ToasttyApp: App {
             alert.addButton(withTitle: "OK")
             alert.runModal()
             return
+        }
+    }
+
+    @MainActor
+    private func openMarkdownFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
+        guard let fileURL = MarkdownOpenPanel.chooseFile(
+            title: markdownOpenTitle(for: placement)
+        ) else {
+            return
+        }
+
+        let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let didOpen = store.createMarkdownPanelFromCommand(
+            preferredWindowID: preferredWindowID,
+            request: MarkdownPanelCreateRequest(
+                filePath: normalizedFilePath,
+                placementOverride: placement
+            )
+        )
+
+        guard didOpen == false else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Unable to Open Markdown File"
+        alert.informativeText = "Toastty couldn't open \(normalizedFilePath) in the current workspace."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func markdownOpenTitle(for placement: WebPanelPlacement) -> String {
+        switch placement {
+        case .rootRight:
+            return "Open Markdown File"
+        case .newTab:
+            return "Open Markdown File in Tab"
+        case .splitRight:
+            return "Open Markdown File in Split"
         }
     }
 

@@ -20,30 +20,6 @@ struct FaviconLinkReference: Equatable, Sendable {
     var rel: String
 }
 
-private final class FocusAwareWKWebView: WKWebView {
-    var interactionDidRequestFocus: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        interactionDidRequestFocus?()
-        super.mouseDown(with: event)
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        interactionDidRequestFocus?()
-        super.rightMouseDown(with: event)
-    }
-
-    override func otherMouseDown(with event: NSEvent) {
-        interactionDidRequestFocus?()
-        super.otherMouseDown(with: event)
-    }
-
-    override func becomeFirstResponder() -> Bool {
-        interactionDidRequestFocus?()
-        return super.becomeFirstResponder()
-    }
-}
-
 @MainActor
 final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     @Published private(set) var navigationState = BrowserPanelNavigationState()
@@ -76,8 +52,9 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     ) {
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
-        let configuration = WKWebViewConfiguration()
-        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        let configuration = Self.makeWebViewConfiguration(
+            for: WebPanelDefinition.browser.capabilityProfile
+        )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         self.webView = webView
@@ -99,10 +76,13 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         canGoBackObservation?.invalidate()
         canGoForwardObservation?.invalidate()
         loadingObservation?.invalidate()
-        webView.interactionDidRequestFocus = nil
-        webView.navigationDelegate = nil
-        webView.uiDelegate = nil
-        webView.removeFromSuperview()
+        let webView = webView
+        Task { @MainActor in
+            webView.interactionDidRequestFocus = nil
+            webView.navigationDelegate = nil
+            webView.uiDelegate = nil
+            webView.removeFromSuperview()
+        }
     }
 
     static func normalizedUserEnteredURLString(_ value: String) -> String? {
@@ -267,6 +247,10 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     }
 
     func apply(webState: WebPanelState) {
+        precondition(
+            webState.definition == .browser,
+            "BrowserPanelRuntime cannot host \(webState.definition.rawValue) panels."
+        )
         synchronizeDisplayedContent(with: webState)
     }
 
@@ -921,6 +905,17 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         </body>
         </html>
         """
+    }
+
+    static func makeWebViewConfiguration(
+        for capabilityProfile: WebPanelCapabilityProfile
+    ) -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        if capabilityProfile == .localOnly {
+            configuration.websiteDataStore = .nonPersistent()
+        }
+        return configuration
     }
 }
 

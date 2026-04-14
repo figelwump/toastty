@@ -1,9 +1,30 @@
 @testable import ToasttyApp
 import CoreState
+import UniformTypeIdentifiers
 import XCTest
 
 @MainActor
 final class AppStoreWindowSelectionTests: XCTestCase {
+    private func makeMarkdownFixture() throws -> (canonicalPath: String, alternatePath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-markdown-tests-\(UUID().uuidString)", isDirectory: true)
+        let alternateDirectoryURL = rootURL.appendingPathComponent("alternate", isDirectory: true)
+        let fileURL = rootURL.appendingPathComponent("README.md", conformingTo: .plainText)
+
+        try fileManager.createDirectory(at: alternateDirectoryURL, withIntermediateDirectories: true)
+        try Data("# Toastty Markdown Fixture\n".utf8).write(to: fileURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let canonicalPath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+        let alternatePath = alternateDirectoryURL
+            .appendingPathComponent("../README.md", conformingTo: .plainText)
+            .path
+        return (canonicalPath, alternatePath)
+    }
+
     func testWindowLookupResolvesSpecificWindowWithoutUsingGlobalSelection() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
@@ -480,6 +501,107 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         XCTAssertEqual(webState.initialURL, "https://example.com")
         XCTAssertNil(webState.currentURL)
+    }
+
+    func testCreateMarkdownPanelFromCommandCreatesSelectedMarkdownTab() throws {
+        let fixture = try makeMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fixture.canonicalPath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 2)
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be markdown")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.title, "README.md")
+        XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertNil(webState.initialURL)
+        XCTAssertNil(webState.currentURL)
+    }
+
+    func testCreateMarkdownPanelFromCommandDefaultsToRootRightPlacement() throws {
+        let fixture = try makeMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: MarkdownPanelCreateRequest(filePath: fixture.canonicalPath)
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 2)
+        let panelID = try XCTUnwrap(workspace.focusedPanelID)
+        guard case .web(let webState) = workspace.panels[panelID] else {
+            XCTFail("expected focused panel to be markdown")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.title, "README.md")
+        XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+    }
+
+    func testCreateMarkdownPanelDeduplicatesByNormalizedFilePathInWorkspace() throws {
+        let fixture = try makeMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fixture.canonicalPath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspaceAfterCreate = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let markdownTabID = try XCTUnwrap(workspaceAfterCreate.resolvedSelectedTabID)
+        let markdownPanelID = try XCTUnwrap(workspaceAfterCreate.tab(id: markdownTabID)?.focusedPanelID)
+        let originalTabID = try XCTUnwrap(workspaceAfterCreate.tabIDs.first)
+
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: sourceWorkspaceID, tabID: originalTabID)))
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fixture.alternatePath,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        let workspaceAfterDedupedOpen = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspaceAfterDedupedOpen.orderedTabs.count, 2)
+        XCTAssertEqual(workspaceAfterDedupedOpen.resolvedSelectedTabID, markdownTabID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, markdownPanelID)
     }
 
     func testOpenURLInBrowserUsesConfiguredRootRightPlacement() throws {

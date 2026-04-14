@@ -226,6 +226,69 @@ struct WorkspaceLayoutSnapshotTests {
     }
 
     @Test
+    func makeAppStatePreservesMarkdownPanelFilePath() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let markdownTabID = UUID()
+        let markdownPanelID = UUID()
+        let markdownSlotID = UUID()
+
+        let markdownTab = WorkspaceTabState(
+            id: markdownTabID,
+            customTitle: "Notes",
+            layoutTree: .slot(slotID: markdownSlotID, panelID: markdownPanelID),
+            panels: [
+                markdownPanelID: .web(
+                    WebPanelState(
+                        definition: .markdown,
+                        title: "notes.md",
+                        filePath: "/tmp/toastty/notes.md"
+                    )
+                ),
+            ],
+            focusedPanelID: markdownPanelID
+        )
+
+        let workspace = WorkspaceState(
+            id: workspaceID,
+            title: "Docs",
+            selectedTabID: markdownTabID,
+            tabIDs: [markdownTabID],
+            tabsByID: [markdownTabID: markdownTab]
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [workspaceID: workspace],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let restoredState = WorkspaceLayoutSnapshot(state: state).makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        let restoredTab = try #require(restoredWorkspace.tab(id: markdownTabID))
+
+        #expect(restoredTab.customTitle == "Notes")
+        guard case .web(let webState) = restoredTab.panels[markdownPanelID] else {
+            Issue.record("Expected markdown tab panel to restore as web")
+            return
+        }
+
+        #expect(webState.definition == .markdown)
+        #expect(webState.title == "notes.md")
+        #expect(webState.filePath == "/tmp/toastty/notes.md")
+        #expect(webState.initialURL == nil)
+        #expect(webState.currentURL == nil)
+    }
+
+    @Test
     func makeAppStatePreservesTerminalProfileBindingAndPanelIDs() throws {
         let workspaceID = UUID()
         let panelID = UUID()

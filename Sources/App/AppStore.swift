@@ -62,6 +62,25 @@ struct BrowserPanelCreateRequest: Equatable, Sendable {
     }
 }
 
+struct MarkdownPanelCreateRequest: Equatable, Sendable {
+    static let defaultPlacement: WebPanelPlacement = .rootRight
+
+    var filePath: String
+    var placementOverride: WebPanelPlacement?
+
+    init(
+        filePath: String,
+        placementOverride: WebPanelPlacement? = nil
+    ) {
+        self.filePath = filePath
+        self.placementOverride = placementOverride
+    }
+
+    var resolvedPlacement: WebPanelPlacement {
+        placementOverride ?? Self.defaultPlacement
+    }
+}
+
 struct FocusedBrowserPanelCommandSelection: Equatable {
     let windowID: UUID
     let workspaceID: UUID
@@ -301,6 +320,52 @@ final class AppStore: ObservableObject {
         }
 
         return createBrowserPanel(
+            workspaceID: selection.workspace.id,
+            request: request
+        )
+    }
+
+    @discardableResult
+    func createMarkdownPanel(
+        workspaceID: UUID,
+        request: MarkdownPanelCreateRequest
+    ) -> Bool {
+        guard let workspace = state.workspacesByID[workspaceID],
+              let normalizedFilePath = Self.normalizedMarkdownFilePath(request.filePath) else {
+            return false
+        }
+
+        if let existingPanelID = existingMarkdownPanelID(
+            in: workspace,
+            normalizedFilePath: normalizedFilePath
+        ) {
+            return focusPanel(containing: existingPanelID)
+        }
+
+        let displayName = Self.markdownDisplayName(for: normalizedFilePath)
+        return send(
+            .createWebPanel(
+                workspaceID: workspaceID,
+                panel: WebPanelState(
+                    definition: .markdown,
+                    title: displayName,
+                    filePath: normalizedFilePath
+                ),
+                placement: request.resolvedPlacement
+            )
+        )
+    }
+
+    @discardableResult
+    func createMarkdownPanelFromCommand(
+        preferredWindowID: UUID?,
+        request: MarkdownPanelCreateRequest
+    ) -> Bool {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        return createMarkdownPanel(
             workspaceID: selection.workspace.id,
             request: request
         )
@@ -885,6 +950,37 @@ final class AppStore: ObservableObject {
     private static func commaSeparatedUUIDs<S: Sequence>(_ ids: S) -> String where S.Element == UUID {
         let values = ids.map(\.uuidString).sorted()
         return values.isEmpty ? "none" : values.joined(separator: ",")
+    }
+
+    private func existingMarkdownPanelID(
+        in workspace: WorkspaceState,
+        normalizedFilePath: String
+    ) -> UUID? {
+        for tab in workspace.orderedTabs {
+            for (panelID, panelState) in tab.panels {
+                guard case .web(let webState) = panelState,
+                      webState.definition == .markdown,
+                      webState.filePath == normalizedFilePath else {
+                    continue
+                }
+                return panelID
+            }
+        }
+        return nil
+    }
+
+    private static func normalizedMarkdownFilePath(_ value: String) -> String? {
+        guard let trimmed = WebPanelState.normalizedFilePath(value) else {
+            return nil
+        }
+
+        let url = URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath()
+        return WebPanelState.normalizedFilePath(url.path)
+    }
+
+    private static func markdownDisplayName(for normalizedFilePath: String) -> String {
+        let name = URL(fileURLWithPath: normalizedFilePath).lastPathComponent
+        return name.isEmpty ? WebPanelDefinition.markdown.defaultTitle : name
     }
 
     @discardableResult
