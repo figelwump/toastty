@@ -1237,7 +1237,11 @@ struct ToasttyApp: App {
             socketPath: socketPath,
             cliExecutablePath: cliExecutablePath,
             shimDirectoryPath: shimDirectoryPath,
-            basePath: processInfo.environment["PATH"]
+            basePath: processInfo.environment["PATH"],
+            agentBasePath: ManagedAgentBasePathResolver(
+                environment: processInfo.environment,
+                fallbackPath: nil
+            ).resolve()
         )
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
@@ -1459,7 +1463,8 @@ struct ToasttyApp: App {
         socketPath: String,
         cliExecutablePath: String?,
         shimDirectoryPath: String?,
-        basePath: String?
+        basePath: String?,
+        agentBasePath: String?
     ) {
         let launchPath = shimDirectoryPath.map {
             AgentCommandShimInstaller.pathValue(prepending: $0, to: basePath)
@@ -1473,6 +1478,7 @@ struct ToasttyApp: App {
                 "cli_path_present": cliExecutablePath == nil ? "false" : "true",
                 "agent_shim_directory": shimDirectoryPath ?? "none",
                 "agent_shim_directory_present": shimDirectoryPath == nil ? "false" : "true",
+                "agent_base_path_present": agentBasePath == nil ? "false" : "true",
                 "legacy_pane_history_directory": runtimePaths.paneHistoryDirectoryURL.path,
                 "pane_journal_directory": runtimePaths.paneJournalDirectoryURL.path,
                 "path_starts_with_shim_directory": pathStartsWithDirectory(
@@ -1484,6 +1490,7 @@ struct ToasttyApp: App {
                     directoryPath: shimDirectoryPath
                 ) ? "true" : "false",
                 "path_sample": pathEntriesSample(launchPath),
+                "agent_base_path_sample": pathEntriesSample(agentBasePath),
             ]
         )
         terminalRuntimeRegistry.setBaseLaunchEnvironmentProvider { panelID in
@@ -1495,6 +1502,9 @@ struct ToasttyApp: App {
             ]
             if let cliExecutablePath {
                 environment[ToasttyLaunchContextEnvironment.cliPathKey] = cliExecutablePath
+            }
+            if let agentBasePath {
+                environment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePath
             }
             if let shimDirectoryPath {
                 environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey] = shimDirectoryPath
@@ -1623,7 +1633,11 @@ struct ToasttyApp: App {
                 socketPath: agentLaunchSocketPath,
                 cliExecutablePath: agentLaunchCLIExecutablePath,
                 shimDirectoryPath: shimDirectoryPath,
-                basePath: ProcessInfo.processInfo.environment["PATH"]
+                basePath: ProcessInfo.processInfo.environment["PATH"],
+                agentBasePath: ManagedAgentBasePathResolver(
+                    environment: ProcessInfo.processInfo.environment,
+                    fallbackPath: nil
+                ).resolve()
             )
         } catch {
             failureMessages.append("Failed to update managed agent command shims: \(error.localizedDescription)")
@@ -1633,7 +1647,11 @@ struct ToasttyApp: App {
                 socketPath: agentLaunchSocketPath,
                 cliExecutablePath: agentLaunchCLIExecutablePath,
                 shimDirectoryPath: nil,
-                basePath: ProcessInfo.processInfo.environment["PATH"]
+                basePath: ProcessInfo.processInfo.environment["PATH"],
+                agentBasePath: ManagedAgentBasePathResolver(
+                    environment: ProcessInfo.processInfo.environment,
+                    fallbackPath: nil
+                ).resolve()
             )
         }
         Self.applyConfiguredDefaultTerminalProfile(
