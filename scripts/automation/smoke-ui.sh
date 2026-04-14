@@ -209,7 +209,16 @@ extract_bool_field() {
   local json="$1"
   local field="$2"
   if command -v jq >/dev/null 2>&1; then
-    echo "$json" | jq -r --arg field "$field" '(.result[$field] // .[$field] // empty) | select(type == "boolean")'
+    echo "$json" | jq -r --arg field "$field" '
+      if (.result | type) == "object" and (.result | has($field)) then
+        .result[$field]
+      elif has($field) then
+        .[$field]
+      else
+        empty
+      end
+      | select(type == "boolean")
+    '
     return
   fi
   echo "$json" | sed -nE "s/.*\"${field}\":[[:space:]]*(true|false).*/\\1/p"
@@ -344,9 +353,73 @@ canonicalize_path() {
   printf '%s' "$path"
 }
 
+compute_sha256() {
+  local path="$1"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$path" | awk '{print $1}'
+    return
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r "$path" | awk '{print $1}'
+    return
+  fi
+  echo "error: shasum or openssl is required for markdown smoke hashing" >&2
+  exit 1
+}
+
 probe_terminal_send_text_availability() {
   local panel_id="$1"
   send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${panel_id}\"}"
+}
+
+wait_for_markdown_panel_state() {
+  local panel_id="$1"
+  local expected_file_path="$2"
+  local expected_display_name="$3"
+  local expected_hash="$4"
+  local last_response=""
+  local last_host_state=""
+  local last_pending=""
+  local last_state_file_path=""
+  local last_bootstrap_file_path=""
+  local last_bootstrap_display_name=""
+  local last_bootstrap_hash=""
+
+  for _ in $(seq 1 80); do
+    last_response="$(send_request "automation.markdown_panel_state" "{\"panelID\":\"${panel_id}\"}")"
+    last_host_state="$(extract_string_field "$last_response" "hostLifecycleState")"
+    last_pending="$(extract_bool_field "$last_response" "pendingBootstrapScript")"
+    last_state_file_path="$(extract_string_field "$last_response" "stateFilePath")"
+    last_bootstrap_file_path="$(extract_string_field "$last_response" "bootstrapFilePath")"
+    last_bootstrap_display_name="$(extract_string_field "$last_response" "bootstrapDisplayName")"
+    last_bootstrap_hash="$(extract_string_field "$last_response" "bootstrapContentSHA256")"
+
+    if [[ "$last_host_state" == "ready" &&
+          "$last_pending" == "false" &&
+          "$last_state_file_path" == "$expected_file_path" &&
+          "$last_bootstrap_file_path" == "$expected_file_path" &&
+          "$last_bootstrap_display_name" == "$expected_display_name" &&
+          "$last_bootstrap_hash" == "$expected_hash" ]]; then
+      printf '%s' "$last_response"
+      return 0
+    fi
+
+    sleep 0.1
+  done
+
+  echo "error: timed out waiting for markdown panel state" >&2
+  echo "panel id: ${panel_id}" >&2
+  echo "expected file path: ${expected_file_path}" >&2
+  echo "expected display name: ${expected_display_name}" >&2
+  echo "expected hash: ${expected_hash}" >&2
+  echo "last host lifecycle: ${last_host_state:-missing}" >&2
+  echo "last pending bootstrap: ${last_pending:-missing}" >&2
+  echo "last state file path: ${last_state_file_path:-missing}" >&2
+  echo "last bootstrap file path: ${last_bootstrap_file_path:-missing}" >&2
+  echo "last bootstrap display name: ${last_bootstrap_display_name:-missing}" >&2
+  echo "last bootstrap hash: ${last_bootstrap_hash:-missing}" >&2
+  echo "last response: ${last_response}" >&2
+  exit 1
 }
 
 send_request "automation.ping" '{}'
@@ -559,6 +632,7 @@ fi
 TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
 FOCUSED_TERMINAL_SCREENSHOT_PATH=""
 FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH=""
+MARKDOWN_SCREENSHOT_PATH=""
 if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
   if [[ ! -f "$GHOSTTY_XCFRAMEWORK_PATH/Info.plist" ]]; then
     echo "error: Ghostty xcframework appears invalid (missing Info.plist): $GHOSTTY_XCFRAMEWORK_PATH" >&2
@@ -1060,6 +1134,60 @@ send_request "automation.perform_action" '{"action":"workspace.tab.select","args
 send_request "automation.perform_action" '{"action":"workspace.tab.select","args":{"index":2}}' >/dev/null
 wait_for_browser_panel_title "Smoke Docs" "$BROWSER_SMOKE_SECONDARY_URL" >/dev/null
 
+send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
+MARKDOWN_SMOKE_FILE="$ARTIFACTS_DIR/markdown-smoke.md"
+cat > "$MARKDOWN_SMOKE_FILE" <<'EOF'
+---
+author: Automation
+tags: smoke, markdown
+---
+# Markdown Smoke
+
+This panel should render local markdown content.
+
+- alpha
+- beta
+
+```swift
+print("markdown smoke")
+```
+EOF
+MARKDOWN_EXPECTED_HASH="$(compute_sha256 "$MARKDOWN_SMOKE_FILE")"
+MARKDOWN_FILE_PATH="$(canonicalize_path "$MARKDOWN_SMOKE_FILE")"
+MARKDOWN_DISPLAY_NAME="$(basename "$MARKDOWN_FILE_PATH")"
+send_request "automation.perform_action" "{\"action\":\"panel.create.markdown\",\"args\":{\"placement\":\"newTab\",\"filePath\":\"$(json_escape_string "$MARKDOWN_FILE_PATH")\"}}" >/dev/null
+MARKDOWN_TAB_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+MARKDOWN_TAB_COUNT="$(extract_int_field "$MARKDOWN_TAB_SNAPSHOT" "tabCount")"
+MARKDOWN_SELECTED_TAB_INDEX="$(extract_int_field "$MARKDOWN_TAB_SNAPSHOT" "selectedTabIndex")"
+MARKDOWN_PANEL_ID="$(extract_string_field "$MARKDOWN_TAB_SNAPSHOT" "focusedPanelID")"
+if [[ "$MARKDOWN_TAB_COUNT" != "2" || "$MARKDOWN_SELECTED_TAB_INDEX" != "2" || -z "$MARKDOWN_PANEL_ID" ]]; then
+  echo "error: markdown new-tab smoke setup did not select the markdown tab as expected" >&2
+  echo "snapshot response: ${MARKDOWN_TAB_SNAPSHOT}" >&2
+  exit 1
+fi
+wait_for_markdown_panel_state "$MARKDOWN_PANEL_ID" "$MARKDOWN_FILE_PATH" "$MARKDOWN_DISPLAY_NAME" "$MARKDOWN_EXPECTED_HASH" >/dev/null
+
+cat > "$MARKDOWN_SMOKE_FILE" <<'EOF'
+# Markdown Smoke Reloaded
+
+This markdown content changed on disk.
+
+1. gamma
+2. delta
+
+> live reload should refresh the panel.
+EOF
+MARKDOWN_RELOADED_HASH="$(compute_sha256 "$MARKDOWN_SMOKE_FILE")"
+wait_for_markdown_panel_state "$MARKDOWN_PANEL_ID" "$MARKDOWN_FILE_PATH" "$MARKDOWN_DISPLAY_NAME" "$MARKDOWN_RELOADED_HASH" >/dev/null
+
+MARKDOWN_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"markdown-panel-smoke"}')"
+MARKDOWN_SCREENSHOT_PATH="$(extract_string_field "$MARKDOWN_SCREENSHOT_RESPONSE" "path")"
+if [[ -z "$MARKDOWN_SCREENSHOT_PATH" || ! -f "$MARKDOWN_SCREENSHOT_PATH" ]]; then
+  echo "error: markdown screenshot path missing or file not found" >&2
+  echo "capture response: ${MARKDOWN_SCREENSHOT_RESPONSE}" >&2
+  exit 1
+fi
+
 SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"web-panel-smoke"}')"
 STATE_RESPONSE="$(send_request "automation.dump_state" '{}')"
 
@@ -1076,6 +1204,7 @@ echo "terminal viewport screenshot: ${TERMINAL_VIEWPORT_SCREENSHOT_PATH:-skipped
 echo "focused terminal screenshot: ${FOCUSED_TERMINAL_SCREENSHOT_PATH:-skipped}"
 echo "focused terminal second screenshot: ${FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH:-skipped}"
 echo "focused screenshot: ${FOCUSED_SCREENSHOT_PATH:-unknown}"
+echo "markdown screenshot: ${MARKDOWN_SCREENSHOT_PATH:-unknown}"
 echo "screenshot: ${SCREENSHOT_PATH:-unknown}"
 echo "state dump: ${STATE_PATH:-unknown}"
 echo "state hash: ${STATE_HASH:-unknown}"

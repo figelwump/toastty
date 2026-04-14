@@ -1355,6 +1355,7 @@ struct ToasttyApp: App {
                 publishesDiscoveryRecord: true,
                 store: store,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService

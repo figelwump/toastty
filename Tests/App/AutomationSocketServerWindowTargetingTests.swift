@@ -1,5 +1,6 @@
 @testable import ToasttyApp
 import CoreState
+import CryptoKit
 import Darwin
 import Foundation
 import XCTest
@@ -273,6 +274,84 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             }
             XCTAssertEqual(webState.definition, .browser)
             XCTAssertEqual(webState.initialURL, "https://example.com/docs")
+        }
+    }
+
+    func testMarkdownPanelAutomationCreatesSelectedTabAndExposesBootstrapState() async throws {
+        let fixture = makeSingleWindowFixture()
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-markdown-automation-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownURL = tempDirectory.appendingPathComponent("smoke.md", isDirectory: false)
+        let markdownContent = """
+        ---
+        author: Automation
+        tags: smoke, markdown
+        ---
+        # Markdown Smoke
+
+        - alpha
+        - beta
+        """
+        try markdownContent.write(to: markdownURL, atomically: true, encoding: .utf8)
+        let expectedHash = SHA256.hash(data: Data(markdownContent.utf8)).map { String(format: "%02x", $0) }.joined()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.markdown",
+                    "args": [
+                        "placement": "newTab",
+                        "filePath": markdownURL.path,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            XCTAssertEqual(workspace.tabIDs.count, 2)
+            let panelID = try XCTUnwrap(workspace.focusedPanelID)
+            guard case .web(let webState) = workspace.panels[panelID] else {
+                XCTFail("expected focused panel to be markdown")
+                return
+            }
+            XCTAssertEqual(webState.definition, .markdown)
+            XCTAssertEqual(webState.filePath, markdownURL.path)
+
+            var snapshotResponse: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.markdown_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                snapshotResponse = response
+                if response.result["bootstrapContentSHA256"] as? String == expectedHash {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            let finalSnapshot = try XCTUnwrap(snapshotResponse)
+            XCTAssertEqual(finalSnapshot.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
+            XCTAssertEqual(finalSnapshot.result["panelID"] as? String, panelID.uuidString)
+            XCTAssertEqual(finalSnapshot.result["stateFilePath"] as? String, markdownURL.path)
+            XCTAssertEqual(finalSnapshot.result["bootstrapFilePath"] as? String, markdownURL.path)
+            XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "smoke.md")
+            XCTAssertEqual(finalSnapshot.result["bootstrapContentSHA256"] as? String, expectedHash)
+            XCTAssertEqual(finalSnapshot.result["bootstrapMode"] as? String, "view")
+            XCTAssertEqual(finalSnapshot.result["currentTheme"] as? String, "dark")
+            XCTAssertEqual(finalSnapshot.result["hostLifecycleState"] as? String, "detached")
         }
     }
 
@@ -845,10 +924,12 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         let socketPath = socketDirectory.appendingPathComponent("events-v1.sock", isDirectory: false).path
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let registry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         registry.bind(sessionLifecycleTracker: sessionRuntimeStore)
         registry.bind(store: store)
+        webPanelRuntimeRegistry.bind(store: store)
         let agentCatalogProvider = TestAgentCatalogProvider()
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
@@ -877,6 +958,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             automationConfig: config,
             store: store,
             terminalRuntimeRegistry: registry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService

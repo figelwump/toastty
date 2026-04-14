@@ -715,8 +715,10 @@ struct AutomationSocketServerTests {
     ) {
         let store = AppStore(persistTerminalFontPreference: false)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
+        webPanelRuntimeRegistry.bind(store: store)
         let agentCatalogProvider = TestAgentCatalogProvider()
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
@@ -740,6 +742,7 @@ struct AutomationSocketServerTests {
             automationConfig: automationConfig,
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,

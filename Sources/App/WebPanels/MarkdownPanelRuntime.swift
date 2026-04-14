@@ -17,6 +17,14 @@ enum MarkdownPanelAssetLocator {
     }
 }
 
+struct MarkdownPanelRuntimeAutomationState: Equatable, Sendable {
+    let lifecycleState: PanelHostLifecycleState
+    let currentTheme: MarkdownPanelTheme
+    let hasPendingBootstrapScript: Bool
+    let currentAssetPath: String?
+    let currentBootstrap: MarkdownPanelBootstrap?
+}
+
 @MainActor
 final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     typealias BootstrapProvider = @Sendable (WebPanelState, MarkdownPanelTheme) async -> MarkdownPanelBootstrap
@@ -94,6 +102,16 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             return .attached(activeAttachment)
         }
         return attachedToContainer && attachedToWindow ? .ready(activeAttachment) : .attached(activeAttachment)
+    }
+
+    func automationState() -> MarkdownPanelRuntimeAutomationState {
+        MarkdownPanelRuntimeAutomationState(
+            lifecycleState: lifecycleState,
+            currentTheme: currentTheme,
+            hasPendingBootstrapScript: pendingBootstrapScript != nil,
+            currentAssetPath: currentAssetURL?.path,
+            currentBootstrap: currentBootstrap
+        )
     }
 
     func attachHost(to container: NSView, attachment: PanelHostAttachmentToken) {
