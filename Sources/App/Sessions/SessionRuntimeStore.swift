@@ -735,9 +735,10 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
         }
 
         if kind == .escape, record.agent == .codex {
-            // Codex emits an explicit turn_aborted watcher event for Esc.
-            // Let that authoritative signal drive idle transitions to avoid
-            // clearing the spinner on every in-TUI Escape press.
+            // Codex logs explicit interrupt events for Esc and other turn
+            // cancellations. Let that watcher-driven signal drive idle
+            // transitions to avoid clearing the spinner on every in-TUI
+            // Escape press.
             return false
         }
 

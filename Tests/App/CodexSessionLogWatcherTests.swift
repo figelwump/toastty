@@ -324,6 +324,35 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         ])
     }
 
+    func testWatcherParsesCurrentCodexInterruptOperationEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-04-13T23:55:37.876Z","dir":"from_tui","kind":"op","payload":{"type":"interrupt"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+        ])
+    }
+
+    func testWatcherDeduplicatesRepeatedCurrentCodexInterruptOperationEvents() async throws {
+        let events = try await recordEvents(
+            from:
+                """
+                {"ts":"2026-04-13T23:55:37.876Z","dir":"from_tui","kind":"op","payload":{"type":"interrupt"}}
+                {"ts":"2026-04-13T23:55:37.876Z","dir":"from_tui","kind":"op","payload":{"type":"interrupt"}}
+                """,
+            expectedCount: 1
+        )
+
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+        ])
+    }
+
     func testWatcherIgnoresRepeatedCurrentCodexUserTurnOperationEvents() async throws {
         let events = try await recordEvents(
             from:
@@ -568,6 +597,31 @@ final class CodexSessionLogWatcherTests: XCTestCase {
         watcher.start()
         try append(
             #"{"dir":"to_tui","kind":"codex_event","payload":{"turn_id":"turn-5","msg":{"type":"turn_aborted","reason":"interrupted"}}}"# + "\n",
+            to: logURL
+        )
+
+        await watcher.stop()
+
+        let events = await recorder.snapshot()
+        XCTAssertEqual(events, [
+            CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+        ])
+    }
+
+    func testWatcherDrainsCurrentCodexInterruptEventOnImmediateStop() async throws {
+        let logURL = try makeLogURL()
+        let recorder = EventRecorder()
+
+        let watcher = CodexSessionLogWatcher(
+            logURL: logURL,
+            pollIntervalNanoseconds: 1_000_000_000
+        ) { event in
+            await recorder.append(event)
+        }
+
+        watcher.start()
+        try append(
+            #"{"ts":"2026-04-13T23:55:37.876Z","dir":"from_tui","kind":"op","payload":{"type":"interrupt"}}"# + "\n",
             to: logURL
         )
 

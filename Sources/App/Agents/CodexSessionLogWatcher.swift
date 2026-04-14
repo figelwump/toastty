@@ -314,19 +314,33 @@ private extension CodexSessionLogWatcher {
             return nil
         }
 
-        guard type == "user_turn" else {
+        switch type {
+        case "user_turn":
+            let dedupeKey = "op_user_turn:\(operationEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+            guard seenKeys.insert(dedupeKey).inserted else {
+                return nil
+            }
+
+            return CodexSessionLogEvent(
+                kind: .turnStarted,
+                detail: userTurnDetail(from: payload) ?? "Responding to your prompt"
+            )
+
+        case "interrupt":
+            // Current codex-cli recordings emit from_tui/op interrupt when the
+            // user cancels the active turn (Esc, Ctrl-C, or equivalent).
+            // Treat it as the modern equivalent of the legacy turn_aborted
+            // record so the sidebar clears the working spinner promptly.
+            let dedupeKey = "op_interrupt:\(operationEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
+            guard seenKeys.insert(dedupeKey).inserted else {
+                return nil
+            }
+
+            return CodexSessionLogEvent(kind: .turnAborted, detail: "Ready for prompt")
+
+        default:
             return nil
         }
-
-        let dedupeKey = "op_user_turn:\(operationEventIdentifier(from: object, payload: payload, fallback: fallbackLine))"
-        guard seenKeys.insert(dedupeKey).inserted else {
-            return nil
-        }
-
-        return CodexSessionLogEvent(
-            kind: .turnStarted,
-            detail: userTurnDetail(from: payload) ?? "Responding to your prompt"
-        )
     }
 
     static func parseHistoryInsertEvent(
