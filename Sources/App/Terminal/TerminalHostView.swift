@@ -1436,26 +1436,6 @@ final class TerminalHostView: NSView {
         ) ?? event
     }
 
-    private func syncPreedit(clearIfNeeded: Bool = true) {
-        #if TOASTTY_HAS_GHOSTTY_KIT
-        guard let ghosttySurface else { return }
-        if markedText.length > 0 {
-            let preedit = markedText.string
-            let cString = preedit.utf8CString
-            cString.withUnsafeBufferPointer { buffer in
-                guard let baseAddress = buffer.baseAddress else { return }
-                let byteCount = max(buffer.count - 1, 0)
-                guard byteCount > 0 else { return }
-                ghosttySurfaceHooks.setPreedit(ghosttySurface, baseAddress, uintptr_t(byteCount))
-            }
-        } else if clearIfNeeded {
-            ghosttySurfaceHooks.setPreedit(ghosttySurface, nil, 0)
-        }
-        #else
-        _ = clearIfNeeded
-        #endif
-    }
-
     private func sendSurfaceText(_ text: String, to surface: ghostty_surface_t) {
         #if TOASTTY_HAS_GHOSTTY_KIT
         let cString = text.utf8CString
@@ -1864,6 +1844,26 @@ final class TerminalHostView: NSView {
         }
     }
     #endif
+
+    private func syncPreedit(clearIfNeeded: Bool = true) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let ghosttySurface else { return }
+        if markedText.length > 0 {
+            let preedit = markedText.string
+            let cString = preedit.utf8CString
+            cString.withUnsafeBufferPointer { buffer in
+                guard let baseAddress = buffer.baseAddress else { return }
+                let byteCount = max(buffer.count - 1, 0)
+                guard byteCount > 0 else { return }
+                ghosttySurfaceHooks.setPreedit(ghosttySurface, baseAddress, uintptr_t(byteCount))
+            }
+        } else if clearIfNeeded {
+            ghosttySurfaceHooks.setPreedit(ghosttySurface, nil, 0)
+        }
+        #else
+        _ = clearIfNeeded
+        #endif
+    }
 
     private func syncLayerContentsScale() {
         let scale = window?.screen?.backingScaleFactor
