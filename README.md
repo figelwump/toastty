@@ -72,10 +72,12 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Option+Shift+[` | Previous tab (wrapping, terminal-proof) |
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
-| `Cmd+Ctrl+<key>` | Launch agent profile (when profile defines `shortcutKey`) |
-| `Cmd+Ctrl+<key>` / `Cmd+Ctrl+Shift+<key>` | Profile split right / split down (when profile defines `shortcutKey`) |
+| `Cmd+Opt+<key>` | Launch agent profile (when profile defines `shortcutKey`) |
+| `Cmd+Opt+<key>` / `Cmd+Opt+Shift+<key>` | Profile split right / split down (when profile defines `shortcutKey`) |
 
 `Cmd+W` and `File > Close` use Toastty's panel-close behavior. The native red close button instead asks for confirmation before closing all terminals, tabs, and workspaces in that window.
+
+`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running, and choosing `Always quit without asking` in that alert turns the setting off.
 
 For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md).
 
@@ -102,7 +104,7 @@ displayName = "Claude Code"
 argv = ["claude"]
 ```
 
-Configured profiles appear in the `Agent` menu and as top-bar buttons. `shortcutKey` is optional; when set, Toastty binds `Cmd+Ctrl+<key>` to launch that profile.
+Configured profiles appear in the `Agent` menu and as top-bar buttons. `shortcutKey` is optional; when set, Toastty binds `Cmd+Opt+<key>` to launch that profile.
 
 ### Profile IDs and special behavior
 
@@ -182,7 +184,7 @@ Features:
 
 - restore the same profile binding after Toastty relaunches and workspace state is reloaded
 - open `Split Right` and `Split Down` actions from `Terminal > <Profile Name>`
-- bind optional `shortcutKey` values to `Cmd+Ctrl+<key>` and `Cmd+Ctrl+Shift+<key>` profile splits
+- bind optional `shortcutKey` values to `Cmd+Opt+<key>` and `Cmd+Opt+Shift+<key>` profile splits
 - optionally set a default profile for every new terminal open
 
 Profiles live in `~/.toastty/terminal-profiles.toml` for ordinary runs, or in the active runtime home's `terminal-profiles.toml` when runtime isolation is enabled. Set `TOASTTY_TERMINAL_PROFILES_PATH` if you want Toastty to load another file instead. Each profile defines the menu label, the panel-header badge label, a startup command that Toastty sends to the pane's login shell when the pane is created or restored, and an optional `shortcutKey`.

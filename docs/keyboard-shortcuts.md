@@ -17,6 +17,8 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 
 `Cmd+W` and `File > Close` both use Toastty's panel-close behavior. The native red close button still asks for confirmation before closing the full window.
 
+`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running, and choosing `Always quit without asking` in that alert turns the setting off.
+
 ## Pane and layout actions
 
 | Shortcut | Action |

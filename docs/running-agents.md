@@ -154,7 +154,7 @@ When the helper script cannot deliver a hook event back to Toastty, it appends t
 When you trigger an agent launch (menu click, keyboard shortcut, or socket command):
 
 1. **Resolve target** — Toastty picks the focused terminal panel in the selected workspace, or falls back to the first terminal panel in the workspace
-2. **Check panel state** — The panel must be at an interactive prompt; Toastty refuses to launch into a panel that appears busy
+2. **Check panel state** — The panel must be at an interactive prompt; Toastty asks Ghostty for the surface prompt state and refuses to launch into a panel that appears busy
 3. **Prepare instrumentation** — Based on the profile ID, Toastty sets up agent-specific scripts, config files, and environment variables in a temporary artifacts directory
 4. **Render shell command** — Toastty builds a single shell command line with all `TOASTTY_*` context variables inline, the instrumentation environment, and the profile's `argv`
 5. **Start session** — A session record is created in the session runtime store with initial status "Idle / Ready for prompt"
@@ -336,7 +336,7 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 
 **"No agents configured"** — `~/.toastty/agents.toml` does not exist or has no uncommented profiles. Open `Agent > Manage Agents...` to create or edit it.
 
-**"The target terminal is not at an interactive prompt"** — Toastty inspects the terminal's visible text to determine if a command is running. Wait for the current command to finish, or use a different panel.
+**"The target terminal is not at an interactive prompt"** — Toastty asks Ghostty whether the terminal surface is currently at a prompt. Wait for the current command to finish, or use a different panel.
 
 **Agent launches but sidebar does not update** — If the profile ID is not `codex` or `claude`, Toastty does not inject instrumentation automatically. Either use a well-known profile ID or report status manually via the `toastty` CLI.
 

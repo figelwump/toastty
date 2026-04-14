@@ -63,6 +63,7 @@ url-opening-alternate-browser-placement = rootRight
 ## Related behavior
 
 - `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` change the active window's persisted layout state instead of rewriting `config`
+- `Search with Google` from a terminal selection always opens a new Toastty browser tab in the originating window; it does not use `url-opening-destination` or the browser placement override keys above
 - new windows inherit the source window's current effective terminal font size
 - runtime-isolated dev/test runs keep `config`, `config-reference`, and related UI-managed state inside the active runtime home instead of the shared user locations
 
