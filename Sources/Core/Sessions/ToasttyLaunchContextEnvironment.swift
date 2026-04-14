@@ -2,6 +2,7 @@ import Foundation
 
 public enum ToasttyLaunchContextEnvironment {
     public static let agentKey = "TOASTTY_AGENT"
+    public static let agentBasePathKey = "TOASTTY_AGENT_BASE_PATH"
     public static let sessionIDKey = "TOASTTY_SESSION_ID"
     public static let panelIDKey = "TOASTTY_PANEL_ID"
     public static let launchReasonKey = "TOASTTY_LAUNCH_REASON"

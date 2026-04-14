@@ -12,7 +12,7 @@ private enum AgentCommandShim {
             return 64
         }
 
-        guard let realBinaryPath = resolveRealBinaryPath(
+        guard let resolvedBinaryPath = resolveRealBinaryPath(
             commandName: commandName,
             environment: environment
         ) else {
@@ -29,13 +29,23 @@ private enum AgentCommandShim {
             return 127
         }
 
+        let realBinaryPath = resolvedBinaryPath.realBinaryPath
+        let resolvedLaunchEnvironment = environmentWithResolvedAgentPath(
+            environment,
+            agentBasePathOverride: resolvedBinaryPath.agentBasePath
+        )
+
         ToasttyLog.info(
             "Observed managed agent shim invocation",
             category: .terminal,
             metadata: invocationLogMetadata(
                 commandName: commandName,
-                environment: environment,
-                additional: ["real_binary_path": realBinaryPath]
+                environment: resolvedLaunchEnvironment,
+                additional: [
+                    "real_binary_path": realBinaryPath,
+                    "fallback_probe_used": resolvedBinaryPath.fallbackProbeUsed ? "true" : "false",
+                    "direct_executable_probe_used": resolvedBinaryPath.directExecutableProbeUsed ? "true" : "false",
+                ]
             )
         )
 
@@ -55,7 +65,7 @@ private enum AgentCommandShim {
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: arguments,
-                environment: environment
+                environment: resolvedLaunchEnvironment
             )
         }
 
@@ -65,19 +75,21 @@ private enum AgentCommandShim {
                 "Passing through managed agent shim invocation without Toastty session management",
                 category: .terminal,
                 metadata: invocationLogMetadata(
-                    commandName: commandName,
-                    environment: environment,
-                    additional: [
-                        "agent": invocation.agent.rawValue,
-                        "real_binary_path": realBinaryPath,
-                        "reason": passThroughReasons.joined(separator: ","),
-                    ]
-                )
+                commandName: commandName,
+                environment: resolvedLaunchEnvironment,
+                additional: [
+                    "agent": invocation.agent.rawValue,
+                    "real_binary_path": realBinaryPath,
+                    "fallback_probe_used": resolvedBinaryPath.fallbackProbeUsed ? "true" : "false",
+                    "direct_executable_probe_used": resolvedBinaryPath.directExecutableProbeUsed ? "true" : "false",
+                    "reason": passThroughReasons.joined(separator: ","),
+                ]
+            )
             )
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
-                environment: environment
+                environment: resolvedLaunchEnvironment
             )
         }
 
@@ -87,7 +99,7 @@ private enum AgentCommandShim {
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
-                environment: environment
+                environment: resolvedLaunchEnvironment
             )
         }
 
@@ -106,21 +118,23 @@ private enum AgentCommandShim {
                 "Managed agent shim fell back to unmanaged launch after launch planning failed",
                 category: .terminal,
                 metadata: invocationLogMetadata(
-                    commandName: commandName,
-                    environment: environment,
-                    additional: [
-                        "agent": invocation.agent.rawValue,
-                        "panel_id": panelID.uuidString,
-                        "cwd": cwd,
-                        "real_binary_path": realBinaryPath,
-                        "reason": "prepare_managed_launch_failed",
-                    ]
-                )
+                commandName: commandName,
+                environment: resolvedLaunchEnvironment,
+                additional: [
+                    "agent": invocation.agent.rawValue,
+                    "panel_id": panelID.uuidString,
+                    "cwd": cwd,
+                    "real_binary_path": realBinaryPath,
+                    "fallback_probe_used": resolvedBinaryPath.fallbackProbeUsed ? "true" : "false",
+                    "direct_executable_probe_used": resolvedBinaryPath.directExecutableProbeUsed ? "true" : "false",
+                    "reason": "prepare_managed_launch_failed",
+                ]
+            )
             )
             return spawnAndWait(
                 executablePath: realBinaryPath,
                 argv: invocation.argv,
-                environment: environment
+                environment: resolvedLaunchEnvironment
             )
         }
 
@@ -129,7 +143,7 @@ private enum AgentCommandShim {
             category: .terminal,
             metadata: invocationLogMetadata(
                 commandName: commandName,
-                environment: environment,
+                environment: resolvedLaunchEnvironment,
                 additional: [
                     "agent": invocation.agent.rawValue,
                     "panel_id": panelID.uuidString,
@@ -137,12 +151,15 @@ private enum AgentCommandShim {
                     "cwd": cwd,
                     "repo_root": plan.environment[ToasttyLaunchContextEnvironment.repoRootKey] ?? "none",
                     "real_binary_path": realBinaryPath,
+                    "fallback_probe_used": resolvedBinaryPath.fallbackProbeUsed ? "true" : "false",
+                    "direct_executable_probe_used": resolvedBinaryPath.directExecutableProbeUsed ? "true" : "false",
                 ]
             )
         )
 
-        var childEnvironment = environment
+        var childEnvironment = resolvedLaunchEnvironment
         childEnvironment.merge(plan.environment) { _, new in new }
+        childEnvironment = environmentWithResolvedAgentPath(childEnvironment)
         let exitStatus = spawnAndWait(
             executablePath: realBinaryPath,
             argv: plan.argv,
@@ -177,10 +194,7 @@ private enum AgentCommandShim {
     private static func resolveRealBinaryPath(
         commandName: String,
         environment: [String: String]
-    ) -> String? {
-        let pathComponents = (environment["PATH"] ?? "")
-            .split(separator: ":")
-            .map(String.init)
+    ) -> ResolvedBinaryPath? {
         let excludedDirectoryPaths = Set(
             [
                 CommandLine.arguments.first.map {
@@ -197,26 +211,90 @@ private enum AgentCommandShim {
             ]
             .compactMap { canonicalPath(for: $0) }
         )
+        let configuredAgentBasePath = normalizedNonEmpty(
+            environment[ToasttyLaunchContextEnvironment.agentBasePathKey]
+        )
+        let basePathResolver = ManagedAgentBasePathResolver(
+            environment: environment,
+            fallbackPath: configuredAgentBasePath ?? environment["PATH"]
+        )
 
-        for directoryPath in pathComponents where directoryPath.isEmpty == false {
-            if let canonicalDirectoryPath = canonicalPath(for: directoryPath),
-               excludedDirectoryPaths.contains(canonicalDirectoryPath) {
-                continue
-            }
-
-            let candidatePath = URL(fileURLWithPath: directoryPath, isDirectory: true)
-                .appendingPathComponent(commandName, isDirectory: false)
-                .path
-            if let canonicalCandidatePath = canonicalPath(for: candidatePath),
-               currentExecutablePaths.contains(canonicalCandidatePath) {
-                continue
-            }
-            if FileManager.default.isExecutableFile(atPath: candidatePath) {
-                return candidatePath
-            }
+        if let realBinaryPath = ManagedAgentPathResolver.resolvedExecutablePath(
+            commandName: commandName,
+            currentPath: environment["PATH"],
+            basePath: configuredAgentBasePath,
+            excludedDirectoryPaths: excludedDirectoryPaths,
+            excludedExecutablePaths: currentExecutablePaths,
+            canonicalPathProvider: canonicalPath(for:),
+            isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
+        ) {
+            return ResolvedBinaryPath(
+                realBinaryPath: realBinaryPath,
+                agentBasePath: configuredAgentBasePath,
+                fallbackProbeUsed: false,
+                directExecutableProbeUsed: false
+            )
         }
 
-        return nil
+        let probedAgentBasePath = basePathResolver.resolve()
+        let effectiveAgentBasePath = ManagedAgentPathResolver.mergedPath(
+            currentPath: configuredAgentBasePath,
+            basePath: probedAgentBasePath
+        )
+
+        if let realBinaryPath = ManagedAgentPathResolver.resolvedExecutablePath(
+            commandName: commandName,
+            currentPath: environment["PATH"],
+            basePath: effectiveAgentBasePath,
+            excludedDirectoryPaths: excludedDirectoryPaths,
+            excludedExecutablePaths: currentExecutablePaths,
+            canonicalPathProvider: canonicalPath(for:),
+            isExecutableFile: { FileManager.default.isExecutableFile(atPath: $0) }
+        ) {
+            return ResolvedBinaryPath(
+                realBinaryPath: realBinaryPath,
+                agentBasePath: effectiveAgentBasePath,
+                fallbackProbeUsed: true,
+                directExecutableProbeUsed: false
+            )
+        }
+
+        guard let executableResolution = basePathResolver.resolveExecutable(
+            commandName: commandName
+        ) else {
+            return nil
+        }
+
+        let executableProbeAgentBasePath = ManagedAgentPathResolver.mergedPath(
+            currentPath: effectiveAgentBasePath,
+            basePath: executableResolution.path
+        )
+
+        return ResolvedBinaryPath(
+            realBinaryPath: executableResolution.executablePath,
+            agentBasePath: executableProbeAgentBasePath,
+            fallbackProbeUsed: true,
+            directExecutableProbeUsed: true
+        )
+    }
+
+    private static func environmentWithResolvedAgentPath(
+        _ environment: [String: String],
+        agentBasePathOverride: String? = nil
+    ) -> [String: String] {
+        guard let resolvedPath = ManagedAgentPathResolver.mergedPath(
+            currentPath: environment["PATH"],
+            basePath: agentBasePathOverride ?? environment[ToasttyLaunchContextEnvironment.agentBasePathKey]
+        ) else {
+            return environment
+        }
+
+        var resolvedEnvironment = environment
+        resolvedEnvironment["PATH"] = resolvedPath
+        if let agentBasePathOverride {
+            resolvedEnvironment[ToasttyLaunchContextEnvironment.agentBasePathKey] = agentBasePathOverride
+        }
+        return resolvedEnvironment
     }
 
     private static func prepareManagedLaunchPlan(
@@ -412,6 +490,11 @@ private enum AgentCommandShim {
     ) -> [String: String] {
         let shimDirectory = normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.agentShimDirectoryKey])
         let path = normalizedNonEmpty(environment["PATH"])
+        let agentBasePath = normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.agentBasePathKey])
+        let effectivePath = ManagedAgentPathResolver.mergedPath(
+            currentPath: path,
+            basePath: agentBasePath
+        )
 
         var metadata: [String: String] = [
             "command_name": commandName,
@@ -419,6 +502,7 @@ private enum AgentCommandShim {
             "session_id_present": environment[ToasttyLaunchContextEnvironment.sessionIDKey] == nil ? "false" : "true",
             "cli_path_present": normalizedNonEmpty(environment[ToasttyLaunchContextEnvironment.cliPathKey]) == nil ? "false" : "true",
             "agent_shim_directory": shimDirectory ?? "none",
+            "agent_base_path_present": agentBasePath == nil ? "false" : "true",
             "path_starts_with_shim_directory": pathStartsWithDirectory(
                 path,
                 directoryPath: shimDirectory
@@ -428,6 +512,8 @@ private enum AgentCommandShim {
                 directoryPath: shimDirectory
             ) ? "true" : "false",
             "path_sample": pathEntriesSample(path),
+            "agent_base_path_sample": pathEntriesSample(agentBasePath),
+            "effective_path_sample": pathEntriesSample(effectivePath),
             "pwd": normalizedNonEmpty(environment["PWD"]) ?? FileManager.default.currentDirectoryPath,
         ]
 
@@ -501,6 +587,13 @@ private struct CLIOutput {
     let exitCode: Int32
     let stdout: Data
     let stderr: Data
+}
+
+private struct ResolvedBinaryPath {
+    let realBinaryPath: String
+    let agentBasePath: String?
+    let fallbackProbeUsed: Bool
+    let directExecutableProbeUsed: Bool
 }
 
 private func normalizedNonEmpty(_ value: String?) -> String? {
