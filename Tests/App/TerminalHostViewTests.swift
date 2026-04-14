@@ -409,6 +409,7 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertFalse(scrollView.hasVerticalScroller)
         XCTAssertFalse(scrollView.hasHorizontalScroller)
+        XCTAssertTrue(scrollView.autohidesScrollers)
     }
 
     func testSurfaceScrollViewKeepsHostViewSizedToClipViewBounds() {
@@ -426,6 +427,7 @@ final class TerminalHostViewTests: XCTestCase {
 
         XCTAssertTrue(scrollView.hasVerticalScroller)
         XCTAssertFalse(scrollView.hasHorizontalScroller)
+        XCTAssertTrue(scrollView.autohidesScrollers)
     }
 
     func testSurfaceScrollViewHidesVerticalScrollerWhenScrollbarStateClears() {

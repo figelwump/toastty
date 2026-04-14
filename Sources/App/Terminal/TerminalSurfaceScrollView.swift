@@ -36,7 +36,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
         borderType = .noBorder
         hasVerticalScroller = false
         hasHorizontalScroller = false
-        autohidesScrollers = false
+        autohidesScrollers = true
         usesPredominantAxisScrolling = true
         scrollerStyle = .overlay
         contentView.clipsToBounds = false
