@@ -703,21 +703,16 @@ extension SessionRuntimeStore: TerminalSessionLifecycleTracking {
     private func refreshedWorkingCodexStatus(
         currentStatus: SessionStatus,
         visibleText: String,
-        promptState: TerminalPromptState
+        promptState _: TerminalPromptState
     ) -> SessionStatus? {
         switch currentStatus.kind {
         case .working:
             return CodexVisibleTextStatusParser.workingStatus(from: visibleText)
         case .idle, .ready, .needsApproval:
-            guard promptState != .idleAtPrompt,
-                  promptState != .exited else {
-                return nil
-            }
-
-            // Recover a stuck non-working row only from Codex's live status
-            // line. Actionable bullets can remain visible after Codex is back
-            // at its prompt, so they are too weak a signal for resurrection.
-            return CodexVisibleTextStatusParser.statusLineWorkingStatus(from: visibleText)
+            // Safe containment: do not resurrect non-working Codex rows from
+            // visible text until we can distinguish Codex's own ready prompt
+            // from a truly active turn.
+            return nil
         case .error:
             return nil
         }

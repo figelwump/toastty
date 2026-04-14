@@ -1091,7 +1091,7 @@ struct SessionRuntimeStoreTests {
     }
 
     @Test
-    func refreshManagedSessionStatusFromVisibleTextRecoversIdleCodexSessionFromLiveStatusLine() {
+    func refreshManagedSessionStatusFromVisibleTextDoesNotRecoverIdleCodexSessionFromLiveStatusLine() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1124,15 +1124,15 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(didRefresh)
+        #expect(didRefresh == false)
         #expect(
             sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
-                SessionStatus(kind: .working, summary: "Working", detail: "Deciding on a test file")
+                SessionStatus(kind: .idle, summary: "Waiting", detail: "Ready for prompt")
         )
     }
 
     @Test
-    func refreshManagedSessionStatusFromVisibleTextRecoversReadyCodexSessionFromLiveStatusLine() {
+    func refreshManagedSessionStatusFromVisibleTextDoesNotRecoverReadyCodexSessionFromLiveStatusLine() {
         let sessionStore = SessionRuntimeStore()
         let panelID = UUID()
         let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -1161,10 +1161,10 @@ struct SessionRuntimeStoreTests {
             at: startedAt.addingTimeInterval(2)
         )
 
-        #expect(didRefresh)
+        #expect(didRefresh == false)
         #expect(
             sessionStore.sessionRegistry.activeSession(for: panelID)?.status ==
-                SessionStatus(kind: .working, summary: "Working", detail: "Deciding on a test file")
+                SessionStatus(kind: .ready, summary: "Ready", detail: "Finished previous task")
         )
     }
 
