@@ -5,6 +5,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import { MarkdownPanelBootstrap } from "./bootstrap";
+import { markdownNativeBridge } from "./nativeBridge";
 
 // --- Sanitize schema: extend default to allow highlight.js class names on spans ---
 
@@ -48,7 +49,10 @@ function plainText(node: React.ReactNode): string {
 
 // --- Content helpers ---
 
-function shortenPath(filePath: string, displayName: string): string {
+function shortenPath(filePath: string | null, displayName: string): string {
+  if (!filePath) {
+    return "No backing file";
+  }
   const dir = filePath.endsWith(displayName)
     ? filePath.slice(0, -displayName.length).replace(/\/$/, "")
     : filePath;
@@ -164,6 +168,99 @@ function useBootstrap(): MarkdownPanelBootstrap | null {
   return bootstrap;
 }
 
+function useMarkdownPanelState(): {
+  bootstrap: MarkdownPanelBootstrap | null;
+  draftContent: string;
+  isDirty: boolean;
+  canSave: boolean;
+  canOverwrite: boolean;
+  enterEdit: () => void;
+  saveEdit: () => void;
+  overwriteAfterConflict: () => void;
+  cancelEdit: () => void;
+  updateDraftContent: (nextContent: string) => void;
+} {
+  const bootstrap = useBootstrap();
+  const [draftContent, setDraftContent] = React.useState("");
+  const lastSyncedContentRevision = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    if (!bootstrap) {
+      lastSyncedContentRevision.current = null;
+      setDraftContent("");
+      return;
+    }
+
+    if (lastSyncedContentRevision.current === bootstrap.contentRevision) {
+      return;
+    }
+
+    lastSyncedContentRevision.current = bootstrap.contentRevision;
+    setDraftContent(bootstrap.content);
+  }, [bootstrap]);
+
+  const enterEdit = React.useCallback(() => {
+    if (!bootstrap?.filePath) {
+      return;
+    }
+
+    markdownNativeBridge.enterEdit();
+  }, [bootstrap?.filePath]);
+
+  const saveEdit = React.useCallback(() => {
+    if (!bootstrap?.isEditing || bootstrap.isSaving || bootstrap.hasExternalConflict) {
+      return;
+    }
+
+    markdownNativeBridge.save(bootstrap.contentRevision);
+  }, [bootstrap]);
+
+  const overwriteAfterConflict = React.useCallback(() => {
+    if (!bootstrap?.isEditing || bootstrap.isSaving || !bootstrap.hasExternalConflict) {
+      return;
+    }
+
+    markdownNativeBridge.overwriteAfterConflict(bootstrap.contentRevision);
+  }, [bootstrap]);
+
+  const cancelEdit = React.useCallback(() => {
+    if (!bootstrap || bootstrap.isSaving) {
+      return;
+    }
+
+    markdownNativeBridge.cancelEdit(bootstrap.contentRevision);
+  }, [bootstrap]);
+
+  const updateDraftContent = React.useCallback((nextContent: string) => {
+    setDraftContent(nextContent);
+
+    if (!bootstrap?.isEditing || bootstrap.isSaving) {
+      return;
+    }
+
+    markdownNativeBridge.draftDidChange(nextContent, bootstrap.contentRevision);
+  }, [bootstrap]);
+
+  const isDirty = Boolean(
+    bootstrap?.isEditing ? (bootstrap.isDirty || draftContent !== bootstrap.content) : bootstrap?.isDirty
+  );
+  const canSave = Boolean(bootstrap?.isEditing && !bootstrap.isSaving && !bootstrap.hasExternalConflict);
+  const canOverwrite = Boolean(bootstrap?.isEditing && !bootstrap.isSaving && bootstrap.hasExternalConflict);
+
+  return {
+    bootstrap,
+    draftContent,
+    isDirty,
+    canSave,
+    canOverwrite,
+    enterEdit,
+    saveEdit,
+    overwriteAfterConflict,
+    cancelEdit,
+    updateDraftContent
+  };
+}
+
 // --- Components ---
 
 const FRONTMATTER_DISPLAY_KEYS = ["date", "author", "tags", "category", "status", "description"];
@@ -219,12 +316,35 @@ function TableOfContents(props: { entries: TocEntry[]; onNavigate: () => void })
   );
 }
 
-function Header(props: { bootstrap: MarkdownPanelBootstrap }) {
-  const { bootstrap } = props;
+function Header(props: {
+  bootstrap: MarkdownPanelBootstrap;
+  content: string;
+  isDirty: boolean;
+  canSave: boolean;
+  canOverwrite: boolean;
+  enterEdit: () => void;
+  saveEdit: () => void;
+  overwriteAfterConflict: () => void;
+  cancelEdit: () => void;
+}) {
+  const {
+    bootstrap,
+    content,
+    isDirty,
+    canSave,
+    canOverwrite,
+    enterEdit,
+    saveEdit,
+    overwriteAfterConflict,
+    cancelEdit
+  } = props;
   const [tocOpen, setTocOpen] = React.useState(false);
   const shortPath = shortenPath(bootstrap.filePath, bootstrap.displayName);
-  const tocEntries = React.useMemo(() => parseToc(bootstrap.content), [bootstrap.content]);
-  const wordCount = React.useMemo(() => computeWordCount(bootstrap.content), [bootstrap.content]);
+  const tocEntries = React.useMemo(
+    () => (bootstrap.isEditing ? [] : parseToc(content)),
+    [bootstrap.isEditing, content]
+  );
+  const wordCount = React.useMemo(() => computeWordCount(content), [content]);
 
   // Close TOC when clicking outside
   React.useEffect(() => {
@@ -248,28 +368,106 @@ function Header(props: { bootstrap: MarkdownPanelBootstrap }) {
         <div className="markdown-panel-title">{bootstrap.displayName}</div>
         <div className="markdown-panel-path" title={bootstrap.filePath}>{shortPath}</div>
       </div>
-      {tocEntries.length > 0 && (
-        <button
-          className={`markdown-toc-toggle${tocOpen ? " markdown-toc-toggle-open" : ""}`}
-          onClick={() => setTocOpen((prev) => !prev)}
-          aria-expanded={tocOpen}
-          aria-label="Table of contents"
-          title="Table of contents"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-          </svg>
-        </button>
-      )}
-      {tocOpen && (
-        <TableOfContents entries={tocEntries} onNavigate={() => setTocOpen(false)} />
-      )}
+      <div className="markdown-panel-actions">
+        {bootstrap.isEditing ? (
+          <>
+            <span className={`markdown-session-badge${isDirty ? " markdown-session-badge-dirty" : ""}`}>
+              {bootstrap.isSaving ? "Saving" : isDirty ? "Unsaved draft" : "Editing"}
+            </span>
+            <button
+              className="markdown-action-button"
+              onClick={bootstrap.hasExternalConflict ? overwriteAfterConflict : saveEdit}
+              disabled={bootstrap.hasExternalConflict ? !canOverwrite : !canSave}
+            >
+              {bootstrap.hasExternalConflict ? "Overwrite" : "Save"}
+            </button>
+            <button
+              className="markdown-action-button markdown-action-button-secondary"
+              onClick={cancelEdit}
+              disabled={bootstrap.isSaving}
+            >
+              {bootstrap.hasExternalConflict ? "Revert" : "Cancel"}
+            </button>
+          </>
+        ) : (
+          <>
+            {tocEntries.length > 0 && (
+              <button
+                className={`markdown-toc-toggle${tocOpen ? " markdown-toc-toggle-open" : ""}`}
+                onClick={() => setTocOpen((prev) => !prev)}
+                aria-expanded={tocOpen}
+                aria-label="Table of contents"
+                title="Table of contents"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            )}
+            <button
+              className="markdown-action-button"
+              onClick={enterEdit}
+              disabled={!bootstrap.filePath}
+            >
+              Edit
+            </button>
+          </>
+        )}
+        {tocOpen && (
+          <TableOfContents entries={tocEntries} onNavigate={() => setTocOpen(false)} />
+        )}
+      </div>
     </header>
   );
 }
 
+function MarkdownEditor(props: {
+  bootstrap: MarkdownPanelBootstrap;
+  draftContent: string;
+  updateDraftContent: (nextContent: string) => void;
+}) {
+  return (
+    <section className="markdown-editor-shell">
+      {(props.bootstrap.hasExternalConflict || props.bootstrap.saveErrorMessage) && (
+        <div className="markdown-editor-status-strip">
+          {props.bootstrap.hasExternalConflict && (
+            <p className="markdown-editor-status markdown-editor-status-conflict">
+              The file changed on disk. Save will stay disabled until you overwrite the file or revert your draft.
+            </p>
+          )}
+          {props.bootstrap.saveErrorMessage && (
+            <p className="markdown-editor-status markdown-editor-status-error">
+              {props.bootstrap.saveErrorMessage}
+            </p>
+          )}
+        </div>
+      )}
+      <textarea
+        className="markdown-editor"
+        value={props.draftContent}
+        onChange={(event) => props.updateDraftContent(event.target.value)}
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
+        readOnly={props.bootstrap.isSaving}
+      />
+    </section>
+  );
+}
+
 export function MarkdownPanelApp() {
-  const bootstrap = useBootstrap();
+  const {
+    bootstrap,
+    draftContent,
+    isDirty,
+    canSave,
+    canOverwrite,
+    enterEdit,
+    saveEdit,
+    overwriteAfterConflict,
+    cancelEdit,
+    updateDraftContent
+  } = useMarkdownPanelState();
 
   if (!bootstrap) {
     return (
@@ -282,55 +480,74 @@ export function MarkdownPanelApp() {
     );
   }
 
-  const frontmatter = extractFrontmatter(bootstrap.content);
+  const renderedContent = bootstrap.isEditing ? draftContent : bootstrap.content;
+  const frontmatter = bootstrap.isEditing ? null : extractFrontmatter(renderedContent);
 
   return (
     <main className="markdown-shell">
-      <Header bootstrap={bootstrap} />
-      <article className="markdown-prose">
-        {frontmatter && <FrontmatterBar meta={frontmatter} />}
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkFrontmatter]}
-          rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
-          components={{
-            a({ href, children }) {
-              if (href?.startsWith("#")) {
-                return <a href={href}>{children}</a>;
+      <Header
+        bootstrap={bootstrap}
+        content={renderedContent}
+        isDirty={isDirty}
+        canSave={canSave}
+        canOverwrite={canOverwrite}
+        enterEdit={enterEdit}
+        saveEdit={saveEdit}
+        overwriteAfterConflict={overwriteAfterConflict}
+        cancelEdit={cancelEdit}
+      />
+      {bootstrap.isEditing ? (
+        <MarkdownEditor
+          bootstrap={bootstrap}
+          draftContent={draftContent}
+          updateDraftContent={updateDraftContent}
+        />
+      ) : (
+        <article className="markdown-prose">
+          {frontmatter && <FrontmatterBar meta={frontmatter} />}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkFrontmatter]}
+            rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
+            components={{
+              a({ href, children }) {
+                if (href?.startsWith("#")) {
+                  return <a href={href}>{children}</a>;
+                }
+                return <span className="markdown-link-blocked">{children}</span>;
+              },
+              img({ alt }) {
+                return <span className="markdown-image-blocked">Image blocked{alt ? `: ${alt}` : ""}</span>;
+              },
+              h1({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h1 id={id}>{children}</h1>;
+              },
+              h2({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h2 id={id}>{children}</h2>;
+              },
+              h3({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h3 id={id}>{children}</h3>;
+              },
+              h4({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h4 id={id}>{children}</h4>;
+              },
+              h5({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h5 id={id}>{children}</h5>;
+              },
+              h6({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h6 id={id}>{children}</h6>;
               }
-              return <span className="markdown-link-blocked">{children}</span>;
-            },
-            img({ alt }) {
-              return <span className="markdown-image-blocked">Image blocked{alt ? `: ${alt}` : ""}</span>;
-            },
-            h1({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h1 id={id}>{children}</h1>;
-            },
-            h2({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h2 id={id}>{children}</h2>;
-            },
-            h3({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h3 id={id}>{children}</h3>;
-            },
-            h4({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h4 id={id}>{children}</h4>;
-            },
-            h5({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h5 id={id}>{children}</h5>;
-            },
-            h6({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h6 id={id}>{children}</h6>;
-            }
-          }}
-        >
-          {bootstrap.content}
-        </ReactMarkdown>
-      </article>
+            }}
+          >
+            {renderedContent}
+          </ReactMarkdown>
+        </article>
+      )}
     </main>
   );
 }

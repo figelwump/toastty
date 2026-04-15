@@ -233,6 +233,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isBrowserReloadShortcut(repeatedEvent))
     }
 
+    func testSaveShortcutMatchesPlainCommandSOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "s", modifiers: [.command], keyCode: 0x01)
+        let shiftedEvent = try makeKeyEvent(characters: "S", modifiers: [.command, .shift], keyCode: 0x01)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "s",
+            modifiers: [.command],
+            keyCode: 0x01,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isSaveShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isSaveShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isSaveShortcut(repeatedEvent))
+    }
+
     func testResizeSplitDirectionMatchesCommandControlArrowsOnly() throws {
         let leftArrow = try makeKeyEvent(
             characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
@@ -333,6 +348,37 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
         XCTAssertNil(interceptor.shortcutAction(for: newBrowserEvent, appOwnedWindowID: nil))
         XCTAssertNil(interceptor.shortcutAction(for: newBrowserTabEvent, appOwnedWindowID: nil))
+    }
+
+    func testMarkdownSaveShortcutUsesFocusedMarkdownSelection() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: windowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fileURL.path,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let interceptor = makeInterceptor(store: store)
+        let saveEvent = try makeKeyEvent(characters: "s", modifiers: [.command], keyCode: 0x01)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: windowID),
+            .saveMarkdown
+        )
+        XCTAssertTrue(interceptor.handle(.saveMarkdown, appOwnedWindowID: windowID))
+        XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
     }
 
     func testCreateBrowserActionUsesRequestedPlacement() throws {

@@ -64,16 +64,23 @@ struct AppWindowView: View {
             isPresented: pendingWorkspaceCloseBinding,
             presenting: pendingWorkspaceClose
         ) { closeTarget in
-            Button("Cancel", role: .cancel) {
-                pendingWorkspaceClose = nil
+            if closeTarget.allowsDestructiveConfirmation {
+                Button("Cancel", role: .cancel) {
+                    pendingWorkspaceClose = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Close") {
+                    confirmWorkspaceClose(closeTarget)
+                }
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button("OK") {
+                    pendingWorkspaceClose = nil
+                }
+                .keyboardShortcut(.defaultAction)
             }
-            .keyboardShortcut(.cancelAction)
-            Button("Close") {
-                confirmWorkspaceClose(closeTarget)
-            }
-            .keyboardShortcut(.defaultAction)
-        } message: { _ in
-            Text("Closing this workspace will close all terminals and panels within it.")
+        } message: { closeTarget in
+            Text(closeTarget.confirmationMessage)
         }
         .sheet(isPresented: $showsAgentGetStartedSheet) {
             AgentGetStartedSheet(
@@ -98,9 +105,21 @@ struct AppWindowView: View {
                   request.windowID == windowID,
                   store.state.workspacesByID[request.workspaceID] != nil,
                   store.consumePendingWorkspaceCloseRequest(windowID: windowID) != nil else { return }
+            let closeConfirmationSummary: MarkdownCloseConfirmationSummary
+            if let workspace = store.state.workspacesByID[request.workspaceID] {
+                closeConfirmationSummary = webPanelRuntimeRegistry.markdownCloseConfirmationSummary(
+                    panelIDs: workspace.orderedTabs.flatMap { Array($0.panels.keys) }
+                )
+            } else {
+                closeConfirmationSummary = .none
+            }
             pendingWorkspaceClose = PendingWorkspaceClose(
                 windowID: request.windowID,
-                workspaceID: request.workspaceID
+                workspaceID: request.workspaceID,
+                unsavedMarkdownDraftCount: closeConfirmationSummary.dirtyDraftCount,
+                firstUnsavedMarkdownDisplayName: closeConfirmationSummary.firstDirtyDraftDisplayName,
+                markdownSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
+                firstMarkdownSaveInProgressDisplayName: closeConfirmationSummary.firstSaveInProgressDisplayName
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
@@ -220,6 +239,41 @@ private struct WindowSlotFocusSignature: Equatable {
 private struct PendingWorkspaceClose: Identifiable {
     let windowID: UUID
     let workspaceID: UUID
+    let unsavedMarkdownDraftCount: Int
+    let firstUnsavedMarkdownDisplayName: String?
+    let markdownSaveInProgressCount: Int
+    let firstMarkdownSaveInProgressDisplayName: String?
 
     var id: UUID { workspaceID }
+
+    var allowsDestructiveConfirmation: Bool {
+        markdownSaveInProgressCount == 0
+    }
+
+    var confirmationMessage: String {
+        var paragraphs: [String] = []
+
+        if markdownSaveInProgressCount == 1,
+           let firstMarkdownSaveInProgressDisplayName {
+            paragraphs.append(
+                "\"\(firstMarkdownSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this workspace."
+            )
+        } else if markdownSaveInProgressCount > 1 {
+            paragraphs.append(
+                "This workspace still has markdown saves in progress. Wait for them to finish before closing the workspace."
+            )
+        }
+
+        if unsavedMarkdownDraftCount == 1,
+           let firstUnsavedMarkdownDisplayName {
+            paragraphs.append(
+                "\"\(firstUnsavedMarkdownDisplayName)\" has unsaved markdown changes. Closing the workspace will discard them."
+            )
+        } else if unsavedMarkdownDraftCount > 1 {
+            paragraphs.append("This workspace has unsaved markdown changes. Closing the workspace will discard them.")
+        }
+
+        paragraphs.append("Closing this workspace will close all terminals and panels within it.")
+        return paragraphs.joined(separator: "\n\n")
+    }
 }

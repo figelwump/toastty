@@ -16,22 +16,32 @@ Step 1 is complete in the `codex/local-document-step1` worktree:
 - preserved browser restore behavior
 - preserved workspace-local markdown dedupe by normalized file path
 
+Step 2 is complete in the current worktree:
+
+- added transient full-panel markdown editing on top of `localDocument`
+- kept `WebPanelState` and `LocalDocumentState` unchanged
+- added save, cancel/revert, dirty-state, and conflict handling
+- returned saved and reverted panels to rendered preview
+- added close and quit safeguards for dirty drafts and in-flight saves
+
 This document is now the follow-on plan, not a proposal for the already-landed
-state-model change.
+state-model change. The next remaining step is step 3.
 
 ## summary
 
 1. The markdown viewer was the right proof of a file-backed, local-only web
    panel, but its persisted naming and state shape were too markdown-specific.
 2. That persistence work should land before editing, and it now has.
-3. Markdown editing should come next on top of the new `localDocument` state.
-4. YAML and TOML should wait until editing is settled and the runtime/UI
-   surface is no longer markdown-specific.
+3. Markdown editing has now landed on top of the new `localDocument` state.
+4. The next step is to rename the markdown-specific runtime and UI surface
+   before broadening beyond markdown.
+5. YAML and TOML should wait until the runtime/UI surface is no longer
+   markdown-specific.
 
 ## goals
 
 - Keep the persisted `localDocument` model stable while building on it.
-- Add markdown edit/preview/split behavior without reworking persistence again.
+- Add markdown editing behavior without reworking persistence again.
 - Preserve all current browser behavior and restore compatibility.
 - Preserve current markdown mobility guarantees:
   - split, tab, move, close, reopen, restore
@@ -114,49 +124,25 @@ direction is old persisted markdown state into new builds, not the reverse.
 
 ## remaining sequence
 
-### step 2: markdown editing on top of localDocument
+### step 2 complete: markdown editing on top of localDocument
 
-Goal:
+Landed scope:
 
-- add markdown editing without changing the panel identity or persistence model
-  again
+- kept markdown as the only supported local-document format in this step
+- kept `WebPanelState` and `LocalDocumentState` unchanged
+- added transient full-panel edit mode for markdown documents
+- added save and revert flows
+- added dirty-state tracking
+- added external-modification conflict handling
+- returned panels to rendered markdown preview after save and revert
+- kept the runtime on the local-only profile
 
-Likely files:
+Implemented validation:
 
-- `Sources/Core/WebPanels/WebPanelState.swift`
-- `Sources/App/WebPanels/MarkdownPanelRuntime.swift`
-- `Sources/App/WebPanels/MarkdownPanelBootstrap.swift`
-- `Sources/App/WebPanels/MarkdownPanelView.swift`
-- `Sources/App/Resources/WebPanels/markdown-panel/`
-- `WebPanels/MarkdownApp/src/`
-- related runtime, restore, and interaction tests
-
-Work:
-
-- extend `LocalDocumentState` with the minimum additional persisted state
-  needed for editing, most likely `LocalDocumentMode`
-- keep markdown as the only supported format in this patch
-- add preview, edit, and split modes for markdown documents
-- add save and revert flows
-- add dirty-state tracking
-- handle external file modification with a bounded conflict strategy
-- keep the web runtime on the local-only profile
-
-Guardrails:
-
-- do not add YAML or TOML in the same patch
-- do not mix runtime/file renames with editing behavior unless the diff stays
-  obviously reviewable
-- keep unsaved-buffer handling scoped to markdown editing rather than designing
-  a fully generic document-provider system
-
-Validation:
-
-- state roundtrip tests for any new persisted markdown mode
-- runtime/bootstrap tests for edit and split mode metadata
+- runtime/bootstrap tests for transient edit-session metadata
 - save/revert/dirty tests
 - missing-file and external-modification tests
-- local smoke validation for preview, edit, save, and restore
+- close / quit confirmation coverage for dirty drafts and saves in progress
 
 ### step 3: rename markdown runtime and UI surface to localDocument
 
@@ -251,16 +237,15 @@ Validation:
 
 ## handoff expectation
 
-The next implementation work should start at step 2, not reopen step 1.
+The next implementation work should start at step 3, not reopen steps 1 or 2.
 
 Recommended order:
 
-1. markdown editing
-2. runtime and UI rename to local-document
-3. classification and open-flow broadening
-4. YAML and TOML rendering
+1. runtime and UI rename to local-document
+2. classification and open-flow broadening
+3. YAML and TOML rendering
 
 Do not start with YAML or TOML. The point of step 1 was to stop building new
 behavior on top of markdown-specific persistence. The next step should cash in
-that refactor by shipping editing on the new model before broadening format
-support again.
+that refactor by broadening the naming and classification surface only after
+editing landed on the new model.
