@@ -1,12 +1,16 @@
-export type MarkdownPanelMode = "view";
 export type MarkdownPanelTheme = "light" | "dark";
 
 export interface MarkdownPanelBootstrap {
-  contractVersion: 2;
-  mode: MarkdownPanelMode;
-  filePath: string;
+  contractVersion: 3;
+  filePath: string | null;
   displayName: string;
   content: string;
+  contentRevision: number;
+  isEditing: boolean;
+  isDirty: boolean;
+  hasExternalConflict: boolean;
+  isSaving: boolean;
+  saveErrorMessage: string | null;
   theme: MarkdownPanelTheme;
 }
 
@@ -33,9 +37,9 @@ function applyTheme(bootstrap: MarkdownPanelBootstrap | null) {
 }
 
 function warnOnContractMismatch(bootstrap: MarkdownPanelBootstrap) {
-  if (bootstrap.contractVersion !== 2) {
+  if (bootstrap.contractVersion !== 3) {
     console.warn(
-      `[ToasttyMarkdownPanel] Expected bootstrap contractVersion 2 but received ${bootstrap.contractVersion}.`
+      `[ToasttyMarkdownPanel] Expected bootstrap contractVersion 3 but received ${bootstrap.contractVersion}.`
     );
   }
 }

@@ -1808,17 +1808,27 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         if let bootstrap = runtimeState.currentBootstrap {
             result["bootstrapContractVersion"] = .int(bootstrap.contractVersion)
-            result["bootstrapMode"] = .string(bootstrap.mode.rawValue)
-            result["bootstrapFilePath"] = .string(bootstrap.filePath)
+            result["bootstrapFilePath"] = bootstrap.filePath.map { .string($0) } ?? .null
             result["bootstrapDisplayName"] = .string(bootstrap.displayName)
+            result["bootstrapContentRevision"] = .int(bootstrap.contentRevision)
+            result["bootstrapIsEditing"] = .bool(bootstrap.isEditing)
+            result["bootstrapIsDirty"] = .bool(bootstrap.isDirty)
+            result["bootstrapHasExternalConflict"] = .bool(bootstrap.hasExternalConflict)
+            result["bootstrapIsSaving"] = .bool(bootstrap.isSaving)
+            result["bootstrapSaveErrorMessage"] = bootstrap.saveErrorMessage.map { .string($0) } ?? .null
             result["bootstrapTheme"] = .string(bootstrap.theme.rawValue)
             result["bootstrapContentLength"] = .int(bootstrap.content.utf8.count)
             result["bootstrapContentSHA256"] = .string(Self.sha256Hex(bootstrap.content))
         } else {
             result["bootstrapContractVersion"] = .null
-            result["bootstrapMode"] = .null
             result["bootstrapFilePath"] = .null
             result["bootstrapDisplayName"] = .null
+            result["bootstrapContentRevision"] = .null
+            result["bootstrapIsEditing"] = .null
+            result["bootstrapIsDirty"] = .null
+            result["bootstrapHasExternalConflict"] = .null
+            result["bootstrapIsSaving"] = .null
+            result["bootstrapSaveErrorMessage"] = .null
             result["bootstrapTheme"] = .null
             result["bootstrapContentLength"] = .null
             result["bootstrapContentSHA256"] = .null

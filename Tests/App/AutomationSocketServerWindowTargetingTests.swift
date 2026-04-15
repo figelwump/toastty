@@ -349,7 +349,9 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(finalSnapshot.result["bootstrapFilePath"] as? String, markdownURL.path)
             XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "smoke.md")
             XCTAssertEqual(finalSnapshot.result["bootstrapContentSHA256"] as? String, expectedHash)
-            XCTAssertEqual(finalSnapshot.result["bootstrapMode"] as? String, "view")
+            XCTAssertEqual(finalSnapshot.result["bootstrapContentRevision"] as? Int, 1)
+            XCTAssertEqual(finalSnapshot.result["bootstrapIsEditing"] as? Bool, false)
+            XCTAssertEqual(finalSnapshot.result["bootstrapIsDirty"] as? Bool, false)
             XCTAssertEqual(finalSnapshot.result["currentTheme"] as? String, "dark")
             XCTAssertEqual(finalSnapshot.result["hostLifecycleState"] as? String, "detached")
         }

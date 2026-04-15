@@ -48,7 +48,10 @@ function plainText(node: React.ReactNode): string {
 
 // --- Content helpers ---
 
-function shortenPath(filePath: string, displayName: string): string {
+function shortenPath(filePath: string | null, displayName: string): string {
+  if (!filePath) {
+    return "No backing file";
+  }
   const dir = filePath.endsWith(displayName)
     ? filePath.slice(0, -displayName.length).replace(/\/$/, "")
     : filePath;
@@ -164,6 +167,33 @@ function useBootstrap(): MarkdownPanelBootstrap | null {
   return bootstrap;
 }
 
+function useMarkdownPanelState(): {
+  bootstrap: MarkdownPanelBootstrap | null;
+  draftContent: string;
+  setDraftContent: React.Dispatch<React.SetStateAction<string>>;
+} {
+  const bootstrap = useBootstrap();
+  const [draftContent, setDraftContent] = React.useState("");
+  const lastSyncedContentRevision = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    if (!bootstrap) {
+      lastSyncedContentRevision.current = null;
+      setDraftContent("");
+      return;
+    }
+
+    if (lastSyncedContentRevision.current === bootstrap.contentRevision) {
+      return;
+    }
+
+    lastSyncedContentRevision.current = bootstrap.contentRevision;
+    setDraftContent(bootstrap.content);
+  }, [bootstrap]);
+
+  return { bootstrap, draftContent, setDraftContent };
+}
+
 // --- Components ---
 
 const FRONTMATTER_DISPLAY_KEYS = ["date", "author", "tags", "category", "status", "description"];
@@ -269,7 +299,7 @@ function Header(props: { bootstrap: MarkdownPanelBootstrap }) {
 }
 
 export function MarkdownPanelApp() {
-  const bootstrap = useBootstrap();
+  const { bootstrap } = useMarkdownPanelState();
 
   if (!bootstrap) {
     return (

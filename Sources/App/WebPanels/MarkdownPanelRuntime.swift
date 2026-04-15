@@ -25,16 +25,81 @@ struct MarkdownPanelRuntimeAutomationState: Equatable, Sendable {
     let currentBootstrap: MarkdownPanelBootstrap?
 }
 
+struct MarkdownPanelDiskRevision: Equatable, Sendable {
+    let fileNumber: UInt64?
+    let modificationDate: Date?
+    let size: UInt64?
+}
+
+struct MarkdownPanelDocumentSnapshot: Equatable, Sendable {
+    let filePath: String?
+    let displayName: String
+    let content: String
+    let diskRevision: MarkdownPanelDiskRevision?
+}
+
+struct MarkdownEditingSession: Equatable, Sendable {
+    var filePath: String?
+    var displayName: String
+    var loadedContent: String
+    var draftContent: String
+    var contentRevision: Int
+    var diskRevision: MarkdownPanelDiskRevision?
+    var isEditing: Bool
+    var hasExternalConflict: Bool
+    var isSaving: Bool
+    var saveErrorMessage: String?
+
+    var isDirty: Bool {
+        draftContent != loadedContent
+    }
+
+    init(document: MarkdownPanelDocumentSnapshot) {
+        filePath = document.filePath
+        displayName = document.displayName
+        loadedContent = document.content
+        draftContent = document.content
+        contentRevision = 1
+        diskRevision = document.diskRevision
+        isEditing = false
+        hasExternalConflict = false
+        isSaving = false
+        saveErrorMessage = nil
+    }
+
+    mutating func replaceCleanBaseline(with document: MarkdownPanelDocumentSnapshot) {
+        let shouldAdvanceRevision = contentRevision == 0 ||
+            filePath != document.filePath ||
+            loadedContent != document.content
+
+        filePath = document.filePath
+        displayName = document.displayName
+        loadedContent = document.content
+        diskRevision = document.diskRevision
+        hasExternalConflict = false
+        isSaving = false
+        saveErrorMessage = nil
+
+        if isEditing == false {
+            draftContent = document.content
+        }
+
+        if shouldAdvanceRevision {
+            contentRevision &+= 1
+        }
+    }
+}
+
 @MainActor
 final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
-    typealias BootstrapProvider = @Sendable (WebPanelState, MarkdownPanelTheme) async -> MarkdownPanelBootstrap
+    typealias DocumentLoader = @Sendable (WebPanelState) async -> MarkdownPanelDocumentSnapshot
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
     private let webView: FocusAwareWKWebView
     private let entryURL: URL?
     private let assetDirectoryURL: URL?
-    private let bootstrapProvider: BootstrapProvider
+    private let documentLoader: DocumentLoader
     private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -47,6 +112,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     private var pendingBootstrapScript: String?
     private var currentAssetURL: URL?
     private var currentBootstrap: MarkdownPanelBootstrap?
+    private var session: MarkdownEditingSession?
     private var currentTheme: MarkdownPanelTheme = .dark
 
     init(
@@ -55,14 +121,14 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
         bundle: Bundle = .main,
         entryURL: URL? = nil,
-        bootstrapProvider: @escaping BootstrapProvider = { await MarkdownPanelRuntime.bootstrap(for: $0, theme: $1) },
+        documentLoader: @escaping DocumentLoader = { await MarkdownPanelRuntime.loadDocument(for: $0) },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
         self.entryURL = entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle)
         self.assetDirectoryURL = (entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
-        self.bootstrapProvider = bootstrapProvider
+        self.documentLoader = documentLoader
         self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = Self.makeWebViewConfiguration(
@@ -195,44 +261,44 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         for webState: WebPanelState,
         theme: MarkdownPanelTheme = .dark
     ) async -> MarkdownPanelBootstrap {
+        let document = await loadDocument(for: webState)
+        let session = MarkdownEditingSession(document: document)
+        return makeBootstrap(from: session, theme: theme)
+    }
+
+    nonisolated static func loadDocument(for webState: WebPanelState) async -> MarkdownPanelDocumentSnapshot {
         precondition(
             webState.definition == .localDocument,
             "MarkdownPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
-        let filePath = webState.filePath ?? ""
-        let displayName = resolvedDisplayName(for: webState, filePath: filePath)
+        let normalizedFilePath = WebPanelState.normalizedFilePath(webState.filePath)
+        let displayName = resolvedDisplayName(for: webState, filePath: normalizedFilePath ?? "")
 
-        guard filePath.isEmpty == false else {
-            return MarkdownPanelBootstrap(
-                filePath: filePath,
+        guard let normalizedFilePath else {
+            return MarkdownPanelDocumentSnapshot(
+                filePath: nil,
                 displayName: displayName,
                 content: missingFileDocument(
                     title: displayName,
                     filePath: nil,
                     message: "Toastty could not determine which markdown file this panel should render."
                 ),
-                theme: theme
+                diskRevision: nil
             )
         }
 
         do {
-            let content = try await readMarkdownContent(at: filePath)
-            return MarkdownPanelBootstrap(
-                filePath: filePath,
-                displayName: displayName,
-                content: content,
-                theme: theme
-            )
+            return try await readMarkdownDocument(at: normalizedFilePath, displayName: displayName)
         } catch {
-            return MarkdownPanelBootstrap(
-                filePath: filePath,
+            return MarkdownPanelDocumentSnapshot(
+                filePath: normalizedFilePath,
                 displayName: displayName,
                 content: missingFileDocument(
                     title: displayName,
-                    filePath: filePath,
+                    filePath: normalizedFilePath,
                     message: error.localizedDescription
                 ),
-                theme: theme
+                diskRevision: nil
             )
         }
     }
@@ -255,6 +321,24 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             configuration.websiteDataStore = .nonPersistent()
         }
         return configuration
+    }
+
+    nonisolated static func makeBootstrap(
+        from session: MarkdownEditingSession,
+        theme: MarkdownPanelTheme
+    ) -> MarkdownPanelBootstrap {
+        MarkdownPanelBootstrap(
+            filePath: session.filePath,
+            displayName: session.displayName,
+            content: session.loadedContent,
+            contentRevision: session.contentRevision,
+            isEditing: session.isEditing,
+            isDirty: session.isDirty,
+            hasExternalConflict: session.hasExternalConflict,
+            isSaving: session.isSaving,
+            saveErrorMessage: session.saveErrorMessage,
+            theme: theme
+        )
     }
 }
 
@@ -283,9 +367,8 @@ private extension MarkdownPanelRuntime {
 
         reloadGeneration &+= 1
         let generation = reloadGeneration
-        let bootstrapProvider = bootstrapProvider
+        let documentLoader = documentLoader
         let reloadDelayNanoseconds = debounced ? reloadDebounceNanoseconds : 0
-        let requestedTheme = currentTheme
 
         reloadTask?.cancel()
         pendingBootstrapScript = nil
@@ -295,7 +378,7 @@ private extension MarkdownPanelRuntime {
                 try? await Task.sleep(nanoseconds: reloadDelayNanoseconds)
             }
 
-            var bootstrap = await bootstrapProvider(webState, requestedTheme)
+            let document = await documentLoader(webState)
             guard let self else { return }
             defer {
                 if generation == self.reloadGeneration {
@@ -306,7 +389,18 @@ private extension MarkdownPanelRuntime {
                 return
             }
 
-            bootstrap = bootstrap.setting(theme: self.currentTheme)
+            if var existingSession = self.session {
+                existingSession.replaceCleanBaseline(with: document)
+                self.session = existingSession
+            } else {
+                self.session = MarkdownEditingSession(document: document)
+            }
+
+            guard let session = self.session else {
+                return
+            }
+
+            let bootstrap = Self.makeBootstrap(from: session, theme: self.currentTheme)
             self.currentBootstrap = bootstrap
             self.metadataDidChange(self.panelID, bootstrap.displayName, nil)
             guard let script = Self.bootstrapJavaScript(for: bootstrap) else {
@@ -348,12 +442,12 @@ private extension MarkdownPanelRuntime {
     }
 
     func pushThemeUpdateIfPossible() {
-        guard let currentBootstrap else { return }
+        guard let session else { return }
 
-        let themedBootstrap = currentBootstrap.setting(theme: currentTheme)
+        let themedBootstrap = Self.makeBootstrap(from: session, theme: currentTheme)
         guard themedBootstrap != currentBootstrap else { return }
 
-        self.currentBootstrap = themedBootstrap
+        currentBootstrap = themedBootstrap
         guard let script = Self.bootstrapJavaScript(for: themedBootstrap) else {
             return
         }
@@ -361,11 +455,26 @@ private extension MarkdownPanelRuntime {
         ensurePanelAppLoaded()
     }
 
-    nonisolated static func readMarkdownContent(at filePath: String) async throws -> String {
+    nonisolated static func readMarkdownDocument(
+        at filePath: String,
+        displayName: String
+    ) async throws -> MarkdownPanelDocumentSnapshot {
         try await Task.detached(priority: .utility) {
             let fileURL = URL(fileURLWithPath: filePath)
             var encoding = String.Encoding.utf8
-            return try String(contentsOf: fileURL, usedEncoding: &encoding)
+            let content = try String(contentsOf: fileURL, usedEncoding: &encoding)
+            let attributes = try FileManager.default.attributesOfItem(atPath: filePath)
+            let diskRevision = MarkdownPanelDiskRevision(
+                fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                modificationDate: attributes[.modificationDate] as? Date,
+                size: (attributes[.size] as? NSNumber)?.uint64Value
+            )
+            return MarkdownPanelDocumentSnapshot(
+                filePath: filePath,
+                displayName: displayName,
+                content: content,
+                diskRevision: diskRevision
+            )
         }.value
     }
 

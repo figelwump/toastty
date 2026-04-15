@@ -24,13 +24,13 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
-            bootstrapProvider: { webState, theme in
+            documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return MarkdownPanelBootstrap(
-                    filePath: webState.filePath ?? "",
+                return MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Docs",
-                    theme: theme
+                    diskRevision: nil
                 )
             },
             reloadDebounceNanoseconds: 10_000_000
@@ -75,6 +75,68 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(MarkdownPanelAssetLocator.directoryURL(bundle: bundle), panelDirectoryURL)
     }
 
+    func testEditingSessionAdvancesRevisionWhenCleanBaselineChanges() {
+        var session = MarkdownEditingSession(
+            document: MarkdownPanelDocumentSnapshot(
+                filePath: "/tmp/toastty/notes.md",
+                displayName: "notes.md",
+                content: "# First",
+                diskRevision: nil
+            )
+        )
+
+        session.replaceCleanBaseline(
+            with: MarkdownPanelDocumentSnapshot(
+                filePath: "/tmp/toastty/notes.md",
+                displayName: "notes.md",
+                content: "# Second",
+                diskRevision: nil
+            )
+        )
+
+        XCTAssertEqual(session.contentRevision, 2)
+        XCTAssertEqual(session.loadedContent, "# Second")
+        XCTAssertEqual(session.draftContent, "# Second")
+        XCTAssertFalse(session.isDirty)
+    }
+
+    func testEditingSessionKeepsRevisionForSameContentRebootstrap() {
+        var session = MarkdownEditingSession(
+            document: MarkdownPanelDocumentSnapshot(
+                filePath: "/tmp/toastty/notes.md",
+                displayName: "notes.md",
+                content: "# Notes",
+                diskRevision: nil
+            )
+        )
+
+        session.replaceCleanBaseline(
+            with: MarkdownPanelDocumentSnapshot(
+                filePath: "/tmp/toastty/notes.md",
+                displayName: "Notes",
+                content: "# Notes",
+                diskRevision: MarkdownPanelDiskRevision(
+                    fileNumber: 42,
+                    modificationDate: Date(timeIntervalSince1970: 123),
+                    size: 7
+                )
+            )
+        )
+
+        XCTAssertEqual(session.contentRevision, 1)
+        XCTAssertEqual(session.displayName, "Notes")
+        XCTAssertEqual(session.loadedContent, "# Notes")
+        XCTAssertEqual(session.draftContent, "# Notes")
+        XCTAssertEqual(
+            session.diskRevision,
+            MarkdownPanelDiskRevision(
+                fileNumber: 42,
+                modificationDate: Date(timeIntervalSince1970: 123),
+                size: 7
+            )
+        )
+    }
+
     func testBootstrapReadsMarkdownFileContents() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -92,11 +154,16 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 2)
-        XCTAssertEqual(bootstrap.mode, .view)
+        XCTAssertEqual(bootstrap.contractVersion, 3)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.content, "# Hello Toastty\n\nA local markdown panel.")
+        XCTAssertEqual(bootstrap.contentRevision, 1)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertFalse(bootstrap.hasExternalConflict)
+        XCTAssertFalse(bootstrap.isSaving)
+        XCTAssertNil(bootstrap.saveErrorMessage)
         XCTAssertEqual(bootstrap.theme, .dark)
     }
 
@@ -122,15 +189,26 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             filePath: "/tmp/toastty/readme.md",
             displayName: "readme.md",
             content: "# Docs",
+            contentRevision: 7,
+            isEditing: true,
+            isDirty: true,
+            hasExternalConflict: true,
+            isSaving: false,
+            saveErrorMessage: "Could not save",
             theme: .dark
         )
 
         let script = try XCTUnwrap(MarkdownPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
         XCTAssertTrue(script.contains("window.ToasttyMarkdownPanel?.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":2"))
+        XCTAssertTrue(script.contains("\"contractVersion\":3"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
         XCTAssertTrue(script.contains("\"content\":\"# Docs\""))
+        XCTAssertTrue(script.contains("\"contentRevision\":7"))
+        XCTAssertTrue(script.contains("\"isEditing\":true"))
+        XCTAssertTrue(script.contains("\"isDirty\":true"))
+        XCTAssertTrue(script.contains("\"hasExternalConflict\":true"))
+        XCTAssertTrue(script.contains("\"saveErrorMessage\":\"Could not save\""))
         XCTAssertTrue(script.contains("\"theme\":\"dark\""))
     }
 
@@ -142,7 +220,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
     func testApplyUsesCurrentEffectiveAppearanceThemeForBootstrap() async throws {
         let bootstrapRecorder = BootstrapRecorder()
-        let themeRecorder = ThemeRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         metadataExpectation.assertForOverFulfill = true
 
@@ -152,14 +229,13 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
-            bootstrapProvider: { webState, theme in
+            documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                await themeRecorder.record(theme)
-                return MarkdownPanelBootstrap(
-                    filePath: webState.filePath ?? "",
+                return MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Docs",
-                    theme: theme
+                    diskRevision: nil
                 )
             },
             reloadDebounceNanoseconds: 10_000_000
@@ -176,9 +252,8 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         await fulfillment(of: [metadataExpectation], timeout: 1)
 
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
-        let recordedThemes = await themeRecorder.snapshot()
         XCTAssertEqual(bootstrapCallCount, 1)
-        XCTAssertEqual(recordedThemes, [.light])
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.theme, .light)
     }
 
     func testAppearanceChangeDoesNotReReadMarkdownContent() async throws {
@@ -192,13 +267,13 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
-            bootstrapProvider: { webState, theme in
+            documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return MarkdownPanelBootstrap(
-                    filePath: webState.filePath ?? "",
+                return MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Docs",
-                    theme: theme
+                    diskRevision: nil
                 )
             },
             reloadDebounceNanoseconds: 10_000_000
@@ -246,9 +321,9 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 }
             },
             interactionDidRequestFocus: { _ in },
-            bootstrapProvider: { webState, theme in
+            documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return await MarkdownPanelRuntime.bootstrap(for: webState, theme: theme)
+                return await MarkdownPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -305,9 +380,9 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 }
             },
             interactionDidRequestFocus: { _ in },
-            bootstrapProvider: { webState, theme in
+            documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return await MarkdownPanelRuntime.bootstrap(for: webState, theme: theme)
+                return await MarkdownPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -368,9 +443,9 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 }
             },
             interactionDidRequestFocus: { _ in },
-            bootstrapProvider: { webState, theme in
+            documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return await MarkdownPanelRuntime.bootstrap(for: webState, theme: theme)
+                return await MarkdownPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -416,17 +491,5 @@ private actor BootstrapRecorder {
 
     func snapshot() -> Int {
         callCount
-    }
-}
-
-private actor ThemeRecorder {
-    private var themes: [MarkdownPanelTheme] = []
-
-    func record(_ theme: MarkdownPanelTheme) {
-        themes.append(theme)
-    }
-
-    func snapshot() -> [MarkdownPanelTheme] {
-        themes
     }
 }
