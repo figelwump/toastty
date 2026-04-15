@@ -347,7 +347,7 @@ final class AppStore: ObservableObject {
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
-                    definition: .markdown,
+                    definition: .localDocument,
                     title: displayName,
                     filePath: normalizedFilePath
                 ),
@@ -959,7 +959,7 @@ final class AppStore: ObservableObject {
         for tab in workspace.orderedTabs {
             for (panelID, panelState) in tab.panels {
                 guard case .web(let webState) = panelState,
-                      webState.definition == .markdown,
+                      webState.definition == .localDocument,
                       webState.filePath == normalizedFilePath else {
                     continue
                 }
@@ -980,7 +980,7 @@ final class AppStore: ObservableObject {
 
     private static func markdownDisplayName(for normalizedFilePath: String) -> String {
         let name = URL(fileURLWithPath: normalizedFilePath).lastPathComponent
-        return name.isEmpty ? WebPanelDefinition.markdown.defaultTitle : name
+        return name.isEmpty ? WebPanelDefinition.localDocument.defaultTitle : name
     }
 
     @discardableResult

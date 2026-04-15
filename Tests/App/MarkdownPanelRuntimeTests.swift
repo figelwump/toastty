@@ -36,7 +36,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             reloadDebounceNanoseconds: 10_000_000
         )
         let webState = WebPanelState(
-            definition: .markdown,
+            definition: .localDocument,
             title: "README.md",
             filePath: "/tmp/toastty/readme.md"
         )
@@ -86,7 +86,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         let bootstrap = await MarkdownPanelRuntime.bootstrap(
             for: WebPanelState(
-                definition: .markdown,
+                definition: .localDocument,
                 title: "README.md",
                 filePath: fileURL.path
             )
@@ -105,7 +105,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         let bootstrap = await MarkdownPanelRuntime.bootstrap(
             for: WebPanelState(
-                definition: .markdown,
+                definition: .localDocument,
                 title: "missing.md",
                 filePath: filePath
             )
@@ -165,7 +165,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             reloadDebounceNanoseconds: 10_000_000
         )
         let webState = WebPanelState(
-            definition: .markdown,
+            definition: .localDocument,
             title: "README.md",
             filePath: "/tmp/toastty/readme.md"
         )
@@ -204,7 +204,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             reloadDebounceNanoseconds: 10_000_000
         )
         let webState = WebPanelState(
-            definition: .markdown,
+            definition: .localDocument,
             title: "README.md",
             filePath: "/tmp/toastty/readme.md"
         )
@@ -253,7 +253,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             reloadDebounceNanoseconds: 50_000_000
         )
         let webState = WebPanelState(
-            definition: .markdown,
+            definition: .localDocument,
             title: "README.md",
             filePath: fileURL.path
         )
@@ -312,7 +312,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             reloadDebounceNanoseconds: 50_000_000
         )
         let webState = WebPanelState(
-            definition: .markdown,
+            definition: .localDocument,
             title: "notes.md",
             filePath: fileURL.path
         )
@@ -377,7 +377,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         runtime.apply(
             webState: WebPanelState(
-                definition: .markdown,
+                definition: .localDocument,
                 title: "first.md",
                 filePath: firstFileURL.path
             )
@@ -386,7 +386,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         runtime.apply(
             webState: WebPanelState(
-                definition: .markdown,
+                definition: .localDocument,
                 title: "second.md",
                 filePath: secondFileURL.path
             )

@@ -1717,7 +1717,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let workspace = store.state.workspacesByID[location.workspaceID],
                   let panelState = workspace.panelState(for: panelID),
                   case .web(let webState) = panelState,
-                  webState.definition == .markdown else {
+                  webState.definition == .localDocument else {
                 throw AutomationSocketError.invalidPayload("panelID is not a markdown panel")
             }
             return (location.workspaceID, panelID, webState)
@@ -1731,7 +1731,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         if let focusedPanelID = workspace.focusedPanelID,
            let panelState = workspace.panels[focusedPanelID],
            case .web(let webState) = panelState,
-           webState.definition == .markdown {
+           webState.definition == .localDocument {
             return (workspaceID, focusedPanelID, webState)
         }
 
@@ -1739,7 +1739,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             let panelID = leaf.panelID
             guard let panelState = workspace.panels[panelID],
                   case .web(let webState) = panelState,
-                  webState.definition == .markdown else {
+                  webState.definition == .localDocument else {
                 continue
             }
             return (workspaceID, panelID, webState)

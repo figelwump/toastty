@@ -322,7 +322,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 XCTFail("expected focused panel to be markdown")
                 return
             }
-            XCTAssertEqual(webState.definition, .markdown)
+            XCTAssertEqual(webState.definition, .localDocument)
             XCTAssertEqual(webState.filePath, markdownURL.path)
 
             var snapshotResponse: AutomationSocketTestResponse?

@@ -452,7 +452,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.filePath, fixture.markdownPath)
         XCTAssertEqual(webState.title, "command-palette.md")
         try StateValidator.validate(store.state)
@@ -519,7 +519,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.filePath, fixture.markdownPath)
         try StateValidator.validate(store.state)
     }
