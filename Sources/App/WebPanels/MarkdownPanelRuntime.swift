@@ -38,6 +38,23 @@ struct MarkdownPanelDocumentSnapshot: Equatable, Sendable {
     let diskRevision: MarkdownPanelDiskRevision?
 }
 
+struct MarkdownSaveRequest: Equatable, Sendable {
+    let filePath: String
+    let displayName: String
+    let content: String
+    let baseContentRevision: Int
+}
+
+enum MarkdownCloseConfirmationKind: Equatable, Sendable {
+    case dirtyDraft
+    case saveInProgress
+}
+
+struct MarkdownCloseConfirmationState: Equatable, Sendable {
+    let kind: MarkdownCloseConfirmationKind
+    let displayName: String
+}
+
 struct MarkdownEditingSession: Equatable, Sendable {
     var filePath: String?
     var displayName: String
@@ -56,6 +73,32 @@ struct MarkdownEditingSession: Equatable, Sendable {
 
     var visibleContent: String {
         isEditing ? draftContent : loadedContent
+    }
+
+    var closeConfirmationState: MarkdownCloseConfirmationState? {
+        guard isEditing else {
+            return nil
+        }
+        if isSaving {
+            return MarkdownCloseConfirmationState(
+                kind: .saveInProgress,
+                displayName: displayName
+            )
+        }
+        guard isDirty else {
+            return nil
+        }
+        return MarkdownCloseConfirmationState(
+            kind: .dirtyDraft,
+            displayName: displayName
+        )
+    }
+
+    var canSaveFromCommand: Bool {
+        filePath != nil &&
+            isEditing &&
+            isSaving == false &&
+            hasExternalConflict == false
     }
 
     init(document: MarkdownPanelDocumentSnapshot) {
@@ -106,11 +149,12 @@ struct MarkdownEditingSession: Equatable, Sendable {
     }
 
     mutating func updateDraft(_ content: String, baseContentRevision: Int) -> Bool {
-        guard isEditing, baseContentRevision == contentRevision else {
+        guard isEditing, isSaving == false, baseContentRevision == contentRevision else {
             return false
         }
 
         draftContent = content
+        saveErrorMessage = nil
         return true
     }
 
@@ -127,11 +171,102 @@ struct MarkdownEditingSession: Equatable, Sendable {
         contentRevision += 1
         return true
     }
+
+    mutating func beginSave(
+        baseContentRevision: Int,
+        allowConflictOverwrite: Bool
+    ) -> MarkdownSaveRequest? {
+        guard let filePath,
+              isEditing,
+              isSaving == false,
+              baseContentRevision == contentRevision else {
+            return nil
+        }
+        guard allowConflictOverwrite ? hasExternalConflict : hasExternalConflict == false else {
+            return nil
+        }
+
+        saveErrorMessage = nil
+        isSaving = true
+        return MarkdownSaveRequest(
+            filePath: filePath,
+            displayName: displayName,
+            content: draftContent,
+            baseContentRevision: baseContentRevision
+        )
+    }
+
+    mutating func finishNoOpSave(baseContentRevision: Int) -> Bool {
+        guard isEditing,
+              isDirty == false,
+              hasExternalConflict == false,
+              isSaving == false,
+              baseContentRevision == contentRevision else {
+            return false
+        }
+
+        isEditing = false
+        saveErrorMessage = nil
+        contentRevision += 1
+        return true
+    }
+
+    mutating func settleSave(
+        with document: MarkdownPanelDocumentSnapshot,
+        expectedContent: String,
+        baseContentRevision: Int
+    ) -> Bool {
+        guard isSaving, baseContentRevision == contentRevision else {
+            return false
+        }
+
+        let savedContentMatchesDisk = document.content == expectedContent
+
+        filePath = document.filePath
+        displayName = document.displayName
+        loadedContent = document.content
+        diskRevision = document.diskRevision
+        isSaving = false
+        saveErrorMessage = nil
+
+        if savedContentMatchesDisk {
+            draftContent = document.content
+            isEditing = false
+            hasExternalConflict = false
+            contentRevision += 1
+        } else {
+            hasExternalConflict = true
+        }
+
+        return true
+    }
+
+    mutating func failSave(message: String, baseContentRevision: Int) -> Bool {
+        guard isSaving, baseContentRevision == contentRevision else {
+            return false
+        }
+
+        isSaving = false
+        saveErrorMessage = message
+        return true
+    }
+
+    mutating func applyExternalConflict(with document: MarkdownPanelDocumentSnapshot) {
+        filePath = document.filePath
+        displayName = document.displayName
+        loadedContent = document.content
+        diskRevision = document.diskRevision
+        hasExternalConflict = true
+        isSaving = false
+        saveErrorMessage = nil
+    }
 }
 
 @MainActor
 final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     typealias DocumentLoader = @Sendable (WebPanelState) async -> MarkdownPanelDocumentSnapshot
+    typealias DocumentSaver = @Sendable (String, String) async throws -> Void
+    typealias SavedDocumentReader = @Sendable (String, String) async throws -> MarkdownPanelDocumentSnapshot
     private static let scriptMessageHandlerName = "toasttyMarkdownPanel"
 
     private let panelID: UUID
@@ -140,6 +275,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     private let entryURL: URL?
     private let assetDirectoryURL: URL?
     private let documentLoader: DocumentLoader
+    private let documentSaver: DocumentSaver
+    private let savedDocumentReader: SavedDocumentReader
     private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -148,6 +285,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     private var currentWebState: WebPanelState?
     private var fileObserver: FilePathObserver?
     private var reloadTask: Task<Void, Never>?
+    private var saveTask: Task<Void, Never>?
+    private var activeSaveOperationID: UUID?
     private var reloadGeneration: UInt64 = 0
     private var pendingBootstrapScript: String?
     private var currentAssetURL: URL?
@@ -162,6 +301,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         bundle: Bundle = .main,
         entryURL: URL? = nil,
         documentLoader: @escaping DocumentLoader = { await MarkdownPanelRuntime.loadDocument(for: $0) },
+        documentSaver: @escaping DocumentSaver = { try await MarkdownPanelRuntime.writeMarkdownDocument(at: $0, content: $1) },
+        savedDocumentReader: @escaping SavedDocumentReader = { try await MarkdownPanelRuntime.readMarkdownDocument(at: $0, displayName: $1) },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -169,6 +310,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         self.entryURL = entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle)
         self.assetDirectoryURL = (entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
         self.documentLoader = documentLoader
+        self.documentSaver = documentSaver
+        self.savedDocumentReader = savedDocumentReader
         self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = Self.makeWebViewConfiguration(
@@ -190,6 +333,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     deinit {
         pendingDetachTask?.cancel()
         reloadTask?.cancel()
+        saveTask?.cancel()
         let webView = webView
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
@@ -222,9 +366,28 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         )
     }
 
+    func canSaveFromCommand() -> Bool {
+        session?.canSaveFromCommand == true
+    }
+
+    @discardableResult
+    func saveFromCommand() -> Bool {
+        guard let session else { return false }
+        guard session.canSaveFromCommand else {
+            return false
+        }
+        save(baseContentRevision: session.contentRevision)
+        return true
+    }
+
+    func closeConfirmationState() -> MarkdownCloseConfirmationState? {
+        session?.closeConfirmationState
+    }
+
     func enterEditMode() {
         guard var session else { return }
         guard session.beginEditing() else { return }
+        objectWillChange.send()
         self.session = session
         updateCurrentBootstrap()
         pushPendingBootstrapIfPossible()
@@ -243,9 +406,18 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     func cancelEditMode(baseContentRevision: Int) {
         guard var session else { return }
         guard session.cancelEditing(baseContentRevision: baseContentRevision) else { return }
+        objectWillChange.send()
         self.session = session
         updateCurrentBootstrap()
         pushPendingBootstrapIfPossible()
+    }
+
+    func save(baseContentRevision: Int) {
+        startSave(baseContentRevision: baseContentRevision, allowConflictOverwrite: false)
+    }
+
+    func overwriteAfterConflict(baseContentRevision: Int) {
+        startSave(baseContentRevision: baseContentRevision, allowConflictOverwrite: true)
     }
 
     func attachHost(to container: NSView, attachment: PanelHostAttachmentToken) {
@@ -355,20 +527,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             )
         }
 
-        do {
-            return try await readMarkdownDocument(at: normalizedFilePath, displayName: displayName)
-        } catch {
-            return MarkdownPanelDocumentSnapshot(
-                filePath: normalizedFilePath,
-                displayName: displayName,
-                content: missingFileDocument(
-                    title: displayName,
-                    filePath: normalizedFilePath,
-                    message: error.localizedDescription
-                ),
-                diskRevision: nil
-            )
-        }
+        return await loadDocumentSnapshot(at: normalizedFilePath, displayName: displayName)
     }
 
     nonisolated static func bootstrapJavaScript(for bootstrap: MarkdownPanelBootstrap) -> String? {
@@ -414,7 +573,9 @@ private extension MarkdownPanelRuntime {
     enum BridgeEvent {
         case enterEdit
         case draftDidChange(content: String, baseContentRevision: Int)
+        case save(baseContentRevision: Int)
         case cancelEdit(baseContentRevision: Int)
+        case overwriteAfterConflict(baseContentRevision: Int)
 
         init?(messageBody: Any) {
             guard let body = messageBody as? [String: Any],
@@ -431,11 +592,21 @@ private extension MarkdownPanelRuntime {
                     return nil
                 }
                 self = .draftDidChange(content: content, baseContentRevision: baseContentRevision)
+            case "save":
+                guard let baseContentRevision = body["baseContentRevision"] as? Int else {
+                    return nil
+                }
+                self = .save(baseContentRevision: baseContentRevision)
             case "cancelEdit":
                 guard let baseContentRevision = body["baseContentRevision"] as? Int else {
                     return nil
                 }
                 self = .cancelEdit(baseContentRevision: baseContentRevision)
+            case "overwriteAfterConflict":
+                guard let baseContentRevision = body["baseContentRevision"] as? Int else {
+                    return nil
+                }
+                self = .overwriteAfterConflict(baseContentRevision: baseContentRevision)
             default:
                 return nil
             }
@@ -448,8 +619,12 @@ private extension MarkdownPanelRuntime {
             enterEditMode()
         case .draftDidChange(let content, let baseContentRevision):
             updateDraftContent(content, baseContentRevision: baseContentRevision)
+        case .save(let baseContentRevision):
+            save(baseContentRevision: baseContentRevision)
         case .cancelEdit(let baseContentRevision):
             cancelEditMode(baseContentRevision: baseContentRevision)
+        case .overwriteAfterConflict(let baseContentRevision):
+            overwriteAfterConflict(baseContentRevision: baseContentRevision)
         }
     }
 
@@ -500,15 +675,131 @@ private extension MarkdownPanelRuntime {
             }
 
             if var existingSession = self.session {
-                existingSession.replaceCleanBaseline(with: document)
+                let didReplaceLoadedContent = existingSession.filePath != document.filePath ||
+                    existingSession.loadedContent != document.content
+
+                if existingSession.isSaving {
+                    return
+                }
+
+                if existingSession.isEditing && existingSession.isDirty && didReplaceLoadedContent {
+                    existingSession.applyExternalConflict(with: document)
+                } else {
+                    existingSession.replaceCleanBaseline(with: document)
+                }
+                self.objectWillChange.send()
                 self.session = existingSession
             } else {
+                self.objectWillChange.send()
                 self.session = MarkdownEditingSession(document: document)
             }
 
             self.updateCurrentBootstrap(emitMetadata: true)
             self.pushPendingBootstrapIfPossible()
         }
+    }
+
+    func startSave(baseContentRevision: Int, allowConflictOverwrite: Bool) {
+        guard var session else { return }
+
+        if allowConflictOverwrite == false,
+           session.finishNoOpSave(baseContentRevision: baseContentRevision) {
+            objectWillChange.send()
+            self.session = session
+            updateCurrentBootstrap()
+            pushPendingBootstrapIfPossible()
+            return
+        }
+
+        guard let request = session.beginSave(
+            baseContentRevision: baseContentRevision,
+            allowConflictOverwrite: allowConflictOverwrite
+        ) else {
+            return
+        }
+
+        let operationID = UUID()
+        saveTask?.cancel()
+        activeSaveOperationID = operationID
+        objectWillChange.send()
+        self.session = session
+        updateCurrentBootstrap()
+        pushPendingBootstrapIfPossible()
+
+        let documentSaver = documentSaver
+        let savedDocumentReader = savedDocumentReader
+        saveTask = Task { [weak self] in
+            do {
+                try await documentSaver(request.filePath, request.content)
+                let document = try await savedDocumentReader(request.filePath, request.displayName)
+                await MainActor.run { [weak self] in
+                    self?.completeSave(
+                        operationID: operationID,
+                        request: request,
+                        document: document
+                    )
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.failSave(
+                        operationID: operationID,
+                        request: request,
+                        error: error
+                    )
+                }
+            }
+        }
+    }
+
+    func completeSave(
+        operationID: UUID,
+        request: MarkdownSaveRequest,
+        document: MarkdownPanelDocumentSnapshot
+    ) {
+        guard activeSaveOperationID == operationID,
+              var session else {
+            return
+        }
+
+        activeSaveOperationID = nil
+        saveTask = nil
+        guard session.settleSave(
+            with: document,
+            expectedContent: request.content,
+            baseContentRevision: request.baseContentRevision
+        ) else {
+            return
+        }
+
+        objectWillChange.send()
+        self.session = session
+        updateCurrentBootstrap()
+        pushPendingBootstrapIfPossible()
+    }
+
+    func failSave(
+        operationID: UUID,
+        request: MarkdownSaveRequest,
+        error: Error
+    ) {
+        guard activeSaveOperationID == operationID,
+              var session else {
+            return
+        }
+
+        activeSaveOperationID = nil
+        saveTask = nil
+        guard session.failSave(
+            message: error.localizedDescription,
+            baseContentRevision: request.baseContentRevision
+        ) else {
+            return
+        }
+
+        objectWillChange.send()
+        self.session = session
+        updateCurrentBootstrap()
+        pushPendingBootstrapIfPossible()
     }
 
     func ensurePanelAppLoaded() {
@@ -560,6 +851,7 @@ private extension MarkdownPanelRuntime {
         let themedBootstrap = Self.makeBootstrap(from: session, theme: currentTheme)
         guard themedBootstrap != currentBootstrap else { return }
 
+        pendingBootstrapScript = nil
         currentBootstrap = themedBootstrap
         pushPendingBootstrapIfPossible()
     }
@@ -568,6 +860,7 @@ private extension MarkdownPanelRuntime {
         guard let session else { return }
         let bootstrap = Self.makeBootstrap(from: session, theme: currentTheme)
         currentBootstrap = bootstrap
+        pendingBootstrapScript = nil
         if emitMetadata {
             metadataDidChange(panelID, bootstrap.displayName, nil)
         }
@@ -601,6 +894,33 @@ private extension MarkdownPanelRuntime {
                 content: content,
                 diskRevision: diskRevision
             )
+        }.value
+    }
+
+    nonisolated static func loadDocumentSnapshot(
+        at filePath: String,
+        displayName: String
+    ) async -> MarkdownPanelDocumentSnapshot {
+        do {
+            return try await readMarkdownDocument(at: filePath, displayName: displayName)
+        } catch {
+            return MarkdownPanelDocumentSnapshot(
+                filePath: filePath,
+                displayName: displayName,
+                content: missingFileDocument(
+                    title: displayName,
+                    filePath: filePath,
+                    message: error.localizedDescription
+                ),
+                diskRevision: nil
+            )
+        }
+    }
+
+    nonisolated static func writeMarkdownDocument(at filePath: String, content: String) async throws {
+        try await Task.detached(priority: .utility) {
+            let fileURL = URL(fileURLWithPath: filePath)
+            try content.write(to: fileURL, atomically: true, encoding: .utf8)
         }.value
     }
 

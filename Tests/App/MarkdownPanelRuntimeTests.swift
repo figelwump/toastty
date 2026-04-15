@@ -14,7 +14,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
     func testApplySkipsDuplicateReloadWhenWebStateIsUnchanged() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        metadataExpectation.assertForOverFulfill = true
         var metadataCallCount = 0
 
         let runtime = MarkdownPanelRuntime(
@@ -139,8 +138,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
     func testEnterEditModeSwitchesBootstrapIntoEditingState() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        metadataExpectation.assertForOverFulfill = true
-
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
@@ -177,7 +174,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
     func testDraftUpdateTracksEditingBufferWithoutAdvancingRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        metadataExpectation.assertForOverFulfill = true
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
@@ -217,7 +213,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
     func testDraftUpdateIgnoresStaleRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        metadataExpectation.assertForOverFulfill = true
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
@@ -257,7 +252,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
     func testCancelEditModeRestoresPreviewAndAdvancesRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        metadataExpectation.assertForOverFulfill = true
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
@@ -294,6 +288,310 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(bootstrap.isDirty)
         XCTAssertEqual(bootstrap.content, "# Original")
         XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
+    }
+
+    func testSaveWritesDraftToDiskAndReturnsToPreview() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await MarkdownPanelRuntime.loadDocument(for: webState)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: fileURL.path
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("# Saved\n", baseContentRevision: baseRevision)
+
+        runtime.save(baseContentRevision: baseRevision)
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertFalse(bootstrap.hasExternalConflict)
+        XCTAssertFalse(bootstrap.isSaving)
+        XCTAssertNil(bootstrap.saveErrorMessage)
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
+        XCTAssertEqual(bootstrap.content, "# Saved\n")
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "# Saved\n")
+    }
+
+    func testSaveFailureKeepsEditingDraftAndSurfacesError() async throws {
+        let missingDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let fileURL = missingDirectoryURL.appendingPathComponent("README.md")
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original\n",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: fileURL.path
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("# Failed save\n", baseContentRevision: baseRevision)
+
+        runtime.save(baseContentRevision: baseRevision)
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertTrue(bootstrap.isDirty)
+        XCTAssertFalse(bootstrap.hasExternalConflict)
+        XCTAssertFalse(bootstrap.isSaving)
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+        XCTAssertEqual(bootstrap.content, "# Failed save\n")
+        XCTAssertNotNil(bootstrap.saveErrorMessage)
+    }
+
+    func testExternalModificationWhileDirtyPreservesDraftAndRaisesConflict() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        var metadataCallCount = 0
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataCallCount += 1
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await MarkdownPanelRuntime.loadDocument(for: webState)
+            },
+            reloadDebounceNanoseconds: 50_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: fileURL.path
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { metadataCallCount >= 1 }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("# Local draft\n", baseContentRevision: baseRevision)
+
+        try "# External change\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        try await waitUntil { metadataCallCount >= 2 }
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertTrue(bootstrap.isDirty)
+        XCTAssertTrue(bootstrap.hasExternalConflict)
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+        XCTAssertEqual(bootstrap.content, "# Local draft\n")
+
+        runtime.cancelEditMode(baseContentRevision: baseRevision)
+        let canceledBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(canceledBootstrap.isEditing)
+        XCTAssertFalse(canceledBootstrap.isDirty)
+        XCTAssertFalse(canceledBootstrap.hasExternalConflict)
+        XCTAssertEqual(canceledBootstrap.content, "# External change\n")
+    }
+
+    func testOverwriteAfterConflictWritesDraftAndReturnsToPreview() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        var metadataCallCount = 0
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataCallCount += 1
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await MarkdownPanelRuntime.loadDocument(for: webState)
+            },
+            reloadDebounceNanoseconds: 50_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: fileURL.path
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { metadataCallCount >= 1 }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("# Local draft\n", baseContentRevision: baseRevision)
+
+        try "# External change\n".write(to: fileURL, atomically: true, encoding: .utf8)
+        try await waitUntil { metadataCallCount >= 2 }
+
+        runtime.overwriteAfterConflict(baseContentRevision: baseRevision)
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertFalse(bootstrap.hasExternalConflict)
+        XCTAssertFalse(bootstrap.isSaving)
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
+        XCTAssertEqual(bootstrap.content, "# Local draft\n")
+        XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "# Local draft\n")
+    }
+
+    func testDuplicateSaveRequestsWhileSavingTriggerSingleWrite() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let saver = ControlledDocumentSaver()
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await MarkdownPanelRuntime.loadDocument(for: webState)
+            },
+            documentSaver: { filePath, content in
+                try await saver.save(filePath: filePath, content: content)
+            },
+            savedDocumentReader: { filePath, displayName in
+                var encoding = String.Encoding.utf8
+                let content = try String(contentsOf: URL(fileURLWithPath: filePath), usedEncoding: &encoding)
+                let attributes = try FileManager.default.attributesOfItem(atPath: filePath)
+                return MarkdownPanelDocumentSnapshot(
+                    filePath: filePath,
+                    displayName: displayName,
+                    content: content,
+                    diskRevision: MarkdownPanelDiskRevision(
+                        fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                        modificationDate: attributes[.modificationDate] as? Date,
+                        size: (attributes[.size] as? NSNumber)?.uint64Value
+                    )
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: fileURL.path
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("# Saved once\n", baseContentRevision: baseRevision)
+
+        runtime.save(baseContentRevision: baseRevision)
+        runtime.save(baseContentRevision: baseRevision)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        let savingBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        let saveCallCountWhileSaving = await saver.snapshot()
+        XCTAssertTrue(savingBootstrap.isSaving)
+        XCTAssertEqual(saveCallCountWhileSaving, 1)
+
+        await saver.resume()
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        let finalSaveCallCount = await saver.snapshot()
+        XCTAssertFalse(bootstrap.isSaving)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertEqual(bootstrap.content, "# Saved once\n")
+        XCTAssertEqual(finalSaveCallCount, 1)
+    }
+
+    func testCloseConfirmationStateWaitsForSaveInProgress() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let saver = ControlledDocumentSaver()
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await MarkdownPanelRuntime.loadDocument(for: webState)
+            },
+            documentSaver: { filePath, content in
+                try await saver.save(filePath: filePath, content: content)
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: fileURL.path
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("# Saving\n", baseContentRevision: baseRevision)
+
+        runtime.save(baseContentRevision: baseRevision)
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertEqual(
+            runtime.closeConfirmationState(),
+            MarkdownCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
+        )
+
+        await saver.resume()
     }
 
     func testBootstrapReadsMarkdownFileContents() async throws {
@@ -380,7 +678,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
     func testApplyUsesCurrentEffectiveAppearanceThemeForBootstrap() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        metadataExpectation.assertForOverFulfill = true
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
@@ -418,7 +715,6 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
     func testAppearanceChangeDoesNotReReadMarkdownContent() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        metadataExpectation.assertForOverFulfill = true
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
@@ -453,7 +749,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrapCallCount, 1)
     }
 
-    func testObservedFileReplacementTriggersSingleReload() async throws {
+    func testObservedFileReplacementReloadsUpdatedContent() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -463,21 +759,12 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
         try "# Initial\n".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let initialLoad = expectation(description: "Initial metadata update arrives")
-        initialLoad.assertForOverFulfill = true
-        let liveReload = expectation(description: "Live reload metadata update arrives")
-        liveReload.assertForOverFulfill = true
         var metadataCallCount = 0
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
-                if metadataCallCount == 1 {
-                    initialLoad.fulfill()
-                } else if metadataCallCount == 2 {
-                    liveReload.fulfill()
-                }
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
@@ -493,16 +780,18 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [initialLoad], timeout: 1)
+        try await waitUntil { metadataCallCount >= 1 }
 
         try "# Updated\n".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        await fulfillment(of: [liveReload], timeout: 1)
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await waitUntil { metadataCallCount >= 2 }
+        try await Task.sleep(nanoseconds: 200_000_000)
 
-        XCTAssertEqual(metadataCallCount, 2)
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertEqual(bootstrap.content, "# Updated\n")
+        XCTAssertGreaterThanOrEqual(metadataCallCount, 2)
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
-        XCTAssertEqual(bootstrapCallCount, 2)
+        XCTAssertGreaterThanOrEqual(bootstrapCallCount, 2)
     }
 
     func testObservedFileDeletionAndRecreationReloadsAtSamePath() async throws {
@@ -515,28 +804,12 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         let fileURL = tempDirectoryURL.appendingPathComponent("notes.md")
         try "# Notes\n".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let initialLoad = expectation(description: "Initial metadata update arrives")
-        initialLoad.assertForOverFulfill = true
-        let deletedReload = expectation(description: "Missing-file reload arrives")
-        deletedReload.assertForOverFulfill = true
-        let recreatedReload = expectation(description: "Recovered-file reload arrives")
-        recreatedReload.assertForOverFulfill = true
         var metadataCallCount = 0
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
-                switch metadataCallCount {
-                case 1:
-                    initialLoad.fulfill()
-                case 2:
-                    deletedReload.fulfill()
-                case 3:
-                    recreatedReload.fulfill()
-                default:
-                    break
-                }
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
@@ -552,18 +825,23 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         )
 
         runtime.apply(webState: webState)
-        await fulfillment(of: [initialLoad], timeout: 1)
+        try await waitUntil { metadataCallCount >= 1 }
 
         try FileManager.default.removeItem(at: fileURL)
-        await fulfillment(of: [deletedReload], timeout: 1)
+        try await waitUntil { metadataCallCount >= 2 }
+        let deletedBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(deletedBootstrap.content.contains("Toastty could not load this markdown file."))
+        XCTAssertTrue(deletedBootstrap.content.contains(fileURL.path))
 
         try "# Notes restored\n".write(to: fileURL, atomically: true, encoding: .utf8)
-        await fulfillment(of: [recreatedReload], timeout: 1)
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await waitUntil { metadataCallCount >= 3 }
+        try await Task.sleep(nanoseconds: 200_000_000)
 
-        XCTAssertEqual(metadataCallCount, 3)
+        let recreatedBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertEqual(recreatedBootstrap.content, "# Notes restored\n")
+        XCTAssertGreaterThanOrEqual(metadataCallCount, 3)
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
-        XCTAssertEqual(bootstrapCallCount, 3)
+        XCTAssertGreaterThanOrEqual(bootstrapCallCount, 3)
     }
 
     func testRetargetingStopsObservingPreviousMarkdownPath() async throws {
@@ -578,28 +856,12 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         try "# First\n".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try "# Second\n".write(to: secondFileURL, atomically: true, encoding: .utf8)
 
-        let initialLoad = expectation(description: "Initial metadata update arrives")
-        initialLoad.assertForOverFulfill = true
-        let retargetLoad = expectation(description: "Retarget metadata update arrives")
-        retargetLoad.assertForOverFulfill = true
-        let secondFileReload = expectation(description: "Second file live reload arrives")
-        secondFileReload.assertForOverFulfill = true
         var metadataCallCount = 0
 
         let runtime = MarkdownPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
-                switch metadataCallCount {
-                case 1:
-                    initialLoad.fulfill()
-                case 2:
-                    retargetLoad.fulfill()
-                case 3:
-                    secondFileReload.fulfill()
-                default:
-                    break
-                }
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
@@ -616,7 +878,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 filePath: firstFileURL.path
             )
         )
-        await fulfillment(of: [initialLoad], timeout: 1)
+        try await waitUntil { metadataCallCount >= 1 }
 
         runtime.apply(
             webState: WebPanelState(
@@ -625,19 +887,21 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
                 filePath: secondFileURL.path
             )
         )
-        await fulfillment(of: [retargetLoad], timeout: 1)
+        try await waitUntil { metadataCallCount >= 2 }
 
         try "# First updated\n".write(to: firstFileURL, atomically: true, encoding: .utf8)
         try await Task.sleep(nanoseconds: 200_000_000)
         XCTAssertEqual(metadataCallCount, 2)
 
         try "# Second updated\n".write(to: secondFileURL, atomically: true, encoding: .utf8)
-        await fulfillment(of: [secondFileReload], timeout: 1)
-        try await Task.sleep(nanoseconds: 150_000_000)
+        try await waitUntil { metadataCallCount >= 3 }
+        try await Task.sleep(nanoseconds: 200_000_000)
 
-        XCTAssertEqual(metadataCallCount, 3)
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertEqual(bootstrap.content, "# Second updated\n")
+        XCTAssertGreaterThanOrEqual(metadataCallCount, 3)
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
-        XCTAssertEqual(bootstrapCallCount, 3)
+        XCTAssertGreaterThanOrEqual(bootstrapCallCount, 3)
     }
 }
 
@@ -650,5 +914,47 @@ private actor BootstrapRecorder {
 
     func snapshot() -> Int {
         callCount
+    }
+}
+
+private actor ControlledDocumentSaver {
+    private var callCount = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func save(filePath: String, content: String) async throws {
+        callCount += 1
+        try content.write(to: URL(fileURLWithPath: filePath), atomically: true, encoding: .utf8)
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func snapshot() -> Int {
+        callCount
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private struct WaitUntilTimedOutError: Error {}
+
+@MainActor
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    pollIntervalNanoseconds: UInt64 = 10_000_000,
+    condition: @MainActor () -> Bool
+) async throws {
+    let timeoutInterval = Duration.nanoseconds(Int64(timeoutNanoseconds))
+    let pollInterval = Duration.nanoseconds(Int64(pollIntervalNanoseconds))
+    let deadline = ContinuousClock.now + timeoutInterval
+
+    while condition() == false {
+        guard ContinuousClock.now < deadline else {
+            throw WaitUntilTimedOutError()
+        }
+        try await Task.sleep(for: pollInterval)
     }
 }

@@ -223,6 +223,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     private let shouldConfirmQuit: Bool
     private weak var store: AppStore?
     private weak var terminalRuntimeRegistry: TerminalRuntimeRegistry?
+    private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private var fileSplitMenuBridge: FileSplitMenuBridge?
     private var fileCloseMenuBridge: FileCloseMenuBridge?
     private var windowSplitMenuBridge: WindowSplitMenuBridge?
@@ -256,6 +257,10 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
 
     func configureTerminalRuntimeRegistry(_ terminalRuntimeRegistry: TerminalRuntimeRegistry) {
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+    }
+
+    func configureWebPanelRuntimeRegistry(_ webPanelRuntimeRegistry: WebPanelRuntimeRegistry) {
+        self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
     }
 
     func configureMenuBridges(
@@ -348,23 +353,34 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
         store: AppStore?
     ) -> Bool {
         let confirmationAlert = NSAlert()
-        confirmationAlert.messageText = "Quit Toastty?"
+        if assessment?.allowsDestructiveConfirmation == false {
+            confirmationAlert.messageText = "Markdown save in progress"
+        } else {
+            confirmationAlert.messageText = "Quit Toastty?"
+        }
         confirmationAlert.informativeText = assessment?.informativeText ?? "Are you sure you want to quit?"
         confirmationAlert.alertStyle = .warning
-        if assessment != nil {
+        if assessment != nil,
+           assessment?.allowsDestructiveConfirmation != false {
             confirmationAlert.showsSuppressionButton = true
             confirmationAlert.suppressionButton?.title = "Always quit without asking"
         }
-        confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
-        confirmationAlert.addConfiguredButton(
-            withTitle: "Quit",
-            behavior: .defaultAction
-        )
+        if assessment?.allowsDestructiveConfirmation == false {
+            confirmationAlert.addConfiguredButton(withTitle: "OK", behavior: .defaultAction)
+        } else {
+            confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
+            confirmationAlert.addConfiguredButton(
+                withTitle: "Quit",
+                behavior: .defaultAction
+            )
+        }
 
         let response = confirmationAlert.runModal()
         // Toastty keeps the visual button order as Cancel, then Quit, so the
         // confirmed quit response remains `.alertSecondButtonReturn`.
-        let didConfirmQuit = response == .alertSecondButtonReturn
+        let didConfirmQuit = assessment?.allowsDestructiveConfirmation == false ?
+            false :
+            response == .alertSecondButtonReturn
         if didConfirmQuit,
            assessment != nil,
            confirmationAlert.suppressionButton?.state == .on {
@@ -375,12 +391,19 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func quitConfirmationAssessment(state: AppState) -> AppQuitConfirmationAssessment? {
-        guard let terminalRuntimeRegistry else {
+        guard let terminalRuntimeRegistry,
+              let webPanelRuntimeRegistry else {
             return nil
         }
-        return AppQuitConfirmation.assess(state: state) { panelID in
-            terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
-        }
+        return AppQuitConfirmation.assess(
+            state: state,
+            terminalAssessment: { panelID in
+                terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+            },
+            markdownCloseConfirmationState: { panelID in
+                webPanelRuntimeRegistry.markdownCloseConfirmationState(panelID: panelID)
+            }
+        )
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -454,6 +477,7 @@ final class DisplayShortcutInterceptor {
         case createBrowser
         case createBrowserTab
         case createWorkspaceTab
+        case saveMarkdown
         case focusNextUnreadOrActivePanel
         case toggleFocusedPanelMode
         case renameSelectedTab
@@ -539,6 +563,11 @@ final class DisplayShortcutInterceptor {
             return .closePanel
         }
 
+        if Self.isSaveShortcut(event),
+           appOwnedFocusedMarkdownSelection(preferredWindowID: appOwnedWindowID) != nil {
+            return .saveMarkdown
+        }
+
         if Self.isFocusNextUnreadOrActiveShortcut(event),
            appOwnedWindowID != nil {
             return .focusNextUnreadOrActivePanel
@@ -612,6 +641,8 @@ final class DisplayShortcutInterceptor {
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
             createWorkspaceTab()
+        case .saveMarkdown:
+            handleSaveMarkdownShortcut(preferredWindowID: appOwnedWindowID)
         case .focusNextUnreadOrActivePanel:
             focusNextUnreadOrActivePanel()
         case .toggleFocusedPanelMode:
@@ -671,6 +702,16 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command, .control, .shift]
+    }
+
+    static func isSaveShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "s" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command]
     }
 
     static func tabSelectionShortcutNumber(for event: NSEvent) -> Int? {
@@ -1058,6 +1099,23 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
+    private func saveFocusedMarkdown(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedMarkdownSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.saveMarkdownPanel(panelID: selection.panelID)
+    }
+
+    private func handleSaveMarkdownShortcut(preferredWindowID: UUID?) -> Bool {
+        guard focusedMarkdownSelection(preferredWindowID: preferredWindowID) != nil else {
+            return false
+        }
+        _ = saveFocusedMarkdown(preferredWindowID: preferredWindowID)
+        // Cmd+S is app-owned for focused markdown panels, even when save is
+        // currently disabled in preview mode or conflict state.
+        return true
+    }
+
     private func focusedBrowserRuntime(preferredWindowID: UUID?) -> BrowserPanelRuntime? {
         guard let selection = appOwnedFocusedBrowserSelection(preferredWindowID: preferredWindowID) else {
             return nil
@@ -1072,9 +1130,21 @@ final class DisplayShortcutInterceptor {
         return focusedBrowserSelection(preferredWindowID: preferredWindowID)
     }
 
+    private func appOwnedFocusedMarkdownSelection(
+        preferredWindowID: UUID?
+    ) -> FocusedMarkdownPanelCommandSelection? {
+        guard let preferredWindowID else { return nil }
+        return focusedMarkdownSelection(preferredWindowID: preferredWindowID)
+    }
+
     private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {
         guard let store else { return nil }
         return store.focusedBrowserPanelSelection(preferredWindowID: preferredWindowID)
+    }
+
+    private func focusedMarkdownSelection(preferredWindowID: UUID?) -> FocusedMarkdownPanelCommandSelection? {
+        guard let store else { return nil }
+        return store.focusedMarkdownPanelSelection(preferredWindowID: preferredWindowID)
     }
 }
 
@@ -1272,7 +1342,8 @@ struct ToasttyApp: App {
         let focusedPanelCommandController = FocusedPanelCommandController(
             store: store,
             runtimeRegistry: terminalRuntimeRegistry,
-            slotFocusRestoreCoordinator: slotFocusRestoreCoordinator
+            slotFocusRestoreCoordinator: slotFocusRestoreCoordinator,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
@@ -1424,6 +1495,7 @@ struct ToasttyApp: App {
         )
         appLifecycleDelegate.configureStore(store)
         appLifecycleDelegate.configureTerminalRuntimeRegistry(terminalRuntimeRegistry)
+        appLifecycleDelegate.configureWebPanelRuntimeRegistry(webPanelRuntimeRegistry)
     }
 
     private static func refreshManagedShellIntegrationSnippetIfInstalled(processInfo: ProcessInfo) {
@@ -1581,6 +1653,7 @@ struct ToasttyApp: App {
                 agentCatalogStore: agentCatalogStore,
                 terminalProfileStore: terminalProfileStore,
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
+                webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
                 focusedPanelCommandController: focusedPanelCommandController,

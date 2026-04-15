@@ -172,37 +172,21 @@ function useMarkdownPanelState(): {
   bootstrap: MarkdownPanelBootstrap | null;
   draftContent: string;
   isDirty: boolean;
+  canSave: boolean;
+  canOverwrite: boolean;
   enterEdit: () => void;
+  saveEdit: () => void;
+  overwriteAfterConflict: () => void;
   cancelEdit: () => void;
   updateDraftContent: (nextContent: string) => void;
 } {
   const bootstrap = useBootstrap();
   const [draftContent, setDraftContent] = React.useState("");
   const lastSyncedContentRevision = React.useRef<number | null>(null);
-  const draftSyncTimeoutID = React.useRef<number | null>(null);
-  const latestBootstrap = React.useRef<MarkdownPanelBootstrap | null>(bootstrap);
-
-  const cancelPendingDraftSync = React.useEffectEvent(() => {
-    if (draftSyncTimeoutID.current === null) {
-      return;
-    }
-
-    window.clearTimeout(draftSyncTimeoutID.current);
-    draftSyncTimeoutID.current = null;
-  });
-
-  const postDraftDidChange = React.useEffectEvent((nextContent: string, baseContentRevision: number) => {
-    markdownNativeBridge.draftDidChange(nextContent, baseContentRevision);
-  });
-
-  React.useEffect(() => {
-    latestBootstrap.current = bootstrap;
-  }, [bootstrap]);
 
   React.useEffect(() => {
     if (!bootstrap) {
       lastSyncedContentRevision.current = null;
-      cancelPendingDraftSync();
       setDraftContent("");
       return;
     }
@@ -212,15 +196,8 @@ function useMarkdownPanelState(): {
     }
 
     lastSyncedContentRevision.current = bootstrap.contentRevision;
-    cancelPendingDraftSync();
     setDraftContent(bootstrap.content);
-  }, [bootstrap, cancelPendingDraftSync]);
-
-  React.useEffect(() => {
-    return () => {
-      cancelPendingDraftSync();
-    };
-  }, [cancelPendingDraftSync]);
+  }, [bootstrap]);
 
   const enterEdit = React.useCallback(() => {
     if (!bootstrap?.filePath) {
@@ -230,38 +207,58 @@ function useMarkdownPanelState(): {
     markdownNativeBridge.enterEdit();
   }, [bootstrap?.filePath]);
 
-  const cancelEdit = React.useCallback(() => {
-    if (!bootstrap) {
+  const saveEdit = React.useCallback(() => {
+    if (!bootstrap?.isEditing || bootstrap.isSaving || bootstrap.hasExternalConflict) {
       return;
     }
 
-    cancelPendingDraftSync();
+    markdownNativeBridge.save(bootstrap.contentRevision);
+  }, [bootstrap]);
+
+  const overwriteAfterConflict = React.useCallback(() => {
+    if (!bootstrap?.isEditing || bootstrap.isSaving || !bootstrap.hasExternalConflict) {
+      return;
+    }
+
+    markdownNativeBridge.overwriteAfterConflict(bootstrap.contentRevision);
+  }, [bootstrap]);
+
+  const cancelEdit = React.useCallback(() => {
+    if (!bootstrap || bootstrap.isSaving) {
+      return;
+    }
+
     markdownNativeBridge.cancelEdit(bootstrap.contentRevision);
-  }, [bootstrap, cancelPendingDraftSync]);
+  }, [bootstrap]);
 
   const updateDraftContent = React.useCallback((nextContent: string) => {
     setDraftContent(nextContent);
-    cancelPendingDraftSync();
 
-    if (!bootstrap?.isEditing) {
+    if (!bootstrap?.isEditing || bootstrap.isSaving) {
       return;
     }
 
-    draftSyncTimeoutID.current = window.setTimeout(() => {
-      const activeBootstrap = latestBootstrap.current;
-      draftSyncTimeoutID.current = null;
-      if (!activeBootstrap?.isEditing) {
-        return;
-      }
-      postDraftDidChange(nextContent, activeBootstrap.contentRevision);
-    }, 250);
-  }, [bootstrap, cancelPendingDraftSync, postDraftDidChange]);
+    markdownNativeBridge.draftDidChange(nextContent, bootstrap.contentRevision);
+  }, [bootstrap]);
 
   const isDirty = Boolean(
     bootstrap?.isEditing ? (bootstrap.isDirty || draftContent !== bootstrap.content) : bootstrap?.isDirty
   );
+  const canSave = Boolean(bootstrap?.isEditing && !bootstrap.isSaving && !bootstrap.hasExternalConflict);
+  const canOverwrite = Boolean(bootstrap?.isEditing && !bootstrap.isSaving && bootstrap.hasExternalConflict);
 
-  return { bootstrap, draftContent, isDirty, enterEdit, cancelEdit, updateDraftContent };
+  return {
+    bootstrap,
+    draftContent,
+    isDirty,
+    canSave,
+    canOverwrite,
+    enterEdit,
+    saveEdit,
+    overwriteAfterConflict,
+    cancelEdit,
+    updateDraftContent
+  };
 }
 
 // --- Components ---
@@ -323,10 +320,24 @@ function Header(props: {
   bootstrap: MarkdownPanelBootstrap;
   content: string;
   isDirty: boolean;
+  canSave: boolean;
+  canOverwrite: boolean;
   enterEdit: () => void;
+  saveEdit: () => void;
+  overwriteAfterConflict: () => void;
   cancelEdit: () => void;
 }) {
-  const { bootstrap, content, isDirty, enterEdit, cancelEdit } = props;
+  const {
+    bootstrap,
+    content,
+    isDirty,
+    canSave,
+    canOverwrite,
+    enterEdit,
+    saveEdit,
+    overwriteAfterConflict,
+    cancelEdit
+  } = props;
   const [tocOpen, setTocOpen] = React.useState(false);
   const shortPath = shortenPath(bootstrap.filePath, bootstrap.displayName);
   const tocEntries = React.useMemo(
@@ -361,13 +372,21 @@ function Header(props: {
         {bootstrap.isEditing ? (
           <>
             <span className={`markdown-session-badge${isDirty ? " markdown-session-badge-dirty" : ""}`}>
-              {isDirty ? "Unsaved draft" : "Editing"}
+              {bootstrap.isSaving ? "Saving" : isDirty ? "Unsaved draft" : "Editing"}
             </span>
+            <button
+              className="markdown-action-button"
+              onClick={bootstrap.hasExternalConflict ? overwriteAfterConflict : saveEdit}
+              disabled={bootstrap.hasExternalConflict ? !canOverwrite : !canSave}
+            >
+              {bootstrap.hasExternalConflict ? "Overwrite" : "Save"}
+            </button>
             <button
               className="markdown-action-button markdown-action-button-secondary"
               onClick={cancelEdit}
+              disabled={bootstrap.isSaving}
             >
-              Cancel
+              {bootstrap.hasExternalConflict ? "Revert" : "Cancel"}
             </button>
           </>
         ) : (
@@ -403,11 +422,26 @@ function Header(props: {
 }
 
 function MarkdownEditor(props: {
+  bootstrap: MarkdownPanelBootstrap;
   draftContent: string;
   updateDraftContent: (nextContent: string) => void;
 }) {
   return (
     <section className="markdown-editor-shell">
+      {(props.bootstrap.hasExternalConflict || props.bootstrap.saveErrorMessage) && (
+        <div className="markdown-editor-status-strip">
+          {props.bootstrap.hasExternalConflict && (
+            <p className="markdown-editor-status markdown-editor-status-conflict">
+              The file changed on disk. Save will stay disabled until you overwrite the file or revert your draft.
+            </p>
+          )}
+          {props.bootstrap.saveErrorMessage && (
+            <p className="markdown-editor-status markdown-editor-status-error">
+              {props.bootstrap.saveErrorMessage}
+            </p>
+          )}
+        </div>
+      )}
       <textarea
         className="markdown-editor"
         value={props.draftContent}
@@ -415,13 +449,25 @@ function MarkdownEditor(props: {
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"
+        readOnly={props.bootstrap.isSaving}
       />
     </section>
   );
 }
 
 export function MarkdownPanelApp() {
-  const { bootstrap, draftContent, isDirty, enterEdit, cancelEdit, updateDraftContent } = useMarkdownPanelState();
+  const {
+    bootstrap,
+    draftContent,
+    isDirty,
+    canSave,
+    canOverwrite,
+    enterEdit,
+    saveEdit,
+    overwriteAfterConflict,
+    cancelEdit,
+    updateDraftContent
+  } = useMarkdownPanelState();
 
   if (!bootstrap) {
     return (
@@ -443,11 +489,16 @@ export function MarkdownPanelApp() {
         bootstrap={bootstrap}
         content={renderedContent}
         isDirty={isDirty}
+        canSave={canSave}
+        canOverwrite={canOverwrite}
         enterEdit={enterEdit}
+        saveEdit={saveEdit}
+        overwriteAfterConflict={overwriteAfterConflict}
         cancelEdit={cancelEdit}
       />
       {bootstrap.isEditing ? (
         <MarkdownEditor
+          bootstrap={bootstrap}
           draftContent={draftContent}
           updateDraftContent={updateDraftContent}
         />

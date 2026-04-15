@@ -125,6 +125,94 @@ final class AppQuitConfirmationTests: XCTestCase {
         )
     }
 
+    func testAssessRequiresConfirmationForUnsavedMarkdownDraft() {
+        let state = makeMarkdownAppState()
+
+        let assessment = AppQuitConfirmation.assess(
+            state: state,
+            terminalAssessment: { _ in
+                XCTFail("markdown-only quit confirmation should not request terminal assessments")
+                return nil
+            },
+            markdownCloseConfirmationState: { _ in
+                MarkdownCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
+            }
+        )
+
+        XCTAssertTrue(assessment.requiresConfirmation)
+        XCTAssertTrue(assessment.allowsDestructiveConfirmation)
+        XCTAssertEqual(assessment.unsavedMarkdownDraftCount, 1)
+        XCTAssertEqual(assessment.firstUnsavedMarkdownDisplayName, "README.md")
+        XCTAssertEqual(
+            assessment.informativeText,
+            "\"README.md\" has unsaved markdown changes. Quitting Toastty will discard them."
+        )
+    }
+
+    func testAssessRequiresWaitingForMarkdownSaveInProgress() {
+        let state = makeMarkdownAppState()
+
+        let assessment = AppQuitConfirmation.assess(
+            state: state,
+            terminalAssessment: { _ in
+                XCTFail("markdown-only quit confirmation should not request terminal assessments")
+                return nil
+            },
+            markdownCloseConfirmationState: { _ in
+                MarkdownCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
+            }
+        )
+
+        XCTAssertTrue(assessment.requiresConfirmation)
+        XCTAssertFalse(assessment.allowsDestructiveConfirmation)
+        XCTAssertEqual(assessment.markdownSaveInProgressCount, 1)
+        XCTAssertEqual(
+            assessment.informativeText,
+            "\"README.md\" is still saving. Wait for the save to finish before quitting Toastty."
+        )
+    }
+
+    func testAssessCombinesMarkdownAndTerminalWarnings() {
+        let workspace = WorkspaceState.bootstrap(title: "Workspace")
+        let markdownState = makeMarkdownAppState()
+        guard let busyPanelID = workspace.allTerminalPanelIDs.first else {
+            return XCTFail("expected bootstrap workspace to contain a terminal panel")
+        }
+        guard let markdownWorkspace = markdownState.workspacesByID.values.first else {
+            return XCTFail("expected markdown workspace")
+        }
+        let combinedState = makeAppState(workspaces: [workspace, markdownWorkspace])
+
+        let assessment = AppQuitConfirmation.assess(
+            state: combinedState,
+            terminalAssessment: { requestedPanelID in
+                if requestedPanelID == busyPanelID {
+                    return TerminalCloseConfirmationAssessment(
+                        requiresConfirmation: true,
+                        runningCommand: "npm run dev"
+                    )
+                }
+                return TerminalCloseConfirmationAssessment(requiresConfirmation: false)
+            },
+            markdownCloseConfirmationState: { _ in
+                MarkdownCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
+            }
+        )
+
+        XCTAssertTrue(assessment.requiresConfirmation)
+        XCTAssertEqual(assessment.unsavedMarkdownDraftCount, 1)
+        XCTAssertEqual(
+            assessment.informativeText,
+            """
+            "README.md" has unsaved markdown changes. Quitting Toastty will discard them.
+
+            A process is still running in Toastty. Quitting will terminate it.
+
+            Detected command: npm run dev
+            """
+        )
+    }
+
     private func makeAppState(workspaces: [WorkspaceState]) -> AppState {
         let windowID = UUID()
         let workspaceIDs = workspaces.map(\.id)
@@ -151,6 +239,26 @@ final class AppQuitConfirmationTests: XCTestCase {
             layoutTree: .slot(slotID: UUID(), panelID: panelID),
             panels: [
                 panelID: .web(WebPanelState(definition: .browser, initialURL: "https://example.com")),
+            ],
+            focusedPanelID: panelID
+        )
+        return makeAppState(workspaces: [workspace])
+    }
+
+    private func makeMarkdownAppState() -> AppState {
+        let panelID = UUID()
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "Notes",
+            layoutTree: .slot(slotID: UUID(), panelID: panelID),
+            panels: [
+                panelID: .web(
+                    WebPanelState(
+                        definition: .localDocument,
+                        title: "README.md",
+                        filePath: "/tmp/toastty/readme.md"
+                    )
+                ),
             ],
             focusedPanelID: panelID
         )

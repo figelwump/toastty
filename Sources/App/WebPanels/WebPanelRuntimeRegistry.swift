@@ -2,6 +2,24 @@ import Combine
 import CoreState
 import Foundation
 
+struct MarkdownCloseConfirmationSummary: Equatable, Sendable {
+    let dirtyDraftCount: Int
+    let firstDirtyDraftDisplayName: String?
+    let saveInProgressCount: Int
+    let firstSaveInProgressDisplayName: String?
+
+    static let none = MarkdownCloseConfirmationSummary(
+        dirtyDraftCount: 0,
+        firstDirtyDraftDisplayName: nil,
+        saveInProgressCount: 0,
+        firstSaveInProgressDisplayName: nil
+    )
+
+    var allowsDestructiveConfirmation: Bool {
+        saveInProgressCount == 0
+    }
+}
+
 @MainActor
 final class WebPanelRuntimeRegistry: ObservableObject {
     private weak var store: AppStore?
@@ -63,6 +81,60 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             self?.objectWillChange.send()
         }
         return runtime
+    }
+
+    func loadedMarkdownRuntime(for panelID: UUID) -> MarkdownPanelRuntime? {
+        markdownRuntimeByPanelID[panelID]
+    }
+
+    func canSaveMarkdownPanel(panelID: UUID) -> Bool {
+        markdownRuntimeByPanelID[panelID]?.canSaveFromCommand() == true
+    }
+
+    @discardableResult
+    func saveMarkdownPanel(panelID: UUID) -> Bool {
+        markdownRuntimeByPanelID[panelID]?.saveFromCommand() == true
+    }
+
+    func markdownCloseConfirmationState(panelID: UUID) -> MarkdownCloseConfirmationState? {
+        markdownRuntimeByPanelID[panelID]?.closeConfirmationState()
+    }
+
+    func markdownCloseConfirmationSummary(panelIDs: some Sequence<UUID>) -> MarkdownCloseConfirmationSummary {
+        var dirtyDraftCount = 0
+        var firstDirtyDraftDisplayName: String?
+        var saveInProgressCount = 0
+        var firstSaveInProgressDisplayName: String?
+
+        for panelID in panelIDs {
+            guard let state = markdownCloseConfirmationState(panelID: panelID) else {
+                continue
+            }
+
+            switch state.kind {
+            case .dirtyDraft:
+                dirtyDraftCount += 1
+                if firstDirtyDraftDisplayName == nil {
+                    firstDirtyDraftDisplayName = state.displayName
+                }
+
+            case .saveInProgress:
+                saveInProgressCount += 1
+                if firstSaveInProgressDisplayName == nil {
+                    firstSaveInProgressDisplayName = state.displayName
+                }
+            }
+        }
+
+        guard dirtyDraftCount > 0 || saveInProgressCount > 0 else {
+            return .none
+        }
+        return MarkdownCloseConfirmationSummary(
+            dirtyDraftCount: dirtyDraftCount,
+            firstDirtyDraftDisplayName: firstDirtyDraftDisplayName,
+            saveInProgressCount: saveInProgressCount,
+            firstSaveInProgressDisplayName: firstSaveInProgressDisplayName
+        )
     }
 }
 

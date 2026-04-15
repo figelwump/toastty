@@ -87,6 +87,12 @@ struct FocusedBrowserPanelCommandSelection: Equatable {
     let panelID: UUID
 }
 
+struct FocusedMarkdownPanelCommandSelection: Equatable {
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -269,6 +275,24 @@ final class AppStore: ObservableObject {
         }
 
         return FocusedBrowserPanelCommandSelection(
+            windowID: selection.windowID,
+            workspaceID: selection.workspace.id,
+            panelID: panelID
+        )
+    }
+
+    func focusedMarkdownPanelSelection(
+        preferredWindowID: UUID?
+    ) -> FocusedMarkdownPanelCommandSelection? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let panelID = selection.workspace.focusedPanelID,
+              selection.workspace.slotID(containingPanelID: panelID) != nil,
+              case .web(let webState) = selection.workspace.panels[panelID],
+              webState.definition == .localDocument else {
+            return nil
+        }
+
+        return FocusedMarkdownPanelCommandSelection(
             windowID: selection.windowID,
             workspaceID: selection.workspace.id,
             panelID: panelID

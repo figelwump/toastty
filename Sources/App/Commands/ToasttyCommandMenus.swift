@@ -108,6 +108,7 @@ struct ToasttyCommandMenus: Commands {
     @ObservedObject var agentCatalogStore: AgentCatalogStore
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
+    @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
     let focusedPanelCommandController: FocusedPanelCommandController
@@ -154,6 +155,17 @@ struct ToasttyCommandMenus: Commands {
 
     private var commandWorkspace: WorkspaceState? {
         commandSelection?.workspace
+    }
+
+    private var focusedMarkdownPanelSelection: FocusedMarkdownPanelCommandSelection? {
+        store.focusedMarkdownPanelSelection(preferredWindowID: preferredCommandWindowID)
+    }
+
+    private var canSaveFocusedMarkdownPanel: Bool {
+        guard let focusedMarkdownPanelSelection else {
+            return false
+        }
+        return webPanelRuntimeRegistry.canSaveMarkdownPanel(panelID: focusedMarkdownPanelSelection.panelID)
     }
 
     private var canFocusNextUnreadOrActivePanel: Bool {
@@ -243,6 +255,15 @@ struct ToasttyCommandMenus: Commands {
                 ToasttyKeyboardShortcuts.newWindow.key,
                 modifiers: ToasttyKeyboardShortcuts.newWindow.modifiers
             )
+        }
+
+        CommandGroup(replacing: .saveItem) {
+            Button("Save") {
+                guard let focusedMarkdownPanelSelection else { return }
+                _ = webPanelRuntimeRegistry.saveMarkdownPanel(panelID: focusedMarkdownPanelSelection.panelID)
+            }
+            .keyboardShortcut("s", modifiers: [.command])
+            .disabled(!canSaveFocusedMarkdownPanel)
         }
 
         CommandGroup(after: .appInfo) {

@@ -338,14 +338,21 @@ struct WorkspaceView: View {
             isPresented: pendingWorkspaceTabCloseBinding,
             presenting: pendingWorkspaceTabClose
         ) { closeTarget in
-            Button("Cancel", role: .cancel) {
-                pendingWorkspaceTabClose = nil
+            if closeTarget.assessment.allowsDestructiveConfirmation {
+                Button("Cancel", role: .cancel) {
+                    pendingWorkspaceTabClose = nil
+                }
+                .keyboardShortcut(.cancelAction)
+                Button("Close Tab") {
+                    confirmWorkspaceTabClose(closeTarget)
+                }
+                .keyboardShortcut(.defaultAction)
+            } else {
+                Button("OK") {
+                    pendingWorkspaceTabClose = nil
+                }
+                .keyboardShortcut(.defaultAction)
             }
-            .keyboardShortcut(.cancelAction)
-            Button("Close Tab") {
-                confirmWorkspaceTabClose(closeTarget)
-            }
-            .keyboardShortcut(.defaultAction)
         } message: { closeTarget in
             Text(closeTarget.assessment.confirmationMessage)
         }
@@ -1409,6 +1416,8 @@ struct WorkspaceView: View {
             shouldBypassConfirmation: shouldBypassInteractiveConfirmation
         ) { panelID in
             terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
+        } markdownCloseConfirmationState: { panelID in
+            webPanelRuntimeRegistry.markdownCloseConfirmationState(panelID: panelID)
         }
 
         guard closeAssessment.requiresConfirmation else {

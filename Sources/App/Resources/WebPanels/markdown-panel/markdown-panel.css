@@ -139,6 +139,33 @@ body {
   overflow: hidden;
 }
 
+.markdown-editor-status-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px 22px 0;
+}
+
+.markdown-editor-status {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  font: 500 13px/1.45 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.markdown-editor-status-conflict {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  color: var(--text);
+}
+
+.markdown-editor-status-error {
+  background: rgba(165, 48, 32, 0.12);
+  border-color: rgba(165, 48, 32, 0.24);
+  color: #f6d9d2;
+}
+
 .markdown-editor {
   width: 100%;
   min-height: calc(100vh - 184px);
@@ -151,6 +178,10 @@ body {
   font: 500 15px/1.65 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
   white-space: pre;
   tab-size: 2;
+}
+
+:root[data-theme="light"] .markdown-editor-status-error {
+  color: #7f2618;
 }
 
 .markdown-action-button {
