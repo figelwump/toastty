@@ -2256,7 +2256,7 @@ private struct PanelCardView: View {
                 maxHeight: .infinity,
                 alignment: .topLeading
             )
-        } else if state.definition == .markdown {
+        } else if state.definition == .localDocument {
             MarkdownPanelView(
                 webState: state,
                 runtime: webPanelRuntimeRegistry.markdownRuntime(for: panelID)

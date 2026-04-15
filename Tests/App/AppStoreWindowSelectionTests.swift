@@ -530,7 +530,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
         XCTAssertEqual(webState.filePath, fixture.canonicalPath)
         XCTAssertNil(webState.initialURL)
@@ -560,7 +560,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             return
         }
 
-        XCTAssertEqual(webState.definition, .markdown)
+        XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
         XCTAssertEqual(webState.filePath, fixture.canonicalPath)
     }

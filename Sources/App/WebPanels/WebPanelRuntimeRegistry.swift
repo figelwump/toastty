@@ -112,7 +112,7 @@ private extension WebPanelRuntimeRegistry {
             for tab in workspace.orderedTabs {
                 for (panelID, panelState) in tab.panels {
                     guard case .web(let webState) = panelState,
-                          webState.definition == .markdown else {
+                          webState.definition == .localDocument else {
                         continue
                     }
                     result.insert(panelID)

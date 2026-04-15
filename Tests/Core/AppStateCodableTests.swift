@@ -256,6 +256,92 @@ struct AppStateCodableTests {
     }
 
     @Test
+    func appStateDecodesLegacyMarkdownPanelPayloadAsLocalDocument() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let filePath = "/tmp/toastty/notes.md"
+
+        let tab = WorkspaceTabState(
+            id: tabID,
+            customTitle: "Notes",
+            layoutTree: .slot(slotID: slotID, panelID: panelID),
+            panels: [
+                panelID: .web(
+                    WebPanelState(
+                        definition: .localDocument,
+                        title: "notes.md",
+                        filePath: filePath
+                    )
+                ),
+            ],
+            focusedPanelID: panelID
+        )
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 40, y: 60, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: WorkspaceState(
+                    id: workspaceID,
+                    title: "Workspace 1",
+                    selectedTabID: tabID,
+                    tabIDs: [tabID],
+                    tabsByID: [tabID: tab]
+                ),
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+
+        let encoded = try JSONEncoder().encode(state)
+        var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var workspacesByID = try decodePairedJSONMap(root["workspacesByID"], label: "AppState.workspacesByID")
+        var workspace = try #require(workspacesByID[workspaceID.uuidString] as? [String: Any])
+        var tabsByID = try decodePairedJSONMap(workspace["tabsByID"], label: "Workspace.tabsByID")
+        var decodedTab = try #require(tabsByID[tabID.uuidString] as? [String: Any])
+        var panels = try decodePairedJSONMap(decodedTab["panels"], label: "WorkspaceTab.panels")
+        var panel = try #require(panels[panelID.uuidString] as? [String: Any])
+        var web = try #require(panel["web"] as? [String: Any])
+        let localDocument = try #require(web["localDocument"] as? [String: Any])
+
+        web["definition"] = "markdown"
+        web["filePath"] = localDocument["filePath"]
+        web.removeValue(forKey: "localDocument")
+        panel["web"] = web
+        panels[panelID.uuidString] = panel
+        decodedTab["panels"] = encodePairedJSONMap(panels)
+        tabsByID[tabID.uuidString] = decodedTab
+        workspace["tabsByID"] = encodePairedJSONMap(tabsByID)
+        workspacesByID[workspaceID.uuidString] = workspace
+        root["workspacesByID"] = encodePairedJSONMap(workspacesByID)
+
+        let legacyData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        let decoded = try JSONDecoder().decode(AppState.self, from: legacyData)
+        let decodedWorkspace = try #require(decoded.workspacesByID[workspaceID])
+        let restoredTab = try #require(decodedWorkspace.tab(id: tabID))
+
+        guard case .web(let webState) = restoredTab.panels[panelID] else {
+            Issue.record("Expected legacy markdown panel to decode as web")
+            return
+        }
+
+        #expect(webState.definition == .localDocument)
+        #expect(webState.title == "notes.md")
+        #expect(webState.filePath == filePath)
+        #expect(webState.localDocument == LocalDocumentState(filePath: filePath, format: .markdown))
+        try StateValidator.validate(decoded)
+    }
+
+    @Test
     func closedPanelRecordCodablePreservesRestoreTabMetadata() throws {
         let workspaceID = UUID()
         let historyTabID = UUID()

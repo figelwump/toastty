@@ -66,7 +66,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = Self.makeWebViewConfiguration(
-            for: WebPanelDefinition.markdown.capabilityProfile
+            for: WebPanelDefinition.localDocument.capabilityProfile
         )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
@@ -160,7 +160,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 
     func apply(webState: WebPanelState) {
         precondition(
-            webState.definition == .markdown,
+            webState.definition == .localDocument,
             "MarkdownPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
         let didChangeState = currentWebState != webState
@@ -196,7 +196,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         theme: MarkdownPanelTheme = .dark
     ) async -> MarkdownPanelBootstrap {
         precondition(
-            webState.definition == .markdown,
+            webState.definition == .localDocument,
             "MarkdownPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
         let filePath = webState.filePath ?? ""

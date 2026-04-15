@@ -6,7 +6,7 @@ struct PanelStateCodableTests {
     @Test
     func webPanelDefinitionsDeclareCapabilityProfiles() {
         #expect(WebPanelDefinition.browser.capabilityProfile == .networkAllowed)
-        #expect(WebPanelDefinition.markdown.capabilityProfile == .localOnly)
+        #expect(WebPanelDefinition.localDocument.capabilityProfile == .localOnly)
         #expect(WebPanelDefinition.scratchpad.capabilityProfile == .localOnly)
         #expect(WebPanelDefinition.diff.capabilityProfile == .localOnly)
     }
@@ -31,7 +31,7 @@ struct PanelStateCodableTests {
             ),
             .web(
                 WebPanelState(
-                    definition: .markdown,
+                    definition: .localDocument,
                     title: "README.md",
                     filePath: "/tmp/project/README.md"
                 )

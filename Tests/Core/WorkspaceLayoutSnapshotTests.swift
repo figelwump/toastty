@@ -240,7 +240,7 @@ struct WorkspaceLayoutSnapshotTests {
             panels: [
                 markdownPanelID: .web(
                     WebPanelState(
-                        definition: .markdown,
+                        definition: .localDocument,
                         title: "notes.md",
                         filePath: "/tmp/toastty/notes.md"
                     )
@@ -281,11 +281,104 @@ struct WorkspaceLayoutSnapshotTests {
             return
         }
 
-        #expect(webState.definition == .markdown)
+        #expect(webState.definition == .localDocument)
         #expect(webState.title == "notes.md")
         #expect(webState.filePath == "/tmp/toastty/notes.md")
+        #expect(
+            webState.localDocument == LocalDocumentState(
+                filePath: "/tmp/toastty/notes.md",
+                format: .markdown
+            )
+        )
         #expect(webState.initialURL == nil)
         #expect(webState.currentURL == nil)
+    }
+
+    @Test
+    func workspaceLayoutSnapshotDecodesLegacyMarkdownPanelPayloadAsLocalDocument() throws {
+        let windowID = UUID()
+        let workspaceID = UUID()
+        let tabID = UUID()
+        let panelID = UUID()
+        let slotID = UUID()
+        let filePath = "/tmp/toastty/notes.md"
+
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [workspaceID],
+                    selectedWorkspaceID: workspaceID
+                ),
+            ],
+            workspacesByID: [
+                workspaceID: WorkspaceState(
+                    id: workspaceID,
+                    title: "Docs",
+                    selectedTabID: tabID,
+                    tabIDs: [tabID],
+                    tabsByID: [
+                        tabID: WorkspaceTabState(
+                            id: tabID,
+                            customTitle: "Notes",
+                            layoutTree: .slot(slotID: slotID, panelID: panelID),
+                            panels: [
+                                panelID: .web(
+                                    WebPanelState(
+                                        definition: .localDocument,
+                                        title: "notes.md",
+                                        filePath: filePath
+                                    )
+                                ),
+                            ],
+                            focusedPanelID: panelID
+                        ),
+                    ]
+                ),
+            ],
+            selectedWindowID: windowID,
+            configuredTerminalFontPoints: nil
+        )
+        let snapshot = WorkspaceLayoutSnapshot(state: state)
+
+        let encoded = try JSONEncoder().encode(snapshot)
+        var root = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        var workspacesByID = try decodePairedJSONMap(root["workspacesByID"], label: "WorkspaceLayoutSnapshot.workspacesByID")
+        var decodedWorkspace = try #require(workspacesByID[workspaceID.uuidString] as? [String: Any])
+        var tabsByID = try decodePairedJSONMap(decodedWorkspace["tabsByID"], label: "WorkspaceLayoutWorkspaceSnapshot.tabsByID")
+        var decodedTab = try #require(tabsByID[tabID.uuidString] as? [String: Any])
+        var panels = try decodePairedJSONMap(decodedTab["panels"], label: "WorkspaceLayoutTabSnapshot.panels")
+        var panel = try #require(panels[panelID.uuidString] as? [String: Any])
+        var web = try #require(panel["web"] as? [String: Any])
+        let localDocument = try #require(web["localDocument"] as? [String: Any])
+
+        web["definition"] = "markdown"
+        web["filePath"] = localDocument["filePath"]
+        web.removeValue(forKey: "localDocument")
+        panel["web"] = web
+        panels[panelID.uuidString] = panel
+        decodedTab["panels"] = encodePairedJSONMap(panels)
+        tabsByID[tabID.uuidString] = decodedTab
+        decodedWorkspace["tabsByID"] = encodePairedJSONMap(tabsByID)
+        workspacesByID[workspaceID.uuidString] = decodedWorkspace
+        root["workspacesByID"] = encodePairedJSONMap(workspacesByID)
+
+        let legacyData = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        let decodedSnapshot = try JSONDecoder().decode(WorkspaceLayoutSnapshot.self, from: legacyData)
+        let restoredState = decodedSnapshot.makeAppState()
+        let restoredWorkspace = try #require(restoredState.workspacesByID[workspaceID])
+        let restoredTab = try #require(restoredWorkspace.tab(id: tabID))
+
+        guard case .web(let webState) = restoredTab.panels[panelID] else {
+            Issue.record("Expected legacy markdown snapshot panel to restore as web")
+            return
+        }
+
+        #expect(webState.definition == .localDocument)
+        #expect(webState.title == "notes.md")
+        #expect(webState.filePath == filePath)
+        #expect(webState.localDocument == LocalDocumentState(filePath: filePath, format: .markdown))
     }
 
     @Test
