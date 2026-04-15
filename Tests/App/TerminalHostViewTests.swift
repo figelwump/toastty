@@ -418,6 +418,37 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(scrollView.scrollerStyle, .overlay)
     }
 
+    func testSurfaceScrollViewUsesDarkAppearanceForDarkTerminalBackground() {
+        let hostView = TerminalHostView()
+        hostView.layer?.backgroundColor = NSColor.black.cgColor
+
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+
+        XCTAssertEqual(scrollView.appearance?.bestMatch(from: [.darkAqua, .aqua]), .darkAqua)
+    }
+
+    func testSurfaceScrollViewUsesLightAppearanceForLightTerminalBackground() {
+        let hostView = TerminalHostView()
+        hostView.layer?.backgroundColor = NSColor.white.cgColor
+
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+
+        XCTAssertEqual(scrollView.appearance?.bestMatch(from: [.darkAqua, .aqua]), .aqua)
+    }
+
+    func testSurfaceScrollViewRefreshesAppearanceWhenTerminalBackgroundChanges() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 90)
+        scrollView.layoutSubtreeIfNeeded()
+
+        hostView.layer?.backgroundColor = NSColor.white.cgColor
+        scrollView.needsLayout = true
+        scrollView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(scrollView.appearance?.bestMatch(from: [.darkAqua, .aqua]), .aqua)
+    }
+
     func testSurfaceScrollViewKeepsOverlayScrollerStyleAfterWindowAttach() {
         // AppKit fires `preferredScrollerStyleDidChangeNotification` when a
         // scroll view moves into a window, and its own observer can reset
@@ -460,6 +491,22 @@ final class TerminalHostViewTests: XCTestCase {
         RunLoop.current.run(until: Date().addingTimeInterval(0.1))
 
         XCTAssertEqual(scrollView.scrollerStyle, .overlay)
+    }
+
+    func testSurfaceScrollViewKeepsResolvedAppearanceAfterPreferredStyleNotification() {
+        let hostView = TerminalHostView()
+        hostView.layer?.backgroundColor = NSColor.white.cgColor
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        scrollView.scrollerStyle = .legacy
+
+        NotificationCenter.default.post(
+            name: NSScroller.preferredScrollerStyleDidChangeNotification,
+            object: nil
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertEqual(scrollView.scrollerStyle, .overlay)
+        XCTAssertEqual(scrollView.appearance?.bestMatch(from: [.darkAqua, .aqua]), .aqua)
     }
 
     func testSurfaceScrollViewKeepsHostViewSizedToClipViewBounds() {

@@ -78,6 +78,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
             object: nil
         )
 
+        synchronizeAppearance()
         synchronizeScrollMetrics()
     }
 
@@ -91,12 +92,14 @@ final class TerminalSurfaceScrollView: NSScrollView {
 
     override func layout() {
         super.layout()
+        synchronizeAppearance()
         synchronizeScrollMetrics()
         syncHostViewFrame()
     }
 
     override func tile() {
         super.tile()
+        synchronizeAppearance()
         synchronizeScrollMetrics()
         syncHostViewFrame()
     }
@@ -112,7 +115,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
         // fires on window attach. Reassert here as a belt-and-suspenders in
         // addition to the notification observer so the scroller never lingers
         // in legacy style along any path.
-        scrollerStyle = .overlay
+        reassertOverlayScrollerStyle(asyncPasses: 2)
         terminalHostView.syncGhosttyCursorOwner()
     }
 
@@ -206,15 +209,42 @@ final class TerminalSurfaceScrollView: NSScrollView {
     private func preferredScrollerStyleDidChange(_ notification: Notification) {
         _ = notification
         // Reassert synchronously for the current notification dispatch, then
-        // again async so we also win the race against AppKit's own observer
+        // again across follow-up main-queue turns so we also win the race
+        // against AppKit's own observers and any extra pass triggered after
+        // the scroller appearance changes.
         // (`+[NSScrollerImpPair _updateAllScrollerImpPairsForNewRecommendedScrollerStyle:]`)
         // which can otherwise fire last and leave the scroller in `.legacy`.
+        reassertOverlayScrollerStyle(asyncPasses: 2)
+    }
+
+    private func synchronizeAppearance() {
+        let nextAppearanceName = Self.scrollerAppearanceName(
+            for: terminalHostView.layer.flatMap(\.backgroundColor).flatMap(NSColor.init(cgColor:))
+        )
+        let currentAppearanceName = appearance?.bestMatch(from: [.darkAqua, .aqua])
+        guard currentAppearanceName != nextAppearanceName else {
+            return
+        }
+
+        let nextAppearance = NSAppearance(named: nextAppearanceName)
+        appearance = nextAppearance
+        // Match Ghostty's host behavior and refresh hover tracking after the
+        // scroller appearance flips so AppKit's cursor regions stay in sync.
+        updateTrackingAreas()
+    }
+
+    private func reassertOverlayScrollerStyle(asyncPasses: Int) {
         scrollerStyle = .overlay
+        guard asyncPasses > 0 else {
+            return
+        }
+
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            if self.scrollerStyle != .overlay {
-                self.scrollerStyle = .overlay
-            }
+            // Some AppKit paths still schedule a later scroller-style reset
+            // after window attach or preferred-style notifications once the
+            // appearance-backed scroller state settles. Keep the extra passes
+            // bounded to these low-frequency lifecycle hooks.
+            self?.reassertOverlayScrollerStyle(asyncPasses: asyncPasses - 1)
         }
     }
 
@@ -331,6 +361,18 @@ final class TerminalSurfaceScrollView: NSScrollView {
         #if DEBUG
         reflectScrolledClipViewCount += 1
         #endif
+    }
+
+    // Match Ghostty's host-side luminance heuristic so standalone Ghostty and
+    // Toastty choose the same Aqua variant for native overlay scrollers.
+    static func scrollerAppearanceName(for backgroundColor: NSColor?) -> NSAppearance.Name {
+        let fallbackColor = backgroundColor ?? .black
+        guard let rgb = fallbackColor.usingColorSpace(.sRGB) else {
+            return .darkAqua
+        }
+
+        let luminance = (0.299 * rgb.redComponent) + (0.587 * rgb.greenComponent) + (0.114 * rgb.blueComponent)
+        return luminance > 0.5 ? .aqua : .darkAqua
     }
 
     #if DEBUG
