@@ -1,56 +1,54 @@
 # toastty local document panel
 
-Date: 2026-04-14
+Date: 2026-04-15
 
-This document is the implementation-sequence plan for evolving Toastty's
-current markdown viewer into a typed `localDocument` built-in web panel.
-It is intentionally narrower than a general extension system and is written
-for the next implementation worktree, where editing is expected to follow
-soon after the initial refactor.
+This document tracks the remaining implementation sequence after the initial
+`localDocument` persistence refactor landed. Shared web-panel architecture
+still lives in `docs/plans/web-panels.md`.
 
-Shared web-panel architecture still lives in `docs/plans/web-panels.md`.
+## status
+
+Step 1 is complete in the `codex/local-document-step1` worktree:
+
+- persisted `WebPanelDefinition.localDocument`
+- added typed `LocalDocumentState`
+- added compatibility decode for legacy persisted `definition: "markdown"`
+- preserved browser restore behavior
+- preserved workspace-local markdown dedupe by normalized file path
+
+This document is now the follow-on plan, not a proposal for the already-landed
+state-model change.
 
 ## summary
 
-1. The current markdown panel was the right proof of a file-backed, local-only
-   `web` panel.
-2. YAML and TOML support should not be added as more cases under a
-   markdown-specific implementation.
-3. Because editing is near-term, the next change should pay the model and
-   naming cost now:
-   - rename the built-in file-backed panel to `localDocument`
-   - move `WebPanelState` toward typed per-definition payloads
-   - add a compatibility decode path for existing persisted markdown panels
-4. The initial shipped formats remain narrow:
-   - markdown preview
-   - YAML code view
-   - TOML code view
-5. The next patch should make the state model editing-ready without
-   implementing full save/dirty/bridge behavior yet.
+1. The markdown viewer was the right proof of a file-backed, local-only web
+   panel, but its persisted naming and state shape were too markdown-specific.
+2. That persistence work should land before editing, and it now has.
+3. Markdown editing should come next on top of the new `localDocument` state.
+4. YAML and TOML should wait until editing is settled and the runtime/UI
+   surface is no longer markdown-specific.
 
 ## goals
 
-- Replace markdown-specific naming with `localDocument` naming where that does
-  not force an avoidable persistence break.
-- Add YAML and TOML support without routing those files through markdown parsing.
-- Establish a persisted local-document model that can support editing next.
+- Keep the persisted `localDocument` model stable while building on it.
+- Add markdown edit/preview/split behavior without reworking persistence again.
 - Preserve all current browser behavior and restore compatibility.
-- Preserve all current markdown mobility guarantees:
+- Preserve current markdown mobility guarantees:
   - split, tab, move, close, reopen, restore
 - Keep local documents on the local-only web profile.
 
 ## non-goals
 
-- Building the editing bridge in this patch.
-- Designing installed third-party panels or a manifest schema.
-- Supporting every local text/code file type immediately.
-- Building live log tailing in this patch.
-- Adding generic stringly-typed payload bags to `WebPanelState`.
+- Reworking browser state into typed payloads in the next patch.
+- Adding YAML or TOML support in the next patch.
+- Building a generic installed-panel or manifest system.
+- Supporting every local text or code format immediately.
+- Building live log tailing in this sequence.
+- Reintroducing a generic stringly-typed payload bag to `WebPanelState`.
 
-## target model
+## current persisted model
 
-The current markdown panel should become one format inside a more general
-file-backed panel.
+The landed state model is intentionally narrow:
 
 ```swift
 public enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendable {
@@ -62,309 +60,207 @@ public enum WebPanelDefinition: String, Codable, CaseIterable, Hashable, Sendabl
 
 public enum LocalDocumentFormat: String, Codable, Equatable, Sendable {
     case markdown
-    case text
-    case code
-    case log
-}
-
-public enum LocalDocumentMode: String, Codable, Equatable, Sendable {
-    case preview
-    case edit
-    case split
 }
 
 public struct LocalDocumentState: Codable, Equatable, Sendable {
     public var filePath: String?
     public var format: LocalDocumentFormat
-    public var syntaxLanguage: String?
-    public var mode: LocalDocumentMode
+}
+
+public struct WebPanelState: Codable, Equatable, Sendable {
+    public var definition: WebPanelDefinition
+    public var title: String
+    public var initialURL: String?
+    public var currentURL: String?
+    public var localDocument: LocalDocumentState?
 }
 ```
 
-Expected near-term mappings:
+Notes on the landed shape:
 
-- `README.md` -> `format: .markdown`, `syntaxLanguage: nil`, `mode: .preview`
-- `config.yaml` -> `format: .code`, `syntaxLanguage: "yaml"`, `mode: .preview`
-- `settings.toml` -> `format: .code`, `syntaxLanguage: "toml"`, `mode: .preview`
+- `WebPanelState.filePath` remains as a read-only compatibility shim for
+  call sites that have not migrated yet.
+- Browser state still uses the existing flat `initialURL` and `currentURL`
+  fields. That is intentional for now.
+- `LocalDocumentState` currently only supports `.markdown`.
+- The next change that needs more document metadata should extend
+  `LocalDocumentState` directly instead of adding new top-level fields back to
+  `WebPanelState`.
 
-This keeps the shape broad enough for later `txt`, source code, and static log
-support without forcing those formats into the first implementation wave.
+## compatibility guarantees
 
-## compatibility requirements
-
-This work changes persisted panel semantics and must not rely on accidental
-restore resets.
-
-Required compatibility behavior:
+The current compatibility contract is:
 
 - persisted browser panels continue to restore
 - persisted markdown panels continue to restore
-- reopened markdown panels continue to reuse their original file path
+- reopened markdown panels continue to reuse their original normalized file path
 - current workspace-local reuse by normalized file path remains intact
 
-Compatibility decode rules:
+Decode rules:
 
 - legacy `definition: "markdown"` decodes as `.localDocument`
-- legacy markdown `filePath` state becomes:
-  - `format: .markdown`
-  - `syntaxLanguage: nil`
-  - `mode: .preview`
-- legacy browser payloads decode into the new browser-specific payload shape
+- legacy top-level markdown `filePath` decodes into `localDocument.filePath`
+- legacy markdown payloads default to `format: .markdown`
+- browser payloads continue to decode through the existing flat URL fields
 
-Do not keep a parallel persisted `documentKind` field just for YAML/TOML.
-Classification should derive from the canonical file path when creating or
-reloading the panel.
+Encode rules:
 
-## classification model
+- new local document payloads encode as `definition: "localDocument"`
+- new local document payloads write nested `localDocument` state
+- new payloads do not emit the legacy top-level markdown `filePath`
 
-Classification should be host-owned and centralized in Core.
+Downgrade compatibility to pre-refactor builds is not a goal. The supported
+direction is old persisted markdown state into new builds, not the reverse.
 
-Add a small shared type under `Sources/Core/WebPanels/` that maps extensions to
-local-document state.
+## remaining sequence
 
-Initial supported mappings:
+### step 2: markdown editing on top of localDocument
 
-- `md`, `markdown`, `mdown`, `mkd` -> markdown
-- `yaml`, `yml` -> code with `yaml`
-- `toml` -> code with `toml`
+Goal:
 
-Rules:
+- add markdown editing without changing the panel identity or persistence model
+  again
 
-- unsupported or extension-less files return `nil`
-- do not inspect content to guess markdown vs YAML
-- use existing normalized file-path helpers; do not reimplement path
-  normalization in the classifier
-
-This keeps all entry points honest:
-
-- file picker
-- terminal link-open routing
-- app-store create/focus logic
-
-## runtime and web-app direction
-
-The runtime and bundled web app should also become `localDocument` rather than
-`markdown`.
-
-Renames expected in the next implementation patch:
-
-- `MarkdownPanelRuntime` -> `LocalDocumentPanelRuntime`
-- `MarkdownPanelBootstrap` -> `LocalDocumentPanelBootstrap`
-- `MarkdownOpenPanel` -> `LocalDocumentOpenPanel`
-- `MarkdownPanelView` -> `LocalDocumentPanelView`
-- `WebPanels/MarkdownApp/` -> `WebPanels/LocalDocumentApp/`
-- app-bundle resources under `Sources/App/Resources/WebPanels/`
-
-The runtime bootstrap should carry:
-
-- contract version
-- mode
-- file path
-- display name
-- raw file content
-- format
-- syntax language
-- theme
-
-Contract-version handling should stay strict. Native and JS ship together; a
-mismatch is a developer failure, not a user-facing fallback path.
-
-## rendering direction
-
-### markdown
-
-Markdown stays on the current markdown-rendering path:
-
-- `react-markdown`
-- `remark-gfm`
-- `rehype-sanitize`
-- heading IDs
-- TOC
-- frontmatter summary
-- markdown word count
-
-### YAML and TOML
-
-YAML and TOML should use a direct code-view path rather than re-entering the
-markdown pipeline with synthetic fences.
-
-Requirements:
-
-- explicit syntax highlighting
-- line numbers
-- no TOC
-- no frontmatter bar
-- no heading-ID helpers
-- no markdown scroll-target behavior
-
-Use the underlying highlighter directly in the code path instead of creating
-synthetic fenced markdown. This avoids fence-escaping bugs and keeps the code
-document path narrower and easier to reason about.
-
-## editing readiness
-
-Editing is expected soon after this refactor, so the state model should be
-ready for it even if the first implementation stays read-only.
-
-What this patch should do now:
-
-- persist `LocalDocumentMode`
-- keep `mode: .preview` as the default for the shipped markdown, YAML, and TOML
-  flows
-- ensure the runtime/bootstrap shape can carry `edit` and `split` later
-
-What this patch should defer:
-
-- dirty-buffer persistence
-- save / save as
-- reload from disk vs unsaved buffer conflict handling
-- typed panel-to-host save/revert commands
-- external-modification conflict UI
-
-Expected next editing wave:
-
-- markdown edit/preview/split
-- YAML/TOML text editing
-- save/revert flows
-- dirty state
-- file-system conflict handling
-- a typed local-document host bridge
-
-## implementation sequence
-
-### step 1: core state refactor and compatibility decode
-
-Files:
+Likely files:
 
 - `Sources/Core/WebPanels/WebPanelState.swift`
-- related Core/App snapshot and restore tests
+- `Sources/App/WebPanels/MarkdownPanelRuntime.swift`
+- `Sources/App/WebPanels/MarkdownPanelBootstrap.swift`
+- `Sources/App/WebPanels/MarkdownPanelView.swift`
+- `Sources/App/Resources/WebPanels/markdown-panel/`
+- `WebPanels/MarkdownApp/src/`
+- related runtime, restore, and interaction tests
 
 Work:
 
-- add `.localDocument` to `WebPanelDefinition`
-- move `WebPanelState` toward typed per-definition payloads
-- add `LocalDocumentState`
-- add compatibility decode for legacy `.markdown`
-- preserve browser restore compatibility
+- extend `LocalDocumentState` with the minimum additional persisted state
+  needed for editing, most likely `LocalDocumentMode`
+- keep markdown as the only supported format in this patch
+- add preview, edit, and split modes for markdown documents
+- add save and revert flows
+- add dirty-state tracking
+- handle external file modification with a bounded conflict strategy
+- keep the web runtime on the local-only profile
 
-This is the highest-risk step and should land first so the rest of the patch
-builds against the final persisted model instead of a temporary adapter.
+Guardrails:
 
-### step 2: shared local-document classification
+- do not add YAML or TOML in the same patch
+- do not mix runtime/file renames with editing behavior unless the diff stays
+  obviously reviewable
+- keep unsaved-buffer handling scoped to markdown editing rather than designing
+  a fully generic document-provider system
 
-Files:
+Validation:
+
+- state roundtrip tests for any new persisted markdown mode
+- runtime/bootstrap tests for edit and split mode metadata
+- save/revert/dirty tests
+- missing-file and external-modification tests
+- local smoke validation for preview, edit, save, and restore
+
+### step 3: rename markdown runtime and UI surface to localDocument
+
+Goal:
+
+- remove markdown-specific type and file naming before broadening beyond
+  markdown
+
+Likely files:
+
+- `Sources/App/WebPanels/*Markdown*`
+- `WebPanels/MarkdownApp/`
+- `Sources/App/Resources/WebPanels/markdown-panel/`
+- menu and open-panel copy that still says "Markdown"
+
+Work:
+
+- rename implementation-local types and files to `LocalDocument*`
+- rename menu and UI copy to document-oriented wording
+- keep the compatibility layer from step 1 unchanged
+
+This step is mostly about naming clarity and reducing the chance that YAML/TOML
+support gets wedged into markdown-specific types.
+
+### step 4: classification and open-flow broadening
+
+Goal:
+
+- centralize local-document classification before adding more formats
+
+Likely files:
 
 - new Core helper under `Sources/Core/WebPanels/`
 - `Sources/App/AppStore.swift`
 - `Sources/App/Terminal/TerminalCommandClickTargetResolver.swift`
-- file-picker/open-panel code
+- file-picker and open-panel code
 
-Work:
+Initial mappings:
 
-- centralize extension-to-format/language mapping
-- replace markdown-only admission checks
-- keep path-based reuse logic intact
+- `md`, `markdown`, `mdown`, `mkd` -> markdown
+- `yaml`, `yml` -> yaml code document
+- `toml` -> toml code document
 
-### step 3: rename runtime and UI surface to local-document
+Rules:
 
-Files:
+- unsupported or extension-less files return `nil`
+- do not inspect file contents to guess type
+- use existing normalized file-path helpers instead of duplicating path logic
 
-- `Sources/App/WebPanels/*Markdown*`
-- `Sources/App/WebPanels/WebPanelRuntimeRegistry.swift`
-- `Sources/App/WorkspaceView.swift`
-- `Sources/App/ToasttyApp.swift`
-- `Sources/App/Commands/ToasttyCommandMenus.swift`
-- `WebPanels/MarkdownApp/`
-- bundled resource paths under `Sources/App/Resources/WebPanels/`
+Validation:
 
-Work:
-
-- rename implementation-local types and files
-- rename menu copy to `Open Document...`
-- keep the persistence compatibility layer from step 1
-
-### step 4: runtime/bootstrap migration
-
-Files:
-
-- renamed local-document runtime/bootstrap files
-- the TS bootstrap contract
-
-Work:
-
-- include `format`, `syntaxLanguage`, and `mode`
-- keep file-path-driven reload and missing-file behavior
-- keep local-only `WKWebView` profile
-
-### step 5: web-app rendering split
-
-Files:
-
-- `WebPanels/LocalDocumentApp/src/*`
-- app-bundled resources
-
-Work:
-
-- preserve markdown preview path
-- add direct code view for YAML/TOML
-- add line numbers
-- suppress markdown-only UI and helpers in code mode
-
-### step 6: validation and performance bounds
-
-Validation requirements:
-
-- targeted Swift tests for state decode, routing, reuse, restore, runtime
-  bootstrap, and file watching
-- local smoke validation for one markdown file, one YAML file, and one TOML file
-- performance sanity checks for:
-  - a small config file
-  - roughly 5k lines
-  - roughly 50k lines
-
-If syntax highlighting is not acceptable for very large files, the same patch
-should add a bounded fallback such as plain preformatted text with line numbers
-above a documented threshold.
-
-## test plan
-
-Add or update coverage for:
-
-- legacy markdown restore decode into local-document state
-- browser restore compatibility
-- YAML/TOML admission and classification
-- uppercase extensions
+- classification tests for lowercase and uppercase extensions
 - spaces in file paths
-- terminal link-open routing for YAML/TOML
+- terminal link-open routing
 - workspace-local dedupe by normalized file path
-- runtime bootstrap metadata for markdown vs code documents
-- missing-file behavior for YAML/TOML
-- code-view UI suppression of markdown-only chrome
 
-Do not add a full new JS test framework just for this patch unless the runtime
-work reveals a clear gap that Swift-side coverage cannot reasonably catch.
+### step 5: YAML and TOML rendering
 
-## out of scope after this patch
+Goal:
 
-Still deferred after the initial local-document refactor:
+- add direct code-view support for YAML and TOML without routing those files
+  back through markdown rendering
 
-- editing bridge implementation
-- scratchpad
-- third-party panel manifests
-- generic installed local-document providers
-- live log tailing
+Likely files:
+
+- `WebPanels/LocalDocumentApp/src/`
+- app-bundled local-document resources
+- local-document runtime/bootstrap contract
+
+Work:
+
+- add explicit format and syntax metadata to the bootstrap contract
+- preserve markdown preview behavior for markdown files
+- add direct code-view rendering for YAML and TOML
+- add line numbers
+- suppress markdown-only UI in code mode
+
+Requirements:
+
+- no synthetic fenced-markdown fallback for YAML or TOML
+- no TOC, frontmatter summary, heading IDs, or markdown scroll-target helpers
+  in code mode
+- keep a bounded large-file fallback if syntax highlighting becomes too slow
+
+Validation:
+
+- runtime/bootstrap tests for markdown vs code documents
+- missing-file behavior for YAML and TOML
+- local smoke validation for one markdown file, one YAML file, and one TOML
+  file
+- performance sanity checks for small, medium, and large files
 
 ## handoff expectation
 
-The next worktree should implement this plan in small reviewable commits with
-the following order:
+The next implementation work should start at step 2, not reopen step 1.
 
-1. Core state compatibility
-2. classification and command/open flow changes
-3. runtime/file rename and wiring
-4. web app rendering split
-5. validation and cleanup
+Recommended order:
 
-Do not start with the web app. The persistence and routing model should settle
-first so the UI work does not have to be rewritten around a temporary state
-shape.
+1. markdown editing
+2. runtime and UI rename to local-document
+3. classification and open-flow broadening
+4. YAML and TOML rendering
+
+Do not start with YAML or TOML. The point of step 1 was to stop building new
+behavior on top of markdown-specific persistence. The next step should cash in
+that refactor by shipping editing on the new model before broadening format
+support again.
