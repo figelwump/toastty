@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 #if TOASTTY_HAS_GHOSTTY_KIT
 import GhosttyKit
 
@@ -16,6 +17,11 @@ final class TerminalSurfaceScrollView: NSScrollView {
             totalRows > visibleRows
         }
     }
+
+    private static let scrollbarTraceEnabled = {
+        let value = ProcessInfo.processInfo.environment["TOASTTY_SCROLLBAR_TRACE"]
+        return isEnabledFlag(value)
+    }()
 
     let terminalHostView: TerminalHostView
     private let scrollDocumentView: NSView
@@ -91,17 +97,21 @@ final class TerminalSurfaceScrollView: NSScrollView {
     }
 
     override func layout() {
+        traceScrollbarLifecycle("layout.enter")
         super.layout()
         synchronizeAppearance()
         synchronizeScrollMetrics()
         syncHostViewFrame()
+        traceScrollbarLifecycle("layout.exit")
     }
 
     override func tile() {
+        traceScrollbarLifecycle("tile.enter")
         super.tile()
         synchronizeAppearance()
         synchronizeScrollMetrics()
         syncHostViewFrame()
+        traceScrollbarLifecycle("tile.exit")
     }
 
     override func viewDidMoveToWindow() {
@@ -109,6 +119,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
         if window == nil {
             isLiveScrolling = false
         }
+        traceScrollbarLifecycle("viewDidMoveToWindow")
         // AppKit resets `scrollerStyle` back to the window-context "recommended"
         // style (often `.legacy` when any mouse has been seen on the session)
         // inside the `preferredScrollerStyleDidChangeNotification` dispatch that
@@ -208,6 +219,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
     @objc
     private func preferredScrollerStyleDidChange(_ notification: Notification) {
         _ = notification
+        traceScrollbarLifecycle("preferredScrollerStyleDidChange.enter")
         // Reassert synchronously for the current notification dispatch, then
         // again across follow-up main-queue turns so we also win the race
         // against AppKit's own observers and any extra pass triggered after
@@ -215,6 +227,7 @@ final class TerminalSurfaceScrollView: NSScrollView {
         // (`+[NSScrollerImpPair _updateAllScrollerImpPairsForNewRecommendedScrollerStyle:]`)
         // which can otherwise fire last and leave the scroller in `.legacy`.
         reassertOverlayScrollerStyle(asyncPasses: 2)
+        traceScrollbarLifecycle("preferredScrollerStyleDidChange.exit")
     }
 
     private func synchronizeAppearance() {
@@ -231,10 +244,22 @@ final class TerminalSurfaceScrollView: NSScrollView {
         // Match Ghostty's host behavior and refresh hover tracking after the
         // scroller appearance flips so AppKit's cursor regions stay in sync.
         updateTrackingAreas()
+        traceScrollbarLifecycle(
+            "appearance.changed",
+            metadata: ["appearance_name": nextAppearanceName.rawValue]
+        )
     }
 
     private func reassertOverlayScrollerStyle(asyncPasses: Int) {
+        traceScrollbarLifecycle(
+            "reassertOverlayScrollerStyle.enter",
+            metadata: ["async_passes": String(asyncPasses)]
+        )
         scrollerStyle = .overlay
+        traceScrollbarLifecycle(
+            "reassertOverlayScrollerStyle.exit",
+            metadata: ["async_passes": String(asyncPasses)]
+        )
         guard asyncPasses > 0 else {
             return
         }
@@ -347,6 +372,10 @@ final class TerminalSurfaceScrollView: NSScrollView {
             return false
         }
         hasVerticalScroller = visible
+        traceScrollbarLifecycle(
+            "verticalScrollerVisibility.changed",
+            metadata: ["visible": visible ? "true" : "false"]
+        )
         return true
     }
 
@@ -373,6 +402,87 @@ final class TerminalSurfaceScrollView: NSScrollView {
 
         let luminance = (0.299 * rgb.redComponent) + (0.587 * rgb.greenComponent) + (0.114 * rgb.blueComponent)
         return luminance > 0.5 ? .aqua : .darkAqua
+    }
+
+    private func traceScrollbarLifecycle(
+        _ event: String,
+        metadata extraMetadata: [String: String] = [:]
+    ) {
+        guard Self.scrollbarTraceEnabled else {
+            return
+        }
+
+        var metadata = scrollbarTraceMetadata()
+        metadata["event"] = event
+        for (key, value) in extraMetadata {
+            metadata[key] = value
+        }
+
+        ToasttyLog.info(
+            "Terminal scrollbar trace",
+            category: .terminal,
+            metadata: metadata
+        )
+    }
+
+    private func scrollbarTraceMetadata() -> [String: String] {
+        var metadata: [String: String] = [
+            "scroll_view_id": String(describing: ObjectIdentifier(self)),
+            "host_view_id": String(describing: ObjectIdentifier(terminalHostView)),
+            "has_vertical_scroller": hasVerticalScroller ? "true" : "false",
+            "scroll_view_style": Self.string(for: scrollerStyle),
+            "preferred_style": Self.string(for: NSScroller.preferredScrollerStyle),
+            "autohides_scrollers": autohidesScrollers ? "true" : "false",
+            "window_attached": window == nil ? "false" : "true",
+            "is_live_scrolling": isLiveScrolling ? "true" : "false"
+        ]
+        if let verticalScroller {
+            metadata["vertical_scroller_hidden"] = verticalScroller.isHidden ? "true" : "false"
+            metadata["vertical_scroller_alpha"] = Self.format(verticalScroller.alphaValue)
+            metadata["vertical_scroller_width"] = Self.format(verticalScroller.frame.width)
+        } else {
+            metadata["vertical_scroller_hidden"] = "missing"
+        }
+        if let scrollbarState {
+            metadata["total_rows"] = String(scrollbarState.totalRows)
+            metadata["offset_rows"] = String(scrollbarState.offsetRows)
+            metadata["visible_rows"] = String(scrollbarState.visibleRows)
+            metadata["is_scrollable"] = scrollbarState.isScrollable ? "true" : "false"
+        } else {
+            metadata["is_scrollable"] = "false"
+        }
+        if let appearanceName = appearance?.bestMatch(from: [.darkAqua, .aqua]) {
+            metadata["appearance"] = appearanceName.rawValue
+        }
+        if let effectiveAppearanceName = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) {
+            metadata["effective_appearance"] = effectiveAppearanceName.rawValue
+        }
+        if let windowAppearanceName = window?.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) {
+            metadata["window_effective_appearance"] = windowAppearanceName.rawValue
+        }
+        return metadata
+    }
+
+    private static func string(for scrollerStyle: NSScroller.Style) -> String {
+        switch scrollerStyle {
+        case .overlay:
+            return "overlay"
+        case .legacy:
+            return "legacy"
+        @unknown default:
+            return "unknown"
+        }
+    }
+
+    private static func format(_ value: CGFloat) -> String {
+        String(format: "%.3f", value)
+    }
+
+    private static func isEnabledFlag(_ value: String?) -> Bool {
+        guard let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
     }
 
     #if DEBUG
