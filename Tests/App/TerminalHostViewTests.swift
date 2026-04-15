@@ -412,6 +412,56 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(scrollView.autohidesScrollers)
     }
 
+    func testSurfaceScrollViewUsesOverlayScrollerStyleOnInit() {
+        let scrollView = TerminalSurfaceScrollView()
+
+        XCTAssertEqual(scrollView.scrollerStyle, .overlay)
+    }
+
+    func testSurfaceScrollViewKeepsOverlayScrollerStyleAfterWindowAttach() {
+        // AppKit fires `preferredScrollerStyleDidChangeNotification` when a
+        // scroll view moves into a window, and its own observer can reset
+        // `scrollerStyle` to `.legacy` (the "recommended" style once any mouse
+        // has been seen on the session). If Toastty's restoration loses the
+        // observer-order race, the terminal shows a fat always-visible legacy
+        // scrollbar. Guard against both the notification race and any direct
+        // reset during `viewDidMoveToWindow`.
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 70, visibleRows: 20)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scrollView
+
+        // Drain the runloop so any deferred `DispatchQueue.main.async` reassertion
+        // and notification observers complete before we assert.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertEqual(scrollView.scrollerStyle, .overlay)
+        XCTAssertEqual(scrollView.verticalScroller?.scrollerStyle, .overlay)
+    }
+
+    func testSurfaceScrollViewRestoresOverlayWhenPreferredStyleNotificationFires() {
+        // Simulate AppKit flipping the scroller style to `.legacy` and then
+        // posting the preferred-style-change notification. The observer plus
+        // the async follow-up must restore `.overlay` so the bar never lingers
+        // in legacy style along this path either.
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.scrollerStyle = .legacy
+
+        NotificationCenter.default.post(
+            name: NSScroller.preferredScrollerStyleDidChangeNotification,
+            object: nil
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+
+        XCTAssertEqual(scrollView.scrollerStyle, .overlay)
+    }
+
     func testSurfaceScrollViewKeepsHostViewSizedToClipViewBounds() {
         let scrollView = TerminalSurfaceScrollView()
         scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 90)

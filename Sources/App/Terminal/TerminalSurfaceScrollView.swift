@@ -106,6 +106,13 @@ final class TerminalSurfaceScrollView: NSScrollView {
         if window == nil {
             isLiveScrolling = false
         }
+        // AppKit resets `scrollerStyle` back to the window-context "recommended"
+        // style (often `.legacy` when any mouse has been seen on the session)
+        // inside the `preferredScrollerStyleDidChangeNotification` dispatch that
+        // fires on window attach. Reassert here as a belt-and-suspenders in
+        // addition to the notification observer so the scroller never lingers
+        // in legacy style along any path.
+        scrollerStyle = .overlay
         terminalHostView.syncGhosttyCursorOwner()
     }
 
@@ -198,7 +205,17 @@ final class TerminalSurfaceScrollView: NSScrollView {
     @objc
     private func preferredScrollerStyleDidChange(_ notification: Notification) {
         _ = notification
+        // Reassert synchronously for the current notification dispatch, then
+        // again async so we also win the race against AppKit's own observer
+        // (`+[NSScrollerImpPair _updateAllScrollerImpPairsForNewRecommendedScrollerStyle:]`)
+        // which can otherwise fire last and leave the scroller in `.legacy`.
         scrollerStyle = .overlay
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.scrollerStyle != .overlay {
+                self.scrollerStyle = .overlay
+            }
+        }
     }
 
     private func synchronizeScrollMetrics() {
