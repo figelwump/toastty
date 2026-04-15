@@ -509,6 +509,28 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(scrollView.appearance?.bestMatch(from: [.darkAqua, .aqua]), .aqua)
     }
 
+    func testSurfaceScrollViewRestoresOverlayDuringLaterTilePass() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 70, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = scrollView
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+
+        scrollView.scrollerStyle = .legacy
+        scrollView.tile()
+
+        XCTAssertEqual(scrollView.scrollerStyle, .overlay)
+        XCTAssertEqual(scrollView.verticalScroller?.scrollerStyle, .overlay)
+    }
+
     func testSurfaceScrollViewKeepsHostViewSizedToClipViewBounds() {
         let scrollView = TerminalSurfaceScrollView()
         scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 90)
