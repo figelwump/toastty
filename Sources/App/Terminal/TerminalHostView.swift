@@ -224,6 +224,10 @@ final class TerminalHostView: NSView {
         }
     }
     private var ghosttyMouseOverLinkURL: String?
+    // Ghostty can briefly report no hovered link while a flagsChanged-driven
+    // hover refresh is re-evaluating a stationary pointer. Keep a tiny
+    // suppression window so Cmd-hover link opens survive transient nil clears.
+    private var syntheticLinkHoverRefreshSuppressionCount = 0
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -362,6 +366,7 @@ final class TerminalHostView: NSView {
         ghosttyMouseCursorStyle = .horizontalText
         ghosttyMouseCursorVisible = true
         ghosttyMouseOverLinkURL = nil
+        syntheticLinkHoverRefreshSuppressionCount = 0
         syncGhosttyCursorOwner()
         syncSurfaceVisibility(reason: "surface_assignment")
     }
@@ -615,6 +620,11 @@ final class TerminalHostView: NSView {
         assert(Thread.isMainThread)
         let normalizedURL = url?.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextURL = normalizedURL?.isEmpty == false ? normalizedURL : nil
+        if nextURL == nil,
+           ghosttyMouseOverLinkURL != nil,
+           syntheticLinkHoverRefreshSuppressionCount > 0 {
+            return
+        }
         guard nextURL != ghosttyMouseOverLinkURL else {
             return
         }
@@ -798,6 +808,7 @@ final class TerminalHostView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        clearSyntheticLinkHoverRefreshSuppression()
         _ = forwardMouseHoverPosition(event)
         #endif
         super.mouseEntered(with: event)
@@ -805,6 +816,7 @@ final class TerminalHostView: NSView {
 
     override func mouseExited(with event: NSEvent) {
         #if TOASTTY_HAS_GHOSTTY_KIT
+        clearSyntheticLinkHoverRefreshSuppression()
         setGhosttyMouseOverLink(nil)
         if NSEvent.pressedMouseButtons == 0,
            let ghosttySurface {
@@ -817,6 +829,9 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseMoved(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        clearSyntheticLinkHoverRefreshSuppression()
+        #endif
         guard forwardMouseHoverPosition(event) else {
             super.mouseMoved(with: event)
             return
@@ -824,6 +839,9 @@ final class TerminalHostView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        clearSyntheticLinkHoverRefreshSuppression()
+        #endif
         if pendingCommandClickLinkURL != nil {
             clearPendingCommandClickLinkOpen()
             return
@@ -835,6 +853,9 @@ final class TerminalHostView: NSView {
     }
 
     override func rightMouseDragged(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        clearSyntheticLinkHoverRefreshSuppression()
+        #endif
         guard forwardMousePosition(event) else {
             super.rightMouseDragged(with: event)
             return
@@ -842,6 +863,9 @@ final class TerminalHostView: NSView {
     }
 
     override func otherMouseDragged(with event: NSEvent) {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        clearSyntheticLinkHoverRefreshSuppression()
+        #endif
         guard forwardMousePosition(event) else {
             super.otherMouseDragged(with: event)
             return
@@ -1008,7 +1032,17 @@ final class TerminalHostView: NSView {
 
         // FlagsChanged events can carry stale or zero-origin locationInWindow
         // values, so use the window's live mouse location instead of the event's.
+        if event.modifierFlags.contains(.command) {
+            beginSyntheticLinkHoverRefreshSuppression()
+        } else {
+            clearSyntheticLinkHoverRefreshSuppression()
+        }
         _ = forwardCurrentMouseHoverPosition(modifierFlags: event.modifierFlags)
+        if event.modifierFlags.contains(.command) {
+            DispatchQueue.main.async { [weak self] in
+                self?.endSyntheticLinkHoverRefreshSuppression()
+            }
+        }
         guard handled else {
             super.flagsChanged(with: event)
             return
@@ -1258,6 +1292,21 @@ final class TerminalHostView: NSView {
             return nil
         }
         return url
+    }
+
+    private func beginSyntheticLinkHoverRefreshSuppression() {
+        syntheticLinkHoverRefreshSuppressionCount += 1
+    }
+
+    private func endSyntheticLinkHoverRefreshSuppression() {
+        syntheticLinkHoverRefreshSuppressionCount = max(
+            syntheticLinkHoverRefreshSuppressionCount - 1,
+            0
+        )
+    }
+
+    private func clearSyntheticLinkHoverRefreshSuppression() {
+        syntheticLinkHoverRefreshSuppressionCount = 0
     }
 
     private func shouldForwardRawRightMouseEvents(surface: ghostty_surface_t) -> Bool {

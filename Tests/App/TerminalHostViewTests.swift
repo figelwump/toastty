@@ -916,6 +916,119 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(usedAlternatePlacement)
     }
 
+    func testCommandShiftClickAfterStationaryShiftPressKeepsHoveredLink() throws {
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openedURL: URL?
+        var usedAlternatePlacement = false
+        let transientClearPending = SendableBooleanBox(true)
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in
+                guard transientClearPending.takeIfTrue() else {
+                    return
+                }
+                DispatchQueue.main.async {
+                    hostView.setGhosttyMouseOverLink(nil)
+                }
+            },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in true }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1246))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { url, useAlternatePlacement in
+            openedURL = url
+            usedAlternatePlacement = useAlternatePlacement
+            return true
+        }
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+        XCTAssertTrue(usedAlternatePlacement)
+    }
+
+    func testMouseExitStillClearsHoveredLinkAfterSyntheticHoverRefresh() throws {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        let window = TestWindow()
+        let transientClearPending = SendableBooleanBox(true)
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in
+                guard transientClearPending.takeIfTrue() else {
+                    return
+                }
+                DispatchQueue.main.async {
+                    hostView.setGhosttyMouseOverLink(nil)
+                }
+            },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in true }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1247))
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
+        window.contentView = scrollView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.pointingHand)
+
+        hostView.mouseExited(
+            with: try makeMouseEvent(
+                type: .mouseExited,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
+    }
+
     func testCommandClickStaysPrimaryWhenShiftAppearsOnlyOnMouseUp() throws {
         let hostView = TerminalHostView()
         let window = TestWindow()
@@ -1502,6 +1615,27 @@ private final class GhosttyMousePositionRecorder: @unchecked Sendable {
             lock.unlock()
         }
         return storage.last
+    }
+}
+
+private final class SendableBooleanBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(_ value: Bool) {
+        self.value = value
+    }
+
+    func takeIfTrue() -> Bool {
+        lock.lock()
+        defer {
+            lock.unlock()
+        }
+        guard value else {
+            return false
+        }
+        value = false
+        return true
     }
 }
 
