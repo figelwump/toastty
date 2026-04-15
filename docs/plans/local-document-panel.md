@@ -31,7 +31,7 @@ state-model change.
 ## goals
 
 - Keep the persisted `localDocument` model stable while building on it.
-- Add markdown edit/preview/split behavior without reworking persistence again.
+- Add markdown editing behavior without reworking persistence again.
 - Preserve all current browser behavior and restore compatibility.
 - Preserve current markdown mobility guarantees:
   - split, tab, move, close, reopen, restore
@@ -137,13 +137,13 @@ Likely files:
 
 Work:
 
-- extend `LocalDocumentState` with the minimum additional persisted state
-  needed for editing, most likely `LocalDocumentMode`
 - keep markdown as the only supported format in this patch
-- add preview, edit, and split modes for markdown documents
+- keep `WebPanelState` and `LocalDocumentState` unchanged for this patch
+- add a transient full-panel edit mode for markdown documents
 - add save and revert flows
 - add dirty-state tracking
 - handle external file modification with a bounded conflict strategy
+- return to rendered markdown preview after save
 - keep the web runtime on the local-only profile
 
 Guardrails:
@@ -153,11 +153,11 @@ Guardrails:
   obviously reviewable
 - keep unsaved-buffer handling scoped to markdown editing rather than designing
   a fully generic document-provider system
+- do not add split or dual-pane editing UI in this patch
 
 Validation:
 
-- state roundtrip tests for any new persisted markdown mode
-- runtime/bootstrap tests for edit and split mode metadata
+- runtime/bootstrap tests for transient edit-session metadata
 - save/revert/dirty tests
 - missing-file and external-modification tests
 - local smoke validation for preview, edit, save, and restore
