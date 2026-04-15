@@ -116,6 +116,10 @@ direction is old persisted markdown state into new builds, not the reverse.
 
 ### step 2: markdown editing on top of localDocument
 
+Detailed plan:
+
+- `docs/plans/local-document-markdown-editing.md`
+
 Goal:
 
 - add markdown editing without changing the panel identity or persistence model
