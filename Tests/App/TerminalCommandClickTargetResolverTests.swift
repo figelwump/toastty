@@ -88,6 +88,36 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    func testResolveRecoversFromTrailingCommaOnFileURL() throws {
+        let fixture = try makeFixture(fileName: "local document markdown editing.md")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "\(fixture.markdownURL.absoluteString),")),
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
+    func testResolveRecoversFromTrailingSentencePunctuationOnRelativeMarkdownPath() throws {
+        let fixture = try makeFixture(fileName: "local document panel (draft).md")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/local%20document%20panel%20(draft).md).")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
     func testResolveIgnoresFragmentsForRelativeMarkdownPaths() throws {
         let fixture = try makeFixture()
 

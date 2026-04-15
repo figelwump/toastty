@@ -13,6 +13,20 @@ enum TerminalCommandClickTargetResolver {
         "mdown",
         "mkd",
     ]
+    private static let trailingSentencePunctuation: Set<Character> = [
+        ",",
+        ".",
+        ":",
+        ";",
+        "!",
+        "?",
+        "\"",
+        "'",
+        ")",
+        "]",
+        "}",
+        ">",
+    ]
 
     static func resolve(
         hoveredURL: URL,
@@ -73,6 +87,23 @@ enum TerminalCommandClickTargetResolver {
         _ path: String,
         fileManager: FileManager
     ) -> String? {
+        if let exactMatch = normalizedExistingMarkdownFilePath(path, fileManager: fileManager) {
+            return exactMatch
+        }
+
+        for recoveredPath in trailingPunctuationRecoveryCandidates(for: path) {
+            if let recoveredMatch = normalizedExistingMarkdownFilePath(recoveredPath, fileManager: fileManager) {
+                return recoveredMatch
+            }
+        }
+
+        return nil
+    }
+
+    private static func normalizedExistingMarkdownFilePath(
+        _ path: String,
+        fileManager: FileManager
+    ) -> String? {
         let resolvedURL = URL(fileURLWithPath: path)
             .standardizedFileURL
             .resolvingSymlinksInPath()
@@ -93,5 +124,18 @@ enum TerminalCommandClickTargetResolver {
         }
 
         return WebPanelState.normalizedFilePath(resolvedPath)
+    }
+
+    private static func trailingPunctuationRecoveryCandidates(for path: String) -> [String] {
+        var trimmedPath = path
+        var recoveredPaths: [String] = []
+
+        while let trailingCharacter = trimmedPath.last,
+              trailingSentencePunctuation.contains(trailingCharacter) {
+            trimmedPath.removeLast()
+            recoveredPaths.append(trimmedPath)
+        }
+
+        return recoveredPaths
     }
 }
