@@ -515,6 +515,48 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertEqual(scrollView.terminalHostView.frame.origin.y, 600, accuracy: 0.001)
     }
 
+    func testSurfaceScrollViewSkipsReflectingUnchangedMetricsDuringLayout() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        let baselineReflectCount = scrollView.reflectScrolledClipViewCount
+
+        scrollView.layout()
+
+        XCTAssertEqual(scrollView.reflectScrolledClipViewCount, baselineReflectCount)
+    }
+
+    func testSurfaceScrollViewSkipsReflectingUnchangedMetricsDuringTile() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        let baselineReflectCount = scrollView.reflectScrolledClipViewCount
+
+        scrollView.tile()
+
+        XCTAssertEqual(scrollView.reflectScrolledClipViewCount, baselineReflectCount)
+    }
+
+    func testSurfaceScrollViewReflectsWhenScrollbarStateChanges() {
+        let scrollView = TerminalSurfaceScrollView()
+        scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)
+        scrollView.applyScrollbar(totalRows: 100, offsetRows: 40, visibleRows: 20)
+        scrollView.applyCellHeightPoints(10)
+        scrollView.layoutSubtreeIfNeeded()
+
+        let baselineReflectCount = scrollView.reflectScrolledClipViewCount
+
+        scrollView.applyScrollbar(totalRows: 20, offsetRows: 0, visibleRows: 20)
+
+        XCTAssertGreaterThan(scrollView.reflectScrolledClipViewCount, baselineReflectCount)
+    }
+
     func testSurfaceScrollViewKeepsDraggedOffsetUntilScrollbarFeedbackArrives() {
         let scrollView = TerminalSurfaceScrollView()
         scrollView.frame = CGRect(x: 0, y: 0, width: 160, height: 200)

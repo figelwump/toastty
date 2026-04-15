@@ -26,6 +26,9 @@ final class TerminalSurfaceScrollView: NSScrollView {
     private var lastSentRow: Int?
     private var pendingRequestedRow: Int?
     var requestScrollToRow: ((Int) -> Bool)?
+    #if DEBUG
+    private(set) var reflectScrolledClipViewCount = 0
+    #endif
 
     init(terminalHostView: TerminalHostView = TerminalHostView()) {
         self.terminalHostView = terminalHostView
@@ -199,15 +202,24 @@ final class TerminalSurfaceScrollView: NSScrollView {
     }
 
     private func synchronizeScrollMetrics() {
-        scrollDocumentView.frame.size.width = contentView.bounds.width
-        scrollDocumentView.frame.size.height = documentHeight(contentHeight: contentView.bounds.height)
-        hasVerticalScroller = scrollbarState?.isScrollable ?? false
+        var shouldReflect = false
+        let contentBounds = contentView.bounds
+        let desiredDocumentSize = CGSize(
+            width: contentBounds.width,
+            height: documentHeight(contentHeight: contentBounds.height)
+        )
+        if setScrollDocumentViewSizeIfNeeded(desiredDocumentSize) {
+            shouldReflect = true
+        }
+        if setVerticalScrollerVisibilityIfNeeded(scrollbarState?.isScrollable ?? false) {
+            shouldReflect = true
+        }
 
         guard isLiveScrolling == false,
               pendingRequestedRow == nil,
               let scrollbarState,
               cellHeightPoints > 0 else {
-            reflectScrolledClipView(contentView)
+            reflectScrolledClipViewIfNeeded(shouldReflect)
             return
         }
 
@@ -215,9 +227,10 @@ final class TerminalSurfaceScrollView: NSScrollView {
         let currentOriginY = contentView.bounds.origin.y
         if abs(currentOriginY - desiredOffsetY) > 0.5 {
             contentView.scroll(to: CGPoint(x: 0, y: desiredOffsetY))
+            shouldReflect = true
         }
         lastSentRow = scrollbarState.offsetRows
-        reflectScrolledClipView(contentView)
+        reflectScrolledClipViewIfNeeded(shouldReflect)
     }
 
     private func syncHostViewFrame() {
@@ -268,6 +281,39 @@ final class TerminalSurfaceScrollView: NSScrollView {
         guard cellHeightPoints > 0 else { return 0 }
         let remainingRows = max(scrollbarState.totalRows - scrollbarState.offsetRows - scrollbarState.visibleRows, 0)
         return CGFloat(remainingRows) * cellHeightPoints
+    }
+
+    private func setScrollDocumentViewSizeIfNeeded(_ size: CGSize) -> Bool {
+        guard abs(scrollDocumentView.frame.width - size.width) > 0.001 ||
+                abs(scrollDocumentView.frame.height - size.height) > 0.001 else {
+            return false
+        }
+
+        var nextFrame = scrollDocumentView.frame
+        nextFrame.size = size
+        scrollDocumentView.frame = nextFrame
+        return true
+    }
+
+    private func setVerticalScrollerVisibilityIfNeeded(_ visible: Bool) -> Bool {
+        guard hasVerticalScroller != visible else {
+            return false
+        }
+        hasVerticalScroller = visible
+        return true
+    }
+
+    private func reflectScrolledClipViewIfNeeded(_ shouldReflect: Bool) {
+        guard shouldReflect else {
+            return
+        }
+
+        // Avoid redundant reflections on no-op layout/tile passes because AppKit
+        // can re-show overlay scrollers when we keep reasserting unchanged metrics.
+        reflectScrolledClipView(contentView)
+        #if DEBUG
+        reflectScrolledClipViewCount += 1
+        #endif
     }
 
     #if DEBUG
