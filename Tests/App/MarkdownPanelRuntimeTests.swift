@@ -137,6 +137,165 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         )
     }
 
+    func testEnterEditModeSwitchesBootstrapIntoEditingState() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        metadataExpectation.assertForOverFulfill = true
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Draft",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.enterEditMode()
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "# Draft")
+        XCTAssertEqual(bootstrap.contentRevision, 1)
+    }
+
+    func testDraftUpdateTracksEditingBufferWithoutAdvancingRevision() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        metadataExpectation.assertForOverFulfill = true
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+
+        runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertTrue(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "## Changed")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+    }
+
+    func testDraftUpdateIgnoresStaleRevision() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        metadataExpectation.assertForOverFulfill = true
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+
+        runtime.updateDraftContent("## Ignored", baseContentRevision: baseRevision + 1)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "# Original")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+    }
+
+    func testCancelEditModeRestoresPreviewAndAdvancesRevision() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        metadataExpectation.assertForOverFulfill = true
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
+
+        runtime.cancelEditMode(baseContentRevision: baseRevision)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "# Original")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
+    }
+
     func testBootstrapReadsMarkdownFileContents() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

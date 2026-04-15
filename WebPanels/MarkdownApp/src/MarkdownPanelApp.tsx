@@ -5,6 +5,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import { MarkdownPanelBootstrap } from "./bootstrap";
+import { markdownNativeBridge } from "./nativeBridge";
 
 // --- Sanitize schema: extend default to allow highlight.js class names on spans ---
 
@@ -170,15 +171,38 @@ function useBootstrap(): MarkdownPanelBootstrap | null {
 function useMarkdownPanelState(): {
   bootstrap: MarkdownPanelBootstrap | null;
   draftContent: string;
-  setDraftContent: React.Dispatch<React.SetStateAction<string>>;
+  isDirty: boolean;
+  enterEdit: () => void;
+  cancelEdit: () => void;
+  updateDraftContent: (nextContent: string) => void;
 } {
   const bootstrap = useBootstrap();
   const [draftContent, setDraftContent] = React.useState("");
   const lastSyncedContentRevision = React.useRef<number | null>(null);
+  const draftSyncTimeoutID = React.useRef<number | null>(null);
+  const latestBootstrap = React.useRef<MarkdownPanelBootstrap | null>(bootstrap);
+
+  const cancelPendingDraftSync = React.useEffectEvent(() => {
+    if (draftSyncTimeoutID.current === null) {
+      return;
+    }
+
+    window.clearTimeout(draftSyncTimeoutID.current);
+    draftSyncTimeoutID.current = null;
+  });
+
+  const postDraftDidChange = React.useEffectEvent((nextContent: string, baseContentRevision: number) => {
+    markdownNativeBridge.draftDidChange(nextContent, baseContentRevision);
+  });
+
+  React.useEffect(() => {
+    latestBootstrap.current = bootstrap;
+  }, [bootstrap]);
 
   React.useEffect(() => {
     if (!bootstrap) {
       lastSyncedContentRevision.current = null;
+      cancelPendingDraftSync();
       setDraftContent("");
       return;
     }
@@ -188,10 +212,56 @@ function useMarkdownPanelState(): {
     }
 
     lastSyncedContentRevision.current = bootstrap.contentRevision;
+    cancelPendingDraftSync();
     setDraftContent(bootstrap.content);
-  }, [bootstrap]);
+  }, [bootstrap, cancelPendingDraftSync]);
 
-  return { bootstrap, draftContent, setDraftContent };
+  React.useEffect(() => {
+    return () => {
+      cancelPendingDraftSync();
+    };
+  }, [cancelPendingDraftSync]);
+
+  const enterEdit = React.useCallback(() => {
+    if (!bootstrap?.filePath) {
+      return;
+    }
+
+    markdownNativeBridge.enterEdit();
+  }, [bootstrap?.filePath]);
+
+  const cancelEdit = React.useCallback(() => {
+    if (!bootstrap) {
+      return;
+    }
+
+    cancelPendingDraftSync();
+    markdownNativeBridge.cancelEdit(bootstrap.contentRevision);
+  }, [bootstrap, cancelPendingDraftSync]);
+
+  const updateDraftContent = React.useCallback((nextContent: string) => {
+    setDraftContent(nextContent);
+    cancelPendingDraftSync();
+
+    if (!bootstrap?.isEditing) {
+      return;
+    }
+
+    draftSyncTimeoutID.current = window.setTimeout(() => {
+      const activeBootstrap = latestBootstrap.current;
+      draftSyncTimeoutID.current = null;
+      if (!activeBootstrap?.isEditing) {
+        return;
+      }
+      postDraftDidChange(nextContent, activeBootstrap.contentRevision);
+    }, 250);
+  }, [bootstrap, cancelPendingDraftSync, postDraftDidChange]);
+
+  const isDirty = Boolean(
+    bootstrap?.isEditing ? (bootstrap.isDirty || draftContent !== bootstrap.content) : bootstrap?.isDirty
+  );
+
+  return { bootstrap, draftContent, isDirty, enterEdit, cancelEdit, updateDraftContent };
 }
 
 // --- Components ---
@@ -249,12 +319,21 @@ function TableOfContents(props: { entries: TocEntry[]; onNavigate: () => void })
   );
 }
 
-function Header(props: { bootstrap: MarkdownPanelBootstrap }) {
-  const { bootstrap } = props;
+function Header(props: {
+  bootstrap: MarkdownPanelBootstrap;
+  content: string;
+  isDirty: boolean;
+  enterEdit: () => void;
+  cancelEdit: () => void;
+}) {
+  const { bootstrap, content, isDirty, enterEdit, cancelEdit } = props;
   const [tocOpen, setTocOpen] = React.useState(false);
   const shortPath = shortenPath(bootstrap.filePath, bootstrap.displayName);
-  const tocEntries = React.useMemo(() => parseToc(bootstrap.content), [bootstrap.content]);
-  const wordCount = React.useMemo(() => computeWordCount(bootstrap.content), [bootstrap.content]);
+  const tocEntries = React.useMemo(
+    () => (bootstrap.isEditing ? [] : parseToc(content)),
+    [bootstrap.isEditing, content]
+  );
+  const wordCount = React.useMemo(() => computeWordCount(content), [content]);
 
   // Close TOC when clicking outside
   React.useEffect(() => {
@@ -278,28 +357,71 @@ function Header(props: { bootstrap: MarkdownPanelBootstrap }) {
         <div className="markdown-panel-title">{bootstrap.displayName}</div>
         <div className="markdown-panel-path" title={bootstrap.filePath}>{shortPath}</div>
       </div>
-      {tocEntries.length > 0 && (
-        <button
-          className={`markdown-toc-toggle${tocOpen ? " markdown-toc-toggle-open" : ""}`}
-          onClick={() => setTocOpen((prev) => !prev)}
-          aria-expanded={tocOpen}
-          aria-label="Table of contents"
-          title="Table of contents"
-        >
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-            <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-          </svg>
-        </button>
-      )}
-      {tocOpen && (
-        <TableOfContents entries={tocEntries} onNavigate={() => setTocOpen(false)} />
-      )}
+      <div className="markdown-panel-actions">
+        {bootstrap.isEditing ? (
+          <>
+            <span className={`markdown-session-badge${isDirty ? " markdown-session-badge-dirty" : ""}`}>
+              {isDirty ? "Unsaved draft" : "Editing"}
+            </span>
+            <button
+              className="markdown-action-button markdown-action-button-secondary"
+              onClick={cancelEdit}
+            >
+              Cancel
+            </button>
+          </>
+        ) : (
+          <>
+            {tocEntries.length > 0 && (
+              <button
+                className={`markdown-toc-toggle${tocOpen ? " markdown-toc-toggle-open" : ""}`}
+                onClick={() => setTocOpen((prev) => !prev)}
+                aria-expanded={tocOpen}
+                aria-label="Table of contents"
+                title="Table of contents"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+            )}
+            <button
+              className="markdown-action-button"
+              onClick={enterEdit}
+              disabled={!bootstrap.filePath}
+            >
+              Edit
+            </button>
+          </>
+        )}
+        {tocOpen && (
+          <TableOfContents entries={tocEntries} onNavigate={() => setTocOpen(false)} />
+        )}
+      </div>
     </header>
   );
 }
 
+function MarkdownEditor(props: {
+  draftContent: string;
+  updateDraftContent: (nextContent: string) => void;
+}) {
+  return (
+    <section className="markdown-editor-shell">
+      <textarea
+        className="markdown-editor"
+        value={props.draftContent}
+        onChange={(event) => props.updateDraftContent(event.target.value)}
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
+      />
+    </section>
+  );
+}
+
 export function MarkdownPanelApp() {
-  const { bootstrap } = useMarkdownPanelState();
+  const { bootstrap, draftContent, isDirty, enterEdit, cancelEdit, updateDraftContent } = useMarkdownPanelState();
 
   if (!bootstrap) {
     return (
@@ -312,55 +434,69 @@ export function MarkdownPanelApp() {
     );
   }
 
-  const frontmatter = extractFrontmatter(bootstrap.content);
+  const renderedContent = bootstrap.isEditing ? draftContent : bootstrap.content;
+  const frontmatter = bootstrap.isEditing ? null : extractFrontmatter(renderedContent);
 
   return (
     <main className="markdown-shell">
-      <Header bootstrap={bootstrap} />
-      <article className="markdown-prose">
-        {frontmatter && <FrontmatterBar meta={frontmatter} />}
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm, remarkFrontmatter]}
-          rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
-          components={{
-            a({ href, children }) {
-              if (href?.startsWith("#")) {
-                return <a href={href}>{children}</a>;
+      <Header
+        bootstrap={bootstrap}
+        content={renderedContent}
+        isDirty={isDirty}
+        enterEdit={enterEdit}
+        cancelEdit={cancelEdit}
+      />
+      {bootstrap.isEditing ? (
+        <MarkdownEditor
+          draftContent={draftContent}
+          updateDraftContent={updateDraftContent}
+        />
+      ) : (
+        <article className="markdown-prose">
+          {frontmatter && <FrontmatterBar meta={frontmatter} />}
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkFrontmatter]}
+            rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
+            components={{
+              a({ href, children }) {
+                if (href?.startsWith("#")) {
+                  return <a href={href}>{children}</a>;
+                }
+                return <span className="markdown-link-blocked">{children}</span>;
+              },
+              img({ alt }) {
+                return <span className="markdown-image-blocked">Image blocked{alt ? `: ${alt}` : ""}</span>;
+              },
+              h1({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h1 id={id}>{children}</h1>;
+              },
+              h2({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h2 id={id}>{children}</h2>;
+              },
+              h3({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h3 id={id}>{children}</h3>;
+              },
+              h4({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h4 id={id}>{children}</h4>;
+              },
+              h5({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h5 id={id}>{children}</h5>;
+              },
+              h6({ children }) {
+                const id = slugifyHeading(plainText(children));
+                return <h6 id={id}>{children}</h6>;
               }
-              return <span className="markdown-link-blocked">{children}</span>;
-            },
-            img({ alt }) {
-              return <span className="markdown-image-blocked">Image blocked{alt ? `: ${alt}` : ""}</span>;
-            },
-            h1({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h1 id={id}>{children}</h1>;
-            },
-            h2({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h2 id={id}>{children}</h2>;
-            },
-            h3({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h3 id={id}>{children}</h3>;
-            },
-            h4({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h4 id={id}>{children}</h4>;
-            },
-            h5({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h5 id={id}>{children}</h5>;
-            },
-            h6({ children }) {
-              const id = slugifyHeading(plainText(children));
-              return <h6 id={id}>{children}</h6>;
-            }
-          }}
-        >
-          {bootstrap.content}
-        </ReactMarkdown>
-      </article>
+            }}
+          >
+            {renderedContent}
+          </ReactMarkdown>
+        </article>
+      )}
     </main>
   );
 }

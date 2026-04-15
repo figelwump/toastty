@@ -54,6 +54,10 @@ struct MarkdownEditingSession: Equatable, Sendable {
         draftContent != loadedContent
     }
 
+    var visibleContent: String {
+        isEditing ? draftContent : loadedContent
+    }
+
     init(document: MarkdownPanelDocumentSnapshot) {
         filePath = document.filePath
         displayName = document.displayName
@@ -71,6 +75,7 @@ struct MarkdownEditingSession: Equatable, Sendable {
         let shouldAdvanceRevision = contentRevision == 0 ||
             filePath != document.filePath ||
             loadedContent != document.content
+        let shouldReplaceDraftContent = isEditing == false || isDirty == false
 
         filePath = document.filePath
         displayName = document.displayName
@@ -80,19 +85,54 @@ struct MarkdownEditingSession: Equatable, Sendable {
         isSaving = false
         saveErrorMessage = nil
 
-        if isEditing == false {
+        if shouldReplaceDraftContent {
             draftContent = document.content
         }
 
         if shouldAdvanceRevision {
-            contentRevision &+= 1
+            contentRevision += 1
         }
+    }
+
+    mutating func beginEditing() -> Bool {
+        guard filePath != nil, isEditing == false else {
+            return false
+        }
+
+        draftContent = loadedContent
+        isEditing = true
+        saveErrorMessage = nil
+        return true
+    }
+
+    mutating func updateDraft(_ content: String, baseContentRevision: Int) -> Bool {
+        guard isEditing, baseContentRevision == contentRevision else {
+            return false
+        }
+
+        draftContent = content
+        return true
+    }
+
+    mutating func cancelEditing(baseContentRevision: Int) -> Bool {
+        guard isEditing, baseContentRevision == contentRevision else {
+            return false
+        }
+
+        draftContent = loadedContent
+        isEditing = false
+        hasExternalConflict = false
+        isSaving = false
+        saveErrorMessage = nil
+        contentRevision += 1
+        return true
     }
 }
 
 @MainActor
 final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     typealias DocumentLoader = @Sendable (WebPanelState) async -> MarkdownPanelDocumentSnapshot
+    private static let scriptMessageHandlerName = "toasttyMarkdownPanel"
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
@@ -144,6 +184,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             interactionDidRequestFocus(panelID)
         }
         webView.navigationDelegate = self
+        webView.configuration.userContentController.add(self, name: Self.scriptMessageHandlerName)
     }
 
     deinit {
@@ -153,6 +194,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
             webView.navigationDelegate = nil
+            webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.scriptMessageHandlerName)
             webView.removeFromSuperview()
         }
     }
@@ -178,6 +220,32 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             currentAssetPath: currentAssetURL?.path,
             currentBootstrap: currentBootstrap
         )
+    }
+
+    func enterEditMode() {
+        guard var session else { return }
+        guard session.beginEditing() else { return }
+        self.session = session
+        updateCurrentBootstrap()
+        pushPendingBootstrapIfPossible()
+    }
+
+    func updateDraftContent(_ content: String, baseContentRevision: Int) {
+        guard var session else { return }
+        guard session.updateDraft(content, baseContentRevision: baseContentRevision) else {
+            return
+        }
+        self.session = session
+        // Keep runtime inspection current without forcing a full bootstrap round-trip on each debounce tick.
+        updateCurrentBootstrap()
+    }
+
+    func cancelEditMode(baseContentRevision: Int) {
+        guard var session else { return }
+        guard session.cancelEditing(baseContentRevision: baseContentRevision) else { return }
+        self.session = session
+        updateCurrentBootstrap()
+        pushPendingBootstrapIfPossible()
     }
 
     func attachHost(to container: NSView, attachment: PanelHostAttachmentToken) {
@@ -330,7 +398,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         MarkdownPanelBootstrap(
             filePath: session.filePath,
             displayName: session.displayName,
-            content: session.loadedContent,
+            content: session.visibleContent,
             contentRevision: session.contentRevision,
             isEditing: session.isEditing,
             isDirty: session.isDirty,
@@ -343,6 +411,48 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 }
 
 private extension MarkdownPanelRuntime {
+    enum BridgeEvent {
+        case enterEdit
+        case draftDidChange(content: String, baseContentRevision: Int)
+        case cancelEdit(baseContentRevision: Int)
+
+        init?(messageBody: Any) {
+            guard let body = messageBody as? [String: Any],
+                  let type = body["type"] as? String else {
+                return nil
+            }
+
+            switch type {
+            case "enterEdit":
+                self = .enterEdit
+            case "draftDidChange":
+                guard let content = body["content"] as? String,
+                      let baseContentRevision = body["baseContentRevision"] as? Int else {
+                    return nil
+                }
+                self = .draftDidChange(content: content, baseContentRevision: baseContentRevision)
+            case "cancelEdit":
+                guard let baseContentRevision = body["baseContentRevision"] as? Int else {
+                    return nil
+                }
+                self = .cancelEdit(baseContentRevision: baseContentRevision)
+            default:
+                return nil
+            }
+        }
+    }
+
+    func handleBridgeEvent(_ event: BridgeEvent) {
+        switch event {
+        case .enterEdit:
+            enterEditMode()
+        case .draftDidChange(let content, let baseContentRevision):
+            updateDraftContent(content, baseContentRevision: baseContentRevision)
+        case .cancelEdit(let baseContentRevision):
+            cancelEditMode(baseContentRevision: baseContentRevision)
+        }
+    }
+
     func synchronizeFileObservation(with filePath: String?) {
         guard let normalizedFilePath = WebPanelState.normalizedFilePath(filePath) else {
             fileObserver?.invalidate()
@@ -396,18 +506,8 @@ private extension MarkdownPanelRuntime {
                 self.session = MarkdownEditingSession(document: document)
             }
 
-            guard let session = self.session else {
-                return
-            }
-
-            let bootstrap = Self.makeBootstrap(from: session, theme: self.currentTheme)
-            self.currentBootstrap = bootstrap
-            self.metadataDidChange(self.panelID, bootstrap.displayName, nil)
-            guard let script = Self.bootstrapJavaScript(for: bootstrap) else {
-                return
-            }
-            self.pendingBootstrapScript = script
-            self.ensurePanelAppLoaded()
+            self.updateCurrentBootstrap(emitMetadata: true)
+            self.pushPendingBootstrapIfPossible()
         }
     }
 
@@ -432,6 +532,19 @@ private extension MarkdownPanelRuntime {
     }
 
     func pushPendingBootstrapIfPossible() {
+        guard let entryURL else {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        if currentAssetURL != entryURL {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        if pendingBootstrapScript == nil {
+            stageCurrentBootstrapScript()
+        }
         guard let pendingBootstrapScript else { return }
         webView.evaluateJavaScript(pendingBootstrapScript) { [weak self] _, error in
             guard let self else { return }
@@ -448,11 +561,24 @@ private extension MarkdownPanelRuntime {
         guard themedBootstrap != currentBootstrap else { return }
 
         currentBootstrap = themedBootstrap
-        guard let script = Self.bootstrapJavaScript(for: themedBootstrap) else {
+        pushPendingBootstrapIfPossible()
+    }
+
+    func updateCurrentBootstrap(emitMetadata: Bool = false) {
+        guard let session else { return }
+        let bootstrap = Self.makeBootstrap(from: session, theme: currentTheme)
+        currentBootstrap = bootstrap
+        if emitMetadata {
+            metadataDidChange(panelID, bootstrap.displayName, nil)
+        }
+    }
+
+    func stageCurrentBootstrapScript() {
+        guard let currentBootstrap,
+              let script = Self.bootstrapJavaScript(for: currentBootstrap) else {
             return
         }
         pendingBootstrapScript = script
-        ensurePanelAppLoaded()
     }
 
     nonisolated static func readMarkdownDocument(
@@ -582,5 +708,16 @@ extension MarkdownPanelRuntime: WKNavigationDelegate {
         let requestedPath = requestURL.standardizedFileURL.path
         let currentPath = currentAssetURL.standardizedFileURL.path
         decisionHandler(requestedPath == currentPath ? .allow : .cancel)
+    }
+}
+
+extension MarkdownPanelRuntime: WKScriptMessageHandler {
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == Self.scriptMessageHandlerName,
+              let event = BridgeEvent(messageBody: message.body) else {
+            return
+        }
+
+        handleBridgeEvent(event)
     }
 }
