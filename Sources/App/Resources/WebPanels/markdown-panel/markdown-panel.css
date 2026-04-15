@@ -161,15 +161,23 @@ body {
 .markdown-prose li,
 .markdown-prose blockquote {
   font-size: 1.08rem;
-  line-height: 1.75;
+  line-height: 1.6;
 }
 
 .markdown-prose li {
-  margin: 0.3em 0;
+  margin: 0.15em 0;
 }
 
 .markdown-prose li > p {
-  margin: 0.4em 0;
+  margin: 0.2em 0;
+}
+
+/* Nested lists under list items: tighten the gap between a parent item's
+   text and its nested bullets/numbered list. Top-level lists keep the
+   default 1em margin from the block-margin rule below. */
+.markdown-prose li > ul,
+.markdown-prose li > ol {
+  margin: 0.3em 0;
 }
 
 .markdown-prose ol {
@@ -194,7 +202,7 @@ body {
   font-weight: 600;
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
   font-size: 1.08rem;
-  line-height: 1.75;
+  line-height: 1.6;
 }
 
 .markdown-prose ul {
