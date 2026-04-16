@@ -228,6 +228,13 @@ final class TerminalHostView: NSView {
     // hover refresh is re-evaluating a stationary pointer. Keep a tiny
     // suppression window so Cmd-hover link opens survive transient nil clears.
     private var syntheticLinkHoverRefreshSuppressionCount = 0
+    // Shift flagsChanged events we deliberately withheld from Ghostty while the
+    // pointer is Cmd-hovering a link. Ghostty re-evaluates its own link
+    // underline from tracked modifier state on each flagsChanged, and a shift
+    // press there clears the underline even though the cached URL stays armed.
+    // Tracking suppressed presses lets us silently swallow the matching
+    // release so Ghostty's modifier view stays consistent.
+    private var suppressedShiftFlagsChangedKeyCodes: Set<UInt16> = []
     #endif
 
     override init(frame frameRect: NSRect) {
@@ -367,6 +374,7 @@ final class TerminalHostView: NSView {
         ghosttyMouseCursorVisible = true
         ghosttyMouseOverLinkURL = nil
         syntheticLinkHoverRefreshSuppressionCount = 0
+        suppressedShiftFlagsChangedKeyCodes.removeAll()
         syncGhosttyCursorOwner()
         syncSurfaceVisibility(reason: "surface_assignment")
     }
@@ -1023,6 +1031,27 @@ final class TerminalHostView: NSView {
             return
         }
 
+        // Withhold Shift flagsChanged from Ghostty while the pointer is
+        // Cmd-hovering a link. Ghostty's underline rendering is driven by its
+        // internally tracked modifier state, and a shift press there turns the
+        // underline off (and does not re-enable on the follow-up hover
+        // refresh), which is visually confusing even though the cached URL
+        // stays armed via syntheticLinkHoverRefreshSuppression. The matching
+        // release has to be swallowed too so Ghostty does not see a release
+        // for a press it never observed.
+        if Self.isShiftModifierKeyCode(event.keyCode) {
+            if action == GHOSTTY_ACTION_PRESS,
+               ghosttyMouseOverLinkURL != nil,
+               event.modifierFlags.contains(.command) {
+                suppressedShiftFlagsChangedKeyCodes.insert(event.keyCode)
+                return
+            }
+            if action == GHOSTTY_ACTION_RELEASE,
+               suppressedShiftFlagsChangedKeyCodes.remove(event.keyCode) != nil {
+                return
+            }
+        }
+
         // Suppression must begin before handleKeyEvent because Ghostty can
         // synchronously emit mouse_over_link(nil) during a modifier key press
         // (e.g. Shift pressed while Cmd-hovering a link). Without this, the
@@ -1149,6 +1178,9 @@ final class TerminalHostView: NSView {
     private func drainTrackedGhosttyModifiers(reason: String) -> Int {
         let pressedKeyCodes = trackedPressedModifierKeyCodes
         trackedPressedModifierKeyCodes.removeAll()
+        // Shadow suppressions are only valid while the original press is
+        // still in flight. Drop them whenever we reconcile modifier state.
+        suppressedShiftFlagsChangedKeyCodes.removeAll()
         guard pressedKeyCodes.isEmpty == false else {
             return 0
         }
@@ -1803,6 +1835,10 @@ final class TerminalHostView: NSView {
         default:
             return false
         }
+    }
+
+    static func isShiftModifierKeyCode(_ keyCode: UInt16) -> Bool {
+        keyCode == 0x38 || keyCode == 0x3C
     }
 
     private static func modifierFlags(

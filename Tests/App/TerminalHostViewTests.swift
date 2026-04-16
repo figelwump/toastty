@@ -1111,6 +1111,89 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(usedAlternatePlacement)
     }
 
+    func testShiftFlagsChangedIsWithheldFromGhosttyWhileCmdHoveringLink() throws {
+        // Ghostty renders the link underline from its own tracked modifier
+        // state, so forwarding a Shift press while the pointer is Cmd-hovering
+        // a link visually turns the underline off even though the cached URL
+        // stays armed. The matching release must be swallowed too, otherwise
+        // Ghostty sees a release for a press it never observed.
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let keyCallCount = SendableIntBox(0)
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in
+                keyCallCount.increment()
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1249))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        XCTAssertEqual(keyCallCount.value, 0, "Shift press while Cmd-hovering must not reach Ghostty")
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command]
+            )
+        )
+        XCTAssertEqual(keyCallCount.value, 0, "Matching Shift release must also be swallowed")
+    }
+
+    func testShiftFlagsChangedForwardsNormallyWithoutCachedLinkHover() throws {
+        // The suppression must be scoped to Cmd-hovered links. Shift without a
+        // cached hover (or without Cmd) still needs to reach Ghostty so it can
+        // track modifier state for selection drags and keyboard shortcuts.
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let keyCallCount = SendableIntBox(0)
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in
+                keyCallCount.increment()
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x124A))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        XCTAssertEqual(keyCallCount.value, 1, "Shift without a cached hover must still reach Ghostty")
+    }
+
     func testMouseExitStillClearsHoveredLinkAfterSyntheticHoverRefresh() throws {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
@@ -1768,6 +1851,27 @@ private final class SendableBooleanBox: @unchecked Sendable {
         }
         value = false
         return true
+    }
+}
+
+private final class SendableIntBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: Int
+
+    init(_ value: Int) {
+        self.storedValue = value
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedValue
+    }
+
+    func increment() {
+        lock.lock()
+        storedValue += 1
+        lock.unlock()
     }
 }
 
