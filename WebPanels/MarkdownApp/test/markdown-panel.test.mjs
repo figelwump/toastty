@@ -26,8 +26,10 @@ test("single newlines render as visible line breaks", () => {
   assert.match(html, /<p>first line<br\/>\s*second line<\/p>/);
 });
 
-test("editor styles force a text cursor across the textarea surface", async () => {
+test("markdown content surfaces use a text cursor while links stay interactive", async () => {
   const styles = await readFile(resolve(packageRoot, "src/styles.css"), "utf8");
 
+  assert.match(styles, /\.markdown-prose,\s*\.markdown-editor-shell\s*\{[\s\S]*?cursor:\s*text;/);
   assert.match(styles, /\.markdown-editor\s*\{[\s\S]*?cursor:\s*text;/);
+  assert.match(styles, /\.markdown-prose a\s*\{[\s\S]*?cursor:\s*pointer;/);
 });

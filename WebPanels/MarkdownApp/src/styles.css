@@ -166,6 +166,11 @@ body {
   color: #f6d9d2;
 }
 
+.markdown-prose,
+.markdown-editor-shell {
+  cursor: text;
+}
+
 .markdown-editor {
   width: 100%;
   min-height: calc(100vh - 184px);
@@ -339,6 +344,7 @@ body {
   color: var(--accent);
   text-decoration-thickness: 1.5px;
   text-underline-offset: 0.15em;
+  cursor: pointer;
 }
 
 .markdown-prose hr {
