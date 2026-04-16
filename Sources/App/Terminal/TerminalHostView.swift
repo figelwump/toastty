@@ -1023,6 +1023,19 @@ final class TerminalHostView: NSView {
             return
         }
 
+        // Suppression must begin before handleKeyEvent because Ghostty can
+        // synchronously emit mouse_over_link(nil) during a modifier key press
+        // (e.g. Shift pressed while Cmd-hovering a link). Without this, the
+        // cached link URL gets cleared before the follow-up hover refresh runs,
+        // and the subsequent refresh often does not re-emit because Ghostty's
+        // internal hover state does not detect a change.
+        let suppressingLinkHoverRefresh = event.modifierFlags.contains(.command)
+        if suppressingLinkHoverRefresh {
+            beginSyntheticLinkHoverRefreshSuppression()
+        } else {
+            clearSyntheticLinkHoverRefreshSuppression()
+        }
+
         // Apply the modifier transition first so stationary pointer hover
         // state re-evaluates against Ghostty's current modifier set.
         let handled = handleKeyEvent(event, action: action)
@@ -1032,13 +1045,8 @@ final class TerminalHostView: NSView {
 
         // FlagsChanged events can carry stale or zero-origin locationInWindow
         // values, so use the window's live mouse location instead of the event's.
-        if event.modifierFlags.contains(.command) {
-            beginSyntheticLinkHoverRefreshSuppression()
-        } else {
-            clearSyntheticLinkHoverRefreshSuppression()
-        }
         _ = forwardCurrentMouseHoverPosition(modifierFlags: event.modifierFlags)
-        if event.modifierFlags.contains(.command) {
+        if suppressingLinkHoverRefresh {
             DispatchQueue.main.async { [weak self] in
                 self?.endSyntheticLinkHoverRefreshSuppression()
             }

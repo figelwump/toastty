@@ -1048,6 +1048,69 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(usedAlternatePlacement)
     }
 
+    func testCommandShiftClickSurvivesSynchronousLinkClearDuringShiftKeyPress() throws {
+        // Ghostty can synchronously emit mouse_over_link(nil) while processing a
+        // Shift key press on a Cmd-hovered link. The suppression window must
+        // cover the key event itself, not just the follow-up hover refresh.
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openedURL: URL?
+        var usedAlternatePlacement = false
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in
+                // Simulate Ghostty synchronously clearing the hovered link
+                // when the shift modifier press is forwarded.
+                hostView.setGhosttyMouseOverLink(nil)
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1248))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { url, useAlternatePlacement in
+            openedURL = url
+            usedAlternatePlacement = useAlternatePlacement
+            return true
+        }
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+        XCTAssertTrue(usedAlternatePlacement)
+    }
+
     func testMouseExitStillClearsHoveredLinkAfterSyntheticHoverRefresh() throws {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
