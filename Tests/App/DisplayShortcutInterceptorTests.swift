@@ -265,6 +265,20 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isSaveShortcut(repeatedEvent))
     }
 
+    func testTextSizeShortcutDirectionMatchesCommandScaleKeys() throws {
+        let commandEqualEvent = try makeKeyEvent(characters: "=", modifiers: [.command], keyCode: 0x18)
+        let commandPlusEvent = try makeKeyEvent(characters: "+", modifiers: [.command, .shift], keyCode: 0x18)
+        let commandMinusEvent = try makeKeyEvent(characters: "-", modifiers: [.command], keyCode: 0x1B)
+        let commandZeroEvent = try makeKeyEvent(characters: "0", modifiers: [.command], keyCode: 0x1D)
+        let plainMinusEvent = try makeKeyEvent(characters: "-", modifiers: [], keyCode: 0x1B)
+
+        XCTAssertEqual(DisplayShortcutInterceptor.textSizeShortcutDirection(for: commandEqualEvent), .increase)
+        XCTAssertEqual(DisplayShortcutInterceptor.textSizeShortcutDirection(for: commandPlusEvent), .increase)
+        XCTAssertEqual(DisplayShortcutInterceptor.textSizeShortcutDirection(for: commandMinusEvent), .decrease)
+        XCTAssertEqual(DisplayShortcutInterceptor.textSizeShortcutDirection(for: commandZeroEvent), .reset)
+        XCTAssertNil(DisplayShortcutInterceptor.textSizeShortcutDirection(for: plainMinusEvent))
+    }
+
     func testResizeSplitDirectionMatchesCommandControlArrowsOnly() throws {
         let leftArrow = try makeKeyEvent(
             characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
@@ -396,6 +410,85 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
         XCTAssertTrue(interceptor.handle(.saveMarkdown, appOwnedWindowID: windowID))
         XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
+    }
+
+    func testTextSizeShortcutTargetsFocusedTerminalMarkdownAndNotBrowser() throws {
+        let increaseEvent = try makeKeyEvent(characters: "=", modifiers: [.command], keyCode: 0x18)
+
+        let terminalStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let terminalWindowID = try XCTUnwrap(terminalStore.state.windows.first?.id)
+        let terminalInterceptor = makeInterceptor(store: terminalStore)
+        XCTAssertEqual(
+            terminalInterceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: terminalWindowID),
+            .increaseTextSize
+        )
+
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let markdownStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let markdownWindowID = try XCTUnwrap(markdownStore.state.windows.first?.id)
+        XCTAssertTrue(
+            markdownStore.createMarkdownPanelFromCommand(
+                preferredWindowID: markdownWindowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fileURL.path,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let markdownInterceptor = makeInterceptor(store: markdownStore)
+        XCTAssertEqual(
+            markdownInterceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: markdownWindowID),
+            .increaseTextSize
+        )
+
+        let browserStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let browserWindowID = try XCTUnwrap(browserStore.state.windows.first?.id)
+        XCTAssertTrue(
+            browserStore.createBrowserPanelFromCommand(
+                preferredWindowID: browserWindowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let browserInterceptor = makeInterceptor(store: browserStore)
+        XCTAssertNil(browserInterceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: browserWindowID))
+    }
+
+    func testTextSizeShortcutHandleAdjustsFocusedMarkdownScale() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: windowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fileURL.path,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+        XCTAssertEqual(store.state.effectiveMarkdownTextScale(for: windowID), 1.1, accuracy: 0.0001)
+        XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: windowID), AppState.defaultTerminalFontPoints)
     }
 
     func testMarkdownSplitShortcutsCreateTerminalPanelsInFocusedWorkspace() throws {

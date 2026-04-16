@@ -93,6 +93,18 @@ struct FocusedMarkdownPanelCommandSelection: Equatable {
     let panelID: UUID
 }
 
+enum FocusedTextSizeCommandTarget: Equatable {
+    case terminal(windowID: UUID)
+    case markdown(windowID: UUID)
+
+    var windowID: UUID {
+        switch self {
+        case .terminal(let windowID), .markdown(let windowID):
+            return windowID
+        }
+    }
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -297,6 +309,26 @@ final class AppStore: ObservableObject {
             workspaceID: selection.workspace.id,
             panelID: panelID
         )
+    }
+
+    func focusedTextSizeCommandTarget(
+        preferredWindowID: UUID?
+    ) -> FocusedTextSizeCommandTarget? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let panelID = selection.workspace.focusedPanelID,
+              selection.workspace.slotID(containingPanelID: panelID) != nil,
+              let panelState = selection.workspace.panels[panelID] else {
+            return nil
+        }
+
+        switch panelState {
+        case .terminal:
+            return .terminal(windowID: selection.windowID)
+        case .web(let webState) where webState.definition == .localDocument:
+            return .markdown(windowID: selection.windowID)
+        case .web:
+            return nil
+        }
     }
 
     @discardableResult
@@ -1072,17 +1104,24 @@ final class AppStore: ObservableObject {
         let windowFontOverride = state.normalizedTerminalFontOverride(
             state.effectiveTerminalFontPoints(for: selection.windowID)
         )
+        let windowMarkdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(
+            state.effectiveMarkdownTextScale(for: selection.windowID)
+        )
 
         guard let focusedPanelID = selection.workspace.focusedPanelID,
               case .terminal(let terminalState)? = selection.workspace.panels[focusedPanelID] else {
-            guard let windowFontOverride else { return nil }
-            return WindowLaunchSeed(windowTerminalFontSizePointsOverride: windowFontOverride)
+            guard windowFontOverride != nil || windowMarkdownTextScaleOverride != nil else { return nil }
+            return WindowLaunchSeed(
+                windowTerminalFontSizePointsOverride: windowFontOverride,
+                windowMarkdownTextScaleOverride: windowMarkdownTextScaleOverride
+            )
         }
 
         return WindowLaunchSeed(
             terminalCWD: terminalState.workingDirectorySeed,
             terminalProfileBinding: terminalState.profileBinding ?? state.defaultTerminalProfileBinding,
-            windowTerminalFontSizePointsOverride: windowFontOverride
+            windowTerminalFontSizePointsOverride: windowFontOverride,
+            windowMarkdownTextScaleOverride: windowMarkdownTextScaleOverride
         )
     }
 

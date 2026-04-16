@@ -353,6 +353,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(finalSnapshot.result["bootstrapIsEditing"] as? Bool, false)
             XCTAssertEqual(finalSnapshot.result["bootstrapIsDirty"] as? Bool, false)
             XCTAssertEqual(finalSnapshot.result["currentTheme"] as? String, "dark")
+            XCTAssertEqual(finalSnapshot.result["bootstrapTextScale"] as? Double, 1.0)
             XCTAssertEqual(finalSnapshot.result["hostLifecycleState"] as? String, "detached")
         }
     }
@@ -820,6 +821,29 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 state.effectiveTerminalFontPoints(for: fixture.secondWindowID),
                 AppState.defaultTerminalFontPoints + 1
             )
+        }
+    }
+
+    func testMarkdownTextActionUsesExplicitWindowSelection() async throws {
+        let fixture = makeTwoWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "app.markdown_text.increase",
+                    "args": [
+                        "windowID": fixture.secondWindowID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            XCTAssertEqual(state.effectiveMarkdownTextScale(for: fixture.firstWindowID), 1.0)
+            XCTAssertEqual(state.effectiveMarkdownTextScale(for: fixture.secondWindowID), 1.1, accuracy: 0.0001)
         }
     }
 

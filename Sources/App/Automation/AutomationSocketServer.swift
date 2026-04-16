@@ -1542,6 +1542,15 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "app.font.reset":
             didMutate = store.send(.resetWindowTerminalFont(windowID: try resolveWindowID(args: args)))
 
+        case "app.markdown_text.increase":
+            didMutate = store.send(.increaseWindowMarkdownTextScale(windowID: try resolveWindowID(args: args)))
+
+        case "app.markdown_text.decrease":
+            didMutate = store.send(.decreaseWindowMarkdownTextScale(windowID: try resolveWindowID(args: args)))
+
+        case "app.markdown_text.reset":
+            didMutate = store.send(.resetWindowMarkdownTextScale(windowID: try resolveWindowID(args: args)))
+
         case "sidebar.workspaces.new":
             let windowID = try resolveWindowID(args: args)
             let title = args.string("title")
@@ -1817,6 +1826,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             result["bootstrapIsSaving"] = .bool(bootstrap.isSaving)
             result["bootstrapSaveErrorMessage"] = bootstrap.saveErrorMessage.map { .string($0) } ?? .null
             result["bootstrapTheme"] = .string(bootstrap.theme.rawValue)
+            result["bootstrapTextScale"] = .double(bootstrap.textScale)
             result["bootstrapContentLength"] = .int(bootstrap.content.utf8.count)
             result["bootstrapContentSHA256"] = .string(Self.sha256Hex(bootstrap.content))
         } else {
@@ -1830,6 +1840,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             result["bootstrapIsSaving"] = .null
             result["bootstrapSaveErrorMessage"] = .null
             result["bootstrapTheme"] = .null
+            result["bootstrapTextScale"] = .null
             result["bootstrapContentLength"] = .null
             result["bootstrapContentSHA256"] = .null
         }

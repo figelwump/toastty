@@ -5,6 +5,7 @@ import SwiftUI
 struct MarkdownPanelHostView: NSViewRepresentable {
     @ObservedObject var runtime: MarkdownPanelRuntime
     let webState: WebPanelState
+    let textScale: Double
 
     @MainActor
     final class Coordinator {
@@ -47,6 +48,7 @@ struct MarkdownPanelHostView: NSViewRepresentable {
             runtime.apply(webState: webState)
             context.coordinator.lastAppliedWebState = webState
         }
+        runtime.applyTextScale(textScale)
     }
 
     static func dismantleNSView(_ containerView: WebPanelContainerView, coordinator: Coordinator) {

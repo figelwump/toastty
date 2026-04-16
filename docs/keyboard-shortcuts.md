@@ -61,6 +61,20 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+G` | Find next match |
 | `Cmd+Shift+G` | Find previous match |
 
+## Text size
+
+These shortcuts target the focused panel type:
+
+- focused terminal: adjust the window's terminal font size
+- focused markdown panel: adjust the window's markdown text size
+- focused browser panel: no app-owned text-size action in this slice
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+=` / `Cmd++` | Increase text size |
+| `Cmd+-` | Decrease text size |
+| `Cmd+0` | Reset text size |
+
 ## Browser
 
 These shortcuts are available when the focused panel is a browser panel:

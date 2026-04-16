@@ -1,7 +1,7 @@
 export type MarkdownPanelTheme = "light" | "dark";
 
 export interface MarkdownPanelBootstrap {
-  contractVersion: 3;
+  contractVersion: 4;
   filePath: string | null;
   displayName: string;
   content: string;
@@ -12,6 +12,7 @@ export interface MarkdownPanelBootstrap {
   isSaving: boolean;
   saveErrorMessage: string | null;
   theme: MarkdownPanelTheme;
+  textScale: number;
 }
 
 type BootstrapListener = (bootstrap: MarkdownPanelBootstrap | null) => void;
@@ -20,6 +21,7 @@ declare global {
   interface Window {
     ToasttyMarkdownPanel?: {
       receiveBootstrap: (bootstrap: MarkdownPanelBootstrap) => void;
+      setTextScale: (textScale: number) => void;
       getCurrentBootstrap: () => MarkdownPanelBootstrap | null;
       subscribe: (listener: BootstrapListener) => () => void;
     };
@@ -36,10 +38,17 @@ function applyTheme(bootstrap: MarkdownPanelBootstrap | null) {
   document.documentElement.dataset.theme = bootstrap.theme;
 }
 
+function applyTextScale(bootstrap: MarkdownPanelBootstrap | null) {
+  document.documentElement.style.setProperty(
+    "--toastty-markdown-text-scale",
+    String(bootstrap?.textScale ?? 1)
+  );
+}
+
 function warnOnContractMismatch(bootstrap: MarkdownPanelBootstrap) {
-  if (bootstrap.contractVersion !== 3) {
+  if (bootstrap.contractVersion !== 4) {
     console.warn(
-      `[ToasttyMarkdownPanel] Expected bootstrap contractVersion 3 but received ${bootstrap.contractVersion}.`
+      `[ToasttyMarkdownPanel] Expected bootstrap contractVersion 4 but received ${bootstrap.contractVersion}.`
     );
   }
 }
@@ -55,6 +64,15 @@ window.ToasttyMarkdownPanel = {
     currentBootstrap = bootstrap;
     warnOnContractMismatch(bootstrap);
     applyTheme(bootstrap);
+    applyTextScale(bootstrap);
+    notifyListeners();
+  },
+  setTextScale(textScale) {
+    if (!currentBootstrap) {
+      return;
+    }
+    currentBootstrap = { ...currentBootstrap, textScale };
+    applyTextScale(currentBootstrap);
     notifyListeners();
   },
   getCurrentBootstrap() {

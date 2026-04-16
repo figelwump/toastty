@@ -10,6 +10,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
     public var selectedWorkspaceID: UUID?
     public var sidebarVisible: Bool
     public var terminalFontSizePointsOverride: Double?
+    public var markdownTextScaleOverride: Double?
 
     public init(
         id: UUID,
@@ -17,7 +18,8 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         workspaceIDs: [UUID],
         selectedWorkspaceID: UUID?,
         sidebarVisible: Bool = true,
-        terminalFontSizePointsOverride: Double? = nil
+        terminalFontSizePointsOverride: Double? = nil,
+        markdownTextScaleOverride: Double? = nil
     ) {
         self.id = id
         self.frame = frame
@@ -25,6 +27,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         self.selectedWorkspaceID = selectedWorkspaceID
         self.sidebarVisible = sidebarVisible
         self.terminalFontSizePointsOverride = terminalFontSizePointsOverride.map(AppState.clampedTerminalFontPoints)
+        self.markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(markdownTextScaleOverride)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -34,6 +37,7 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         case selectedWorkspaceID
         case sidebarVisible
         case terminalFontSizePointsOverride
+        case markdownTextScaleOverride
     }
 
     public init(from decoder: Decoder) throws {
@@ -47,6 +51,12 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
             Double.self,
             forKey: .terminalFontSizePointsOverride
         ).map(AppState.clampedTerminalFontPoints)
+        markdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(
+            try container.decodeIfPresent(
+                Double.self,
+                forKey: .markdownTextScaleOverride
+            )
+        )
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -57,5 +67,6 @@ public struct WindowState: Codable, Equatable, Identifiable, Sendable {
         try container.encodeIfPresent(selectedWorkspaceID, forKey: .selectedWorkspaceID)
         try container.encode(sidebarVisible, forKey: .sidebarVisible)
         try container.encodeIfPresent(terminalFontSizePointsOverride, forKey: .terminalFontSizePointsOverride)
+        try container.encodeIfPresent(markdownTextScaleOverride, forKey: .markdownTextScaleOverride)
     }
 }

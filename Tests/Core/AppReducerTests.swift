@@ -743,7 +743,8 @@ struct AppReducerTests {
             workspaceTitle: "Client Logs",
             terminalCWD: "~/src/../tmp/toastty",
             terminalProfileBinding: TerminalProfileBinding(profileID: "zmx"),
-            windowTerminalFontSizePointsOverride: 15
+            windowTerminalFontSizePointsOverride: 15,
+            windowMarkdownTextScaleOverride: 1.2
         )
 
         #expect(reducer.send(.createWindow(seed: seed, initialFrame: nil), state: &state))
@@ -761,7 +762,9 @@ struct AppReducerTests {
         #expect(terminalState.cwd == ((NSHomeDirectory() + "/src/../tmp/toastty") as NSString).standardizingPath)
         #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
         #expect(window.terminalFontSizePointsOverride == 15)
+        #expect(window.markdownTextScaleOverride == 1.2)
         #expect(state.effectiveTerminalFontPoints(for: window.id) == 15)
+        #expect(state.effectiveMarkdownTextScale(for: window.id) == 1.2)
         try StateValidator.validate(state)
     }
 
@@ -2389,6 +2392,38 @@ struct AppReducerTests {
 
         #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: defaultPoints), state: &state) == false)
         #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+    }
+
+    @Test
+    func windowMarkdownTextActionsAdjustAndResetScale() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let defaultScale = AppState.defaultMarkdownTextScale
+        let step = AppState.markdownTextScaleStep
+
+        #expect(reducer.send(.increaseWindowMarkdownTextScale(windowID: windowID), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == defaultScale + step)
+        #expect(state.window(id: windowID)?.markdownTextScaleOverride == defaultScale + step)
+
+        #expect(reducer.send(.decreaseWindowMarkdownTextScale(windowID: windowID), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == defaultScale)
+        #expect(state.window(id: windowID)?.markdownTextScaleOverride == nil)
+
+        #expect(reducer.send(.setWindowMarkdownTextScale(windowID: windowID, scale: 1.4), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == 1.4)
+
+        #expect(reducer.send(.resetWindowMarkdownTextScale(windowID: windowID), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == defaultScale)
+        #expect(state.window(id: windowID)?.markdownTextScaleOverride == nil)
+
+        #expect(reducer.send(.setWindowMarkdownTextScale(windowID: windowID, scale: AppState.maxMarkdownTextScale + 1), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == AppState.maxMarkdownTextScale)
+        #expect(reducer.send(.increaseWindowMarkdownTextScale(windowID: windowID), state: &state) == false)
+
+        #expect(reducer.send(.setWindowMarkdownTextScale(windowID: windowID, scale: AppState.minMarkdownTextScale), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == AppState.minMarkdownTextScale)
+        #expect(reducer.send(.decreaseWindowMarkdownTextScale(windowID: windowID), state: &state) == false)
     }
 
     @Test

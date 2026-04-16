@@ -50,6 +50,10 @@ public enum AppAction: Equatable, Sendable {
     case increaseWindowTerminalFont(windowID: UUID)
     case decreaseWindowTerminalFont(windowID: UUID)
     case resetWindowTerminalFont(windowID: UUID)
+    case setWindowMarkdownTextScale(windowID: UUID, scale: Double)
+    case increaseWindowMarkdownTextScale(windowID: UUID)
+    case decreaseWindowMarkdownTextScale(windowID: UUID)
+    case resetWindowMarkdownTextScale(windowID: UUID)
     case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
     case splitFocusedSlotInDirectionWithTerminalProfile(
@@ -123,6 +127,14 @@ public extension AppAction {
             return "decreaseWindowTerminalFont"
         case .resetWindowTerminalFont:
             return "resetWindowTerminalFont"
+        case .setWindowMarkdownTextScale:
+            return "setWindowMarkdownTextScale"
+        case .increaseWindowMarkdownTextScale:
+            return "increaseWindowMarkdownTextScale"
+        case .decreaseWindowMarkdownTextScale:
+            return "decreaseWindowMarkdownTextScale"
+        case .resetWindowMarkdownTextScale:
+            return "resetWindowMarkdownTextScale"
         case .splitFocusedSlot:
             return "splitFocusedSlot"
         case .splitFocusedSlotInDirection:

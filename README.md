@@ -38,7 +38,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Scrollback find** — Search the active terminal's Ghostty scrollback in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
 - **Persisted terminal history** — With shell integration installed, restored `zsh` and `bash` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
-- **Font control** — Increase, decrease, or reset terminal font size per window, with new windows inheriting the source window's current size and layouts remembering window-local overrides
+- **Text size control** — `Cmd+=`, `Cmd+-`, and `Cmd+0` adjust terminal font size for focused terminals and markdown text size for focused markdown panels, with separate window-local overrides persisted in layouts
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
@@ -62,6 +62,9 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+F` | Find in active terminal scrollback |
 | `Cmd+G` | Find next in active terminal scrollback |
 | `Cmd+Shift+G` | Find previous in active terminal scrollback |
+| `Cmd+=` / `Cmd++` | Increase text size for the focused terminal or markdown panel |
+| `Cmd+-` | Decrease text size for the focused terminal or markdown panel |
+| `Cmd+0` | Reset text size for the focused terminal or markdown panel |
 | `Cmd+Ctrl+Arrow` | Resize split |
 | `Cmd+W` | Close focused panel |
 | `Cmd+Ctrl+=` | Equalize splits |
@@ -166,7 +169,7 @@ Use `Toastty > Manage Config…` to open or create the live config file, `Toastt
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
 - `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
-- `Increase Terminal Font`, `Decrease Terminal Font`, and `Reset Terminal Font` update the active window's persisted layout state instead of rewriting your config file
+- `View > Increase Text Size`, `Decrease Text Size`, and `Reset Text Size` update window-local terminal or markdown text-size overrides instead of rewriting your config file
 
 Example:
 

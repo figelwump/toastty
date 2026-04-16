@@ -88,7 +88,8 @@ public struct AppReducer {
                 frame: initialFrame ?? CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
                 workspaceIDs: [workspace.id],
                 selectedWorkspaceID: workspace.id,
-                terminalFontSizePointsOverride: seed?.windowTerminalFontSizePointsOverride
+                terminalFontSizePointsOverride: seed?.windowTerminalFontSizePointsOverride,
+                markdownTextScaleOverride: seed?.windowMarkdownTextScaleOverride
             )
 
             commitWorkspace(workspace, workspaceID: workspace.id, state: &state)
@@ -311,6 +312,9 @@ public struct AppReducer {
                 selectedWorkspaceID: detachedWorkspaceID,
                 terminalFontSizePointsOverride: state.normalizedTerminalFontOverride(
                     state.effectiveTerminalFontPoints(for: sourceLocation.windowID)
+                ),
+                markdownTextScaleOverride: AppState.normalizedMarkdownTextScaleOverride(
+                    state.effectiveMarkdownTextScale(for: sourceLocation.windowID)
                 )
             )
 
@@ -538,6 +542,29 @@ public struct AppReducer {
             state.windows[windowIndex].terminalFontSizePointsOverride = nil
             return true
 
+        case .setWindowMarkdownTextScale(let windowID, let scale):
+            return setWindowMarkdownTextScale(windowID: windowID, scale: scale, state: &state)
+
+        case .increaseWindowMarkdownTextScale(let windowID):
+            return adjustWindowMarkdownTextScale(
+                windowID: windowID,
+                step: AppState.markdownTextScaleStep,
+                state: &state
+            )
+
+        case .decreaseWindowMarkdownTextScale(let windowID):
+            return adjustWindowMarkdownTextScale(
+                windowID: windowID,
+                step: -AppState.markdownTextScaleStep,
+                state: &state
+            )
+
+        case .resetWindowMarkdownTextScale(let windowID):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            guard state.windows[windowIndex].markdownTextScaleOverride != nil else { return false }
+            state.windows[windowIndex].markdownTextScaleOverride = nil
+            return true
+
         case .splitFocusedSlot(let workspaceID, let orientation):
             let direction: SlotSplitDirection = orientation == .horizontal ? .right : .down
             return splitFocusedSlot(workspaceID: workspaceID, direction: direction, state: &state)
@@ -707,6 +734,40 @@ public struct AppReducer {
             return false
         }
         state.windows[windowIndex].terminalFontSizePointsOverride = normalizedOverride
+        return true
+    }
+
+    private static func setWindowMarkdownTextScale(
+        windowID: UUID,
+        scale: Double,
+        state: inout AppState
+    ) -> Bool {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        let normalizedOverride = AppState.normalizedMarkdownTextScaleOverride(scale)
+        guard state.windows[windowIndex].markdownTextScaleOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].markdownTextScaleOverride = normalizedOverride
+        return true
+    }
+
+    private static func adjustWindowMarkdownTextScale(
+        windowID: UUID,
+        step: Double,
+        state: inout AppState
+    ) -> Bool {
+        guard state.window(id: windowID) != nil else { return false }
+        let previousScale = state.effectiveMarkdownTextScale(for: windowID)
+        let nextScale = AppState.clampedMarkdownTextScale(previousScale + step)
+        guard abs(nextScale - previousScale) >= AppState.markdownTextScaleComparisonEpsilon else {
+            return false
+        }
+        let normalizedOverride = AppState.normalizedMarkdownTextScaleOverride(nextScale)
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        guard state.windows[windowIndex].markdownTextScaleOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].markdownTextScaleOverride = normalizedOverride
         return true
     }
 

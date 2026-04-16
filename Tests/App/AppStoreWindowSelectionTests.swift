@@ -286,6 +286,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         state.workspacesByID[sourceWorkspaceID] = sourceWorkspace
         state.configuredTerminalFontPoints = 13
         state.windows[0].terminalFontSizePointsOverride = 16
+        state.windows[0].markdownTextScaleOverride = 1.2
 
         let sourceFrame = CGRectCodable(x: 320, y: 240, width: 1600, height: 960)
         let store = AppStore(
@@ -311,7 +312,13 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(newTerminalState.cwd, "/tmp/toastty/new-window")
         XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "zmx"))
         XCTAssertEqual(newWindow.terminalFontSizePointsOverride, 16)
+        XCTAssertEqual(newWindow.markdownTextScaleOverride, 1.2)
         XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: newWindow.id), 16)
+        XCTAssertEqual(store.state.effectiveMarkdownTextScale(for: newWindow.id), 1.2)
+
+        XCTAssertTrue(store.send(.increaseWindowMarkdownTextScale(windowID: newWindow.id)))
+        XCTAssertEqual(store.state.effectiveMarkdownTextScale(for: newWindow.id), 1.3, accuracy: 0.0001)
+        XCTAssertEqual(store.state.effectiveMarkdownTextScale(for: sourceWindowID), 1.2, accuracy: 0.0001)
     }
 
     func testCreateWindowFromCommandFallsBackToHomeDirectoryAndDefaultProfileFromNonTerminalFocus() throws {
@@ -321,6 +328,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let reducer = AppReducer()
         state.configuredTerminalFontPoints = 13
         state.windows[0].terminalFontSizePointsOverride = 17
+        state.windows[0].markdownTextScaleOverride = 1.3
 
         XCTAssertTrue(
             reducer.send(
@@ -361,7 +369,9 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(newTerminalState.cwd, NSHomeDirectory())
         XCTAssertEqual(newTerminalState.profileBinding, TerminalProfileBinding(profileID: "ssh-prod"))
         XCTAssertEqual(newWindow.terminalFontSizePointsOverride, 17)
+        XCTAssertEqual(newWindow.markdownTextScaleOverride, 1.3)
         XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: newWindow.id), 17)
+        XCTAssertEqual(store.state.effectiveMarkdownTextScale(for: newWindow.id), 1.3)
     }
 
     func testCreateWindowFromCommandUsesProvidedFrameWithoutCascadeWhenNoSourceWindowExists() throws {
@@ -384,7 +394,9 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(window.frame, expectedFrame)
         XCTAssertEqual(store.state.selectedWindowID, window.id)
         XCTAssertNil(window.terminalFontSizePointsOverride)
+        XCTAssertNil(window.markdownTextScaleOverride)
         XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: window.id), 13)
+        XCTAssertEqual(store.state.effectiveMarkdownTextScale(for: window.id), AppState.defaultMarkdownTextScale)
     }
 
     func testCreateWorkspaceTabFromCommandSeedsFromFocusedTerminal() throws {
@@ -692,6 +704,61 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
 
         XCTAssertNil(store.focusedBrowserPanelSelection(preferredWindowID: nil))
+    }
+
+    func testFocusedTextSizeCommandTargetReturnsTerminalForFocusedTerminal() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+
+        XCTAssertEqual(
+            store.focusedTextSizeCommandTarget(preferredWindowID: windowID),
+            .terminal(windowID: windowID)
+        )
+    }
+
+    func testFocusedTextSizeCommandTargetReturnsMarkdownForFocusedMarkdown() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: windowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fileURL.path,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        XCTAssertEqual(
+            store.focusedTextSizeCommandTarget(preferredWindowID: windowID),
+            .markdown(windowID: windowID)
+        )
+    }
+
+    func testFocusedTextSizeCommandTargetReturnsNilForFocusedBrowser() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        XCTAssertNil(store.focusedTextSizeCommandTarget(preferredWindowID: windowID))
     }
 
     func testFocusPanelContainingBrowserSelectsBrowserTab() throws {

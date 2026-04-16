@@ -293,6 +293,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     private var currentBootstrap: MarkdownPanelBootstrap?
     private var session: MarkdownEditingSession?
     private var currentTheme: MarkdownPanelTheme = .dark
+    private var currentTextScale: Double = AppState.defaultMarkdownTextScale
 
     init(
         panelID: UUID,
@@ -477,6 +478,19 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         requestReload(debounced: false)
     }
 
+    func applyTextScale(_ scale: Double) {
+        let nextScale = AppState.clampedMarkdownTextScale(scale)
+        guard abs(nextScale - currentTextScale) >= AppState.markdownTextScaleComparisonEpsilon else {
+            return
+        }
+
+        currentTextScale = nextScale
+        if let currentBootstrap {
+            self.currentBootstrap = currentBootstrap.setting(textScale: nextScale)
+        }
+        pushTextScaleUpdateIfPossible()
+    }
+
     func applyEffectiveAppearance(_ appearance: NSAppearance?) {
         webView.appearance = appearance
 
@@ -499,11 +513,12 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 
     nonisolated static func bootstrap(
         for webState: WebPanelState,
-        theme: MarkdownPanelTheme = .dark
+        theme: MarkdownPanelTheme = .dark,
+        textScale: Double = AppState.defaultMarkdownTextScale
     ) async -> MarkdownPanelBootstrap {
         let document = await loadDocument(for: webState)
         let session = MarkdownEditingSession(document: document)
-        return makeBootstrap(from: session, theme: theme)
+        return makeBootstrap(from: session, theme: theme, textScale: textScale)
     }
 
     nonisolated static func loadDocument(for webState: WebPanelState) async -> MarkdownPanelDocumentSnapshot {
@@ -539,6 +554,10 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         return "window.ToasttyMarkdownPanel?.receiveBootstrap(\(json));"
     }
 
+    nonisolated static func textScaleJavaScript(for textScale: Double) -> String {
+        "window.ToasttyMarkdownPanel?.setTextScale(\(String(format: "%.4f", textScale)));"
+    }
+
     static func makeWebViewConfiguration(
         for capabilityProfile: WebPanelCapabilityProfile
     ) -> WKWebViewConfiguration {
@@ -552,7 +571,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 
     nonisolated static func makeBootstrap(
         from session: MarkdownEditingSession,
-        theme: MarkdownPanelTheme
+        theme: MarkdownPanelTheme,
+        textScale: Double
     ) -> MarkdownPanelBootstrap {
         MarkdownPanelBootstrap(
             filePath: session.filePath,
@@ -564,7 +584,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             hasExternalConflict: session.hasExternalConflict,
             isSaving: session.isSaving,
             saveErrorMessage: session.saveErrorMessage,
-            theme: theme
+            theme: theme,
+            textScale: textScale
         )
     }
 }
@@ -848,7 +869,11 @@ private extension MarkdownPanelRuntime {
     func pushThemeUpdateIfPossible() {
         guard let session else { return }
 
-        let themedBootstrap = Self.makeBootstrap(from: session, theme: currentTheme)
+        let themedBootstrap = Self.makeBootstrap(
+            from: session,
+            theme: currentTheme,
+            textScale: currentTextScale
+        )
         guard themedBootstrap != currentBootstrap else { return }
 
         pendingBootstrapScript = nil
@@ -858,11 +883,35 @@ private extension MarkdownPanelRuntime {
 
     func updateCurrentBootstrap(emitMetadata: Bool = false) {
         guard let session else { return }
-        let bootstrap = Self.makeBootstrap(from: session, theme: currentTheme)
+        let bootstrap = Self.makeBootstrap(
+            from: session,
+            theme: currentTheme,
+            textScale: currentTextScale
+        )
         currentBootstrap = bootstrap
         pendingBootstrapScript = nil
         if emitMetadata {
             metadataDidChange(panelID, bootstrap.displayName, nil)
+        }
+    }
+
+    func pushTextScaleUpdateIfPossible() {
+        guard currentBootstrap != nil else { return }
+        guard let entryURL else {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        if currentAssetURL != entryURL {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        let script = Self.textScaleJavaScript(for: currentTextScale)
+        webView.evaluateJavaScript(script) { [weak self] _, error in
+            guard let self, error != nil else { return }
+            self.pendingBootstrapScript = nil
+            self.pushPendingBootstrapIfPossible()
         }
     }
 

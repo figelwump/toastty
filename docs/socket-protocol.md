@@ -260,10 +260,22 @@ Supported action IDs:
   - `args.url` is optional
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
+  - terminal-only window font increase
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.font.decrease`
+  - terminal-only window font decrease
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.font.reset`
+  - terminal-only window font reset
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
+- `app.markdown_text.increase`
+  - window-local markdown text-size increase
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
+- `app.markdown_text.decrease`
+  - window-local markdown text-size decrease
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
+- `app.markdown_text.reset`
+  - window-local markdown text-size reset
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `sidebar.workspaces.new`
   - `args.title` is optional

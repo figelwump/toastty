@@ -173,7 +173,9 @@ struct AppStateCodableTests {
         #expect(decoded.selectedWindowID == windowID)
         #expect(decoded.defaultTerminalProfileID == "ssh-prod")
         #expect(decoded.window(id: windowID)?.terminalFontSizePointsOverride == 14)
+        #expect(decoded.window(id: windowID)?.markdownTextScaleOverride == nil)
         #expect(decoded.effectiveTerminalFontPoints(for: windowID) == 14)
+        #expect(decoded.effectiveMarkdownTextScale(for: windowID) == AppState.defaultMarkdownTextScale)
         #expect(decodedWorkspace.title == "Infra")
         #expect(decodedWorkspace.tabIDs == [decodedTabID])
         #expect(decodedWorkspace.selectedTabID == decodedTabID)
@@ -217,6 +219,8 @@ struct AppStateCodableTests {
 
         #expect(decoded.window(id: windowID)?.terminalFontSizePointsOverride == nil)
         #expect(decoded.effectiveTerminalFontPoints(for: windowID) == 14)
+        #expect(decoded.window(id: windowID)?.markdownTextScaleOverride == nil)
+        #expect(decoded.effectiveMarkdownTextScale(for: windowID) == AppState.defaultMarkdownTextScale)
     }
 
     @Test

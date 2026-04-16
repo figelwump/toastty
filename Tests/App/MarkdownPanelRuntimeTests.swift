@@ -611,7 +611,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 3)
+        XCTAssertEqual(bootstrap.contractVersion, 4)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.content, "# Hello Toastty\n\nA local markdown panel.")
@@ -622,6 +622,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(bootstrap.isSaving)
         XCTAssertNil(bootstrap.saveErrorMessage)
         XCTAssertEqual(bootstrap.theme, .dark)
+        XCTAssertEqual(bootstrap.textScale, AppState.defaultMarkdownTextScale)
     }
 
     func testBootstrapFallsBackToErrorDocumentWhenFileIsMissing() async {
@@ -652,13 +653,14 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             hasExternalConflict: true,
             isSaving: false,
             saveErrorMessage: "Could not save",
-            theme: .dark
+            theme: .dark,
+            textScale: 1.3
         )
 
         let script = try XCTUnwrap(MarkdownPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
         XCTAssertTrue(script.contains("window.ToasttyMarkdownPanel?.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":3"))
+        XCTAssertTrue(script.contains("\"contractVersion\":4"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
         XCTAssertTrue(script.contains("\"content\":\"# Docs\""))
         XCTAssertTrue(script.contains("\"contentRevision\":7"))
@@ -667,6 +669,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.contains("\"hasExternalConflict\":true"))
         XCTAssertTrue(script.contains("\"saveErrorMessage\":\"Could not save\""))
         XCTAssertTrue(script.contains("\"theme\":\"dark\""))
+        XCTAssertTrue(script.contains("\"textScale\":1.3"))
     }
 
     func testThemeResolvesFromEffectiveAppearance() {
@@ -747,6 +750,80 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
         XCTAssertEqual(bootstrapCallCount, 1)
+    }
+
+    func testApplyTextScaleDoesNotReReadMarkdownContent() async throws {
+        let bootstrapRecorder = BootstrapRecorder()
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await bootstrapRecorder.recordCall()
+                return MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.applyTextScale(1.2)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let bootstrapCallCount = await bootstrapRecorder.snapshot()
+        XCTAssertEqual(bootstrapCallCount, 1)
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.textScale, 1.2)
+    }
+
+    func testAppearanceChangePreservesCurrentTextScale() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.applyTextScale(1.3)
+        runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertEqual(bootstrap.theme, .light)
+        XCTAssertEqual(bootstrap.textScale, 1.3)
     }
 
     func testObservedFileReplacementReloadsUpdatedContent() async throws {
