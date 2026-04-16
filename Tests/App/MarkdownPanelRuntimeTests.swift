@@ -675,6 +675,42 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(MarkdownPanelRuntime.theme(for: nil), .dark)
     }
 
+    func testShouldApplyWebViewAppearanceSkipsSameNamedAppearance() {
+        XCTAssertFalse(
+            MarkdownPanelRuntime.shouldApplyWebViewAppearance(
+                current: NSAppearance(named: .aqua),
+                next: NSAppearance(named: .aqua)
+            )
+        )
+    }
+
+    func testShouldApplyWebViewAppearanceAllowsMeaningfulAppearanceChanges() {
+        XCTAssertTrue(
+            MarkdownPanelRuntime.shouldApplyWebViewAppearance(
+                current: NSAppearance(named: .darkAqua),
+                next: NSAppearance(named: .aqua)
+            )
+        )
+        XCTAssertTrue(
+            MarkdownPanelRuntime.shouldApplyWebViewAppearance(
+                current: nil,
+                next: NSAppearance(named: .aqua)
+            )
+        )
+        XCTAssertTrue(
+            MarkdownPanelRuntime.shouldApplyWebViewAppearance(
+                current: NSAppearance(named: .aqua),
+                next: nil
+            )
+        )
+        XCTAssertFalse(
+            MarkdownPanelRuntime.shouldApplyWebViewAppearance(
+                current: nil,
+                next: nil
+            )
+        )
+    }
+
     func testApplyUsesCurrentEffectiveAppearanceThemeForBootstrap() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")

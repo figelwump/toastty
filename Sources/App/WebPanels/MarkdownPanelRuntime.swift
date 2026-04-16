@@ -478,7 +478,12 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     }
 
     func applyEffectiveAppearance(_ appearance: NSAppearance?) {
-        webView.appearance = appearance
+        // Re-assigning the same appearance still invalidates WKWebView cursor
+        // rects, which can briefly reset the cursor to AppKit's default arrow
+        // before WebKit reasserts its hovered cursor on the next mouse move.
+        if Self.shouldApplyWebViewAppearance(current: webView.appearance, next: appearance) {
+            webView.appearance = appearance
+        }
 
         let nextTheme = Self.theme(for: appearance)
         guard nextTheme != currentTheme else { return }
@@ -495,6 +500,13 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         default:
             return .dark
         }
+    }
+
+    nonisolated static func shouldApplyWebViewAppearance(
+        current: NSAppearance?,
+        next: NSAppearance?
+    ) -> Bool {
+        current?.name != next?.name
     }
 
     nonisolated static func bootstrap(

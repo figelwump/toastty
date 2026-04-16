@@ -23,6 +23,13 @@ final class FocusAwareWKWebView: WKWebView {
         interactionDidRequestFocus?()
         return super.becomeFirstResponder()
     }
+
+    // WKWebView manages its hovered cursor from its internal content view.
+    // Rebuilding AppKit cursor rects for the outer host can briefly restore
+    // the default arrow cursor before WebKit reasserts the hovered cursor on
+    // the next mouse move, so leave the outer host without its own rects.
+    override func resetCursorRects() {
+    }
 }
 
 final class WebPanelContainerView: NSView {
