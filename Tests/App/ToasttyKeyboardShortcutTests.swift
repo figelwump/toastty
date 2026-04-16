@@ -31,6 +31,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
     }
 
     func testShortcutDefinitionsMatchExpectedGlyphs() {
+        XCTAssertEqual(ToasttyKeyboardShortcuts.commandPalette.symbolLabel, "⇧⌘P")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWindow.symbolLabel, "⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⌘B")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
@@ -48,6 +49,7 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
 
     func testShortcutDefinitionsRemainUnique() {
         let shortcuts = [
+            ToasttyKeyboardShortcuts.commandPalette,
             ToasttyKeyboardShortcuts.newWindow,
             ToasttyKeyboardShortcuts.toggleSidebar,
             ToasttyKeyboardShortcuts.newWorkspace,

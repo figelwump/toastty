@@ -6,6 +6,21 @@ import XCTest
 
 @MainActor
 final class DisplayShortcutInterceptorTests: XCTestCase {
+    func testCommandPaletteShortcutMatchesCommandShiftPOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "P", modifiers: [.command, .shift], keyCode: 0x23)
+        let plainCommandEvent = try makeKeyEvent(characters: "p", modifiers: [.command], keyCode: 0x23)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "P",
+            modifiers: [.command, .shift],
+            keyCode: 0x23,
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isCommandPaletteShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isCommandPaletteShortcut(plainCommandEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isCommandPaletteShortcut(repeatedEvent))
+    }
+
     func testNewTabShortcutMatchesPlainCommandTOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "t", modifiers: [.command], keyCode: 0x11)
         let shiftedEvent = try makeKeyEvent(characters: "T", modifiers: [.command, .shift], keyCode: 0x11)
@@ -342,6 +357,47 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
         XCTAssertNil(interceptor.shortcutAction(for: openLocationEvent, appOwnedWindowID: nil))
         XCTAssertNil(interceptor.shortcutAction(for: reloadEvent, appOwnedWindowID: nil))
+    }
+
+    func testCommandPaletteShortcutRequiresAppOwnedWindowUnlessPaletteIsAlreadyActive() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let paletteEvent = try makeKeyEvent(
+            characters: "P",
+            modifiers: [.command, .shift],
+            keyCode: 0x23
+        )
+        let inactiveInterceptor = makeInterceptor(store: store)
+        let activeInterceptor = makeInterceptor(
+            store: store,
+            isCommandPalettePresented: { true }
+        )
+
+        XCTAssertEqual(
+            inactiveInterceptor.shortcutAction(for: paletteEvent, appOwnedWindowID: windowID),
+            .commandPalette
+        )
+        XCTAssertNil(inactiveInterceptor.shortcutAction(for: paletteEvent, appOwnedWindowID: nil))
+        XCTAssertEqual(
+            activeInterceptor.shortcutAction(for: paletteEvent, appOwnedWindowID: nil),
+            .commandPalette
+        )
+    }
+
+    func testCommandPaletteActionDelegatesToggleWithOriginWindowID() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        var toggledWindowID: UUID?
+        let interceptor = makeInterceptor(
+            store: store,
+            toggleCommandPalette: { originWindowID in
+                toggledWindowID = originWindowID
+                return true
+            }
+        )
+
+        XCTAssertTrue(interceptor.handle(.commandPalette, appOwnedWindowID: windowID))
+        XCTAssertEqual(toggledWindowID, windowID)
     }
 
     func testBrowserCreationShortcutsRequireAppOwnedWindowSelection() throws {
@@ -843,7 +899,11 @@ private func rootSplitRatio(in workspace: WorkspaceState) -> Double? {
 }
 
 @MainActor
-private func makeInterceptor(store: AppStore) -> DisplayShortcutInterceptor {
+private func makeInterceptor(
+    store: AppStore,
+    isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
+    toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false }
+) -> DisplayShortcutInterceptor {
     let terminalRuntimeRegistry = TerminalRuntimeRegistry()
     terminalRuntimeRegistry.bind(store: store)
     let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
@@ -861,6 +921,8 @@ private func makeInterceptor(store: AppStore) -> DisplayShortcutInterceptor {
         webPanelRuntimeRegistry: webPanelRuntimeRegistry,
         sessionRuntimeStore: sessionRuntimeStore,
         focusedPanelCommandController: focusedPanelCommandController,
+        isCommandPalettePresented: isCommandPalettePresented,
+        toggleCommandPalette: toggleCommandPalette,
         installEventMonitor: false
     )
 }

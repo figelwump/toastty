@@ -47,6 +47,11 @@ private extension EventModifiers {
 }
 
 enum ToasttyKeyboardShortcuts {
+    static let commandPalette = ToasttyKeyboardShortcut(
+        "p",
+        modifiers: [.command, .shift]
+    )
+
     static let newTab = ToasttyKeyboardShortcut(
         "t",
         modifiers: [.command]

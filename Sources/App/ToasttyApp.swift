@@ -470,9 +470,12 @@ final class DisplayShortcutInterceptor {
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let isCommandPalettePresented: @MainActor () -> Bool
+    private let toggleCommandPalette: @MainActor (UUID?) -> Bool
     nonisolated(unsafe) private var eventMonitor: Any?
 
     enum ShortcutAction: Equatable {
+        case commandPalette
         case closePanel
         case createBrowser
         case createBrowserTab
@@ -501,6 +504,8 @@ final class DisplayShortcutInterceptor {
         webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
+        isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
+        toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         installEventMonitor: Bool = true
     ) {
         self.store = store
@@ -508,6 +513,8 @@ final class DisplayShortcutInterceptor {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.isCommandPalettePresented = isCommandPalettePresented
+        self.toggleCommandPalette = toggleCommandPalette
         if installEventMonitor {
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
@@ -533,7 +540,15 @@ final class DisplayShortcutInterceptor {
     }
 
     func shortcutAction(for event: NSEvent, appOwnedWindowID: UUID?) -> ShortcutAction? {
+        if Self.isCommandPaletteShortcut(event),
+           isCommandPalettePresented() {
+            return .commandPalette
+        }
 
+        if Self.isCommandPaletteShortcut(event),
+           appOwnedWindowID != nil {
+            return .commandPalette
+        }
         if let shortcutNumber = Self.tabSelectionShortcutNumber(for: event),
            appOwnedWindowID != nil {
             return .selectWorkspaceTab(shortcutNumber)
@@ -639,6 +654,8 @@ final class DisplayShortcutInterceptor {
 
     func handle(_ action: ShortcutAction, appOwnedWindowID: UUID?) -> Bool {
         switch action {
+        case .commandPalette:
+            toggleCommandPalette(appOwnedWindowID)
         case .closePanel:
             closeFocusedPanel()
         case .createBrowser:
@@ -680,6 +697,16 @@ final class DisplayShortcutInterceptor {
         case .cycleWorkspacePrevious:
             cycleWorkspace(direction: -1)
         }
+    }
+
+    static func isCommandPaletteShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "p" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
     }
 
     static func isNewTabShortcut(_ event: NSEvent) -> Bool {
@@ -1247,6 +1274,7 @@ struct ToasttyApp: App {
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let commandPaletteController: CommandPaletteController
     private let displayShortcutInterceptor: DisplayShortcutInterceptor
 
     private var profileShortcutRegistry: ProfileShortcutRegistry {
@@ -1388,6 +1416,16 @@ struct ToasttyApp: App {
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let commandPaletteActionHandler = CommandPaletteActionHandler(
+            store: store,
+            splitLayoutCommandController: splitLayoutCommandController
+        )
+        let commandPaletteController = CommandPaletteController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            actions: commandPaletteActionHandler
+        )
+        self.commandPaletteController = commandPaletteController
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1450,7 +1488,13 @@ struct ToasttyApp: App {
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
-            focusedPanelCommandController: focusedPanelCommandController
+            focusedPanelCommandController: focusedPanelCommandController,
+            isCommandPalettePresented: { [weak commandPaletteController] in
+                commandPaletteController?.isPresented ?? false
+            },
+            toggleCommandPalette: { [weak commandPaletteController] originWindowID in
+                commandPaletteController?.toggle(originWindowID: originWindowID) ?? false
+            }
         )
         _store = StateObject(wrappedValue: store)
         _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
