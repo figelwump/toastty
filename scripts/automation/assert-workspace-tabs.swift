@@ -263,6 +263,45 @@ private func averageRed(
     return Int(round(Double(total) / Double(count)))
 }
 
+private func averageColor(
+    in image: ImageSampler,
+    xRange: ClosedRange<Int>,
+    rowY: Int
+) -> RGB {
+    var totalRed = 0
+    var totalGreen = 0
+    var totalBlue = 0
+    var count = 0
+
+    for x in xRange {
+        let color = image.color(topX: x, topY: rowY)
+        totalRed += color.red
+        totalGreen += color.green
+        totalBlue += color.blue
+        count += 1
+    }
+
+    guard count > 0 else { return RGB(hex: 0x000000) }
+    return RGB(
+        red: Int(round(Double(totalRed) / Double(count))),
+        green: Int(round(Double(totalGreen) / Double(count))),
+        blue: Int(round(Double(totalBlue) / Double(count)))
+    )
+}
+
+private func containsColor(
+    in image: ImageSampler,
+    xRange: ClosedRange<Int>,
+    rowY: Int,
+    target: RGB,
+    tolerance: Int
+) -> Bool {
+    for x in xRange where isNear(image.color(topX: x, topY: rowY), target, tolerance: tolerance) {
+        return true
+    }
+    return false
+}
+
 private func longestRun(
     in xRange: ClosedRange<Int>,
     predicate: (Int) -> Bool
@@ -291,7 +330,6 @@ private func assertSingleWidthSeam(
 ) throws {
     let image = snapshot.image
     let scale = snapshot.scale
-    let leadingRun = snapshot.tabRuns[leadingTabIndex - 1]
     let trailingRun = snapshot.tabRuns[trailingTabIndex - 1]
     let seamX = trailingRun.lowerBound
     let seamRowY = min(
@@ -329,9 +367,116 @@ private func assertSingleWidthSeam(
         seamWidth <= max(2, scaled(requiresVisibleSeparator ? 3.5 : 2.5, scale: scale)),
         "\(messagePrefix) seam still looks double-width"
     )
+}
+
+private func assertSelectedTabOwnsSeam(
+    snapshot: HeaderTabSnapshot,
+    leadingTabIndex: Int,
+    trailingTabIndex: Int,
+    messagePrefix: String
+) throws {
+    let image = snapshot.image
+    let scale = snapshot.scale
+    let leadingRun = snapshot.tabRuns[leadingTabIndex - 1]
+    let trailingRun = snapshot.tabRuns[trailingTabIndex - 1]
+    let seamX = trailingRun.lowerBound
+    let seamRowY = min(
+        image.height - 1,
+        scaled(tabTopInsetPoints + 6, scale: scale)
+    )
+    let searchRadius = max(2, scaled(4, scale: scale))
+    let selectedRange = max(leadingRun.lowerBound, seamX - searchRadius)...min(
+        leadingRun.upperBound,
+        seamX + searchRadius
+    )
+    let trailingRange = max(trailingRun.lowerBound, seamX - searchRadius)...min(
+        trailingRun.upperBound,
+        seamX + searchRadius
+    )
+
     try assertCondition(
-        trailingRun.lowerBound <= leadingRun.upperBound + max(1, scaled(1, scale: scale)),
-        "\(messagePrefix) tabs are no longer visually overlapping"
+        containsColor(
+            in: image,
+            xRange: selectedRange,
+            rowY: seamRowY,
+            target: selectedBackground,
+            tolerance: 12
+        ),
+        "\(messagePrefix) no longer shows selected tab fill at the boundary"
+    )
+    try assertCondition(
+        containsColor(
+            in: image,
+            xRange: trailingRange,
+            rowY: seamRowY,
+            target: chromeBackground,
+            tolerance: 10
+        ),
+        "\(messagePrefix) no longer transitions into chrome-colored tab fill"
+    )
+}
+
+private func assertTabChromeFill(
+    snapshot: HeaderTabSnapshot,
+    tabIndex: Int,
+    messagePrefix: String
+) throws {
+    let image = snapshot.image
+    let scale = snapshot.scale
+    let run = snapshot.tabRuns[tabIndex - 1]
+    let sampleCenterX = run.lowerBound + ((run.length * 3) / 5)
+    let sampleHalfWidth = max(1, scaled(2, scale: scale))
+    let sampleRange = max(run.lowerBound, sampleCenterX - sampleHalfWidth)...min(
+        run.upperBound,
+        sampleCenterX + sampleHalfWidth
+    )
+    let sampleRowY = min(
+        image.height - 1,
+        scaled(tabTopInsetPoints + 10, scale: scale)
+    )
+    let fillColor = averageColor(
+        in: image,
+        xRange: sampleRange,
+        rowY: sampleRowY
+    )
+
+    try assertCondition(
+        isNear(fillColor, chromeBackground, tolerance: 10),
+        "\(messagePrefix) no longer uses the chrome-colored unselected fill"
+    )
+}
+
+private func assertVisibleSeparator(
+    snapshot: HeaderTabSnapshot,
+    leadingTabIndex: Int,
+    trailingTabIndex: Int,
+    messagePrefix: String
+) throws {
+    let image = snapshot.image
+    let scale = snapshot.scale
+    let leadingRun = snapshot.tabRuns[leadingTabIndex - 1]
+    let trailingRun = snapshot.tabRuns[trailingTabIndex - 1]
+    let seamX = trailingRun.lowerBound
+    let seamRowY = min(
+        image.height - 1,
+        scaled(tabTopInsetPoints + 6, scale: scale)
+    )
+    let searchRadius = max(2, scaled(4, scale: scale))
+    let seamRange = max(0, seamX - searchRadius)...min(image.width - 1, seamX + searchRadius)
+    let fillSampleWidth = max(2, scaled(6, scale: scale))
+    let leadingFillRange = max(leadingRun.lowerBound, seamX - searchRadius - fillSampleWidth)...max(
+        leadingRun.lowerBound,
+        seamX - searchRadius - 1
+    )
+    let fillBaseline = averageRed(
+        in: image,
+        xRange: leadingFillRange,
+        rowY: seamRowY
+    )
+
+    try assertCondition(
+        seamRange.contains { image.color(topX: $0, topY: seamRowY).red >= fillBaseline + 8 },
+        "\(messagePrefix) separator highlight disappeared"
     )
 }
 
@@ -360,11 +505,6 @@ private func assertTwoTabScreenshot(path: String) throws -> HeaderTabSnapshot {
     let scale = snapshot.scale
     let selectedRun = snapshot.selectedTabRun
     let unselectedRun = snapshot.tabRuns[1]
-
-    try assertCondition(
-        abs(unselectedRun.lowerBound - selectedRun.upperBound - 1) <= 2,
-        "two-tab header still shows a horizontal gap between tabs"
-    )
 
     try assertCondition(
         snapshot.accentRun.lowerBound >= selectedRun.lowerBound &&
@@ -402,6 +542,17 @@ private func assertTwoTabScreenshot(path: String) throws -> HeaderTabSnapshot {
         "panel header no longer visually connects with the selected tab"
     )
 
+    try assertTabChromeFill(
+        snapshot: snapshot,
+        tabIndex: 2,
+        messagePrefix: "unselected workspace tab"
+    )
+    try assertSelectedTabOwnsSeam(
+        snapshot: snapshot,
+        leadingTabIndex: 1,
+        trailingTabIndex: 2,
+        messagePrefix: "selected-to-unselected workspace tab seam"
+    )
     try assertSingleWidthSeam(
         snapshot: snapshot,
         leadingTabIndex: 1,
@@ -473,15 +624,17 @@ private func assertNineAndTenTabScreenshots(
         ten.tabWidth < referenceTwoTabSnapshot.tabWidth,
         "ten-tab header did not compress tabs relative to the two-tab layout"
     )
-    try assertCondition(
-        abs(nine.tabRuns[1].lowerBound - nine.tabRuns[0].upperBound - 1) <= 2,
-        "compressed tabs still show a horizontal gap"
-    )
 
     try assertBadgeVisibility(snapshot: nine, tabIndex: 9, expectedVisible: true)
     try assertBadgeVisibility(snapshot: ten, tabIndex: 9, expectedVisible: true)
     try assertBadgeVisibility(snapshot: ten, tabIndex: 10, expectedVisible: false)
 
+    try assertVisibleSeparator(
+        snapshot: nine,
+        leadingTabIndex: 2,
+        trailingTabIndex: 3,
+        messagePrefix: "unselected workspace tab seam"
+    )
     try assertSingleWidthSeam(
         snapshot: nine,
         leadingTabIndex: 2,
