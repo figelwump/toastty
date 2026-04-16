@@ -303,7 +303,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             let createResponse = try sendRequest(
                 command: "automation.perform_action",
                 payload: [
-                    "action": "panel.create.markdown",
+                    "action": "panel.create.localDocument",
                     "args": [
                         "placement": "newTab",
                         "filePath": markdownURL.path,
@@ -328,7 +328,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             var snapshotResponse: AutomationSocketTestResponse?
             for _ in 0 ..< 40 {
                 let response = try sendRequest(
-                    command: "automation.markdown_panel_state",
+                    command: "automation.local_document_panel_state",
                     payload: [
                         "panelID": panelID.uuidString,
                     ],
@@ -346,14 +346,71 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(finalSnapshot.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
             XCTAssertEqual(finalSnapshot.result["panelID"] as? String, panelID.uuidString)
             XCTAssertEqual(finalSnapshot.result["stateFilePath"] as? String, markdownURL.path)
+            XCTAssertEqual(finalSnapshot.result["stateFormat"] as? String, "markdown")
             XCTAssertEqual(finalSnapshot.result["bootstrapFilePath"] as? String, markdownURL.path)
             XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "smoke.md")
+            XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "markdown")
+            XCTAssertEqual(finalSnapshot.result["bootstrapShouldHighlight"] as? Bool, true)
             XCTAssertEqual(finalSnapshot.result["bootstrapContentSHA256"] as? String, expectedHash)
             XCTAssertEqual(finalSnapshot.result["bootstrapContentRevision"] as? Int, 1)
             XCTAssertEqual(finalSnapshot.result["bootstrapIsEditing"] as? Bool, false)
             XCTAssertEqual(finalSnapshot.result["bootstrapIsDirty"] as? Bool, false)
             XCTAssertEqual(finalSnapshot.result["currentTheme"] as? String, "dark")
             XCTAssertEqual(finalSnapshot.result["hostLifecycleState"] as? String, "detached")
+        }
+    }
+
+    func testMarkdownAutomationAliasesStillCreateAndInspectLocalDocumentPanel() async throws {
+        let fixture = makeSingleWindowFixture()
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-markdown-automation-alias-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownURL = tempDirectory.appendingPathComponent("alias.md", isDirectory: false)
+        let markdownContent = "# Alias Smoke\n"
+        try markdownContent.write(to: markdownURL, atomically: true, encoding: .utf8)
+        let expectedHash = SHA256.hash(data: Data(markdownContent.utf8)).map { String(format: "%02x", $0) }.joined()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.markdown",
+                    "args": [
+                        "placement": "newTab",
+                        "filePath": markdownURL.path,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let panelID = try XCTUnwrap(workspace.focusedPanelID)
+            var snapshotResponse: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.markdown_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                snapshotResponse = response
+                if response.result["bootstrapContentSHA256"] as? String == expectedHash {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            let finalSnapshot = try XCTUnwrap(snapshotResponse)
+            XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "alias.md")
+            XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "markdown")
         }
     }
 

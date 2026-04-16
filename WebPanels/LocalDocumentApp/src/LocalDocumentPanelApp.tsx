@@ -1,13 +1,22 @@
+import hljs from "highlight.js/lib/core";
+import ini from "highlight.js/lib/languages/ini";
+import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
-import { LocalDocumentPanelBootstrap } from "./bootstrap";
+import { LocalDocumentFormat, LocalDocumentPanelBootstrap } from "./bootstrap";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
-// --- Sanitize schema: extend default to allow highlight.js class names on spans ---
+if (!hljs.getLanguage("yaml")) {
+  hljs.registerLanguage("yaml", yaml);
+}
+if (!hljs.getLanguage("toml")) {
+  // The installed highlight.js bundle exposes TOML through the INI grammar.
+  hljs.registerLanguage("toml", ini);
+}
 
 const sanitizeSchema = {
   ...defaultSchema,
@@ -20,7 +29,31 @@ const sanitizeSchema = {
   },
 };
 
-// --- Heading helpers ---
+function isMarkdownFormat(format: LocalDocumentFormat): boolean {
+  return format === "markdown";
+}
+
+function syntaxLanguage(format: LocalDocumentFormat): "yaml" | "toml" | null {
+  switch (format) {
+    case "yaml":
+      return "yaml";
+    case "toml":
+      return "toml";
+    case "markdown":
+      return null;
+  }
+}
+
+function formatLabel(format: LocalDocumentFormat): string {
+  switch (format) {
+    case "markdown":
+      return "Markdown";
+    case "yaml":
+      return "YAML";
+    case "toml":
+      return "TOML";
+  }
+}
 
 function slugifyHeading(text: string): string {
   const collapsed = text
@@ -47,7 +80,14 @@ function plainText(node: React.ReactNode): string {
   return "";
 }
 
-// --- Content helpers ---
+function normalizeLineEndings(content: string): string {
+  return content.replace(/\r\n?/g, "\n");
+}
+
+function contentLines(content: string): string[] {
+  const normalized = normalizeLineEndings(content);
+  return normalized.length > 0 ? normalized.split("\n") : [""];
+}
 
 function shortenPath(filePath: string | null, displayName: string): string {
   if (!filePath) {
@@ -73,22 +113,23 @@ function computeWordCount(content: string): string {
   return words.length.toLocaleString();
 }
 
+function computeLineCount(content: string): string {
+  return contentLines(content).length.toLocaleString();
+}
+
 interface TocEntry {
   level: number;
   text: string;
   id: string;
 }
 
-/** Strip markdown inline syntax so raw heading text slugifies the same as
- *  the plain-text extraction from the rendered React tree. */
 function stripMarkdownInline(text: string): string {
   return text
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1") // links & images -> link text / alt
-    .replace(/[*_~`]/g, "");                     // bold, italic, strikethrough, code
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[*_~`]/g, "");
 }
 
 function parseToc(content: string): TocEntry[] {
-  // Strip frontmatter so YAML comments (# ...) aren't mistaken for headings
   const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
 
   const entries: TocEntry[] = [];
@@ -96,8 +137,6 @@ function parseToc(content: string): TocEntry[] {
   let fenceLen = 0;
 
   for (const line of body.split("\n")) {
-    // Track code fences with proper open/close matching (CommonMark: closing
-    // fence must use the same character and be at least as long as the opener)
     const fenceMatch = line.match(/^(`{3,}|~{3,})/);
     if (fenceMatch) {
       const char = fenceMatch[1][0];
@@ -141,16 +180,12 @@ function extractFrontmatter(content: string): Record<string, string> | null {
   return Object.keys(meta).length > 0 ? meta : null;
 }
 
-// --- Scroll helper that accounts for rehype-sanitize clobber prefix ---
-
 function scrollToHeading(id: string) {
   const el = document.getElementById("user-content-" + id) ?? document.getElementById(id);
   if (el) {
     el.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 }
-
-// --- Bootstrap hook ---
 
 function useBootstrap(): LocalDocumentPanelBootstrap | null {
   const [bootstrap, setBootstrap] = React.useState<LocalDocumentPanelBootstrap | null>(
@@ -261,8 +296,6 @@ function useLocalDocumentPanelState(): {
   };
 }
 
-// --- Components ---
-
 const FRONTMATTER_DISPLAY_KEYS = ["date", "author", "tags", "category", "status", "description"];
 
 function FrontmatterBar(props: { meta: Record<string, string> }) {
@@ -341,12 +374,16 @@ function Header(props: {
   const [tocOpen, setTocOpen] = React.useState(false);
   const shortPath = shortenPath(bootstrap.filePath, bootstrap.displayName);
   const tocEntries = React.useMemo(
-    () => (bootstrap.isEditing ? [] : parseToc(content)),
-    [bootstrap.isEditing, content]
+    () => (bootstrap.isEditing || !isMarkdownFormat(bootstrap.format) ? [] : parseToc(content)),
+    [bootstrap.isEditing, bootstrap.format, content]
   );
-  const wordCount = React.useMemo(() => computeWordCount(content), [content]);
+  const statsLabel = React.useMemo(
+    () => isMarkdownFormat(bootstrap.format)
+      ? `${computeWordCount(content)} words`
+      : `${computeLineCount(content)} lines`,
+    [bootstrap.format, content]
+  );
 
-  // Close TOC when clicking outside
   React.useEffect(() => {
     if (!tocOpen) return;
     function handleClick(e: MouseEvent) {
@@ -359,10 +396,18 @@ function Header(props: {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [tocOpen]);
 
+  React.useEffect(() => {
+    if (!isMarkdownFormat(bootstrap.format) && tocOpen) {
+      setTocOpen(false);
+    }
+  }, [bootstrap.format, tocOpen]);
+
   return (
     <header className="local-document-panel-header">
       <div className="local-document-panel-stats">
-        <span className="local-document-panel-stat">{wordCount} words</span>
+        <span className="local-document-panel-stat">{statsLabel}</span>
+        <span className="local-document-panel-stat-divider" />
+        <span className="local-document-panel-stat">{formatLabel(bootstrap.format)}</span>
       </div>
       <div className="local-document-panel-title-wrap">
         <div className="local-document-panel-title">{bootstrap.displayName}</div>
@@ -455,6 +500,115 @@ function LocalDocumentEditor(props: {
   );
 }
 
+function MarkdownDocumentView(props: { content: string }) {
+  const frontmatter = React.useMemo(
+    () => extractFrontmatter(props.content),
+    [props.content]
+  );
+
+  return (
+    <article className="markdown-prose">
+      {frontmatter && <FrontmatterBar meta={frontmatter} />}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkFrontmatter]}
+        rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
+        components={{
+          a({ href, children }) {
+            if (href?.startsWith("#")) {
+              return <a href={href}>{children}</a>;
+            }
+            return <span className="markdown-link-blocked">{children}</span>;
+          },
+          img({ alt }) {
+            return <span className="markdown-image-blocked">Image blocked{alt ? `: ${alt}` : ""}</span>;
+          },
+          h1({ children }) {
+            const id = slugifyHeading(plainText(children));
+            return <h1 id={id}>{children}</h1>;
+          },
+          h2({ children }) {
+            const id = slugifyHeading(plainText(children));
+            return <h2 id={id}>{children}</h2>;
+          },
+          h3({ children }) {
+            const id = slugifyHeading(plainText(children));
+            return <h3 id={id}>{children}</h3>;
+          },
+          h4({ children }) {
+            const id = slugifyHeading(plainText(children));
+            return <h4 id={id}>{children}</h4>;
+          },
+          h5({ children }) {
+            const id = slugifyHeading(plainText(children));
+            return <h5 id={id}>{children}</h5>;
+          },
+          h6({ children }) {
+            const id = slugifyHeading(plainText(children));
+            return <h6 id={id}>{children}</h6>;
+          }
+        }}
+      >
+        {props.content}
+      </ReactMarkdown>
+    </article>
+  );
+}
+
+function highlightedCodeHTML(
+  format: LocalDocumentFormat,
+  content: string,
+  shouldHighlight: boolean
+): string | null {
+  const language = syntaxLanguage(format);
+  if (!shouldHighlight || !language || !hljs.getLanguage(language)) {
+    return null;
+  }
+
+  try {
+    return hljs.highlight(String(content), { language, ignoreIllegals: true }).value;
+  } catch {
+    return null;
+  }
+}
+
+function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
+  const lines = React.useMemo(() => contentLines(props.content), [props.content]);
+  const highlightedHTML = React.useMemo(
+    () => highlightedCodeHTML(props.bootstrap.format, props.content, props.bootstrap.shouldHighlight),
+    [props.bootstrap.format, props.bootstrap.shouldHighlight, props.content]
+  );
+  const language = syntaxLanguage(props.bootstrap.format);
+  const codeClassName = language ? `hljs language-${language}` : "hljs";
+
+  return (
+    <section className="local-document-code-shell">
+      {!props.bootstrap.shouldHighlight && (
+        <div className="local-document-code-status-strip">
+          <p className="local-document-code-status">
+            Syntax highlighting is disabled for large files. Editing remains available, but performance may still degrade on very large documents.
+          </p>
+        </div>
+      )}
+      <div className="local-document-code-frame">
+        <div className="local-document-code-gutter" aria-hidden="true">
+          {lines.map((_, index) => (
+            <span key={index} className="local-document-code-gutter-line">
+              {index + 1}
+            </span>
+          ))}
+        </div>
+        <pre className="local-document-code-scroll">
+          {highlightedHTML ? (
+            <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
+          ) : (
+            <code className="local-document-code-plain">{props.content}</code>
+          )}
+        </pre>
+      </div>
+    </section>
+  );
+}
+
 export function LocalDocumentPanelApp() {
   const {
     bootstrap,
@@ -474,14 +628,13 @@ export function LocalDocumentPanelApp() {
       <main className="local-document-shell local-document-shell-loading">
         <div className="local-document-empty-state">
           <p className="local-document-empty-title">Waiting for content…</p>
-          <p className="local-document-empty-copy">Toastty will load a local markdown file into this panel.</p>
+          <p className="local-document-empty-copy">Toastty will load a local file into this panel.</p>
         </div>
       </main>
     );
   }
 
   const renderedContent = bootstrap.isEditing ? draftContent : bootstrap.content;
-  const frontmatter = bootstrap.isEditing ? null : extractFrontmatter(renderedContent);
 
   return (
     <main className="local-document-shell">
@@ -502,51 +655,10 @@ export function LocalDocumentPanelApp() {
           draftContent={draftContent}
           updateDraftContent={updateDraftContent}
         />
+      ) : isMarkdownFormat(bootstrap.format) ? (
+        <MarkdownDocumentView content={renderedContent} />
       ) : (
-        <article className="markdown-prose">
-          {frontmatter && <FrontmatterBar meta={frontmatter} />}
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkFrontmatter]}
-            rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
-            components={{
-              a({ href, children }) {
-                if (href?.startsWith("#")) {
-                  return <a href={href}>{children}</a>;
-                }
-                return <span className="markdown-link-blocked">{children}</span>;
-              },
-              img({ alt }) {
-                return <span className="markdown-image-blocked">Image blocked{alt ? `: ${alt}` : ""}</span>;
-              },
-              h1({ children }) {
-                const id = slugifyHeading(plainText(children));
-                return <h1 id={id}>{children}</h1>;
-              },
-              h2({ children }) {
-                const id = slugifyHeading(plainText(children));
-                return <h2 id={id}>{children}</h2>;
-              },
-              h3({ children }) {
-                const id = slugifyHeading(plainText(children));
-                return <h3 id={id}>{children}</h3>;
-              },
-              h4({ children }) {
-                const id = slugifyHeading(plainText(children));
-                return <h4 id={id}>{children}</h4>;
-              },
-              h5({ children }) {
-                const id = slugifyHeading(plainText(children));
-                return <h5 id={id}>{children}</h5>;
-              },
-              h6({ children }) {
-                const id = slugifyHeading(plainText(children));
-                return <h6 id={id}>{children}</h6>;
-              }
-            }}
-          >
-            {renderedContent}
-          </ReactMarkdown>
-        </article>
+        <CodeDocumentView bootstrap={bootstrap} content={renderedContent} />
       )}
     </main>
   );

@@ -1,9 +1,12 @@
 export type LocalDocumentPanelTheme = "light" | "dark";
+export type LocalDocumentFormat = "markdown" | "yaml" | "toml";
 
 export interface LocalDocumentPanelBootstrap {
-  contractVersion: 3;
+  contractVersion: 4;
   filePath: string | null;
   displayName: string;
+  format: LocalDocumentFormat;
+  shouldHighlight: boolean;
   content: string;
   contentRevision: number;
   isEditing: boolean;
@@ -37,9 +40,9 @@ function applyTheme(bootstrap: LocalDocumentPanelBootstrap | null) {
 }
 
 function warnOnContractMismatch(bootstrap: LocalDocumentPanelBootstrap) {
-  if (bootstrap.contractVersion !== 3) {
+  if (bootstrap.contractVersion !== 4) {
     console.warn(
-      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 3 but received ${bootstrap.contractVersion}.`
+      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 4 but received ${bootstrap.contractVersion}.`
     );
   }
 }

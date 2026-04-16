@@ -908,7 +908,7 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             cwd: cwd,
             useAlternatePlacement: useAlternatePlacement
         ) {
-        case .markdownFile(let path, let placement):
+        case .localDocumentFile(let path, let placement):
             return store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: preferredWindowID,
                 request: LocalDocumentPanelCreateRequest(

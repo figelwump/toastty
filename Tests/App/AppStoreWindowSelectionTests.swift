@@ -25,6 +25,24 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         return (canonicalPath, alternatePath)
     }
 
+    private func makeLocalDocumentFixture(
+        fileName: String,
+        content: String = "value: fixture\n"
+    ) throws -> String {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-format-tests-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = rootURL.appendingPathComponent(fileName, isDirectory: false)
+
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try Data(content.utf8).write(to: fileURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
     private func makeUnsupportedFixture(fileName: String = "README.txt") throws -> String {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -605,6 +623,41 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(
             webState.localDocument,
             LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
+        )
+    }
+
+    func testCreateYamlPanelFromCommandCreatesTypedLocalDocument() throws {
+        let fixturePath = try makeLocalDocumentFixture(fileName: "config.yaml")
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fixturePath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be local document")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixturePath)
+        XCTAssertEqual(webState.title, "config.yaml")
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fixturePath, format: .yaml)
         )
     }
 

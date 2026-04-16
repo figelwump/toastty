@@ -500,13 +500,14 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             documentSaver: { filePath, content in
                 try await saver.save(filePath: filePath, content: content)
             },
-            savedDocumentReader: { filePath, displayName in
+            savedDocumentReader: { filePath, displayName, format in
                 var encoding = String.Encoding.utf8
                 let content = try String(contentsOf: URL(fileURLWithPath: filePath), usedEncoding: &encoding)
                 let attributes = try FileManager.default.attributesOfItem(atPath: filePath)
                 return LocalDocumentPanelDocumentSnapshot(
                     filePath: filePath,
                     displayName: displayName,
+                    format: format,
                     content: content,
                     diskRevision: LocalDocumentPanelDiskRevision(
                         fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
@@ -547,6 +548,76 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(bootstrap.isEditing)
         XCTAssertEqual(bootstrap.content, "# Saved once\n")
         XCTAssertEqual(finalSaveCallCount, 1)
+    }
+
+    func testSavePreservesYamlFormatThroughSavedDocumentReload() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("config.yaml")
+        try "mode: draft\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let capturedFormat = LockedBox<LocalDocumentFormat?>(nil)
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await LocalDocumentPanelRuntime.loadDocument(for: webState)
+            },
+            documentSaver: { filePath, content in
+                try content.write(toFile: filePath, atomically: true, encoding: .utf8)
+            },
+            savedDocumentReader: { filePath, displayName, format in
+                await capturedFormat.set(format)
+                var encoding = String.Encoding.utf8
+                let content = try String(contentsOf: URL(fileURLWithPath: filePath), usedEncoding: &encoding)
+                let attributes = try FileManager.default.attributesOfItem(atPath: filePath)
+                return LocalDocumentPanelDocumentSnapshot(
+                    filePath: filePath,
+                    displayName: displayName,
+                    format: format,
+                    content: content,
+                    diskRevision: LocalDocumentPanelDiskRevision(
+                        fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                        modificationDate: attributes[.modificationDate] as? Date,
+                        size: (attributes[.size] as? NSNumber)?.uint64Value
+                    )
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "config.yaml",
+            localDocument: LocalDocumentState(
+                filePath: fileURL.path,
+                format: .yaml
+            )
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("mode: saved\n", baseContentRevision: baseRevision)
+
+        runtime.save(baseContentRevision: baseRevision)
+        try await waitUntil {
+            guard let bootstrap = runtime.automationState().currentBootstrap else {
+                return false
+            }
+            return bootstrap.isEditing == false && bootstrap.isSaving == false
+        }
+
+        let bootstrap: LocalDocumentPanelBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        let capturedFormatValue = await capturedFormat.snapshot()
+        XCTAssertEqual(capturedFormatValue, .yaml)
+        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, "mode: saved\n")
     }
 
     func testCloseConfirmationStateWaitsForSaveInProgress() async throws {
@@ -607,13 +678,18 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             for: WebPanelState(
                 definition: .localDocument,
                 title: "README.md",
-                filePath: fileURL.path
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .markdown
+                )
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 3)
+        XCTAssertEqual(bootstrap.contractVersion, 4)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .markdown)
+        XCTAssertTrue(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.content, "# Hello Toastty\n\nA local markdown panel.")
         XCTAssertEqual(bootstrap.contentRevision, 1)
         XCTAssertFalse(bootstrap.isEditing)
@@ -631,7 +707,10 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             for: WebPanelState(
                 definition: .localDocument,
                 title: "missing.md",
-                filePath: filePath
+                localDocument: LocalDocumentState(
+                    filePath: filePath,
+                    format: .markdown
+                )
             )
         )
 
@@ -639,6 +718,81 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.filePath, filePath)
         XCTAssertTrue(bootstrap.content.contains("Toastty could not load this document."))
         XCTAssertTrue(bootstrap.content.contains(filePath))
+    }
+
+    func testBootstrapForMissingYamlFallsBackToPlainTextCodeDocument() async {
+        let filePath = "/tmp/toastty/missing.yaml"
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "missing.yaml",
+                localDocument: LocalDocumentState(
+                    filePath: filePath,
+                    format: .yaml
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertTrue(bootstrap.content.hasPrefix("Toastty could not load this document."))
+        XCTAssertTrue(bootstrap.content.contains("Path:\n\(filePath)"))
+        XCTAssertTrue(bootstrap.content.contains("\n\nReason:\n"))
+        XCTAssertFalse(bootstrap.content.contains("**Path**"))
+        XCTAssertFalse(bootstrap.content.contains("# "))
+    }
+
+    func testBootstrapDisablesHighlightingForLargeTomlFiles() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("Toastty.toml")
+        let largeContent = String(repeating: "key = \"value\"\n", count: 40_500)
+        try largeContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "Toastty.toml",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .toml
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .toml)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
+    func testBootstrapKeepsHighlightingAtExactCodeThreshold() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("boundary.yaml")
+        let thresholdContent = String(repeating: "a", count: 524_288)
+        try thresholdContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "boundary.yaml",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .yaml
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content.utf8.count, 524_288)
     }
 
     func testBootstrapJavaScriptEmbedsJSONPayload() throws {
@@ -658,8 +812,10 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let script = try XCTUnwrap(LocalDocumentPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
         XCTAssertTrue(script.contains("window.ToasttyLocalDocumentPanel?.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":3"))
+        XCTAssertTrue(script.contains("\"contractVersion\":4"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
+        XCTAssertTrue(script.contains("\"format\":\"markdown\""))
+        XCTAssertTrue(script.contains("\"shouldHighlight\":true"))
         XCTAssertTrue(script.contains("\"content\":\"# Docs\""))
         XCTAssertTrue(script.contains("\"contentRevision\":7"))
         XCTAssertTrue(script.contains("\"isEditing\":true"))
@@ -914,6 +1070,22 @@ private actor BootstrapRecorder {
 
     func snapshot() -> Int {
         callCount
+    }
+}
+
+private actor LockedBox<Value: Sendable> {
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    func set(_ value: Value) {
+        self.value = value
+    }
+
+    func snapshot() -> Value {
+        value
     }
 }
 

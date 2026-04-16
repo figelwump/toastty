@@ -5,9 +5,18 @@ import XCTest
 
 @MainActor
 final class LocalDocumentOpenPanelTests: XCTestCase {
-    func testAllowedContentTypesMatchSharedMarkdownExtensions() {
+    func testSupportedFilenameExtensionsResolveToContentTypes() {
+        for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
+            XCTAssertNotNil(
+                UTType(filenameExtension: fileExtension, conformingTo: .plainText),
+                "expected \(fileExtension) to resolve to a UTType"
+            )
+        }
+    }
+
+    func testAllowedContentTypesMatchSharedSupportedExtensions() {
         let expectedTypeIdentifiers = Set(
-            LocalDocumentClassifier.markdownFilenameExtensions.compactMap {
+            LocalDocumentClassifier.supportedFilenameExtensions.compactMap {
                 UTType(filenameExtension: $0, conformingTo: .plainText)?.identifier
             }
         )

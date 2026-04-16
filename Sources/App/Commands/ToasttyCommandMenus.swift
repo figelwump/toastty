@@ -458,17 +458,17 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Button("Open Markdown File…") {
+            Button("Open Local File…") {
                 openLocalDocumentFile(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Open Markdown File in Tab…") {
+            Button("Open Local File in Tab…") {
                 openLocalDocumentFileInTab(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Open Markdown File in Split…") {
+            Button("Open Local File in Split…") {
                 openLocalDocumentFileInSplit(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)

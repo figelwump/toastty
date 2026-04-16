@@ -5,13 +5,13 @@ import UniformTypeIdentifiers
 enum LocalDocumentOpenPanel {
     @MainActor
     static func chooseFile(
-        title: String = "Open Markdown File",
+        title: String = "Open Local File",
         directoryURL: URL? = nil
     ) -> URL? {
         let panel = NSOpenPanel()
         panel.title = title
         panel.prompt = "Open"
-        panel.message = "Choose a markdown file to open in Toastty."
+        panel.message = "Choose a local file to open in Toastty."
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -22,7 +22,7 @@ enum LocalDocumentOpenPanel {
 
     static func allowedContentTypes() -> [UTType] {
         var types: [UTType] = []
-        for fileExtension in LocalDocumentClassifier.markdownFilenameExtensions {
+        for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
             if let type = UTType(filenameExtension: fileExtension, conformingTo: .plainText),
                types.contains(type) == false {
                 types.append(type)

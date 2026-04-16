@@ -1111,7 +1111,7 @@ final class DisplayShortcutInterceptor {
             return false
         }
         _ = saveFocusedLocalDocument(preferredWindowID: preferredWindowID)
-        // Cmd+S is app-owned for focused markdown panels, even when save is
+        // Cmd+S is app-owned for focused local-document panels, even when save is
         // currently disabled in preview mode or conflict state.
         return true
     }
@@ -1902,7 +1902,7 @@ struct ToasttyApp: App {
         guard didOpen == false else { return }
 
         let alert = NSAlert()
-        alert.messageText = "Unable to Open Markdown File"
+        alert.messageText = "Unable to Open Local File"
         alert.informativeText = "Toastty couldn't open \(normalizedFilePath) in the current workspace."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
@@ -1912,11 +1912,11 @@ struct ToasttyApp: App {
     private func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
         case .rootRight:
-            return "Open Markdown File"
+            return "Open Local File"
         case .newTab:
-            return "Open Markdown File in Tab"
+            return "Open Local File in Tab"
         case .splitRight:
-            return "Open Markdown File in Split"
+            return "Open Local File in Split"
         }
     }
 

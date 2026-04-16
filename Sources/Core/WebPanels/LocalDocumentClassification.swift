@@ -1,14 +1,19 @@
 import Foundation
 
-// Shared source of truth for local-document formats admitted by current entry
-// points. YAML and TOML stay excluded until code-mode rendering exists.
+// Shared source of truth for local-document format detection and supported
+// picker/command-entry extensions.
 public enum LocalDocumentClassifier {
-    public static let markdownFilenameExtensions: [String] = [
-        "md",
-        "markdown",
-        "mdown",
-        "mkd",
+    public static let filenameExtensionToFormat: [String: LocalDocumentFormat] = [
+        "md": .markdown,
+        "markdown": .markdown,
+        "mdown": .markdown,
+        "mkd": .markdown,
+        "yaml": .yaml,
+        "yml": .yaml,
+        "toml": .toml,
     ]
+
+    public static let supportedFilenameExtensions: [String] = filenameExtensionToFormat.keys.sorted()
 
     public static func format(forPathExtension pathExtension: String) -> LocalDocumentFormat? {
         let normalizedExtension = pathExtension.lowercased()
@@ -16,7 +21,7 @@ public enum LocalDocumentClassifier {
             return nil
         }
 
-        return markdownFilenameExtensions.contains(normalizedExtension) ? .markdown : nil
+        return filenameExtensionToFormat[normalizedExtension]
     }
 
     public static func format(forFilePath filePath: String) -> LocalDocumentFormat? {

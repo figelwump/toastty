@@ -2,7 +2,7 @@ import CoreState
 import Foundation
 
 enum TerminalCommandClickTarget: Equatable, Sendable {
-    case markdownFile(path: String, placement: WebPanelPlacement)
+    case localDocumentFile(path: String, placement: WebPanelPlacement)
     case passthrough(URL)
 }
 
@@ -29,12 +29,12 @@ enum TerminalCommandClickTargetResolver {
         fileManager: FileManager = .default
     ) -> TerminalCommandClickTarget {
         guard let localFilePath = resolvedLocalFilePath(for: hoveredURL, cwd: cwd),
-              let markdownFilePath = normalizedMarkdownFilePath(localFilePath, fileManager: fileManager) else {
+              let localDocumentFilePath = normalizedLocalDocumentFilePath(localFilePath, fileManager: fileManager) else {
             return .passthrough(hoveredURL)
         }
 
         let placement: WebPanelPlacement = useAlternatePlacement ? .rootRight : .newTab
-        return .markdownFile(path: markdownFilePath, placement: placement)
+        return .localDocumentFile(path: localDocumentFilePath, placement: placement)
     }
 
     private static func resolvedLocalFilePath(for hoveredURL: URL, cwd: String?) -> String? {
@@ -77,16 +77,16 @@ enum TerminalCommandClickTargetResolver {
         return path
     }
 
-    private static func normalizedMarkdownFilePath(
+    private static func normalizedLocalDocumentFilePath(
         _ path: String,
         fileManager: FileManager
     ) -> String? {
-        if let exactMatch = normalizedExistingMarkdownFilePath(path, fileManager: fileManager) {
+        if let exactMatch = normalizedExistingLocalDocumentFilePath(path, fileManager: fileManager) {
             return exactMatch
         }
 
         for recoveredPath in trailingPunctuationRecoveryCandidates(for: path) {
-            if let recoveredMatch = normalizedExistingMarkdownFilePath(recoveredPath, fileManager: fileManager) {
+            if let recoveredMatch = normalizedExistingLocalDocumentFilePath(recoveredPath, fileManager: fileManager) {
                 return recoveredMatch
             }
         }
@@ -94,7 +94,7 @@ enum TerminalCommandClickTargetResolver {
         return nil
     }
 
-    private static func normalizedExistingMarkdownFilePath(
+    private static func normalizedExistingLocalDocumentFilePath(
         _ path: String,
         fileManager: FileManager
     ) -> String? {
@@ -112,7 +112,7 @@ enum TerminalCommandClickTargetResolver {
             return nil
         }
 
-        guard LocalDocumentClassifier.format(forFilePath: resolvedPath) == .markdown else {
+        guard LocalDocumentClassifier.format(forFilePath: resolvedPath) != nil else {
             return nil
         }
 

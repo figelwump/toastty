@@ -34,8 +34,23 @@ struct LocalDocumentPanelDiskRevision: Equatable, Sendable {
 struct LocalDocumentPanelDocumentSnapshot: Equatable, Sendable {
     let filePath: String?
     let displayName: String
+    let format: LocalDocumentFormat
     let content: String
     let diskRevision: LocalDocumentPanelDiskRevision?
+
+    init(
+        filePath: String?,
+        displayName: String,
+        format: LocalDocumentFormat = .markdown,
+        content: String,
+        diskRevision: LocalDocumentPanelDiskRevision?
+    ) {
+        self.filePath = filePath
+        self.displayName = displayName
+        self.format = format
+        self.content = content
+        self.diskRevision = diskRevision
+    }
 }
 
 struct LocalDocumentSaveRequest: Equatable, Sendable {
@@ -58,6 +73,7 @@ struct LocalDocumentCloseConfirmationState: Equatable, Sendable {
 struct LocalDocumentEditingSession: Equatable, Sendable {
     var filePath: String?
     var displayName: String
+    var format: LocalDocumentFormat
     var loadedContent: String
     var draftContent: String
     var contentRevision: Int
@@ -104,6 +120,7 @@ struct LocalDocumentEditingSession: Equatable, Sendable {
     init(document: LocalDocumentPanelDocumentSnapshot) {
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         draftContent = document.content
         contentRevision = 1
@@ -117,11 +134,13 @@ struct LocalDocumentEditingSession: Equatable, Sendable {
     mutating func replaceCleanBaseline(with document: LocalDocumentPanelDocumentSnapshot) {
         let shouldAdvanceRevision = contentRevision == 0 ||
             filePath != document.filePath ||
+            format != document.format ||
             loadedContent != document.content
         let shouldReplaceDraftContent = isEditing == false || isDirty == false
 
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         diskRevision = document.diskRevision
         hasExternalConflict = false
@@ -224,6 +243,7 @@ struct LocalDocumentEditingSession: Equatable, Sendable {
 
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         diskRevision = document.diskRevision
         isSaving = false
@@ -254,6 +274,7 @@ struct LocalDocumentEditingSession: Equatable, Sendable {
     mutating func applyExternalConflict(with document: LocalDocumentPanelDocumentSnapshot) {
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         diskRevision = document.diskRevision
         hasExternalConflict = true
@@ -266,8 +287,9 @@ struct LocalDocumentEditingSession: Equatable, Sendable {
 final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     typealias DocumentLoader = @Sendable (WebPanelState) async -> LocalDocumentPanelDocumentSnapshot
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
-    typealias SavedDocumentReader = @Sendable (String, String) async throws -> LocalDocumentPanelDocumentSnapshot
+    typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
+    nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
@@ -302,7 +324,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         entryURL: URL? = nil,
         documentLoader: @escaping DocumentLoader = { await LocalDocumentPanelRuntime.loadDocument(for: $0) },
         documentSaver: @escaping DocumentSaver = { try await LocalDocumentPanelRuntime.writeLocalDocument(at: $0, content: $1) },
-        savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1) },
+        savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1, format: $2) },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -511,6 +533,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             webState.definition == .localDocument,
             "LocalDocumentPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
+        let format = resolvedFormat(for: webState)
         let normalizedFilePath = WebPanelState.normalizedFilePath(webState.filePath)
         let displayName = resolvedDisplayName(for: webState, filePath: normalizedFilePath ?? "")
 
@@ -518,8 +541,9 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             return LocalDocumentPanelDocumentSnapshot(
                 filePath: nil,
                 displayName: displayName,
+                format: format,
                 content: missingFileDocument(
-                    title: displayName,
+                    format: format,
                     filePath: nil,
                     message: "Toastty could not determine which local document this panel should render."
                 ),
@@ -527,7 +551,11 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             )
         }
 
-        return await loadDocumentSnapshot(at: normalizedFilePath, displayName: displayName)
+        return await loadDocumentSnapshot(
+            at: normalizedFilePath,
+            displayName: displayName,
+            format: format
+        )
     }
 
     nonisolated static func bootstrapJavaScript(for bootstrap: LocalDocumentPanelBootstrap) -> String? {
@@ -557,6 +585,12 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         LocalDocumentPanelBootstrap(
             filePath: session.filePath,
             displayName: session.displayName,
+            format: session.format,
+            shouldHighlight: shouldHighlight(
+                format: session.format,
+                content: session.visibleContent,
+                diskRevision: session.diskRevision
+            ),
             content: session.visibleContent,
             contentRevision: session.contentRevision,
             isEditing: session.isEditing,
@@ -731,7 +765,11 @@ private extension LocalDocumentPanelRuntime {
         saveTask = Task { [weak self] in
             do {
                 try await documentSaver(request.filePath, request.content)
-                let document = try await savedDocumentReader(request.filePath, request.displayName)
+                let document = try await savedDocumentReader(
+                    request.filePath,
+                    request.displayName,
+                    session.format
+                )
                 await MainActor.run { [weak self] in
                     self?.completeSave(
                         operationID: operationID,
@@ -876,7 +914,8 @@ private extension LocalDocumentPanelRuntime {
 
     nonisolated static func readLocalDocument(
         at filePath: String,
-        displayName: String
+        displayName: String,
+        format: LocalDocumentFormat
     ) async throws -> LocalDocumentPanelDocumentSnapshot {
         try await Task.detached(priority: .utility) {
             let fileURL = URL(fileURLWithPath: filePath)
@@ -891,6 +930,7 @@ private extension LocalDocumentPanelRuntime {
             return LocalDocumentPanelDocumentSnapshot(
                 filePath: filePath,
                 displayName: displayName,
+                format: format,
                 content: content,
                 diskRevision: diskRevision
             )
@@ -899,16 +939,22 @@ private extension LocalDocumentPanelRuntime {
 
     nonisolated static func loadDocumentSnapshot(
         at filePath: String,
-        displayName: String
+        displayName: String,
+        format: LocalDocumentFormat
     ) async -> LocalDocumentPanelDocumentSnapshot {
         do {
-            return try await readLocalDocument(at: filePath, displayName: displayName)
+            return try await readLocalDocument(
+                at: filePath,
+                displayName: displayName,
+                format: format
+            )
         } catch {
             return LocalDocumentPanelDocumentSnapshot(
                 filePath: filePath,
                 displayName: displayName,
+                format: format,
                 content: missingFileDocument(
-                    title: displayName,
+                    format: format,
                     filePath: filePath,
                     message: error.localizedDescription
                 ),
@@ -934,9 +980,40 @@ private extension LocalDocumentPanelRuntime {
         return fileName.isEmpty ? webState.definition.defaultTitle : fileName
     }
 
-    nonisolated static func missingFileDocument(title: String, filePath: String?, message: String) -> String {
+    nonisolated static func resolvedFormat(for webState: WebPanelState) -> LocalDocumentFormat {
+        webState.localDocument?.format ?? .markdown
+    }
+
+    nonisolated static func shouldHighlight(
+        format: LocalDocumentFormat,
+        content: String,
+        diskRevision: LocalDocumentPanelDiskRevision?
+    ) -> Bool {
+        guard format != .markdown else {
+            return true
+        }
+        guard diskRevision != nil else {
+            return false
+        }
+        return content.utf8.count <= syntaxHighlightThresholdBytes
+    }
+
+    nonisolated static func missingFileDocument(
+        format: LocalDocumentFormat,
+        filePath: String?,
+        message: String
+    ) -> String {
+        switch format {
+        case .markdown:
+            return markdownMissingFileDocument(filePath: filePath, message: message)
+        case .yaml, .toml:
+            return codeMissingFileDocument(filePath: filePath, message: message)
+        }
+    }
+
+    nonisolated static func markdownMissingFileDocument(filePath: String?, message: String) -> String {
         var lines = [
-            "# \(title)",
+            "# Document unavailable",
             "",
             "Toastty could not load this document.",
         ]
@@ -954,6 +1031,28 @@ private extension LocalDocumentPanelRuntime {
             "",
             "**Reason**",
             "",
+            message,
+        ]
+
+        return lines.joined(separator: "\n")
+    }
+
+    nonisolated static func codeMissingFileDocument(filePath: String?, message: String) -> String {
+        var lines = [
+            "Toastty could not load this document.",
+        ]
+
+        if let filePath, filePath.isEmpty == false {
+            lines += [
+                "",
+                "Path:",
+                filePath,
+            ]
+        }
+
+        lines += [
+            "",
+            "Reason:",
             message,
         ]
 

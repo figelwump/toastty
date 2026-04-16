@@ -127,6 +127,75 @@ body {
   box-shadow: var(--shadow);
 }
 
+.local-document-code-shell {
+  flex: 1;
+  width: min(1080px, calc(100vw - 40px));
+  margin: 28px auto 52px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.local-document-code-status-strip {
+  padding: 18px 22px 0;
+}
+
+.local-document-code-status {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font: 500 13px/1.45 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+}
+
+.local-document-code-frame {
+  display: flex;
+  align-items: stretch;
+  margin-top: 18px;
+  background: var(--pre-bg);
+  color: var(--pre-text);
+}
+
+.local-document-code-gutter {
+  flex: 0 0 auto;
+  padding: 28px 14px 34px 18px;
+  border-right: 1px solid rgba(255, 224, 191, 0.08);
+  background: rgba(255, 224, 191, 0.03);
+  color: #8a7566;
+  font: 500 13px/1.65 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  text-align: right;
+  user-select: none;
+}
+
+.local-document-code-gutter-line {
+  display: block;
+  min-height: 1.65em;
+}
+
+.local-document-code-scroll {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 28px 30px 34px;
+}
+
+.local-document-code-scroll code,
+.local-document-code-plain {
+  display: block;
+  min-width: max-content;
+  font: 500 15px/1.65 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  white-space: pre;
+  tab-size: 2;
+}
+
+.local-document-code-plain {
+  color: var(--pre-text);
+}
+
 .local-document-editor-shell {
   flex: 1;
   width: min(980px, calc(100vw - 40px));
@@ -545,6 +614,12 @@ body {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.local-document-panel-stat-divider {
+  width: 1px;
+  height: 14px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 /* TOC dropdown panel */

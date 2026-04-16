@@ -1,3 +1,4 @@
+import CoreState
 import Foundation
 
 enum LocalDocumentPanelTheme: String, Codable, Equatable, Sendable {
@@ -9,6 +10,8 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let contractVersion: Int
     let filePath: String?
     let displayName: String
+    let format: LocalDocumentFormat
+    let shouldHighlight: Bool
     let content: String
     let contentRevision: Int
     let isEditing: Bool
@@ -19,9 +22,11 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let theme: LocalDocumentPanelTheme
 
     init(
-        contractVersion: Int = 3,
+        contractVersion: Int = 4,
         filePath: String?,
         displayName: String,
+        format: LocalDocumentFormat = .markdown,
+        shouldHighlight: Bool = true,
         content: String,
         contentRevision: Int,
         isEditing: Bool = false,
@@ -34,6 +39,8 @@ struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
         self.contractVersion = contractVersion
         self.filePath = filePath
         self.displayName = displayName
+        self.format = format
+        self.shouldHighlight = shouldHighlight
         self.content = content
         self.contentRevision = contentRevision
         self.isEditing = isEditing
@@ -51,6 +58,8 @@ extension LocalDocumentPanelBootstrap {
             contractVersion: contractVersion,
             filePath: filePath,
             displayName: displayName,
+            format: format,
+            shouldHighlight: shouldHighlight,
             content: content,
             contentRevision: contentRevision,
             isEditing: isEditing,
