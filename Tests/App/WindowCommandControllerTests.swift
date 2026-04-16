@@ -882,8 +882,8 @@ final class WindowCommandControllerTests: XCTestCase {
         rebuiltFileMenu.addItem(rebuiltOpenRecentItem)
         fileItem.submenu = rebuiltFileMenu
 
-        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: mainMenu)
-        for _ in 0 ..< 5 {
+        NotificationCenter.default.post(name: NSMenu.didChangeItemNotification, object: rebuiltFileMenu)
+        for _ in 0 ..< 10 {
             await flushMainActorTasks()
             if rebuiltNewWindowItem.isHidden,
                rebuiltOpenRecentItem.isHidden == false,
@@ -1087,7 +1087,8 @@ final class WindowCommandControllerTests: XCTestCase {
     func testHiddenSystemMenuItemsBridgeRefreshesOwnedFileCloseSectionForMenuTreeRefresh() async {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let fileSplitBridge = FileSplitMenuBridge(
-            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+            splitLayoutCommandController: SplitLayoutCommandController(store: store),
+            preferredWindowIDProvider: { store.state.selectedWindowID }
         )
         let fileCloseBridge = makeFileCloseMenuBridge(store: store)
         let hiddenBridge = HiddenSystemMenuItemsBridge(
@@ -1114,6 +1115,8 @@ final class WindowCommandControllerTests: XCTestCase {
         application.mainMenu = mainMenu
         defer { application.mainMenu = previousMainMenu }
 
+        fileSplitBridge.installIfNeeded()
+        fileCloseBridge.installIfNeeded()
         hiddenBridge.installIfNeeded()
 
         XCTAssertEqual(
@@ -1148,7 +1151,8 @@ final class WindowCommandControllerTests: XCTestCase {
     func testFileSplitMenuBridgeInsertsSplitSectionBeforeCloseCommands() {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let bridge = FileSplitMenuBridge(
-            splitLayoutCommandController: SplitLayoutCommandController(store: store)
+            splitLayoutCommandController: SplitLayoutCommandController(store: store),
+            preferredWindowIDProvider: { store.state.selectedWindowID }
         )
 
         let mainMenu = NSMenu(title: "Main")
@@ -1221,6 +1225,53 @@ final class WindowCommandControllerTests: XCTestCase {
             menuItemTitles(in: fileMenu),
             ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
         )
+    }
+
+    func testFileSplitMenuBridgeUsesPreferredWindowInsteadOfSelectedWindowFallback() throws {
+        let firstWorkspace = WorkspaceState.bootstrap(title: "One")
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstWorkspace.id],
+                    selectedWorkspaceID: firstWorkspace.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspace.id: firstWorkspace,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: firstWindowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let bridge = FileSplitMenuBridge(
+            splitLayoutCommandController: SplitLayoutCommandController(store: store),
+            preferredWindowIDProvider: { secondWindowID }
+        )
+
+        bridge.splitRight(nil)
+
+        let firstWorkspaceAfterSplit = try XCTUnwrap(store.state.workspacesByID[firstWorkspace.id])
+        let secondWorkspaceAfterSplit = try XCTUnwrap(store.state.workspacesByID[secondWorkspace.id])
+
+        XCTAssertEqual(firstWorkspaceAfterSplit.layoutTree.allSlotInfos.count, 1)
+        XCTAssertEqual(secondWorkspaceAfterSplit.layoutTree.allSlotInfos.count, 2)
+
+        let focusedPanelID = try XCTUnwrap(secondWorkspaceAfterSplit.focusedPanelID)
+        guard case .terminal = secondWorkspaceAfterSplit.panels[focusedPanelID] else {
+            XCTFail("expected file-menu split to target the preferred window workspace")
+            return
+        }
     }
 
     func testWindowSplitMenuBridgeInsertsSectionBeforeWindowList() throws {

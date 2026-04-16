@@ -218,6 +218,23 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isNewBrowserTabShortcut(repeatedEvent))
     }
 
+    func testSplitDirectionMatchesCommandDVariantsOnly() throws {
+        let splitRightEvent = try makeKeyEvent(characters: "d", modifiers: [.command], keyCode: 0x02)
+        let splitDownEvent = try makeKeyEvent(characters: "D", modifiers: [.command, .shift], keyCode: 0x02)
+        let plainEvent = try makeKeyEvent(characters: "d", modifiers: [], keyCode: 0x02)
+        let repeatedEvent = try makeKeyEvent(
+            characters: "d",
+            modifiers: [.command],
+            keyCode: 0x02,
+            isARepeat: true
+        )
+
+        XCTAssertEqual(DisplayShortcutInterceptor.splitDirection(for: splitRightEvent), .right)
+        XCTAssertEqual(DisplayShortcutInterceptor.splitDirection(for: splitDownEvent), .down)
+        XCTAssertNil(DisplayShortcutInterceptor.splitDirection(for: plainEvent))
+        XCTAssertNil(DisplayShortcutInterceptor.splitDirection(for: repeatedEvent))
+    }
+
     func testBrowserReloadShortcutMatchesPlainCommandROnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "r", modifiers: [.command], keyCode: 0x0F)
         let shiftedEvent = try makeKeyEvent(characters: "R", modifiers: [.command, .shift], keyCode: 0x0F)
@@ -379,6 +396,61 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
         XCTAssertTrue(interceptor.handle(.saveMarkdown, appOwnedWindowID: windowID))
         XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
+    }
+
+    func testMarkdownSplitShortcutsCreateTerminalPanelsInFocusedWorkspace() throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let scenarios: [(NSEvent, DisplayShortcutInterceptor.ShortcutAction)] = [
+            (
+                try makeKeyEvent(characters: "d", modifiers: [.command], keyCode: 0x02),
+                .split(.right)
+            ),
+            (
+                try makeKeyEvent(characters: "D", modifiers: [.command, .shift], keyCode: 0x02),
+                .split(.down)
+            ),
+        ]
+
+        for (event, expectedAction) in scenarios {
+            let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+            let windowID = try XCTUnwrap(store.state.windows.first?.id)
+            let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+            XCTAssertTrue(
+                store.createMarkdownPanelFromCommand(
+                    preferredWindowID: windowID,
+                    request: MarkdownPanelCreateRequest(
+                        filePath: fileURL.path,
+                        placementOverride: .splitRight
+                    )
+                )
+            )
+
+            let interceptor = makeInterceptor(store: store)
+            let workspaceBeforeSplit = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+
+            XCTAssertEqual(
+                interceptor.shortcutAction(for: event, appOwnedWindowID: windowID),
+                expectedAction
+            )
+            XCTAssertTrue(interceptor.handle(expectedAction, appOwnedWindowID: windowID))
+
+            let workspaceAfterSplit = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+            XCTAssertEqual(workspaceAfterSplit.panels.count, workspaceBeforeSplit.panels.count + 1)
+            XCTAssertEqual(workspaceAfterSplit.orderedTabs.count, workspaceBeforeSplit.orderedTabs.count)
+
+            let focusedPanelID = try XCTUnwrap(workspaceAfterSplit.focusedPanelID)
+            guard case .terminal = workspaceAfterSplit.panels[focusedPanelID] else {
+                XCTFail("expected markdown split shortcut to focus a new terminal panel")
+                continue
+            }
+        }
     }
 
     func testCreateBrowserActionUsesRequestedPlacement() throws {

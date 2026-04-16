@@ -477,6 +477,7 @@ final class DisplayShortcutInterceptor {
         case createBrowser
         case createBrowserTab
         case createWorkspaceTab
+        case split(SlotSplitDirection)
         case saveMarkdown
         case focusNextUnreadOrActivePanel
         case toggleFocusedPanelMode
@@ -556,6 +557,11 @@ final class DisplayShortcutInterceptor {
         if Self.isNewBrowserTabShortcut(event),
            appOwnedWindowID != nil {
             return .createBrowserTab
+        }
+
+        if let direction = Self.splitDirection(for: event),
+           appOwnedWindowID != nil {
+            return .split(direction)
         }
 
         if Self.isClosePanelShortcut(event),
@@ -641,6 +647,8 @@ final class DisplayShortcutInterceptor {
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
             createWorkspaceTab()
+        case .split(let direction):
+            split(direction: direction, preferredWindowID: appOwnedWindowID)
         case .saveMarkdown:
             handleSaveMarkdownShortcut(preferredWindowID: appOwnedWindowID)
         case .focusNextUnreadOrActivePanel:
@@ -712,6 +720,23 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command]
+    }
+
+    static func splitDirection(for event: NSEvent) -> SlotSplitDirection? {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "d" else {
+            return nil
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        switch modifiers {
+        case [.command]:
+            return .right
+        case [.command, .shift]:
+            return .down
+        default:
+            return nil
+        }
     }
 
     static func tabSelectionShortcutNumber(for event: NSEvent) -> Int? {
@@ -932,6 +957,22 @@ final class DisplayShortcutInterceptor {
         guard let store else { return false }
         guard let preferredWindowID = appOwnedShortcutWindowID() else { return false }
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
+    }
+
+    private func split(direction: SlotSplitDirection, preferredWindowID: UUID?) -> Bool {
+        guard let store else { return false }
+        guard let preferredWindowID else { return false }
+        guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
+            return false
+        }
+
+        _ = terminalRuntimeRegistry.splitFocusedSlotInDirection(
+            workspaceID: workspaceID,
+            direction: direction
+        )
+        // Cmd+D / Cmd+Shift+D should remain app-owned for resolved Toastty
+        // workspace windows so embedded web views cannot reject the shortcut.
+        return true
     }
 
     private func createBrowser(preferredWindowID: UUID?, placement: WebPanelPlacement) -> Bool {
@@ -1368,7 +1409,8 @@ struct ToasttyApp: App {
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         fileSplitMenuBridge = FileSplitMenuBridge(
-            splitLayoutCommandController: splitLayoutCommandController
+            splitLayoutCommandController: splitLayoutCommandController,
+            preferredWindowIDProvider: { currentToasttyAppOwnedWindowID(in: store) }
         )
         fileCloseMenuBridge = FileCloseMenuBridge(
             windowCommandController: WindowCommandController(

@@ -626,6 +626,7 @@ final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
 @MainActor
 final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
     private let splitLayoutCommandController: SplitLayoutCommandController
+    private let preferredWindowIDProvider: () -> UUID?
     private lazy var splitRightItem = makeManagedItem()
     private lazy var splitLeftItem = makeManagedItem()
     private lazy var splitDownItem = makeManagedItem()
@@ -639,8 +640,12 @@ final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
         separatorItem,
     ]
 
-    init(splitLayoutCommandController: SplitLayoutCommandController) {
+    init(
+        splitLayoutCommandController: SplitLayoutCommandController,
+        preferredWindowIDProvider: @escaping () -> UUID? = { nil }
+    ) {
         self.splitLayoutCommandController = splitLayoutCommandController
+        self.preferredWindowIDProvider = preferredWindowIDProvider
     }
 
     func installIfNeeded() {
@@ -655,34 +660,46 @@ final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
 
     @objc
     func splitRight(_: Any?) {
-        _ = splitLayoutCommandController.split(direction: .right, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.split(direction: .right, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func splitLeft(_: Any?) {
-        _ = splitLayoutCommandController.split(direction: .left, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.split(direction: .left, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func splitDown(_: Any?) {
-        _ = splitLayoutCommandController.split(direction: .down, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.split(direction: .down, preferredWindowID: preferredWindowID)
     }
 
     @objc
     func splitUp(_: Any?) {
-        _ = splitLayoutCommandController.split(direction: .up, preferredWindowID: nil)
+        guard let preferredWindowID = currentKeyWindowID() else { return }
+        _ = splitLayoutCommandController.split(direction: .up, preferredWindowID: preferredWindowID)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        guard let preferredWindowID = currentKeyWindowID() else {
+            return false
+        }
+
         switch menuItem.action {
         case #selector(splitRight(_:)),
             #selector(splitLeft(_:)),
             #selector(splitDown(_:)),
             #selector(splitUp(_:)):
-            return splitLayoutCommandController.canSplit(preferredWindowID: nil)
+            return splitLayoutCommandController.canSplit(preferredWindowID: preferredWindowID)
         default:
             return true
         }
+    }
+
+    private func currentKeyWindowID() -> UUID? {
+        preferredWindowIDProvider()
     }
 
     private func restoreOwnedItems() {
