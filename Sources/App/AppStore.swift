@@ -355,25 +355,28 @@ final class AppStore: ObservableObject {
         request: LocalDocumentPanelCreateRequest
     ) -> Bool {
         guard let workspace = state.workspacesByID[workspaceID],
-              let normalizedFilePath = Self.normalizedLocalDocumentFilePath(request.filePath) else {
+              let resolvedLocalDocument = Self.resolvedLocalDocument(request.filePath) else {
             return false
         }
 
         if let existingPanelID = existingLocalDocumentPanelID(
             in: workspace,
-            normalizedFilePath: normalizedFilePath
+            normalizedFilePath: resolvedLocalDocument.normalizedFilePath
         ) {
             return focusPanel(containing: existingPanelID)
         }
 
-        let displayName = Self.localDocumentDisplayName(for: normalizedFilePath)
+        let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
         return send(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
                     definition: .localDocument,
                     title: displayName,
-                    filePath: normalizedFilePath
+                    localDocument: LocalDocumentState(
+                        filePath: resolvedLocalDocument.normalizedFilePath,
+                        format: resolvedLocalDocument.format
+                    )
                 ),
                 placement: request.resolvedPlacement
             )
@@ -984,7 +987,7 @@ final class AppStore: ObservableObject {
             for (panelID, panelState) in tab.panels {
                 guard case .web(let webState) = panelState,
                       webState.definition == .localDocument,
-                      webState.filePath == normalizedFilePath else {
+                      webState.localDocument?.filePath == normalizedFilePath else {
                     continue
                 }
                 return panelID
@@ -993,13 +996,23 @@ final class AppStore: ObservableObject {
         return nil
     }
 
-    private static func normalizedLocalDocumentFilePath(_ value: String) -> String? {
+    private static func resolvedLocalDocument(
+        _ value: String
+    ) -> (normalizedFilePath: String, format: LocalDocumentFormat)? {
         guard let trimmed = WebPanelState.normalizedFilePath(value) else {
             return nil
         }
 
         let url = URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath()
-        return WebPanelState.normalizedFilePath(url.path)
+        let normalizedFilePath = url.path
+        guard normalizedFilePath.isEmpty == false,
+              let format = LocalDocumentClassifier.format(
+                  forPathExtension: url.pathExtension
+              ) else {
+            return nil
+        }
+
+        return (normalizedFilePath, format)
     }
 
     private static func localDocumentDisplayName(for normalizedFilePath: String) -> String {

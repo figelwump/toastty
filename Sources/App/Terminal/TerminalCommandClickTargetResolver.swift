@@ -7,12 +7,6 @@ enum TerminalCommandClickTarget: Equatable, Sendable {
 }
 
 enum TerminalCommandClickTargetResolver {
-    private static let markdownFileExtensions: Set<String> = [
-        "md",
-        "markdown",
-        "mdown",
-        "mkd",
-    ]
     private static let trailingSentencePunctuation: Set<Character> = [
         ",",
         ".",
@@ -118,8 +112,7 @@ enum TerminalCommandClickTargetResolver {
             return nil
         }
 
-        let pathExtension = resolvedURL.pathExtension.lowercased()
-        guard markdownFileExtensions.contains(pathExtension) else {
+        guard LocalDocumentClassifier.format(forFilePath: resolvedPath) == .markdown else {
             return nil
         }
 

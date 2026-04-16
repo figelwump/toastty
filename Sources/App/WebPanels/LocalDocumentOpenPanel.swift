@@ -1,4 +1,5 @@
 import AppKit
+import CoreState
 import UniformTypeIdentifiers
 
 enum LocalDocumentOpenPanel {
@@ -18,13 +19,10 @@ enum LocalDocumentOpenPanel {
         panel.directoryURL = directoryURL
         return panel.runModal() == .OK ? panel.url : nil
     }
-}
 
-private extension LocalDocumentOpenPanel {
     static func allowedContentTypes() -> [UTType] {
         var types: [UTType] = []
-        let extensions = ["md", "markdown", "mdown", "mkd"]
-        for fileExtension in extensions {
+        for fileExtension in LocalDocumentClassifier.markdownFilenameExtensions {
             if let type = UTType(filenameExtension: fileExtension, conformingTo: .plainText),
                types.contains(type) == false {
                 types.append(type)

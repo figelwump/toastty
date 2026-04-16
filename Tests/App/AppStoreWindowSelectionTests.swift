@@ -25,6 +25,41 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         return (canonicalPath, alternatePath)
     }
 
+    private func makeUnsupportedFixture(fileName: String = "README.txt") throws -> String {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-tests-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = rootURL.appendingPathComponent(fileName, conformingTo: .plainText)
+
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try Data("plain text\n".utf8).write(to: fileURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    private func makeSymlinkedMarkdownFixture() throws -> (canonicalPath: String, symlinkPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-symlink-tests-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = rootURL.appendingPathComponent("README.md", conformingTo: .plainText)
+        let symlinkURL = rootURL.appendingPathComponent("linked-readme.md", conformingTo: .plainText)
+
+        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+        try Data("# Toastty Markdown Fixture\n".utf8).write(to: fileURL)
+        try fileManager.createSymbolicLink(at: symlinkURL, withDestinationURL: fileURL)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            canonicalPath: fileURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            symlinkPath: symlinkURL.path
+        )
+    }
+
     func testWindowLookupResolvesSpecificWindowWithoutUsingGlobalSelection() throws {
         let firstWorkspace = WorkspaceState.bootstrap(title: "One")
         let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
@@ -533,6 +568,10 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
         XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
+        )
         XCTAssertNil(webState.initialURL)
         XCTAssertNil(webState.currentURL)
     }
@@ -563,6 +602,10 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.title, "README.md")
         XCTAssertEqual(webState.filePath, fixture.canonicalPath)
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fixture.canonicalPath, format: .markdown)
+        )
     }
 
     func testCreateMarkdownPanelDeduplicatesByNormalizedFilePathInWorkspace() throws {
@@ -593,6 +636,64 @@ final class AppStoreWindowSelectionTests: XCTestCase {
                 preferredWindowID: sourceWindowID,
                 request: LocalDocumentPanelCreateRequest(
                     filePath: fixture.alternatePath,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        let workspaceAfterDedupedOpen = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspaceAfterDedupedOpen.orderedTabs.count, 2)
+        XCTAssertEqual(workspaceAfterDedupedOpen.resolvedSelectedTabID, markdownTabID)
+        XCTAssertEqual(workspaceAfterDedupedOpen.focusedPanelID, markdownPanelID)
+    }
+
+    func testCreateLocalDocumentPanelFromCommandRejectsUnsupportedFileExtension() throws {
+        let unsupportedPath = try makeUnsupportedFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertFalse(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(filePath: unsupportedPath)
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 1)
+        XCTAssertEqual(workspace.layoutTree.allSlotInfos.count, 1)
+    }
+
+    func testCreateMarkdownPanelDeduplicatesResolvedSymlinkPathInWorkspace() throws {
+        let fixture = try makeSymlinkedMarkdownFixture()
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fixture.canonicalPath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspaceAfterCreate = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let markdownTabID = try XCTUnwrap(workspaceAfterCreate.resolvedSelectedTabID)
+        let markdownPanelID = try XCTUnwrap(workspaceAfterCreate.tab(id: markdownTabID)?.focusedPanelID)
+        let originalTabID = try XCTUnwrap(workspaceAfterCreate.tabIDs.first)
+
+        XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: sourceWorkspaceID, tabID: originalTabID)))
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fixture.symlinkPath,
                     placementOverride: .splitRight
                 )
             )

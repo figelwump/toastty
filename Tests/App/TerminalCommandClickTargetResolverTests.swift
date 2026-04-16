@@ -61,6 +61,18 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    func testResolveFallsBackForUnsupportedLocalFileExtension() throws {
+        let fixture = try makeFixture(fileName: "config.yaml")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+    }
+
     func testResolveFallsBackForRemoteMarkdownURL() throws {
         let url = try XCTUnwrap(URL(string: "https://example.com/docs/readme.md"))
 
