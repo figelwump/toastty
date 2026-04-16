@@ -24,8 +24,19 @@ Step 2 is complete in the current worktree:
 - returned saved and reverted panels to rendered preview
 - added close and quit safeguards for dirty drafts and in-flight saves
 
+Step 3 is complete in the `codex/local-document-step3` worktree:
+
+- renamed implementation-local markdown runtime, host, bootstrap, and view
+  types/files to `LocalDocument*`
+- renamed the bundled web app and shipped asset path to the local-document
+  naming surface
+- renamed app integration APIs and runtime registry seams to `localDocument*`
+- kept user-facing open/menu wording on "Markdown File" until broader format
+  support lands
+- kept the step 1 compatibility layer and automation command strings unchanged
+
 This document is now the follow-on plan, not a proposal for the already-landed
-state-model change. The next remaining step is step 3.
+state-model change. The next remaining step is step 4.
 
 ## summary
 
@@ -33,10 +44,9 @@ state-model change. The next remaining step is step 3.
    panel, but its persisted naming and state shape were too markdown-specific.
 2. That persistence work should land before editing, and it now has.
 3. Markdown editing has now landed on top of the new `localDocument` state.
-4. The next step is to rename the markdown-specific runtime and UI surface
-   before broadening beyond markdown.
-5. YAML and TOML should wait until the runtime/UI surface is no longer
-   markdown-specific.
+4. The runtime and implementation surface now use `localDocument` naming.
+5. The next step is to centralize local-document classification plumbing before
+   broadening the open flow and adding YAML and TOML rendering.
 
 ## goals
 
@@ -144,7 +154,7 @@ Implemented validation:
 - missing-file and external-modification tests
 - close / quit confirmation coverage for dirty drafts and saves in progress
 
-### step 3: rename markdown runtime and UI surface to localDocument
+### step 3 complete: rename markdown runtime and UI surface to localDocument
 
 Goal:
 
@@ -158,20 +168,31 @@ Likely files:
 - `Sources/App/Resources/WebPanels/markdown-panel/`
 - menu and open-panel copy that still says "Markdown"
 
-Work:
+Landed scope:
 
-- rename implementation-local types and files to `LocalDocument*`
-- rename menu and UI copy to document-oriented wording
-- keep the compatibility layer from step 1 unchanged
+- renamed implementation-local types and files to `LocalDocument*`
+- renamed the bundled web app and shipped asset directory to local-document
+  naming
+- renamed app integration APIs to `localDocument*`
+- kept user-facing file-picker/menu wording on markdown-specific copy for now
+- kept the compatibility layer from step 1 unchanged
+- kept automation command strings stable for now
 
 This step is mostly about naming clarity and reducing the chance that YAML/TOML
 support gets wedged into markdown-specific types.
 
-### step 4: classification and open-flow broadening
+Implemented validation:
+
+- runtime/bootstrap tests for the renamed asset locator and JS bridge global
+- app-layer tests for the renamed runtime and creation APIs
+- local smoke automation through the renamed bundled assets
+
+### step 4: shared classification plumbing
 
 Goal:
 
-- centralize local-document classification before adding more formats
+- centralize local-document classification and extension source-of-truth before
+  broadening beyond markdown
 
 Likely files:
 
@@ -180,7 +201,15 @@ Likely files:
 - `Sources/App/Terminal/TerminalCommandClickTargetResolver.swift`
 - file-picker and open-panel code
 
-Initial mappings:
+This step should stay intentionally narrow:
+
+- keep user-facing entry points markdown-only in this step
+- do not persist YAML or TOML formats until the runtime has a non-markdown
+  rendering path
+- use one shared source of truth for supported markdown extensions and format
+  detection
+
+Future mappings once code mode lands:
 
 - `md`, `markdown`, `mdown`, `mkd` -> markdown
 - `yaml`, `yml` -> yaml code document
@@ -191,6 +220,8 @@ Rules:
 - unsupported or extension-less files return `nil`
 - do not inspect file contents to guess type
 - use existing normalized file-path helpers instead of duplicating path logic
+- do not expose YAML or TOML through picker, menu, or terminal open flows in
+  this step
 
 Validation:
 
@@ -198,6 +229,7 @@ Validation:
 - spaces in file paths
 - terminal link-open routing
 - workspace-local dedupe by normalized file path
+- open-panel type parity with the previous markdown-only filter
 
 ### step 5: YAML and TOML rendering
 
@@ -237,15 +269,15 @@ Validation:
 
 ## handoff expectation
 
-The next implementation work should start at step 3, not reopen steps 1 or 2.
+The next implementation work should start at step 4, not reopen steps 1, 2,
+or 3.
 
 Recommended order:
 
-1. runtime and UI rename to local-document
-2. classification and open-flow broadening
-3. YAML and TOML rendering
+1. shared classification plumbing
+2. YAML and TOML rendering plus open-flow broadening
 
 Do not start with YAML or TOML. The point of step 1 was to stop building new
 behavior on top of markdown-specific persistence. The next step should cash in
 that refactor by broadening the naming and classification surface only after
-editing landed on the new model.
+editing and the runtime rename landed on the new model.
