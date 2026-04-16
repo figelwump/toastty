@@ -2,12 +2,14 @@
   "name": "toastty-markdown-panel",
   "private": true,
   "scripts": {
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
+    "remark-breaks": "^4.0.0",
     "rehype-highlight": "^7.0.2",
     "rehype-sanitize": "^6.0.0",
     "remark-frontmatter": "^5.0.0",

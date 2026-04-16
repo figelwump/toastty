@@ -2,6 +2,7 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import remarkBreaks from "remark-breaks";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
 import { MarkdownPanelBootstrap } from "./bootstrap";
@@ -506,7 +507,7 @@ export function MarkdownPanelApp() {
         <article className="markdown-prose">
           {frontmatter && <FrontmatterBar meta={frontmatter} />}
           <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkFrontmatter]}
+            remarkPlugins={[remarkGfm, remarkFrontmatter, remarkBreaks]}
             rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
             components={{
               a({ href, children }) {
