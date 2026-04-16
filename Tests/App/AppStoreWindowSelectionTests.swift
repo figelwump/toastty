@@ -511,9 +511,9 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: sourceWindowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fixture.canonicalPath,
                     placementOverride: .newTab
                 )
@@ -545,9 +545,9 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: sourceWindowID,
-                request: MarkdownPanelCreateRequest(filePath: fixture.canonicalPath)
+                request: LocalDocumentPanelCreateRequest(filePath: fixture.canonicalPath)
             )
         )
 
@@ -573,9 +573,9 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
 
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: sourceWindowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fixture.canonicalPath,
                     placementOverride: .newTab
                 )
@@ -589,9 +589,9 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         XCTAssertTrue(store.send(.selectWorkspaceTab(workspaceID: sourceWorkspaceID, tabID: originalTabID)))
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: sourceWindowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fixture.alternatePath,
                     placementOverride: .splitRight
                 )

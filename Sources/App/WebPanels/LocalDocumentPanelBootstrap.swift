@@ -1,11 +1,11 @@
 import Foundation
 
-enum MarkdownPanelTheme: String, Codable, Equatable, Sendable {
+enum LocalDocumentPanelTheme: String, Codable, Equatable, Sendable {
     case light
     case dark
 }
 
-struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
+struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let contractVersion: Int
     let filePath: String?
     let displayName: String
@@ -16,7 +16,7 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
     let hasExternalConflict: Bool
     let isSaving: Bool
     let saveErrorMessage: String?
-    let theme: MarkdownPanelTheme
+    let theme: LocalDocumentPanelTheme
 
     init(
         contractVersion: Int = 3,
@@ -29,7 +29,7 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
         hasExternalConflict: Bool = false,
         isSaving: Bool = false,
         saveErrorMessage: String? = nil,
-        theme: MarkdownPanelTheme
+        theme: LocalDocumentPanelTheme
     ) {
         self.contractVersion = contractVersion
         self.filePath = filePath
@@ -45,8 +45,8 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
     }
 }
 
-extension MarkdownPanelBootstrap {
-    func setting(theme: MarkdownPanelTheme) -> Self {
+extension LocalDocumentPanelBootstrap {
+    func setting(theme: LocalDocumentPanelTheme) -> Self {
         Self(
             contractVersion: contractVersion,
             filePath: filePath,

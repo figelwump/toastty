@@ -566,9 +566,9 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             persistTerminalFontPreference: false
         )
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: windowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fixture.markdownPath,
                     placementOverride: .newTab
                 )

@@ -362,9 +362,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: windowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fileURL.path,
                     placementOverride: .splitRight
                 )
@@ -375,9 +375,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         XCTAssertEqual(
             interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: windowID),
-            .saveMarkdown
+            .saveLocalDocument
         )
-        XCTAssertTrue(interceptor.handle(.saveMarkdown, appOwnedWindowID: windowID))
+        XCTAssertTrue(interceptor.handle(.saveLocalDocument, appOwnedWindowID: windowID))
         XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
     }
 

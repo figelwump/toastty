@@ -400,8 +400,8 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             terminalAssessment: { panelID in
                 terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
             },
-            markdownCloseConfirmationState: { panelID in
-                webPanelRuntimeRegistry.markdownCloseConfirmationState(panelID: panelID)
+            localDocumentCloseConfirmationState: { panelID in
+                webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
             }
         )
     }
@@ -477,7 +477,7 @@ final class DisplayShortcutInterceptor {
         case createBrowser
         case createBrowserTab
         case createWorkspaceTab
-        case saveMarkdown
+        case saveLocalDocument
         case focusNextUnreadOrActivePanel
         case toggleFocusedPanelMode
         case renameSelectedTab
@@ -564,8 +564,8 @@ final class DisplayShortcutInterceptor {
         }
 
         if Self.isSaveShortcut(event),
-           appOwnedFocusedMarkdownSelection(preferredWindowID: appOwnedWindowID) != nil {
-            return .saveMarkdown
+           appOwnedFocusedLocalDocumentSelection(preferredWindowID: appOwnedWindowID) != nil {
+            return .saveLocalDocument
         }
 
         if Self.isFocusNextUnreadOrActiveShortcut(event),
@@ -641,8 +641,8 @@ final class DisplayShortcutInterceptor {
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
             createWorkspaceTab()
-        case .saveMarkdown:
-            handleSaveMarkdownShortcut(preferredWindowID: appOwnedWindowID)
+        case .saveLocalDocument:
+            handleSaveLocalDocumentShortcut(preferredWindowID: appOwnedWindowID)
         case .focusNextUnreadOrActivePanel:
             focusNextUnreadOrActivePanel()
         case .toggleFocusedPanelMode:
@@ -1099,18 +1099,18 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
-    private func saveFocusedMarkdown(preferredWindowID: UUID?) -> Bool {
-        guard let selection = focusedMarkdownSelection(preferredWindowID: preferredWindowID) else {
+    private func saveFocusedLocalDocument(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
             return false
         }
-        return webPanelRuntimeRegistry.saveMarkdownPanel(panelID: selection.panelID)
+        return webPanelRuntimeRegistry.saveLocalDocumentPanel(panelID: selection.panelID)
     }
 
-    private func handleSaveMarkdownShortcut(preferredWindowID: UUID?) -> Bool {
-        guard focusedMarkdownSelection(preferredWindowID: preferredWindowID) != nil else {
+    private func handleSaveLocalDocumentShortcut(preferredWindowID: UUID?) -> Bool {
+        guard focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) != nil else {
             return false
         }
-        _ = saveFocusedMarkdown(preferredWindowID: preferredWindowID)
+        _ = saveFocusedLocalDocument(preferredWindowID: preferredWindowID)
         // Cmd+S is app-owned for focused markdown panels, even when save is
         // currently disabled in preview mode or conflict state.
         return true
@@ -1130,11 +1130,11 @@ final class DisplayShortcutInterceptor {
         return focusedBrowserSelection(preferredWindowID: preferredWindowID)
     }
 
-    private func appOwnedFocusedMarkdownSelection(
+    private func appOwnedFocusedLocalDocumentSelection(
         preferredWindowID: UUID?
-    ) -> FocusedMarkdownPanelCommandSelection? {
+    ) -> FocusedLocalDocumentPanelCommandSelection? {
         guard let preferredWindowID else { return nil }
-        return focusedMarkdownSelection(preferredWindowID: preferredWindowID)
+        return focusedLocalDocumentSelection(preferredWindowID: preferredWindowID)
     }
 
     private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {
@@ -1142,9 +1142,9 @@ final class DisplayShortcutInterceptor {
         return store.focusedBrowserPanelSelection(preferredWindowID: preferredWindowID)
     }
 
-    private func focusedMarkdownSelection(preferredWindowID: UUID?) -> FocusedMarkdownPanelCommandSelection? {
+    private func focusedLocalDocumentSelection(preferredWindowID: UUID?) -> FocusedLocalDocumentPanelCommandSelection? {
         guard let store else { return nil }
-        return store.focusedMarkdownPanelSelection(preferredWindowID: preferredWindowID)
+        return store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredWindowID)
     }
 }
 
@@ -1666,20 +1666,20 @@ struct ToasttyApp: App {
                 openManageConfig: openManageConfig,
                 openConfigReference: openConfigReference,
                 openAgentProfilesConfiguration: openAgentProfilesConfiguration,
-                openMarkdownFile: { preferredWindowID in
-                    self.openMarkdownFile(
+                openLocalDocumentFile: { preferredWindowID in
+                    self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.rootRight
                     )
                 },
-                openMarkdownFileInTab: { preferredWindowID in
-                    self.openMarkdownFile(
+                openLocalDocumentFileInTab: { preferredWindowID in
+                    self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.newTab
                     )
                 },
-                openMarkdownFileInSplit: { preferredWindowID in
-                    self.openMarkdownFile(
+                openLocalDocumentFileInSplit: { preferredWindowID in
+                    self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.splitRight
                     )
@@ -1883,17 +1883,17 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private func openMarkdownFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
-        guard let fileURL = MarkdownOpenPanel.chooseFile(
-            title: markdownOpenTitle(for: placement)
+    private func openLocalDocumentFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
+        guard let fileURL = LocalDocumentOpenPanel.chooseFile(
+            title: localDocumentOpenTitle(for: placement)
         ) else {
             return
         }
 
         let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
-        let didOpen = store.createMarkdownPanelFromCommand(
+        let didOpen = store.createLocalDocumentPanelFromCommand(
             preferredWindowID: preferredWindowID,
-            request: MarkdownPanelCreateRequest(
+            request: LocalDocumentPanelCreateRequest(
                 filePath: normalizedFilePath,
                 placementOverride: placement
             )
@@ -1909,7 +1909,7 @@ struct ToasttyApp: App {
         alert.runModal()
     }
 
-    private func markdownOpenTitle(for placement: WebPanelPlacement) -> String {
+    private func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
         case .rootRight:
             return "Open Markdown File"

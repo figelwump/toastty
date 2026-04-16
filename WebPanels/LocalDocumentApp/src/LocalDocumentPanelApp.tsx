@@ -4,8 +4,8 @@ import rehypeHighlight from "rehype-highlight";
 import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkFrontmatter from "remark-frontmatter";
 import remarkGfm from "remark-gfm";
-import { MarkdownPanelBootstrap } from "./bootstrap";
-import { markdownNativeBridge } from "./nativeBridge";
+import { LocalDocumentPanelBootstrap } from "./bootstrap";
+import { localDocumentNativeBridge } from "./nativeBridge";
 
 // --- Sanitize schema: extend default to allow highlight.js class names on spans ---
 
@@ -152,24 +152,24 @@ function scrollToHeading(id: string) {
 
 // --- Bootstrap hook ---
 
-function useBootstrap(): MarkdownPanelBootstrap | null {
-  const [bootstrap, setBootstrap] = React.useState<MarkdownPanelBootstrap | null>(
-    () => window.ToasttyMarkdownPanel?.getCurrentBootstrap() ?? null
+function useBootstrap(): LocalDocumentPanelBootstrap | null {
+  const [bootstrap, setBootstrap] = React.useState<LocalDocumentPanelBootstrap | null>(
+    () => window.ToasttyLocalDocumentPanel?.getCurrentBootstrap() ?? null
   );
 
   React.useEffect(() => {
-    return window.ToasttyMarkdownPanel?.subscribe(setBootstrap);
+    return window.ToasttyLocalDocumentPanel?.subscribe(setBootstrap);
   }, []);
 
   React.useEffect(() => {
-    document.title = bootstrap?.displayName ?? "Markdown";
+    document.title = bootstrap?.displayName ?? "Local Document";
   }, [bootstrap]);
 
   return bootstrap;
 }
 
-function useMarkdownPanelState(): {
-  bootstrap: MarkdownPanelBootstrap | null;
+function useLocalDocumentPanelState(): {
+  bootstrap: LocalDocumentPanelBootstrap | null;
   draftContent: string;
   isDirty: boolean;
   canSave: boolean;
@@ -204,7 +204,7 @@ function useMarkdownPanelState(): {
       return;
     }
 
-    markdownNativeBridge.enterEdit();
+    localDocumentNativeBridge.enterEdit();
   }, [bootstrap?.filePath]);
 
   const saveEdit = React.useCallback(() => {
@@ -212,7 +212,7 @@ function useMarkdownPanelState(): {
       return;
     }
 
-    markdownNativeBridge.save(bootstrap.contentRevision);
+    localDocumentNativeBridge.save(bootstrap.contentRevision);
   }, [bootstrap]);
 
   const overwriteAfterConflict = React.useCallback(() => {
@@ -220,7 +220,7 @@ function useMarkdownPanelState(): {
       return;
     }
 
-    markdownNativeBridge.overwriteAfterConflict(bootstrap.contentRevision);
+    localDocumentNativeBridge.overwriteAfterConflict(bootstrap.contentRevision);
   }, [bootstrap]);
 
   const cancelEdit = React.useCallback(() => {
@@ -228,7 +228,7 @@ function useMarkdownPanelState(): {
       return;
     }
 
-    markdownNativeBridge.cancelEdit(bootstrap.contentRevision);
+    localDocumentNativeBridge.cancelEdit(bootstrap.contentRevision);
   }, [bootstrap]);
 
   const updateDraftContent = React.useCallback((nextContent: string) => {
@@ -238,7 +238,7 @@ function useMarkdownPanelState(): {
       return;
     }
 
-    markdownNativeBridge.draftDidChange(nextContent, bootstrap.contentRevision);
+    localDocumentNativeBridge.draftDidChange(nextContent, bootstrap.contentRevision);
   }, [bootstrap]);
 
   const isDirty = Boolean(
@@ -317,7 +317,7 @@ function TableOfContents(props: { entries: TocEntry[]; onNavigate: () => void })
 }
 
 function Header(props: {
-  bootstrap: MarkdownPanelBootstrap;
+  bootstrap: LocalDocumentPanelBootstrap;
   content: string;
   isDirty: boolean;
   canSave: boolean;
@@ -360,29 +360,29 @@ function Header(props: {
   }, [tocOpen]);
 
   return (
-    <header className="markdown-panel-header">
-      <div className="markdown-panel-stats">
-        <span className="markdown-panel-stat">{wordCount} words</span>
+    <header className="local-document-panel-header">
+      <div className="local-document-panel-stats">
+        <span className="local-document-panel-stat">{wordCount} words</span>
       </div>
-      <div className="markdown-panel-title-wrap">
-        <div className="markdown-panel-title">{bootstrap.displayName}</div>
-        <div className="markdown-panel-path" title={bootstrap.filePath}>{shortPath}</div>
+      <div className="local-document-panel-title-wrap">
+        <div className="local-document-panel-title">{bootstrap.displayName}</div>
+        <div className="local-document-panel-path" title={bootstrap.filePath}>{shortPath}</div>
       </div>
-      <div className="markdown-panel-actions">
+      <div className="local-document-panel-actions">
         {bootstrap.isEditing ? (
           <>
-            <span className={`markdown-session-badge${isDirty ? " markdown-session-badge-dirty" : ""}`}>
+            <span className={`local-document-session-badge${isDirty ? " local-document-session-badge-dirty" : ""}`}>
               {bootstrap.isSaving ? "Saving" : isDirty ? "Unsaved draft" : "Editing"}
             </span>
             <button
-              className="markdown-action-button"
+              className="local-document-action-button"
               onClick={bootstrap.hasExternalConflict ? overwriteAfterConflict : saveEdit}
               disabled={bootstrap.hasExternalConflict ? !canOverwrite : !canSave}
             >
               {bootstrap.hasExternalConflict ? "Overwrite" : "Save"}
             </button>
             <button
-              className="markdown-action-button markdown-action-button-secondary"
+              className="local-document-action-button local-document-action-button-secondary"
               onClick={cancelEdit}
               disabled={bootstrap.isSaving}
             >
@@ -405,7 +405,7 @@ function Header(props: {
               </button>
             )}
             <button
-              className="markdown-action-button"
+              className="local-document-action-button"
               onClick={enterEdit}
               disabled={!bootstrap.filePath}
             >
@@ -421,29 +421,29 @@ function Header(props: {
   );
 }
 
-function MarkdownEditor(props: {
-  bootstrap: MarkdownPanelBootstrap;
+function LocalDocumentEditor(props: {
+  bootstrap: LocalDocumentPanelBootstrap;
   draftContent: string;
   updateDraftContent: (nextContent: string) => void;
 }) {
   return (
-    <section className="markdown-editor-shell">
+    <section className="local-document-editor-shell">
       {(props.bootstrap.hasExternalConflict || props.bootstrap.saveErrorMessage) && (
-        <div className="markdown-editor-status-strip">
+        <div className="local-document-editor-status-strip">
           {props.bootstrap.hasExternalConflict && (
-            <p className="markdown-editor-status markdown-editor-status-conflict">
+            <p className="local-document-editor-status local-document-editor-status-conflict">
               The file changed on disk. Save will stay disabled until you overwrite the file or revert your draft.
             </p>
           )}
           {props.bootstrap.saveErrorMessage && (
-            <p className="markdown-editor-status markdown-editor-status-error">
+            <p className="local-document-editor-status local-document-editor-status-error">
               {props.bootstrap.saveErrorMessage}
             </p>
           )}
         </div>
       )}
       <textarea
-        className="markdown-editor"
+        className="local-document-editor"
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
         spellCheck={false}
@@ -455,7 +455,7 @@ function MarkdownEditor(props: {
   );
 }
 
-export function MarkdownPanelApp() {
+export function LocalDocumentPanelApp() {
   const {
     bootstrap,
     draftContent,
@@ -467,14 +467,14 @@ export function MarkdownPanelApp() {
     overwriteAfterConflict,
     cancelEdit,
     updateDraftContent
-  } = useMarkdownPanelState();
+  } = useLocalDocumentPanelState();
 
   if (!bootstrap) {
     return (
-      <main className="markdown-shell markdown-shell-loading">
-        <div className="markdown-empty-state">
-          <p className="markdown-empty-title">Waiting for content…</p>
-          <p className="markdown-empty-copy">Toastty will load a local markdown file into this panel.</p>
+      <main className="local-document-shell local-document-shell-loading">
+        <div className="local-document-empty-state">
+          <p className="local-document-empty-title">Waiting for content…</p>
+          <p className="local-document-empty-copy">Toastty will load a local markdown file into this panel.</p>
         </div>
       </main>
     );
@@ -484,7 +484,7 @@ export function MarkdownPanelApp() {
   const frontmatter = bootstrap.isEditing ? null : extractFrontmatter(renderedContent);
 
   return (
-    <main className="markdown-shell">
+    <main className="local-document-shell">
       <Header
         bootstrap={bootstrap}
         content={renderedContent}
@@ -497,7 +497,7 @@ export function MarkdownPanelApp() {
         cancelEdit={cancelEdit}
       />
       {bootstrap.isEditing ? (
-        <MarkdownEditor
+        <LocalDocumentEditor
           bootstrap={bootstrap}
           draftContent={draftContent}
           updateDraftContent={updateDraftContent}

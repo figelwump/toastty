@@ -141,16 +141,16 @@ final class FocusedPanelCommandController {
                 }
 
             case .some(.web(let webState)) where webState.definition == .localDocument:
-                if let closeConfirmationState = webPanelRuntimeRegistry?.markdownCloseConfirmationState(panelID: panelID) {
+                if let closeConfirmationState = webPanelRuntimeRegistry?.localDocumentCloseConfirmationState(panelID: panelID) {
                     didPromptForConfirmation = true
                     switch closeConfirmationState.kind {
                     case .dirtyDraft:
-                        guard confirmDiscardMarkdownDraft(displayName: closeConfirmationState.displayName) else {
+                        guard confirmDiscardLocalDocumentDraft(displayName: closeConfirmationState.displayName) else {
                             return .canceled
                         }
 
                     case .saveInProgress:
-                        presentMarkdownSaveInProgressAlert(displayName: closeConfirmationState.displayName)
+                        presentLocalDocumentSaveInProgressAlert(displayName: closeConfirmationState.displayName)
                         return .canceled
                     }
                 }
@@ -234,7 +234,7 @@ final class FocusedPanelCommandController {
         return response == .alertSecondButtonReturn
     }
 
-    private func confirmDiscardMarkdownDraft(displayName: String) -> Bool {
+    private func confirmDiscardLocalDocumentDraft(displayName: String) -> Bool {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Discard markdown draft?"
         confirmationAlert.informativeText = "\"\(displayName)\" has unsaved changes. Closing the panel will discard them."
@@ -249,7 +249,7 @@ final class FocusedPanelCommandController {
         return response == .alertSecondButtonReturn
     }
 
-    private func presentMarkdownSaveInProgressAlert(displayName: String) {
+    private func presentLocalDocumentSaveInProgressAlert(displayName: String) {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Markdown save in progress"
         confirmationAlert.informativeText =

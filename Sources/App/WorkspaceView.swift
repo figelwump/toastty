@@ -1416,8 +1416,8 @@ struct WorkspaceView: View {
             shouldBypassConfirmation: shouldBypassInteractiveConfirmation
         ) { panelID in
             terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
-        } markdownCloseConfirmationState: { panelID in
-            webPanelRuntimeRegistry.markdownCloseConfirmationState(panelID: panelID)
+        } localDocumentCloseConfirmationState: { panelID in
+            webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
         }
 
         guard closeAssessment.requiresConfirmation else {
@@ -2266,9 +2266,9 @@ private struct PanelCardView: View {
                 alignment: .topLeading
             )
         } else if state.definition == .localDocument {
-            MarkdownPanelView(
+            LocalDocumentPanelView(
                 webState: state,
-                runtime: webPanelRuntimeRegistry.markdownRuntime(for: panelID)
+                runtime: webPanelRuntimeRegistry.localDocumentRuntime(for: panelID)
             )
             .frame(
                 maxWidth: .infinity,

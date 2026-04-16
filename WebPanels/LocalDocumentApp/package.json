@@ -1,5 +1,5 @@
 {
-  "name": "toastty-markdown-panel",
+  "name": "toastty-local-document-panel",
   "private": true,
   "scripts": {
     "build": "node scripts/build.mjs"

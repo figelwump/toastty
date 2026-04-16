@@ -1,12 +1,12 @@
 import CoreState
 import SwiftUI
 
-struct MarkdownPanelView: View {
+struct LocalDocumentPanelView: View {
     let webState: WebPanelState
-    @ObservedObject var runtime: MarkdownPanelRuntime
+    @ObservedObject var runtime: LocalDocumentPanelRuntime
 
     var body: some View {
-        MarkdownPanelHostView(
+        LocalDocumentPanelHostView(
             runtime: runtime,
             webState: webState
         )

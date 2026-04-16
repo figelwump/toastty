@@ -1116,10 +1116,10 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
 
         case "automation.markdown_panel_state":
             try requireAutomationMode(for: command)
-            let resolved = try resolveMarkdownTarget(payload: payload)
-            let runtime = webPanelRuntimeRegistry.markdownRuntime(for: resolved.panelID)
+            let resolved = try resolveLocalDocumentTarget(payload: payload)
+            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
             runtime.apply(webState: resolved.webState)
-            return markdownPanelStateSnapshot(
+            return localDocumentPanelStateSnapshot(
                 workspaceID: resolved.workspaceID,
                 panelID: resolved.panelID,
                 webState: resolved.webState,
@@ -1522,9 +1522,9 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             guard let filePath = normalizedOptionalText(args.string("filePath")) else {
                 throw AutomationSocketError.invalidPayload("filePath is required")
             }
-            didMutate = store.createMarkdownPanel(
+            didMutate = store.createLocalDocumentPanel(
                 workspaceID: try workspaceID(),
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: filePath,
                     placementOverride: try webPanelPlacement()
                 )
@@ -1704,7 +1704,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func resolveMarkdownTarget(
+    private func resolveLocalDocumentTarget(
         payload: [String: AutomationJSONValue]
     ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
         if let rawPanelID = payload.string("panelID") {
@@ -1787,11 +1787,11 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func markdownPanelStateSnapshot(
+    private func localDocumentPanelStateSnapshot(
         workspaceID: UUID,
         panelID: UUID,
         webState: WebPanelState,
-        runtimeState: MarkdownPanelRuntimeAutomationState
+        runtimeState: LocalDocumentPanelRuntimeAutomationState
     ) -> [String: AutomationJSONValue] {
         var result: [String: AutomationJSONValue] = [
             "workspaceID": .string(workspaceID.uuidString),

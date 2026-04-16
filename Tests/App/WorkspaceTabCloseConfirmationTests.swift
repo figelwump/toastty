@@ -123,15 +123,15 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
                 XCTFail("markdown-only tab close should not request terminal assessments")
                 return nil
             },
-            markdownCloseConfirmationState: { panelID in
+            localDocumentCloseConfirmationState: { panelID in
                 guard panelID == panelIDs[0] else { return nil }
-                return MarkdownCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
+                return LocalDocumentCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
             }
         )
 
         XCTAssertTrue(assessment.requiresConfirmation)
         XCTAssertTrue(assessment.allowsDestructiveConfirmation)
-        XCTAssertEqual(assessment.unsavedMarkdownDraftCount, 1)
+        XCTAssertEqual(assessment.unsavedLocalDocumentDraftCount, 1)
         XCTAssertEqual(
             assessment.confirmationMessage,
             "\"README.md\" has unsaved markdown changes. Closing the tab will discard them."
@@ -156,15 +156,15 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
                 XCTFail("markdown-only tab close should not request terminal assessments")
                 return nil
             },
-            markdownCloseConfirmationState: { panelID in
+            localDocumentCloseConfirmationState: { panelID in
                 guard panelID == panelIDs[0] else { return nil }
-                return MarkdownCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
+                return LocalDocumentCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
             }
         )
 
         XCTAssertTrue(assessment.requiresConfirmation)
         XCTAssertFalse(assessment.allowsDestructiveConfirmation)
-        XCTAssertEqual(assessment.markdownSaveInProgressCount, 1)
+        XCTAssertEqual(assessment.localDocumentSaveInProgressCount, 1)
         XCTAssertEqual(
             assessment.confirmationMessage,
             "\"README.md\" is still saving. Wait for the save to finish before closing this tab."
@@ -195,14 +195,14 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
                 }
                 return TerminalCloseConfirmationAssessment(requiresConfirmation: false)
             },
-            markdownCloseConfirmationState: { panelID in
+            localDocumentCloseConfirmationState: { panelID in
                 guard panelID == panelIDs[1] else { return nil }
-                return MarkdownCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
+                return LocalDocumentCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
             }
         )
 
         XCTAssertTrue(assessment.requiresConfirmation)
-        XCTAssertEqual(assessment.unsavedMarkdownDraftCount, 1)
+        XCTAssertEqual(assessment.unsavedLocalDocumentDraftCount, 1)
         XCTAssertEqual(
             assessment.confirmationMessage,
             """

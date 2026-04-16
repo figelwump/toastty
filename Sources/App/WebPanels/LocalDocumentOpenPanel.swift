@@ -1,7 +1,7 @@
 import AppKit
 import UniformTypeIdentifiers
 
-enum MarkdownOpenPanel {
+enum LocalDocumentOpenPanel {
     @MainActor
     static func chooseFile(
         title: String = "Open Markdown File",
@@ -20,7 +20,7 @@ enum MarkdownOpenPanel {
     }
 }
 
-private extension MarkdownOpenPanel {
+private extension LocalDocumentOpenPanel {
     static func allowedContentTypes() -> [UTType] {
         var types: [UTType] = []
         let extensions = ["md", "markdown", "mdown", "mkd"]

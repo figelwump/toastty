@@ -1,6 +1,6 @@
-export type MarkdownPanelTheme = "light" | "dark";
+export type LocalDocumentPanelTheme = "light" | "dark";
 
-export interface MarkdownPanelBootstrap {
+export interface LocalDocumentPanelBootstrap {
   contractVersion: 3;
   filePath: string | null;
   displayName: string;
@@ -11,35 +11,35 @@ export interface MarkdownPanelBootstrap {
   hasExternalConflict: boolean;
   isSaving: boolean;
   saveErrorMessage: string | null;
-  theme: MarkdownPanelTheme;
+  theme: LocalDocumentPanelTheme;
 }
 
-type BootstrapListener = (bootstrap: MarkdownPanelBootstrap | null) => void;
+type BootstrapListener = (bootstrap: LocalDocumentPanelBootstrap | null) => void;
 
 declare global {
   interface Window {
-    ToasttyMarkdownPanel?: {
-      receiveBootstrap: (bootstrap: MarkdownPanelBootstrap) => void;
-      getCurrentBootstrap: () => MarkdownPanelBootstrap | null;
+    ToasttyLocalDocumentPanel?: {
+      receiveBootstrap: (bootstrap: LocalDocumentPanelBootstrap) => void;
+      getCurrentBootstrap: () => LocalDocumentPanelBootstrap | null;
       subscribe: (listener: BootstrapListener) => () => void;
     };
   }
 }
 
 const listeners = new Set<BootstrapListener>();
-let currentBootstrap: MarkdownPanelBootstrap | null = null;
+let currentBootstrap: LocalDocumentPanelBootstrap | null = null;
 
-function applyTheme(bootstrap: MarkdownPanelBootstrap | null) {
+function applyTheme(bootstrap: LocalDocumentPanelBootstrap | null) {
   if (!bootstrap) {
     return;
   }
   document.documentElement.dataset.theme = bootstrap.theme;
 }
 
-function warnOnContractMismatch(bootstrap: MarkdownPanelBootstrap) {
+function warnOnContractMismatch(bootstrap: LocalDocumentPanelBootstrap) {
   if (bootstrap.contractVersion !== 3) {
     console.warn(
-      `[ToasttyMarkdownPanel] Expected bootstrap contractVersion 3 but received ${bootstrap.contractVersion}.`
+      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 3 but received ${bootstrap.contractVersion}.`
     );
   }
 }
@@ -50,7 +50,7 @@ function notifyListeners() {
   }
 }
 
-window.ToasttyMarkdownPanel = {
+window.ToasttyLocalDocumentPanel = {
   receiveBootstrap(bootstrap) {
     currentBootstrap = bootstrap;
     warnOnContractMismatch(bootstrap);

@@ -64,18 +64,18 @@ body {
   min-height: 100vh;
 }
 
-.markdown-shell {
+.local-document-shell {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
-.markdown-shell-loading {
+.local-document-shell-loading {
   align-items: center;
   justify-content: center;
 }
 
-.markdown-panel-header {
+.local-document-panel-header {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -89,7 +89,7 @@ body {
   box-shadow: 0 1px 0 var(--header-shadow);
 }
 
-.markdown-panel-actions {
+.local-document-panel-actions {
   margin-left: auto;
   position: relative;
   display: flex;
@@ -97,19 +97,19 @@ body {
   gap: 10px;
 }
 
-.markdown-panel-title-wrap {
+.local-document-panel-title-wrap {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.markdown-panel-title {
+.local-document-panel-title {
   font: 600 18px/1.2 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
   letter-spacing: -0.02em;
 }
 
-.markdown-panel-path {
+.local-document-panel-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -127,7 +127,7 @@ body {
   box-shadow: var(--shadow);
 }
 
-.markdown-editor-shell {
+.local-document-editor-shell {
   flex: 1;
   width: min(980px, calc(100vw - 40px));
   margin: 28px auto 52px;
@@ -139,14 +139,14 @@ body {
   overflow: hidden;
 }
 
-.markdown-editor-status-strip {
+.local-document-editor-status-strip {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 18px 22px 0;
 }
 
-.markdown-editor-status {
+.local-document-editor-status {
   margin: 0;
   padding: 12px 14px;
   border: 1px solid transparent;
@@ -154,19 +154,19 @@ body {
   font: 500 13px/1.45 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
-.markdown-editor-status-conflict {
+.local-document-editor-status-conflict {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
   color: var(--text);
 }
 
-.markdown-editor-status-error {
+.local-document-editor-status-error {
   background: rgba(165, 48, 32, 0.12);
   border-color: rgba(165, 48, 32, 0.24);
   color: #f6d9d2;
 }
 
-.markdown-editor {
+.local-document-editor {
   width: 100%;
   min-height: calc(100vh - 184px);
   padding: 28px 30px 34px;
@@ -180,11 +180,11 @@ body {
   tab-size: 2;
 }
 
-:root[data-theme="light"] .markdown-editor-status-error {
+:root[data-theme="light"] .local-document-editor-status-error {
   color: #7f2618;
 }
 
-.markdown-action-button {
+.local-document-action-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -199,22 +199,22 @@ body {
   transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
 }
 
-.markdown-action-button:hover:enabled {
+.local-document-action-button:hover:enabled {
   transform: translateY(-1px);
 }
 
-.markdown-action-button:disabled {
+.local-document-action-button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.markdown-action-button-secondary {
+.local-document-action-button-secondary {
   background: transparent;
   color: var(--text);
   border-color: var(--border);
 }
 
-.markdown-session-badge {
+.local-document-session-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -227,7 +227,7 @@ body {
   letter-spacing: 0.08em;
 }
 
-.markdown-session-badge-dirty {
+.local-document-session-badge-dirty {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
@@ -399,7 +399,7 @@ body {
   font: 500 0.95em/1.6 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
-.markdown-empty-state {
+.local-document-empty-state {
   max-width: 460px;
   padding: 28px 30px;
   border: 1px solid var(--border);
@@ -409,18 +409,18 @@ body {
   text-align: center;
 }
 
-.markdown-empty-title {
+.local-document-empty-title {
   margin: 0 0 10px;
   font: 600 1.1rem/1.2 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
-.markdown-empty-copy {
+.local-document-empty-copy {
   margin: 0;
   color: var(--muted);
   font: 500 0.98rem/1.6 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
-.markdown-editor::placeholder {
+.local-document-editor::placeholder {
   color: var(--muted);
 }
 
@@ -510,7 +510,7 @@ body {
 }
 
 /* Header stats (replaces badge) */
-.markdown-panel-stats {
+.local-document-panel-stats {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -590,7 +590,7 @@ body {
 }
 
 @media (max-width: 720px) {
-  .markdown-panel-header {
+  .local-document-panel-header {
     padding: 16px 16px 14px;
   }
 

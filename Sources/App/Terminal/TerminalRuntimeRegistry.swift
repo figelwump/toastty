@@ -909,9 +909,9 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             useAlternatePlacement: useAlternatePlacement
         ) {
         case .markdownFile(let path, let placement):
-            return store.createMarkdownPanelFromCommand(
+            return store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: preferredWindowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: path,
                     placementOverride: placement
                 )
