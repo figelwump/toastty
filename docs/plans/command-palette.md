@@ -327,6 +327,29 @@ If a command already has a helper or controller method, the palette should call
 that exact path. If a title or shortcut already exists in menu code, the palette
 should reuse that value instead of retyping it.
 
+This same underlying command layer should remain reusable by future Toastty CLI
+automation, but the CLI should be a separate projection over those app-owned
+helpers and controllers rather than a consumer of palette-specific types.
+Palette UI abstractions such as fuzzy search, provider prefixes, icons,
+origin-window routing, and interactive focused-panel resolution should not
+become the command model for automation.
+
+We should not build a universal command registry in v1 just to satisfy both
+surfaces up front. The durable boundary is:
+
+- shared substrate:
+  - app-owned command helpers and controllers
+  - shared titles/shortcuts where that metadata already exists
+  - stable machine-oriented command identifiers
+- palette-only:
+  - search, ranking, usage frequency, icons, and provider UX
+  - origin-window targeting and palette session lifecycle
+  - contextual `@` file-open browsing
+- future CLI-specific:
+  - explicit arguments and targeting
+  - structured failures and exit behavior
+  - non-interactive execution semantics
+
 ### command execution context
 
 ```swift
@@ -353,6 +376,12 @@ struct CommandExecutionContext {
 constructed with the command controllers and helper paths the palette needs,
 rather than forcing the catalog to reach into controllers ad hoc.
 
+`CommandExecutionContext` is intentionally palette-scoped. It should stay
+focused on origin-window interactive execution rather than being widened to also
+serve future CLI automation. If and when the CLI lands, it should define its
+own automation context and target-resolution model over the same underlying
+command helpers/controllers.
+
 ### command descriptor
 
 ```swift
@@ -371,6 +400,19 @@ struct CommandPaletteCommand: Identifiable {
 This is still an explicit list, but it is not a second command system. The
 closure bodies must call existing helpers/controllers rather than sending raw
 `AppAction` values unless no higher-level path exists yet.
+
+`id` should be a stable machine-oriented identifier sourced from shared command
+metadata, not a value derived from `title`. The display title may evolve to
+match menus or UX polish later without breaking future automation surfaces.
+
+Availability should also be split conceptually between:
+
+- underlying command preconditions rooted in app state
+- palette display filtering rooted in the origin window and current interactive
+  context
+
+That keeps the palette free to hide irrelevant results without forcing future
+automation to pretend it is running inside a palette session.
 
 ### command catalog
 
@@ -491,6 +533,11 @@ small.
 panels and richer navigation exist.
 
 ### provider protocol
+
+`PaletteProvider` is a palette extensibility point, not a generic command or
+automation interface. A future CLI should not route through providers or
+through `CommandPaletteCatalog`; it should project separately over the same
+underlying command layer.
 
 ```swift
 struct PaletteQueryContext {
@@ -1021,6 +1068,9 @@ Update:
   current `focusedPanelID` state at execution time.
 - **Command sourcing:** the palette is a thin projection over existing
   command/menu/controller paths, not a second command system.
+- **CLI relationship:** a future CLI should be a peer automation surface over
+  the same underlying command helpers/controllers, not a consumer of palette
+  providers, palette context, or palette catalog types.
 - **Default mode:** no-prefix = commands.
 - **File mode:** `@` = file open.
 - **Reserved prefix:** `#` stays available for future heading/symbol queries.
