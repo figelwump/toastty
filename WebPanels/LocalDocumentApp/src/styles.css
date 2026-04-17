@@ -153,6 +153,7 @@ body {
 }
 
 .local-document-code-frame {
+  --local-document-code-line-height: 24.75px;
   display: flex;
   align-items: stretch;
   margin-top: 18px;
@@ -166,14 +167,18 @@ body {
   border-right: 1px solid rgba(255, 224, 191, 0.08);
   background: rgba(255, 224, 191, 0.03);
   color: #8a7566;
-  font: 500 13px/1.65 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: var(--local-document-code-line-height);
   text-align: right;
   user-select: none;
 }
 
 .local-document-code-gutter-line {
   display: block;
-  min-height: 1.65em;
+  min-height: var(--local-document-code-line-height);
+  line-height: var(--local-document-code-line-height);
 }
 
 .local-document-code-scroll {
@@ -187,7 +192,10 @@ body {
 .local-document-code-plain {
   display: block;
   min-width: max-content;
-  font: 500 15px/1.65 "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: var(--local-document-code-line-height);
   white-space: pre;
   tab-size: 2;
 }
