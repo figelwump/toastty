@@ -66,7 +66,6 @@ enum ToastyTheme {
     static let workspaceTabCloseBackground = Color(hex: 0x2A2A2A)
     static let workspaceTabCloseButton = Color(hex: 0x888888)
     static let workspaceTabCloseButtonHover = Color(hex: 0xCCCCCC)
-
     // Empty state
     static let emptyStateToastCrust = Color(hex: 0x4A3425)
     static let emptyStateToastBread = Color(hex: 0x6B4E38)

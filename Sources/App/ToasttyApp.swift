@@ -1957,6 +1957,7 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
+                focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                 openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,

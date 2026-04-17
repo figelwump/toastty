@@ -89,6 +89,31 @@ final class WorkspaceViewTests: XCTestCase {
         )
     }
 
+    func testPanelHeaderTrailingAccessoryUsesCloseButtonWhenHovered() {
+        XCTAssertEqual(
+            WorkspaceView.panelHeaderTrailingAccessory(shortcutLabel: "⌥1", isHovered: true),
+            .closeButton
+        )
+    }
+
+    func testPanelHeaderTrailingAccessoryKeepsShortcutBadgeWhenNotHovered() {
+        XCTAssertEqual(
+            WorkspaceView.panelHeaderTrailingAccessory(shortcutLabel: "⌥1", isHovered: false),
+            .badge("⌥1")
+        )
+    }
+
+    func testPanelHeaderTrailingAccessoryShowsOnlyCloseButtonForPanelsWithoutShortcutBadge() {
+        XCTAssertEqual(
+            WorkspaceView.panelHeaderTrailingAccessory(shortcutLabel: nil, isHovered: true),
+            .closeButton
+        )
+        XCTAssertEqual(
+            WorkspaceView.panelHeaderTrailingAccessory(shortcutLabel: nil, isHovered: false),
+            .empty
+        )
+    }
+
     func testWorkspaceTabManagementAffordancesStayEnabledForVisibleTabs() {
         XCTAssertFalse(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 0))
         XCTAssertTrue(WorkspaceView.workspaceTabManagementAffordancesEnabled(tabCount: 1))
@@ -672,6 +697,12 @@ final class WorkspaceViewTests: XCTestCase {
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogStore
         )
+        let focusedPanelCommandController = FocusedPanelCommandController(
+            store: store,
+            runtimeRegistry: registry,
+            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator(),
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry
+        )
         let workspaceView = WorkspaceView(
             windowID: windowID,
             store: store,
@@ -681,6 +712,7 @@ final class WorkspaceViewTests: XCTestCase {
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: .empty),
+            focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
             showAgentGetStartedFlow: {},
             terminalRuntimeContext: TerminalWindowRuntimeContext(

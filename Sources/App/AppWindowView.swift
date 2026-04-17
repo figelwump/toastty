@@ -10,6 +10,7 @@ struct AppWindowView: View {
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
+    let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
@@ -48,6 +49,7 @@ struct AppWindowView: View {
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
                     profileShortcutRegistry: profileShortcutRegistry,
+                    focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,
                     showAgentGetStartedFlow: presentAgentGetStartedFlow,
                     terminalRuntimeContext: terminalRuntimeContext,

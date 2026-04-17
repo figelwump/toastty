@@ -9,6 +9,12 @@ struct WorkspaceView: View {
         case empty
     }
 
+    enum PanelHeaderTrailingAccessory: Equatable {
+        case closeButton
+        case badge(String)
+        case empty
+    }
+
     struct FocusModePresentationState: Equatable {
         let workspaceID: UUID
         let tabID: UUID
@@ -60,6 +66,7 @@ struct WorkspaceView: View {
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
+    let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let showAgentGetStartedFlow: () -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
@@ -174,6 +181,20 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceTabInstallsContextMenu(tabCount: Int) -> Bool {
         tabCount > 0
+    }
+
+    nonisolated static func panelHeaderTrailingAccessory(
+        shortcutLabel: String?,
+        isHovered: Bool
+    ) -> PanelHeaderTrailingAccessory {
+        if isHovered {
+            return .closeButton
+        }
+
+        guard let shortcutLabel else {
+            return .empty
+        }
+        return .badge(shortcutLabel)
     }
 
     nonisolated static func browserTitleIconPanelID(for tab: WorkspaceTabState) -> UUID? {
@@ -686,6 +707,7 @@ struct WorkspaceView: View {
                         terminalProfileStore: terminalProfileStore,
                         terminalRuntimeRegistry: terminalRuntimeRegistry,
                         webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                        focusedPanelCommandController: focusedPanelCommandController,
                         terminalRuntimeContext: terminalRuntimeContext,
                         windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
                         windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
@@ -1901,6 +1923,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    let focusedPanelCommandController: FocusedPanelCommandController
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
     let windowMarkdownTextScale: Double
@@ -1932,6 +1955,7 @@ private struct SlotPlacementView: View {
                     terminalProfileStore: terminalProfileStore,
                     terminalRuntimeRegistry: terminalRuntimeRegistry,
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+                    focusedPanelCommandController: focusedPanelCommandController,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
@@ -1972,7 +1996,10 @@ private struct PanelCardView: View {
     @ObservedObject var terminalProfileStore: TerminalProfileStore
     @ObservedObject var terminalRuntimeRegistry: TerminalRuntimeRegistry
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
+    let focusedPanelCommandController: FocusedPanelCommandController
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
+    @State private var isHovered = false
+    @State private var isCloseButtonHovered = false
 
     private var isFocused: Bool {
         // Only the selected workspace may present a focused terminal host.
@@ -2055,6 +2082,13 @@ private struct PanelCardView: View {
         .onTapGesture {
             store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
         }
+        .onHover(perform: updateHoverState)
+        .onChange(of: appIsActive) { _, nextValue in
+            if nextValue == false {
+                isHovered = false
+                isCloseButtonHovered = false
+            }
+        }
     }
 
     private var panelHeader: some View {
@@ -2073,18 +2107,22 @@ private struct PanelCardView: View {
                     isActivePanel: isFocused
                 )
                 .layoutPriority(1)
+
+                panelHeaderTrailingContent
             } else if let shortcutLabel {
                 panelHeaderLeadingItems
 
                 panelHeaderTitle
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                shortcutBadge(shortcutLabel)
+                panelHeaderTrailingContent
             } else {
                 panelHeaderLeadingItems
 
                 panelHeaderTitle
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                panelHeaderTrailingContent
             }
         }
         .frame(
@@ -2166,6 +2204,17 @@ private struct PanelCardView: View {
         guard case .terminal = panelState else { return nil }
         guard let shortcutNumber else { return nil }
         return DisplayShortcutConfig.panelFocusShortcutLabel(for: shortcutNumber)
+    }
+
+    private var showsHoveredCloseAffordance: Bool {
+        appIsActive && isHovered
+    }
+
+    private var resolvedPanelHeaderTrailingAccessory: WorkspaceView.PanelHeaderTrailingAccessory {
+        WorkspaceView.panelHeaderTrailingAccessory(
+            shortcutLabel: shortcutLabel,
+            isHovered: showsHoveredCloseAffordance
+        )
     }
 
     private var browserTitleIconImage: NSImage? {
@@ -2327,6 +2376,48 @@ private struct PanelCardView: View {
             .background(ToastyTheme.hairline, in: RoundedRectangle(cornerRadius: 3))
     }
 
+    @ViewBuilder
+    private var panelHeaderTrailingContent: some View {
+        switch resolvedPanelHeaderTrailingAccessory {
+        case .closeButton:
+            panelHeaderCloseButton
+        case .badge(let label):
+            shortcutBadge(label)
+        case .empty:
+            EmptyView()
+        }
+    }
+
+    private var panelHeaderCloseButton: some View {
+        Button {
+            _ = focusedPanelCommandController.closePanel(panelID: panelID)
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(
+                    isCloseButtonHovered
+                        ? ToastyTheme.workspaceTabCloseButtonHover
+                        : ToastyTheme.workspaceTabCloseButton
+                )
+                .frame(width: 16, height: 16)
+                .background(
+                    ToastyTheme.workspaceTabCloseBackground,
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Close Panel")
+        .accessibilityIdentifier("panel.header.close.\(panelID.uuidString)")
+        .help(ToasttyKeyboardShortcuts.closePanel.helpText("Close Panel"))
+        .onHover { hovering in
+            if hovering {
+                isCloseButtonHovered = true
+            } else if isCloseButtonHovered {
+                isCloseButtonHovered = false
+            }
+        }
+    }
+
     private func profileBadge(_ badge: TerminalProfileBadge) -> some View {
         Text(badge.label)
             .font(ToastyTheme.fontTerminalProfileBadge)
@@ -2343,6 +2434,14 @@ private struct PanelCardView: View {
                     : ToastyTheme.terminalProfileBadgeMissingBackground,
                 in: Capsule()
             )
+    }
+
+    private func updateHoverState(_ hovering: Bool) {
+        let nextHoverState = appIsActive && hovering
+        isHovered = nextHoverState
+        if nextHoverState == false {
+            isCloseButtonHovered = false
+        }
     }
 }
 
