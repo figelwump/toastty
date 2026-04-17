@@ -291,6 +291,26 @@ final class TerminalRuntimeRegistry: ObservableObject {
         )
     }
 
+    @discardableResult
+    func splitFocusedSlotInDirectionWithWorkingDirectory(
+        workspaceID: UUID,
+        direction: SlotSplitDirection,
+        workingDirectory: String
+    ) -> Bool {
+        guard let normalizedWorkingDirectory = Self.normalizedCWDValue(workingDirectory) else {
+            return false
+        }
+
+        return sendSplitAction(
+            workspaceID: workspaceID,
+            action: .splitFocusedSlotInDirectionWithWorkingDirectory(
+                workspaceID: workspaceID,
+                direction: direction,
+                workingDirectory: normalizedWorkingDirectory
+            )
+        )
+    }
+
     func controller(for panelID: UUID, workspaceID: UUID, windowID: UUID) -> TerminalSurfaceController {
         runtimeStore.controller(
             for: panelID,
@@ -900,7 +920,8 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
     func openCommandClickLink(_ url: URL, useAlternatePlacement: Bool, from panelID: UUID) -> Bool {
         guard let store else { return false }
         let state = store.state
-        let preferredWindowID = state.workspaceSelection(containingPanelID: panelID)?.windowID
+        let selection = state.workspaceSelection(containingPanelID: panelID)
+        let preferredWindowID = selection?.windowID
         let cwd = terminalPanelState(for: panelID, state: state)?.expectedProcessWorkingDirectory
 
         switch TerminalCommandClickTargetResolver.resolve(
@@ -915,6 +936,16 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
                     filePath: path,
                     placementOverride: placement
                 )
+            )
+        case .localDirectory(let path):
+            guard let workspaceID = selection?.workspaceID else {
+                return false
+            }
+            let direction: SlotSplitDirection = useAlternatePlacement ? .down : .right
+            return splitFocusedSlotInDirectionWithWorkingDirectory(
+                workspaceID: workspaceID,
+                direction: direction,
+                workingDirectory: path
             )
         case .passthrough(let passthroughURL):
             return AppURLRouter.open(

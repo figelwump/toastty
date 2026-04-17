@@ -57,6 +57,51 @@ struct AppReducerTests {
     }
 
     @Test
+    func splitFocusedSlotInDirectionWithWorkingDirectorySeedsNewPanelFromExplicitDirectory() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[focusedPanelID] else {
+            Issue.record("expected focused panel to be terminal before split")
+            return
+        }
+        terminalState.cwd = "/tmp/toastty/source"
+        workspace.panels[focusedPanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(
+            reducer.send(
+                .splitFocusedSlotInDirectionWithWorkingDirectory(
+                    workspaceID: workspaceID,
+                    direction: .right,
+                    workingDirectory: "/tmp/toastty/target/../target"
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let newFocusedPanelID = try #require(workspaceAfter.focusedPanelID)
+
+        guard case .terminal(let splitTerminalState) = workspaceAfter.panels[newFocusedPanelID] else {
+            Issue.record("expected split-created panel to be terminal")
+            return
+        }
+        #expect(splitTerminalState.cwd == "/tmp/toastty/target")
+
+        guard case .terminal(let sourceTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            Issue.record("expected source panel to remain terminal")
+            return
+        }
+        #expect(sourceTerminalState.cwd == "/tmp/toastty/source")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func splitFocusedSlotFallsBackToHomeCWDWhenFocusedPanelIsWeb() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()

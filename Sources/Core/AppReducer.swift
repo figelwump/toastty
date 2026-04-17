@@ -596,6 +596,18 @@ public struct AppReducer {
         case .splitFocusedSlotInDirection(let workspaceID, let direction):
             return splitFocusedSlot(workspaceID: workspaceID, direction: direction, state: &state)
 
+        case .splitFocusedSlotInDirectionWithWorkingDirectory(
+            let workspaceID,
+            let direction,
+            let workingDirectory
+        ):
+            return splitFocusedSlot(
+                workspaceID: workspaceID,
+                direction: direction,
+                workingDirectory: workingDirectory,
+                state: &state
+            )
+
         case .splitFocusedSlotInDirectionWithTerminalProfile(let workspaceID, let direction, let profileBinding):
             return splitFocusedSlot(
                 workspaceID: workspaceID,
@@ -868,6 +880,7 @@ public struct AppReducer {
         workspaceID: UUID,
         direction: SlotSplitDirection,
         profileBinding: TerminalProfileBinding? = nil,
+        workingDirectory: String? = nil,
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -876,7 +889,12 @@ public struct AppReducer {
         }
 
         let inheritedCWD: String
-        if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
+        if let workingDirectory {
+            guard let normalizedWorkingDirectory = normalizedWorkingDirectoryValue(workingDirectory) else {
+                return false
+            }
+            inheritedCWD = normalizedWorkingDirectory
+        } else if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
             inheritedCWD = focusedTerminalState.workingDirectorySeed
         } else {
             inheritedCWD = NSHomeDirectory()
@@ -916,6 +934,15 @@ public struct AppReducer {
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
 
+    }
+
+    private static func normalizedWorkingDirectoryValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let normalizedPath = (trimmed as NSString).standardizingPath
+        guard normalizedPath.isEmpty == false else { return nil }
+        return normalizedPath
     }
 
     @discardableResult

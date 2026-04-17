@@ -60,6 +60,11 @@ public enum AppAction: Equatable, Sendable {
     case resetBrowserPanelPageZoom(panelID: UUID)
     case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
+    case splitFocusedSlotInDirectionWithWorkingDirectory(
+        workspaceID: UUID,
+        direction: SlotSplitDirection,
+        workingDirectory: String
+    )
     case splitFocusedSlotInDirectionWithTerminalProfile(
         workspaceID: UUID,
         direction: SlotSplitDirection,
@@ -151,6 +156,8 @@ public extension AppAction {
             return "splitFocusedSlot"
         case .splitFocusedSlotInDirection:
             return "splitFocusedSlotInDirection"
+        case .splitFocusedSlotInDirectionWithWorkingDirectory:
+            return "splitFocusedSlotInDirectionWithWorkingDirectory"
         case .splitFocusedSlotInDirectionWithTerminalProfile:
             return "splitFocusedSlotInDirectionWithTerminalProfile"
         case .focusSlot:

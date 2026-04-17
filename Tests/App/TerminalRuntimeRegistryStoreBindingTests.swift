@@ -537,6 +537,98 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickDirectoryRelativePathCreatesRightSplitTerminal() throws {
+        let fixture = try makeDirectoryFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/worktrees/demo")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count + 1)
+
+        guard case .split(_, let orientation, _, _, _) = workspaceAfter.layoutTree else {
+            XCTFail("expected split root after directory command-click")
+            return
+        }
+        XCTAssertEqual(orientation, .horizontal)
+
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected focused split panel to be terminal")
+            return
+        }
+        XCTAssertEqual(newTerminalState.cwd, fixture.directoryPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testAlternateOpenCommandClickDirectoryRelativePathCreatesDownSplitTerminal() throws {
+        let fixture = try makeDirectoryFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/worktrees/demo")),
+                useAlternatePlacement: true,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count + 1)
+
+        guard case .split(_, let orientation, _, _, _) = workspaceAfter.layoutTree else {
+            XCTFail("expected split root after alternate directory command-click")
+            return
+        }
+        XCTAssertEqual(orientation, .vertical)
+
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected focused split panel to be terminal")
+            return
+        }
+        XCTAssertEqual(newTerminalState.cwd, fixture.directoryPath)
+        try StateValidator.validate(store.state)
+    }
+
     func testAlternateOpenCommandClickMarkdownFileURLUsesRootRightPlacement() throws {
         let fixture = try makeMarkdownFixture()
         let workspace = WorkspaceState(
@@ -975,6 +1067,26 @@ private extension TerminalRuntimeRegistryStoreBindingTests {
             rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
             markdownPath: markdownURL.standardizedFileURL.resolvingSymlinksInPath().path,
             markdownURL: markdownURL
+        )
+    }
+
+    func makeDirectoryFixture() throws -> (rootPath: String, directoryPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-directory-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let directoryURL = rootURL
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("worktrees", isDirectory: true)
+            .appendingPathComponent("demo", isDirectory: true)
+
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            directoryPath: directoryURL.standardizedFileURL.path
         )
     }
 }

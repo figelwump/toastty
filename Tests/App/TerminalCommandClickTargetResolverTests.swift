@@ -115,6 +115,51 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, .passthrough(url))
     }
 
+    func testResolveTreatsRelativeDirectoryPathAsLocalDirectory() throws {
+        let fixture = try makeDirectoryFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/worktrees/demo")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.directoryPath)
+        )
+    }
+
+    func testResolveRecoversFromTrailingPunctuationOnRelativeDirectoryPath() throws {
+        let fixture = try makeDirectoryFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/worktrees/demo).")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: true
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.directoryPath)
+        )
+    }
+
+    func testResolvePreservesSymlinkDirectoryPathForLocalDirectoryTarget() throws {
+        let fixture = try makeSymlinkDirectoryFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.symlinkURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.symlinkPath)
+        )
+    }
+
     func testResolveDecodesPercentEncodedFileURLs() throws {
         let fixture = try makeFixture(fileName: "my notes.md")
 
@@ -190,7 +235,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, .passthrough(fixture.markdownURL))
     }
 
-    func testResolveFallsBackForDirectoryNamedMarkdownFile() throws {
+    func testResolveTreatsDirectoryNamedMarkdownPathAsLocalDirectory() throws {
         let fixture = try makeFixture(directoryNamedMarkdownFile: true)
 
         let target = TerminalCommandClickTargetResolver.resolve(
@@ -199,7 +244,10 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             useAlternatePlacement: false
         )
 
-        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.markdownPath)
+        )
     }
 
     private func makeFixture(
@@ -233,6 +281,47 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
             markdownPath: normalizedMarkdownURL.path,
             markdownURL: markdownURL
+        )
+    }
+
+    private func makeDirectoryFixture() throws -> (rootPath: String, directoryPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-directory-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let directoryURL = rootURL
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("worktrees", isDirectory: true)
+            .appendingPathComponent("demo", isDirectory: true)
+
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            directoryPath: directoryURL.standardizedFileURL.path
+        )
+    }
+
+    private func makeSymlinkDirectoryFixture() throws -> (symlinkPath: String, symlinkURL: URL) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-directory-symlink-tests-\(UUID().uuidString)", isDirectory: true)
+        let targetURL = rootURL.appendingPathComponent("target", isDirectory: true)
+        let symlinkURL = rootURL.appendingPathComponent("linked-target", isDirectory: true)
+
+        try fileManager.createDirectory(at: targetURL, withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(at: symlinkURL, withDestinationURL: targetURL)
+
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            symlinkPath: symlinkURL.standardizedFileURL.path,
+            symlinkURL: symlinkURL
         )
     }
 }
