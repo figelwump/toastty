@@ -254,6 +254,18 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         synchronizeDisplayedContent(with: webState)
     }
 
+    func setEffectivelyVisible(_ visible: Bool) {
+        let shouldHideWebView = !visible
+        guard webView.isHidden != shouldHideWebView else {
+            return
+        }
+
+        // SwiftUI keeps hidden tabs/workspaces mounted with opacity, which
+        // leaves the WKWebView alive in the AppKit hierarchy. Use isHidden so
+        // AppKit stops treating that subtree as a cursor owner.
+        webView.isHidden = shouldHideWebView
+    }
+
     func requestLocationFieldFocus() {
         locationFieldFocusRequestID = UUID()
     }

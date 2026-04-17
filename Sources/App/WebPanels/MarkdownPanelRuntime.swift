@@ -477,6 +477,18 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         requestReload(debounced: false)
     }
 
+    func setEffectivelyVisible(_ visible: Bool) {
+        let shouldHideWebView = !visible
+        guard webView.isHidden != shouldHideWebView else {
+            return
+        }
+
+        // SwiftUI keeps hidden tabs/workspaces mounted with opacity, which
+        // leaves the WKWebView alive in the AppKit hierarchy. Use isHidden so
+        // AppKit stops treating that subtree as a cursor owner.
+        webView.isHidden = shouldHideWebView
+    }
+
     func applyEffectiveAppearance(_ appearance: NSAppearance?) {
         // Re-assigning the same appearance still invalidates WKWebView cursor
         // rects, which can briefly reset the cursor to AppKit's default arrow

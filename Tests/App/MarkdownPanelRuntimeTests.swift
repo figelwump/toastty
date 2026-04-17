@@ -1,6 +1,7 @@
 import AppKit
 @testable import ToasttyApp
 import CoreState
+import WebKit
 import XCTest
 
 @MainActor
@@ -97,6 +98,44 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(session.loadedContent, "# Second")
         XCTAssertEqual(session.draftContent, "# Second")
         XCTAssertFalse(session.isDirty)
+    }
+
+    func testSetEffectivelyVisibleHidesAttachedWebViewWithoutDetaching() {
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        let attachment = PanelHostAttachmentToken.next()
+
+        runtime.attachHost(to: container, attachment: attachment)
+        runtime.setEffectivelyVisible(false)
+
+        XCTAssertEqual(container.subviews.count, 1)
+        XCTAssertTrue(container.subviews[0].isHidden)
+
+        runtime.setEffectivelyVisible(true)
+
+        XCTAssertEqual(container.subviews.count, 1)
+        XCTAssertFalse(container.subviews[0].isHidden)
+    }
+
+    func testSetEffectivelyVisibleBeforeAttachKeepsWebViewHiddenOnAttach() {
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        let attachment = PanelHostAttachmentToken.next()
+
+        runtime.setEffectivelyVisible(false)
+        runtime.attachHost(to: container, attachment: attachment)
+
+        XCTAssertEqual(container.subviews.count, 1)
+        XCTAssertTrue(container.subviews[0] is WKWebView)
+        XCTAssertTrue(container.subviews[0].isHidden)
     }
 
     func testEditingSessionKeepsRevisionForSameContentRebootstrap() {

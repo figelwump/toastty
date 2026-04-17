@@ -2255,6 +2255,7 @@ private struct PanelCardView: View {
                 panelID: panelID,
                 webState: state,
                 runtime: webPanelRuntimeRegistry.browserRuntime(for: panelID),
+                isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
                 isActivePanel: isFocused,
                 activatePanel: {
                     _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
@@ -2268,7 +2269,8 @@ private struct PanelCardView: View {
         } else if state.definition == .localDocument {
             MarkdownPanelView(
                 webState: state,
-                runtime: webPanelRuntimeRegistry.markdownRuntime(for: panelID)
+                runtime: webPanelRuntimeRegistry.markdownRuntime(for: panelID),
+                isEffectivelyVisible: isWorkspaceSelected && isTabSelected
             )
             .frame(
                 maxWidth: .infinity,

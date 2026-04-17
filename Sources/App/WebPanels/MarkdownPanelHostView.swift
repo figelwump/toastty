@@ -5,6 +5,7 @@ import SwiftUI
 struct MarkdownPanelHostView: NSViewRepresentable {
     @ObservedObject var runtime: MarkdownPanelRuntime
     let webState: WebPanelState
+    let isEffectivelyVisible: Bool
 
     @MainActor
     final class Coordinator {
@@ -41,6 +42,7 @@ struct MarkdownPanelHostView: NSViewRepresentable {
 
         containerView.onLayout = attach
         attach(containerView)
+        runtime.setEffectivelyVisible(isEffectivelyVisible)
         runtime.applyEffectiveAppearance(containerView.effectiveAppearance)
 
         if context.coordinator.lastAppliedWebState != webState {

@@ -1,6 +1,7 @@
 @testable import ToasttyApp
 import AppKit
 import CoreState
+import WebKit
 import XCTest
 
 @MainActor
@@ -158,5 +159,43 @@ final class BrowserPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(firstContainer.subviews.count, 0)
         XCTAssertEqual(secondContainer.subviews.count, 1)
         XCTAssertEqual(runtime.lifecycleState.attachmentToken, secondAttachment)
+    }
+
+    func testSetEffectivelyVisibleHidesAttachedWebViewWithoutDetaching() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        let attachment = PanelHostAttachmentToken.next()
+
+        runtime.attachHost(to: container, attachment: attachment)
+        runtime.setEffectivelyVisible(false)
+
+        XCTAssertEqual(container.subviews.count, 1)
+        XCTAssertTrue(container.subviews[0].isHidden)
+
+        runtime.setEffectivelyVisible(true)
+
+        XCTAssertEqual(container.subviews.count, 1)
+        XCTAssertFalse(container.subviews[0].isHidden)
+    }
+
+    func testSetEffectivelyVisibleBeforeAttachKeepsWebViewHiddenOnAttach() {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        let attachment = PanelHostAttachmentToken.next()
+
+        runtime.setEffectivelyVisible(false)
+        runtime.attachHost(to: container, attachment: attachment)
+
+        XCTAssertEqual(container.subviews.count, 1)
+        XCTAssertTrue(container.subviews[0] is WKWebView)
+        XCTAssertTrue(container.subviews[0].isHidden)
     }
 }

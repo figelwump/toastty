@@ -5,6 +5,7 @@ struct BrowserPanelView: View {
     let panelID: UUID
     let webState: WebPanelState
     @ObservedObject var runtime: BrowserPanelRuntime
+    let isEffectivelyVisible: Bool
     let isActivePanel: Bool
     let activatePanel: () -> Void
 
@@ -19,7 +20,8 @@ struct BrowserPanelView: View {
 
             BrowserPanelHostView(
                 runtime: runtime,
-                webState: webState
+                webState: webState,
+                isEffectivelyVisible: isEffectivelyVisible
             )
             .frame(
                 maxWidth: .infinity,
