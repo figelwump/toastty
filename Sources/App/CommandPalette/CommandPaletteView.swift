@@ -4,6 +4,11 @@ struct CommandPaletteView: View {
     @ObservedObject var viewModel: CommandPaletteViewModel
 
     var body: some View {
+        let shape = RoundedRectangle(
+            cornerRadius: CommandPalettePanel.cornerRadius,
+            style: .continuous
+        )
+
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
@@ -77,18 +82,19 @@ struct CommandPaletteView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 11)
         }
-        .frame(width: 580)
+        .frame(
+            width: CommandPalettePanel.defaultFrame.width,
+            height: CommandPalettePanel.defaultFrame.height
+        )
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color(red: 0.18, green: 0.15, blue: 0.13).opacity(0.98))
+            shape.fill(Color(red: 0.18, green: 0.15, blue: 0.13).opacity(0.98))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
+            shape.stroke(Color.white.opacity(0.1), lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(shape)
+        .compositingGroup()
         .shadow(color: Color.black.opacity(0.5), radius: 28, y: 12)
-        .padding(1)
     }
 
     private var resultCountText: String {

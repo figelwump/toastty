@@ -151,6 +151,35 @@ final class CommandPaletteControllerTests: XCTestCase {
 }
 
 @MainActor
+final class CommandPalettePanelTests: XCTestCase {
+    func testPositionedFrameCentersWithinOriginWindow() {
+        let originFrame = CGRect(x: 120, y: 180, width: 900, height: 640)
+
+        let frame = CommandPalettePanel.positionedFrame(
+            relativeTo: originFrame,
+            visibleFrame: nil
+        )
+
+        XCTAssertEqual(frame.origin.x, 280)
+        XCTAssertEqual(frame.origin.y, 374)
+        XCTAssertEqual(frame.size, CommandPalettePanel.defaultFrame.size)
+    }
+
+    func testPositionedFrameClampsCenteredFrameIntoVisibleScreenBounds() {
+        let originFrame = CGRect(x: 920, y: 620, width: 420, height: 260)
+        let visibleFrame = CGRect(x: 0, y: 0, width: 1_200, height: 800)
+
+        let frame = CommandPalettePanel.positionedFrame(
+            relativeTo: originFrame,
+            visibleFrame: visibleFrame
+        )
+
+        XCTAssertEqual(frame.origin.x, visibleFrame.maxX - CommandPalettePanel.defaultFrame.width)
+        XCTAssertEqual(frame.origin.y, visibleFrame.maxY - CommandPalettePanel.defaultFrame.height)
+    }
+}
+
+@MainActor
 private final class RecordingCommandPaletteActions: CommandPaletteActionHandling {
     var createdWorkspaceWindowIDs: [UUID] = []
 
