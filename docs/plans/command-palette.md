@@ -1,6 +1,7 @@
 # toastty command palette
 
 Date: 2026-04-13
+Updated: 2026-04-17
 
 This document describes the design and implementation plan for a command palette
 in Toastty. It covers presentation, command sourcing, search and ranking,
@@ -55,6 +56,55 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - The command palette plan should align with that markdown shape rather than
   inventing a parallel markdown-open path.
 
+## status update (2026-04-17)
+
+### shipped so far
+
+- `Cmd+Shift+P` is wired through `DisplayShortcutInterceptor` and toggles a
+  real palette session.
+- A dedicated `CommandPaletteController` owns the panel, session state,
+  dismiss reasons, and focus restoration.
+- Command execution is anchored to `originWindowID`, so commands route to the
+  window the palette came from instead of the palette window itself.
+- The palette currently ships as a fixed-size panel with a custom search field,
+  keyboard navigation, and a minimal result list.
+- The first routing-shell command set is intentionally narrow:
+  - `Split Horizontally`
+  - `New Workspace`
+  - `Toggle Sidebar`
+- Tests cover shortcut interception, origin-window targeting, focus
+  restoration, and basic view-model behavior.
+- Local smoke validation has been run against the routing shell.
+
+### known issues and deferred work
+
+- Multi-display positioning is still not fully correct in at least one laptop +
+  external-monitor layout. The palette should stay centered in the origin
+  window, but that bug is not resolved yet.
+- The shell is intentionally not feature-complete:
+  - no full command catalog yet
+  - no fuzzy scorer
+  - no usage tracking
+  - no `@` mode
+  - no menu item
+- The original wave-1 command list was too broad for the first landing. The
+  shipped slice proves routing and focus behavior first; the broader command
+  surface should come next.
+
+### next chunk
+
+The next chunk should be **catalog foundation**, not fuzzy search or `@` mode.
+
+That means:
+
+- extract shared command titles and shortcuts into reusable metadata where
+  needed
+- expand from the current 3-command shell to the next band of high-frequency
+  built-ins
+- keep search simple while the catalog is growing
+- defer usage ranking, `@` mode, and menu integration until the command surface
+  is meaningfully broader
+
 ## goals
 
 - Give users a fast way to discover and execute app commands without memorizing
@@ -103,18 +153,22 @@ This remains the right starting point because it is:
 
 ### visual spec
 
-- **Panel width:** 580px, centered horizontally, offset about 20% from the top
-  of the origin window.
+- **Panel size:** 580px wide, fixed shell height in the first implementation,
+  centered in the origin window's content area.
 - **Background:** `#2e2722`, 12px corner radius, 1px border
   `rgba(255,255,255,0.10)`, heavy shadow
   `0 32px 80px rgba(0,0,0,0.8)`.
 - **Search field:** 14-16px padding, magnifying glass icon, 15px Inter,
   separated from results by a 1px divider.
 - **Result rows:** 8px vertical padding, 16px horizontal. Icon on the left,
-  title centered, shortcut badge right-aligned.
+  title left-aligned, shortcut badge right-aligned.
 - **Selected row:** amber tint background with a left accent border.
-- **Footer:** result count on the left, mode hints on the right.
+- **Footer:** result count on the left, mode hints on the right, pinned to the
+  bottom edge of the shell.
 - **Empty state:** muted centered text.
+- **Vertical layout:** search and results stay top-aligned, footer stays at the
+  bottom, and any spare height sits under the result list rather than
+  re-centering the contents.
 
 ### color tokens
 
@@ -270,7 +324,8 @@ enum CommandPaletteDismissReason {
 ```
 
 - `show(relativeTo originWindow: NSWindow, originWindowID: UUID)` records the
-  origin window, centers the panel on that window's screen, restores the last
+  origin window, centers the panel in the origin window's content area,
+  resolves the most relevant visible screen for clamping, restores the last
   query policy for the session, and focuses the search field.
 - `dismiss(reason:)` orders the panel out and handles focus restoration based on
   the reason.
@@ -280,7 +335,9 @@ enum CommandPaletteDismissReason {
   focus restoration.
 - In v1, click-away dismisses the palette. We do not keep the palette alive
   after the user activates another window.
-- Panel height is dynamic up to a fixed max row count.
+- The first implementation uses a fixed shell size. The result area absorbs
+  spare height while keeping search/results top-aligned and the footer pinned
+  to the bottom.
 
 ### SwiftUI content structure
 
@@ -288,9 +345,12 @@ enum CommandPaletteDismissReason {
 VStack(spacing: 0) {
     PaletteSearchField
     Divider()
-    PaletteResultList
-    Divider()
-    PaletteFooter
+    VStack(spacing: 0) {
+        PaletteResultList
+        Spacer(minLength: 0)
+        Divider()
+        PaletteFooter
+    }
 }
 ```
 
@@ -832,10 +892,13 @@ there, not deferred until later polish.
 
 ## implementation plan
 
-### wave 1: core palette shell
+### wave 1: routing shell
 
 Goal: `Cmd+Shift+P` opens a working palette shell that executes a small set of
 high-frequency commands against the correct origin window.
+
+Status: mostly landed. The core routing shell exists, the command set is still
+minimal, and one multi-display centering bug remains open.
 
 **1a. Shortcut interception**
 
@@ -882,9 +945,6 @@ New files:
 Changes:
 
 - `PaletteSearchField` intercepts Up, Down, Return, and Escape
-- `PaletteSearchField` also intercepts `Ctrl+N` and `Ctrl+P` as aliases for
-  Down and Up so the palette matches terminal/readline-style navigation muscle
-  memory
 - `CommandPaletteViewModel` owns:
   - `query`
   - `selectedIndex`
@@ -895,24 +955,34 @@ Changes:
   of truth
 - query work must cancel cleanly when the user types again
 
-**1d. Wave-1 command set**
+Deferred ergonomic follow-up:
 
-Use a small initial set:
+- add `Ctrl+N` / `Ctrl+P` parity with Down / Up once the broader catalog lands
 
-- Split Horizontal
-- Split Vertical
+**1d. Shipped wave-1 command set**
+
+The initial landing deliberately shipped only:
+
+- Split Horizontally
 - New Workspace
+- Toggle Sidebar
+
+This is enough to prove:
+
+- origin-window routing
+- palette-owned focus/dismiss behavior
+- execution while the palette panel is key
+
+Deferred from the original wave-1 surface:
+
+- Split Vertical
 - New Tab
 - Close Panel
-- Toggle Sidebar
 - Reload Configuration
-
-Each command must execute through existing helpers/controllers scoped to
-`originWindowID`.
+- the rest of the built-in high-frequency commands
 
 **1e. Wave-1 validation**
 
-- unit tests for `FuzzyScorer`
 - unit tests for `CommandPaletteViewModel`
 - integration test for origin-window targeting
 - manual smoke:
@@ -922,10 +992,11 @@ Each command must execute through existing helpers/controllers scoped to
   - click outside the palette and verify it dismisses without trying to persist
     across the window switch
 
-### wave 2: full command catalog
+### wave 2: catalog foundation (next chunk)
 
-Goal: all built-in user-facing commands are searchable without introducing a
-parallel command system or duplicating command metadata inline.
+Goal: grow beyond the routing shell by extracting shared command metadata and
+adding the next band of high-frequency built-ins, without trying to ship the
+entire palette feature set at once.
 
 **2a. Catalog**
 
@@ -937,10 +1008,21 @@ Changes:
 
 - extract shareable command titles and shortcut metadata before wiring the full
   catalog so menus and palette results stay in lockstep
-- define the full command list as a thin projection over existing helpers and
-  controllers
+- define the next band of commands as a thin projection over existing helpers
+  and controllers
 - factor shared titles/shortcuts into reusable constants where needed
 - keep availability and execution closures rooted in the existing command layer
+
+Suggested scope for this chunk:
+
+- Split Vertical
+- New Tab
+- Close Panel
+- Reload Configuration
+- the remaining obvious split/layout commands already exposed by shortcuts or
+  menus
+
+Do not bundle in fuzzy scoring, usage ranking, or `@` mode here.
 
 **2b. Result rendering**
 
@@ -957,7 +1039,25 @@ Changes:
 - integration check that the empty query shows the expected built-ins and hides
   unavailable commands for the origin window
 
-### wave 3: usage frequency
+### wave 3: full command catalog completion
+
+Goal: make the command surface broad and coherent before ranking and provider
+work start depending on it.
+
+**3a. Catalog completion**
+
+- fill out the remaining built-in user-facing commands
+- add icons and subtitles where they materially improve scanability
+- keep titles and shortcut badges sourced from shared metadata
+
+**3b. Wave-3 validation**
+
+- broader command projection tests
+- availability tests across multiple window/workspace states
+- integration check that empty-query results cover the expected built-ins for
+  the origin window
+
+### wave 4: usage frequency
 
 Goal: frequently-used commands rise without fighting runtime isolation.
 
@@ -982,13 +1082,13 @@ Changes:
 - unit tests for persistence and runtime-aware path resolution
 - manual verification that repeated commands rise for ambiguous prefixes
 
-### wave 4: `@` file-open mode
+### wave 5: `@` file-open mode
 
 Goal: `@` opens markdown and HTML files from a contextual tree, routing each
 result to the right destination.
 
 Prerequisite: the markdown APIs from `../toastty-markdown-panel` must be merged
-before wave 4 ships with markdown support. If that merge is not available yet,
+before wave 5 ships with markdown support. If that merge is not available yet,
 ship HTML-only routing first or hold `@` mode until the markdown command path is
 present.
 
@@ -1025,7 +1125,7 @@ That means the palette should not construct raw markdown web panels directly.
 - integration test that opening the same markdown file twice reuses the same
   markdown panel in the current workspace
 
-### wave 5: polish, docs, and end-to-end validation
+### wave 6: polish, docs, and end-to-end validation
 
 Goal: smooth presentation, clear discoverability, and stable verification.
 
