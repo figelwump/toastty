@@ -51,6 +51,28 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             interactionDidRequestFocus: { [weak self] panelID in
                 guard let self else { return }
                 _ = self.store?.focusPanel(containing: panelID)
+            },
+            openSecondaryURL: { [weak self] panelID, url in
+                guard let self,
+                      let store = self.store else {
+                    return false
+                }
+
+                let preferredWindowID = store.state.workspaceSelection(containingPanelID: panelID)?.windowID
+                // Browser-native secondary opens intentionally bypass the
+                // general app-owned URL routing preferences: Cmd-click and
+                // popup-style browser opens should behave like browser tabs.
+                // AppURLRouter still sends non-http(s) URLs external.
+                return AppURLRouter.open(
+                    url,
+                    preferredWindowID: preferredWindowID,
+                    appStore: store,
+                    preferences: URLRoutingPreferences(
+                        destination: .toasttyBrowser,
+                        browserPlacement: .newTab,
+                        alternateBrowserPlacement: .newTab
+                    )
+                )
             }
         )
         browserRuntimeByPanelID[panelID] = runtime
