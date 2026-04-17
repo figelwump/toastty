@@ -91,9 +91,18 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         markdownRuntimeByPanelID[panelID]?.canSaveFromCommand() == true
     }
 
+    func canCancelEditingMarkdownPanel(panelID: UUID) -> Bool {
+        markdownRuntimeByPanelID[panelID]?.canCancelEditFromCommand() == true
+    }
+
     @discardableResult
     func saveMarkdownPanel(panelID: UUID) -> Bool {
         markdownRuntimeByPanelID[panelID]?.saveFromCommand() == true
+    }
+
+    @discardableResult
+    func cancelEditingMarkdownPanel(panelID: UUID) -> Bool {
+        markdownRuntimeByPanelID[panelID]?.cancelEditFromCommand() == true
     }
 
     func markdownCloseConfirmationState(panelID: UUID) -> MarkdownCloseConfirmationState? {

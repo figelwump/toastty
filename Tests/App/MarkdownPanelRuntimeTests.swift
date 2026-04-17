@@ -329,6 +329,48 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
     }
 
+    func testCancelEditFromCommandRestoresPreviewAndAdvancesRevision() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = MarkdownPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                MarkdownPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
+
+        XCTAssertTrue(runtime.canCancelEditFromCommand())
+        XCTAssertTrue(runtime.cancelEditFromCommand())
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "# Original")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
+        XCTAssertFalse(runtime.canCancelEditFromCommand())
+    }
+
     func testSaveWritesDraftToDiskAndReturnsToPreview() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

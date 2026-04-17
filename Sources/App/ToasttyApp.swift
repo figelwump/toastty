@@ -483,6 +483,7 @@ final class DisplayShortcutInterceptor {
         case createBrowserTab
         case createWorkspaceTab
         case split(SlotSplitDirection)
+        case cancelLocalDocumentEdit
         case saveMarkdown
         case focusNextUnreadOrActivePanel
         case toggleFocusedPanelMode
@@ -574,6 +575,11 @@ final class DisplayShortcutInterceptor {
             return .closePanel
         }
 
+        if Self.isCancelEditShortcut(event),
+           canCancelFocusedLocalDocumentEdit(preferredWindowID: appOwnedWindowID) {
+            return .cancelLocalDocumentEdit
+        }
+
         if Self.isSaveShortcut(event),
            appOwnedFocusedMarkdownSelection(preferredWindowID: appOwnedWindowID) != nil {
             return .saveMarkdown
@@ -654,6 +660,8 @@ final class DisplayShortcutInterceptor {
             createWorkspaceTab()
         case .split(let direction):
             split(direction: direction, preferredWindowID: appOwnedWindowID)
+        case .cancelLocalDocumentEdit:
+            handleCancelLocalDocumentEditShortcut(preferredWindowID: appOwnedWindowID)
         case .saveMarkdown:
             handleSaveMarkdownShortcut(preferredWindowID: appOwnedWindowID)
         case .focusNextUnreadOrActivePanel:
@@ -725,6 +733,16 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command]
+    }
+
+    static func isCancelEditShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              Int(event.keyCode) == Int(kVK_Escape) else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers.isEmpty
     }
 
     static func splitDirection(for event: NSEvent) -> SlotSplitDirection? {
@@ -1150,6 +1168,31 @@ final class DisplayShortcutInterceptor {
             return false
         }
         return webPanelRuntimeRegistry.saveMarkdownPanel(panelID: selection.panelID)
+    }
+
+    private func canCancelFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedMarkdownSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.canCancelEditingMarkdownPanel(panelID: selection.panelID)
+    }
+
+    private func cancelFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedMarkdownSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.cancelEditingMarkdownPanel(panelID: selection.panelID)
+    }
+
+    private func handleCancelLocalDocumentEditShortcut(preferredWindowID: UUID?) -> Bool {
+        guard canCancelFocusedLocalDocumentEdit(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        // Keep bare Escape with the active local-document editor only while it
+        // has a cancelable edit session; otherwise let the embedded view or the
+        // default responder handle Escape normally.
+        _ = cancelFocusedLocalDocumentEdit(preferredWindowID: preferredWindowID)
+        return true
     }
 
     private func handleSaveMarkdownShortcut(preferredWindowID: UUID?) -> Bool {

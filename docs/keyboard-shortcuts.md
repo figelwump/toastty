@@ -70,6 +70,15 @@ These shortcuts are available when the focused panel is a browser panel:
 | `Cmd+L` | Focus the browser location field |
 | `Cmd+R` | Reload the current page, or stop while a page is loading |
 
+## Local documents
+
+These shortcuts are available when the focused panel is a local document in edit mode:
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+S` | Save the current draft |
+| `Escape` | Cancel edit mode and discard the current draft |
+
 ## Agents and terminal profiles
 
 These shortcuts depend on configured profiles:

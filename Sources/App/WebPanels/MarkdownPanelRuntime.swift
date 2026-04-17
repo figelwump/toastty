@@ -370,6 +370,11 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         session?.canSaveFromCommand == true
     }
 
+    func canCancelEditFromCommand() -> Bool {
+        guard let session else { return false }
+        return session.isEditing && session.isSaving == false
+    }
+
     @discardableResult
     func saveFromCommand() -> Bool {
         guard let session else { return false }
@@ -377,6 +382,16 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
             return false
         }
         save(baseContentRevision: session.contentRevision)
+        return true
+    }
+
+    @discardableResult
+    func cancelEditFromCommand() -> Bool {
+        guard let session else { return false }
+        guard session.isEditing, session.isSaving == false else {
+            return false
+        }
+        cancelEditMode(baseContentRevision: session.contentRevision)
         return true
     }
 

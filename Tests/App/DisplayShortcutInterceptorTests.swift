@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 @testable import ToasttyApp
 import CoreState
 import WebKit
@@ -265,6 +266,25 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isSaveShortcut(repeatedEvent))
     }
 
+    func testCancelEditShortcutMatchesBareEscapeOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "\u{1b}", modifiers: [], keyCode: UInt16(kVK_Escape))
+        let modifiedEvent = try makeKeyEvent(
+            characters: "\u{1b}",
+            modifiers: [.shift],
+            keyCode: UInt16(kVK_Escape)
+        )
+        let repeatedEvent = try makeKeyEvent(
+            characters: "\u{1b}",
+            modifiers: [],
+            keyCode: UInt16(kVK_Escape),
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isCancelEditShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isCancelEditShortcut(modifiedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isCancelEditShortcut(repeatedEvent))
+    }
+
     func testResizeSplitDirectionMatchesCommandControlArrowsOnly() throws {
         let leftArrow = try makeKeyEvent(
             characters: String(UnicodeScalar(NSLeftArrowFunctionKey)!),
@@ -396,6 +416,78 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
         XCTAssertTrue(interceptor.handle(.saveMarkdown, appOwnedWindowID: windowID))
         XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
+    }
+
+    func testLocalDocumentCancelEditShortcutRequiresActiveEditMode() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(
+            store.createMarkdownPanelFromCommand(
+                preferredWindowID: windowID,
+                request: MarkdownPanelCreateRequest(
+                    filePath: fileURL.path,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        terminalRuntimeRegistry.bind(store: store)
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        webPanelRuntimeRegistry.bind(store: store)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let focusedPanelCommandController = FocusedPanelCommandController(
+            store: store,
+            runtimeRegistry: terminalRuntimeRegistry,
+            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+        )
+        let interceptor = DisplayShortcutInterceptor(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: focusedPanelCommandController,
+            installEventMonitor: false
+        )
+
+        let selection = try XCTUnwrap(store.focusedMarkdownPanelSelection(preferredWindowID: windowID))
+        let workspace = try XCTUnwrap(store.state.workspacesByID[selection.workspaceID])
+        guard case .web(let webState) = workspace.panels[selection.panelID] else {
+            XCTFail("expected focused local-document panel")
+            return
+        }
+
+        let runtime = webPanelRuntimeRegistry.markdownRuntime(for: selection.panelID)
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+
+        let escapeEvent = try makeKeyEvent(characters: "\u{1b}", modifiers: [], keyCode: UInt16(kVK_Escape))
+
+        XCTAssertNil(interceptor.shortcutAction(for: escapeEvent, appOwnedWindowID: windowID))
+
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("# Changed\n", baseContentRevision: baseRevision)
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: escapeEvent, appOwnedWindowID: windowID),
+            .cancelLocalDocumentEdit
+        )
+        XCTAssertTrue(interceptor.handle(.cancelLocalDocumentEdit, appOwnedWindowID: windowID))
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "# Preview\n")
     }
 
     func testMarkdownSplitShortcutsCreateTerminalPanelsInFocusedWorkspace() throws {
@@ -840,6 +932,23 @@ private func rootSplitRatio(in workspace: WorkspaceState) -> Double? {
         return nil
     }
     return ratio
+}
+
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    pollNanoseconds: UInt64 = 10_000_000,
+    file: StaticString = #filePath,
+    line: UInt = #line,
+    _ predicate: @escaping @MainActor () -> Bool
+) async throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while await predicate() == false {
+        if DispatchTime.now().uptimeNanoseconds >= deadline {
+            XCTFail("Timed out waiting for condition", file: file, line: line)
+            return
+        }
+        try await Task.sleep(nanoseconds: pollNanoseconds)
+    }
 }
 
 @MainActor
