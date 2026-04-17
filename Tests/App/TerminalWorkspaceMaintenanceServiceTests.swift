@@ -33,7 +33,42 @@ final class TerminalWorkspaceMaintenanceServiceTests: XCTestCase {
             removedPanelIDs: []
         )
 
-        XCTAssertEqual(Set(fixture.pulseRecorder.panelIDs), [originalPanelID])
+        XCTAssertEqual(Set(fixture.pulseRecorder.panelIDs), [initiallySelectedPanelID, originalPanelID])
+    }
+
+    func testSynchronizePulsesOutgoingAndIncomingPanelsWhenWorkspaceSelectionChanges() throws {
+        let fixture = try makeMaintenanceFixture(state: try makeTwoWorkspaceFixtureState())
+        let windowID = try XCTUnwrap(fixture.store.state.windows.first?.id)
+        let initiallySelectedWorkspaceID = try XCTUnwrap(fixture.store.state.windows.first?.selectedWorkspaceID)
+        let initiallySelectedWorkspace = try XCTUnwrap(
+            fixture.store.state.workspacesByID[initiallySelectedWorkspaceID]
+        )
+        let initiallySelectedPanelID = try XCTUnwrap(initiallySelectedWorkspace.focusedPanelID)
+        let originalWorkspaceID = try XCTUnwrap(
+            fixture.store.state.windows.first?.workspaceIDs.first { $0 != initiallySelectedWorkspaceID }
+        )
+        let originalWorkspace = try XCTUnwrap(fixture.store.state.workspacesByID[originalWorkspaceID])
+        let originalPanelID = try XCTUnwrap(originalWorkspace.focusedPanelID)
+
+        fixture.service.synchronize(
+            state: fixture.store.state,
+            livePanelIDs: Set(fixture.panelIDs),
+            removedPanelIDs: []
+        )
+
+        XCTAssertEqual(Set(fixture.pulseRecorder.panelIDs), [initiallySelectedPanelID])
+        fixture.pulseRecorder.panelIDs.removeAll()
+
+        XCTAssertTrue(
+            fixture.store.send(.selectWorkspace(windowID: windowID, workspaceID: originalWorkspaceID))
+        )
+        fixture.service.synchronize(
+            state: fixture.store.state,
+            livePanelIDs: Set(fixture.panelIDs),
+            removedPanelIDs: []
+        )
+
+        XCTAssertEqual(Set(fixture.pulseRecorder.panelIDs), [initiallySelectedPanelID, originalPanelID])
     }
 }
 
@@ -82,6 +117,18 @@ private func makeTwoTabFixtureState() throws -> AppState {
     XCTAssertTrue(
         reducer.send(.createWorkspaceTab(workspaceID: workspaceID, seed: nil), state: &state),
         "expected second tab creation to succeed"
+    )
+    return state
+}
+
+@MainActor
+private func makeTwoWorkspaceFixtureState() throws -> AppState {
+    var state = AppState.bootstrap()
+    let reducer = AppReducer()
+    let windowID = try XCTUnwrap(state.windows.first?.id)
+    XCTAssertTrue(
+        reducer.send(.createWorkspace(windowID: windowID, title: "Second Workspace"), state: &state),
+        "expected second workspace creation to succeed"
     )
     return state
 }

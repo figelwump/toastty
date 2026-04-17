@@ -294,6 +294,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewAppliesGhosttyPointerCursorToDocumentCursor() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_POINTER)
 
@@ -303,6 +304,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewAppliesGhosttyTextCursorToDocumentCursor() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
 
@@ -312,6 +314,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewTracksGhosttyCursorVisibility() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseVisibility(GHOSTTY_MOUSE_HIDDEN)
         XCTAssertFalse(scrollView.ghosttyCursorVisible)
@@ -323,6 +326,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewUsesLinkCursorForMouseOverLinkFallback() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
         hostView.setGhosttyMouseOverLink("https://example.com")
@@ -333,12 +337,52 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewRestoresBaseCursorWhenMouseOverLinkClears() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
         hostView.setGhosttyMouseOverLink("https://example.com")
         hostView.setGhosttyMouseOverLink(nil)
 
         XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
+    }
+
+    func testSurfaceScrollViewDoesNotApplyGhosttyPointerCursorWhenAncestorIsTransparent() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let ancestor = NSView(frame: contentView.bounds)
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        ancestor.alphaValue = 0
+
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(scrollView)
+
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_POINTER)
+
+        XCTAssertNil(scrollView.documentCursor)
+    }
+
+    func testSurfaceScrollViewRelinquishesCursorWhenPresentationVisibilityTurnsHidden() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let ancestor = NSView(frame: contentView.bounds)
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(scrollView)
+
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_POINTER)
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.pointingHand)
+
+        ancestor.alphaValue = 0
+
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_cursor_hidden"))
+        XCTAssertNil(scrollView.documentCursor)
     }
 
     func testMakeContextMenuIncludesSearchWithGoogleForSearchableSelection() {
@@ -1001,7 +1045,7 @@ final class TerminalHostViewTests: XCTestCase {
                 guard transientClearPending.takeIfTrue() else {
                     return
                 }
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     hostView.setGhosttyMouseOverLink(nil)
                 }
             },
@@ -1197,7 +1241,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testMouseExitStillClearsHoveredLinkAfterSyntheticHoverRefresh() throws {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
-        let window = TestWindow()
+        let window = attachToVisibleWindow(scrollView)
         let transientClearPending = SendableBooleanBox(true)
 
         hostView.ghosttySurfaceHooks = .init(
@@ -1217,7 +1261,6 @@ final class TerminalHostViewTests: XCTestCase {
         )
         hostView.setGhosttySurface(fakeSurfaceHandle(0x1247))
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
-        window.contentView = scrollView
         window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
 
         hostView.setGhosttyMouseOverLink("https://example.com/docs")
@@ -1727,6 +1770,23 @@ private func makeMouseEvent(
     location: NSPoint = NSPoint(x: 12, y: 12),
     modifierFlags: NSEvent.ModifierFlags = []
 ) throws -> NSEvent {
+    if type == .mouseEntered || type == .mouseExited {
+        guard let event = NSEvent.enterExitEvent(
+            with: type,
+            location: location,
+            modifierFlags: modifierFlags,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        ) else {
+            throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
+        }
+        return event
+    }
+
     guard let event = NSEvent.mouseEvent(
         with: type,
         location: location,
@@ -1741,6 +1801,16 @@ private func makeMouseEvent(
         throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
     }
     return event
+}
+
+@MainActor
+private func attachToVisibleWindow(_ view: NSView) -> TestWindow {
+    let window = TestWindow()
+    let contentView = NSView(frame: window.frame)
+    window.forcedOcclusionState = [.visible]
+    window.contentView = contentView
+    contentView.addSubview(view)
+    return window
 }
 
 private func makeKeyEvent(

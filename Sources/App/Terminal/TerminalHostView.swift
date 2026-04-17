@@ -559,6 +559,7 @@ final class TerminalHostView: NSView {
 
     private func applySurfaceVisibility(visible: Bool, reason: String) {
         isEffectivelyVisible = visible
+        syncGhosttyCursorOwner()
         if visible {
             requestFirstResponderIfNeeded?()
         }
@@ -644,9 +645,10 @@ final class TerminalHostView: NSView {
         guard let terminalSurfaceScrollView = enclosingScrollView as? TerminalSurfaceScrollView else {
             return
         }
+        let ownsCursor = resolvedSurfaceVisibility(includeTransparentAncestors: true)
         terminalSurfaceScrollView.applyGhosttyCursor(
-            style: effectiveGhosttyMouseCursorStyle(),
-            visible: ghosttyMouseCursorVisible
+            style: ownsCursor ? effectiveGhosttyMouseCursorStyle() : nil,
+            visible: ownsCursor ? ghosttyMouseCursorVisible : true
         )
     }
 

@@ -217,52 +217,69 @@ final class TerminalWorkspaceMaintenanceService {
 
         visibilityPulseTask?.cancel()
         visibilityPulseTask = nil
-
-        guard let currentVisibleSelection else {
-            previousVisibleWorkspaceSelection = nil
+        let previousVisibleSelection = previousVisibleWorkspaceSelection
+        previousVisibleWorkspaceSelection = currentVisibleSelection
+        guard previousVisibleSelection != nil || currentVisibleSelection != nil else {
             return
         }
 
-        previousVisibleWorkspaceSelection = currentVisibleSelection
-        scheduleVisibilityPulse(for: currentVisibleSelection.workspaceID)
+        scheduleVisibilityPulse(
+            previousSelection: previousVisibleSelection,
+            currentSelection: currentVisibleSelection
+        )
     }
 
-    private func scheduleVisibilityPulse(for workspaceID: UUID) {
+    private func scheduleVisibilityPulse(
+        previousSelection: VisibleWorkspaceSelection?,
+        currentSelection: VisibleWorkspaceSelection?
+    ) {
+        let workspaceIDs = Set(
+            [previousSelection?.workspaceID, currentSelection?.workspaceID].compactMap(\.self)
+        )
         ToasttyLog.debug(
             "Scheduling Ghostty visibility refresh pulse after workspace/tab selection change",
             category: .ghostty,
-            metadata: ["workspace_id": workspaceID.uuidString]
+            metadata: ["workspace_ids": workspaceIDs.map(\.uuidString).sorted().joined(separator: ",")]
         )
 
         visibilityPulseTask = visibilityPulseScheduler { [weak self] in
-            self?.pulseVisibleSurfaces(in: workspaceID)
+            self?.pulseVisibleSurfaces(
+                previousSelection: previousSelection,
+                currentSelection: currentSelection
+            )
         }
     }
 
-    private func pulseVisibleSurfaces(in workspaceID: UUID) {
+    private func pulseVisibleSurfaces(
+        previousSelection: VisibleWorkspaceSelection?,
+        currentSelection: VisibleWorkspaceSelection?
+    ) {
         guard let store else { return }
         let currentState = store.state
-        guard currentState.selectedWorkspaceSelection()?.workspaceID == workspaceID,
-              let workspace = currentState.workspacesByID[workspaceID] else {
-            return
-        }
-
-        let panelIDs = visibleTerminalPanelIDs(in: workspace)
+        let panelIDs = pulsedTerminalPanelIDs(
+            state: currentState,
+            previousSelection: previousSelection,
+            currentSelection: currentSelection
+        )
         guard panelIDs.isEmpty == false else { return }
         ToasttyLog.debug(
-            "Pulsing visible Ghostty surfaces after workspace/tab selection change",
+            "Pulsing Ghostty surfaces after workspace/tab selection change",
             category: .ghostty,
             metadata: [
-                "workspace_id": workspaceID.uuidString,
                 "panel_count": String(panelIDs.count),
+                "workspace_ids": Set(
+                    [previousSelection?.workspaceID, currentSelection?.workspaceID].compactMap(\.self)
+                )
+                .map(\.uuidString)
+                .sorted()
+                .joined(separator: ","),
             ]
         )
         for panelID in panelIDs {
             ToasttyLog.debug(
-                "Pulsing Ghostty surface refresh for workspace-selected panel",
+                "Pulsing Ghostty surface refresh for selection-adjacent panel",
                 category: .ghostty,
                 metadata: [
-                    "workspace_id": workspaceID.uuidString,
                     "panel_id": panelID.uuidString,
                 ]
             )
@@ -285,7 +302,32 @@ final class TerminalWorkspaceMaintenanceService {
         guard let tab = workspace.selectedTab else {
             return []
         }
+        return visibleTerminalPanelIDs(in: tab)
+    }
 
+    private func pulsedTerminalPanelIDs(
+        state: AppState,
+        previousSelection: VisibleWorkspaceSelection?,
+        currentSelection: VisibleWorkspaceSelection?
+    ) -> Set<UUID> {
+        visibleTerminalPanelIDs(selection: previousSelection, state: state).union(
+            visibleTerminalPanelIDs(selection: currentSelection, state: state)
+        )
+    }
+
+    private func visibleTerminalPanelIDs(
+        selection: VisibleWorkspaceSelection?,
+        state: AppState
+    ) -> Set<UUID> {
+        guard let selection,
+              let workspace = state.workspacesByID[selection.workspaceID],
+              let tab = workspace.tab(id: selection.tabID) else {
+            return []
+        }
+        return visibleTerminalPanelIDs(in: tab)
+    }
+
+    private func visibleTerminalPanelIDs(in tab: WorkspaceTabState) -> Set<UUID> {
         var panelIDs: Set<UUID> = []
         for leaf in tab.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
