@@ -37,7 +37,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Scrollback find** — Search the active terminal's Ghostty scrollback in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
-- **Persisted terminal history** — With shell integration installed, restored `zsh` and `bash` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
+- **Persisted terminal history** — With shell integration installed, restored `zsh`, `bash`, and `fish` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
 - **Font control** — Increase, decrease, or reset terminal font size per window, with new windows inheriting the source window's current size and layouts remembering window-local overrides
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
@@ -224,13 +224,14 @@ their current profile bindings.
 
 #### Shell integration
 
-Use `Toastty > Install Shell Integration…` to set up live pane titles and restored-pane command recall for `zsh` and `bash` automatically while preserving shared shell history. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Toastty…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
+Use `Toastty > Install Shell Integration…` to set up live pane titles and restored-pane command recall for `zsh`, `bash`, and `fish` automatically while preserving shared shell history. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Toastty…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the shell init file it detects:
 
 - `zsh` → `~/.zshrc`
 - `bash` → `~/.bash_profile` by default, or an existing `~/.profile`
+- `fish` → `~/.config/fish/config.fish`
 
 After installing, new profiled panes pick it up automatically. Existing `zmx`
 or `tmux` sessions may need to restart, or you may need to re-source the init
@@ -242,6 +243,11 @@ This journal-based restore path does not migrate old `history/panes/*.history`
 files into the new `history/pane-journals/*.journal` format. Existing shared
 shell history still remains available immediately, and pane-local recall starts
 rebuilding as new commands run in each pane.
+
+For `fish`, Toastty skips pane-journal import and writes when `fish_history=''`.
+The first fish slice also mirrors fish's default "leading-space commands stay
+out of history" behavior, but it does not currently mirror custom
+`fish_should_add_to_history` filters.
 
 Shell integration installation is disabled while runtime isolation is enabled, because sandboxed dev/test runs must not rewrite your login shell files.
 

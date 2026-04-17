@@ -1,10 +1,12 @@
 # Shell Integration
 
-Toastty's shell integration emits `OSC 2` title sequences so panel headers show live working directories and running commands, even inside multiplexers like `tmux` or `zmx`. For `zsh` and `bash`, Toastty also keeps a Toastty-owned per-pane restore journal while leaving the shell's normal shared history alone.
+Toastty's shell integration emits `OSC 2` title sequences so panel headers show live working directories and running commands, even inside multiplexers like `tmux` or `zmx`. For `zsh`, `bash`, and `fish`, Toastty also keeps a Toastty-owned per-pane restore journal while leaving the shell's normal shared history alone.
 
 On restore, Toastty imports that pane's journal into the shell's in-memory history. That means `Up` starts with the last commands from that pane, while reverse-search and normal history traversal can still see the broader shared shell history.
 
 The easiest way to install is either `Toastty > Install Shell Integration…` or the top-bar `Get Started…` flow in Toastty. Both write the snippet and source it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
+
+If you keep shell startup files in version control, the installer is still the easiest way to get the exact current snippet. Install once, keep the managed file under `~/.toastty/shell/`, and version only the `source` line in your shell init file if that matches your workflow.
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.
 
@@ -244,9 +246,25 @@ Then add this near the end of `~/.bash_profile` on macOS, or `~/.bashrc` if that
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.bash"
 ```
 
+## Fish
+
+Toastty installs the managed fish snippet at `~/.toastty/shell/toastty-profile-shell-integration.fish` and sources it from `~/.config/fish/config.fish`:
+
+```fish
+source "$HOME/.toastty/shell/toastty-profile-shell-integration.fish"
+```
+
+The fish snippet uses `fish_prompt`, `fish_preexec`, and `fish_postexec` events to keep pane titles current and maintain the pane-local restore journal.
+
+Fish-specific behavior:
+
+- Commands that start with a leading space are skipped, matching fish's default hidden-from-history behavior.
+- If `fish_history` is set to the empty string, Toastty skips pane-journal import and writes for that session.
+- Custom `fish_should_add_to_history` filtering is not mirrored yet. Toastty's first fish slice only applies the built-in leading-space and `fish_history=''` checks.
+
 ## Other shells
 
-Install an equivalent interactive hook that writes `OSC 2` (`\033]2;...\a`) to `/dev/tty` with the current working directory whenever the prompt returns. If your shell also has a pre-exec hook, emitting the current command there is useful too, but the prompt-time directory title is the important part for profiled multiplexer sessions. Toastty's managed restore-journal wiring is currently provided for `zsh` and `bash` only.
+Install an equivalent interactive hook that writes `OSC 2` (`\033]2;...\a`) to `/dev/tty` with the current working directory whenever the prompt returns. If your shell also has a pre-exec hook, emitting the current command there is useful too, but the prompt-time directory title is the important part for profiled multiplexer sessions. Toastty's managed restore-journal wiring is currently provided for `zsh`, `bash`, and `fish` only.
 
 ## Related docs
 

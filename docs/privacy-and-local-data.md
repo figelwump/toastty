@@ -17,9 +17,9 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots, including window-local terminal font overrides.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
-  - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash).
+  - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
 - `~/.toastty/history/pane-journals/`
-  - Toastty-owned per-pane restore journals used by `zsh` and `bash` shell integration. These are imported into in-memory shell history on restore, but Toastty does not replace the shell's primary shared history file.
+  - Toastty-owned per-pane restore journals used by `zsh`, `bash`, and `fish` shell integration. These are imported into in-memory shell history on restore, but Toastty does not replace the shell's primary shared history file. For fish, Toastty skips pane-journal import and writes when `fish_history=''`.
 - By default, `~/Library/Logs/Toastty/toastty.log`
   - Structured JSON logs.
 - By default, `~/Library/Logs/Toastty/toastty.previous.log`

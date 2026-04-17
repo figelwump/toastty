@@ -45,6 +45,27 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertEqual(plan.shell, .zsh)
     }
 
+    func testInstallationPlanUsesFishConfigForFish() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
+            shellPathProvider: { "/usr/local/bin/fish" }
+        )
+
+        let plan = try installer.installationPlan()
+
+        XCTAssertEqual(plan.shell, .fish)
+        XCTAssertEqual(
+            plan.initFileURL.path,
+            homeDirectoryURL.appendingPathComponent(".config/fish/config.fish").path
+        )
+        XCTAssertEqual(
+            plan.sourceLine,
+            "source \"$HOME/.toastty/shell/toastty-profile-shell-integration.fish\""
+        )
+    }
+
     func testInstallWritesManagedZshSnippetAndUpdatesZshrc() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         try writeFile(
@@ -211,6 +232,8 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             .appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.zsh")
         let bashSnippetURL = homeDirectoryURL
             .appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.bash")
+        let fishSnippetURL = homeDirectoryURL
+            .appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.fish")
         try writeFile(
             """
             # Added by Toastty terminal profile shell integration
@@ -225,8 +248,16 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             """,
             to: homeDirectoryURL.appendingPathComponent(".bash_profile")
         )
+        try writeFile(
+            """
+            # Added by Toastty terminal profile shell integration
+            source "$HOME/.toastty/shell/toastty-profile-shell-integration.fish"
+            """,
+            to: homeDirectoryURL.appendingPathComponent(".config/fish/config.fish")
+        )
         try writeFile("# stale zsh snippet\n", to: zshSnippetURL)
         try writeFile("# stale bash snippet\n", to: bashSnippetURL)
+        try writeFile("# stale fish snippet\n", to: fishSnippetURL)
 
         let updated = try installer.refreshManagedSnippetIfInstalled()
 
@@ -237,6 +268,9 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         let bashSnippetContents = try String(contentsOf: bashSnippetURL, encoding: .utf8)
         XCTAssertTrue(bashSnippetContents.contains("_toastty_initialize_pane_journal"))
+
+        let fishSnippetContents = try String(contentsOf: fishSnippetURL, encoding: .utf8)
+        XCTAssertTrue(fishSnippetContents.contains("_toastty_initialize_pane_journal"))
     }
 
     func testBashInstallationUsesProfileWhenBashProfileIsMissing() throws {
@@ -303,19 +337,54 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertTrue(bashProfileContents.contains("source \"$HOME/.toastty/shell/toastty-profile-shell-integration.bash\""))
     }
 
+    func testInstallWritesManagedFishSnippetAndCreatesFishConfig() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: [:],
+            shellPathProvider: { "/usr/local/bin/fish" }
+        )
+
+        let result = try installer.install()
+
+        XCTAssertEqual(result.plan.shell, .fish)
+        XCTAssertTrue(result.updatedInitFile)
+        XCTAssertTrue(result.createdInitFile)
+
+        let configContents = try String(
+            contentsOf: homeDirectoryURL.appendingPathComponent(".config/fish/config.fish"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(configContents.contains("source \"$HOME/.toastty/shell/toastty-profile-shell-integration.fish\""))
+        XCTAssertTrue(configContents.contains("# Added by Toastty terminal profile shell integration"))
+
+        let snippetContents = try String(
+            contentsOf: homeDirectoryURL.appendingPathComponent(".toastty/shell/toastty-profile-shell-integration.fish"),
+            encoding: .utf8
+        )
+        XCTAssertTrue(snippetContents.contains("if not status --is-interactive"))
+        XCTAssertTrue(snippetContents.contains("_toastty_restore_agent_shim_path"))
+        XCTAssertTrue(snippetContents.contains("_toastty_initialize_pane_journal"))
+        XCTAssertTrue(snippetContents.contains("builtin history append -- \"$entry\""))
+        XCTAssertTrue(snippetContents.contains("TOASTTY_PANE_JOURNAL_FILE"))
+        XCTAssertTrue(snippetContents.contains("--on-event fish_prompt"))
+        XCTAssertTrue(snippetContents.contains("--on-event fish_preexec"))
+        XCTAssertTrue(snippetContents.contains("--on-event fish_postexec"))
+    }
+
     func testInstallationPlanRejectsUnsupportedShell() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
             homeDirectoryPath: homeDirectoryURL.path,
             environment: [:],
-            shellPathProvider: { "/opt/homebrew/bin/fish" }
+            shellPathProvider: { "/bin/tcsh" }
         )
 
         XCTAssertThrowsError(try installer.installationPlan()) { error in
             guard case .unsupportedShell(let shellPath) = error as? ProfileShellIntegrationInstallerError else {
                 return XCTFail("Expected unsupported shell error, got \(error)")
             }
-            XCTAssertEqual(shellPath, "/opt/homebrew/bin/fish")
+            XCTAssertEqual(shellPath, "/bin/tcsh")
         }
     }
 
@@ -1018,6 +1087,358 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         XCTAssertEqual(output.split(separator: "\n").map(String.init), ["echo toastty-bash"])
     }
+
+    func testManagedFishSnippetRestoresAgentShimPathToFront() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let shimDirectory = "/tmp/toastty-agent-shims"
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; string join ':' $PATH",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    "PATH": "/Users/vishal/.bun/bin:\(shimDirectory):/usr/bin",
+                    "TOASTTY_AGENT_SHIM_DIR": shimDirectory,
+                ]
+            )
+        )
+
+        let components = output.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ":").map(String.init)
+        XCTAssertEqual(components.first, shimDirectory)
+        XCTAssertEqual(components.filter { $0 == shimDirectory }.count, 1)
+    }
+
+    func testManagedFishSnippetLeavesPathUnchangedWithoutAgentShimDirectory() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let originalPath = "/Users/vishal/.bun/bin:/usr/bin"
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; set before (string join ':' $PATH); source \"$argv[1]\"; printf '%s\\n%s\\n' \"$before\" (string join ':' $PATH)",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: ["PATH": originalPath]
+            )
+        )
+
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            [originalPath, originalPath]
+        )
+    }
+
+    func testManagedFishSnippetImportsPaneJournalOnRestore() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-fish.journal")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("echo toastty-fish\0git status\0".utf8).write(to: journalFileURL, options: .atomic)
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; history search --max 10",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                    ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                ]
+            )
+        )
+
+        XCTAssertTrue(output.contains("echo toastty-fish"))
+        XCTAssertTrue(output.contains("git status"))
+    }
+
+    func testManagedFishSnippetSkipsPaneJournalImportForCreateLaunches() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-fish.journal")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("echo toastty-fish\0".utf8).write(to: journalFileURL, options: .atomic)
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; history search --max 10",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                    ToasttyLaunchContextEnvironment.launchReasonKey: "create",
+                ]
+            )
+        )
+
+        XCTAssertFalse(output.contains("echo toastty-fish"))
+    }
+
+    func testManagedFishSnippetPreservesLaunchReasonForSubsequentCommands() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; printf '%s\\n' \"$TOASTTY_LAUNCH_REASON\"",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [ToasttyLaunchContextEnvironment.launchReasonKey: "restore"]
+            )
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "restore")
+    }
+
+    func testManagedFishSnippetDoesNotReimportPaneJournalInNestedShell() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-fish.journal")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try paneJournalData(entries: ["echo toastty-fish"]).write(to: journalFileURL, options: .atomic)
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; set -gx TOASTTY_TEST_SNIPPET \"$argv[1]\"; set -gx TOASTTY_TEST_FISH \"$argv[2]\"; \"$TOASTTY_TEST_FISH\" -N -i -c 'set -g fish_greeting; source \"$argv[1]\"; history search --max 5' \"$TOASTTY_TEST_SNIPPET\"",
+                snippetURL.path,
+                fishExecutableURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                    ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                ]
+            )
+        )
+
+        XCTAssertFalse(output.contains("echo toastty-fish"))
+    }
+
+    func testManagedFishSnippetSkipsIncompleteTrailingPaneJournalEntry() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-fish.journal")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("echo toastty-fish\0git status".utf8).write(to: journalFileURL, options: .atomic)
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; history search --max 10",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                    ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                ]
+            )
+        )
+
+        XCTAssertTrue(output.contains("echo toastty-fish"))
+        XCTAssertFalse(output.contains("git status"))
+    }
+
+    func testManagedFishSnippetCompactsPaneJournalToMostRecentEntries() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-fish.journal")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let entries = (1...5_002).map { "echo toastty-fish-\($0)" }
+        try paneJournalData(entries: entries).write(to: journalFileURL, options: .atomic)
+
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; set entries; while read --null --local entry; set entries $entries \"$entry\"; end < \"$TOASTTY_PANE_JOURNAL_FILE\"; set last_index (count $entries); printf '%s\\n%s\\n%s\\n' (count $entries) \"$entries[1]\" \"$entries[$last_index]\"",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path]
+            )
+        )
+
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            ["5000", "echo toastty-fish-3", "echo toastty-fish-5002"]
+        )
+    }
+
+    func testManagedFishSnippetAppendsNewHistoryEntriesToPaneJournal() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-fish.journal")
+        let output = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; emit fish_preexec 'echo toastty-fish'; emit fish_postexec 'echo toastty-fish'; while read --null --local entry; printf '%s\\n' \"$entry\"; end < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path]
+            )
+        )
+
+        XCTAssertEqual(output.trimmingCharacters(in: .whitespacesAndNewlines), "echo toastty-fish")
+    }
+
+    func testManagedFishSnippetSkipsCommandsHiddenFromFishHistory() throws {
+        let fishExecutableURL = try requireFishExecutableURL()
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.fish.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.fish"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-fish.journal")
+
+        let leadingSpaceOutput = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; emit fish_preexec ' echo toastty-fish'; emit fish_postexec ' echo toastty-fish'; if test -r \"$TOASTTY_PANE_JOURNAL_FILE\"; while read --null --local entry; printf '%s\\n' \"$entry\"; end < \"$TOASTTY_PANE_JOURNAL_FILE\"; end",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path]
+            )
+        )
+        XCTAssertTrue(leadingSpaceOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+        let disabledHistoryOutput = try runProcess(
+            executableURL: fishExecutableURL,
+            arguments: [
+                "-N",
+                "-i",
+                "-c",
+                "set -g fish_greeting; source \"$argv[1]\"; emit fish_preexec 'echo toastty-fish'; emit fish_postexec 'echo toastty-fish'; if test -r \"$TOASTTY_PANE_JOURNAL_FILE\"; while read --null --local entry; printf '%s\\n' \"$entry\"; end < \"$TOASTTY_PANE_JOURNAL_FILE\"; end",
+                snippetURL.path,
+            ],
+            environment: try fishTestEnvironment(
+                for: snippetURL,
+                overriding: [
+                    ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                    "fish_history": "",
+                ]
+            )
+        )
+        XCTAssertTrue(disabledHistoryOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
 }
 
 private func makeTemporaryHomeDirectory() throws -> URL {
@@ -1033,6 +1454,53 @@ private func writeStandaloneSnippet(_ contents: String, fileName: String) throws
     let snippetURL = directoryURL.appendingPathComponent(fileName)
     try contents.write(to: snippetURL, atomically: true, encoding: .utf8)
     return snippetURL
+}
+
+private func fishTestEnvironment(
+    for snippetURL: URL,
+    overriding overrides: [String: String] = [:]
+) throws -> [String: String] {
+    let homeDirectoryURL = snippetURL.deletingLastPathComponent()
+    let configDirectoryURL = homeDirectoryURL.appendingPathComponent(".config", isDirectory: true)
+    let dataDirectoryURL = homeDirectoryURL.appendingPathComponent(".local/share", isDirectory: true)
+    try FileManager.default.createDirectory(at: configDirectoryURL, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: dataDirectoryURL, withIntermediateDirectories: true)
+
+    var environment = [
+        "HOME": homeDirectoryURL.path,
+        "TERM": "xterm-256color",
+        "PATH": ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+        "XDG_CONFIG_HOME": configDirectoryURL.path,
+        "XDG_DATA_HOME": dataDirectoryURL.path,
+        "fish_history": "toastty_shell_integration_tests",
+    ]
+    for (key, value) in overrides {
+        environment[key] = value
+    }
+    return environment
+}
+
+private func requireFishExecutableURL() throws -> URL {
+    let candidatePaths = [
+        "/opt/homebrew/bin/fish",
+        "/usr/local/bin/fish",
+        "/usr/bin/fish",
+    ]
+    for path in candidatePaths where FileManager.default.isExecutableFile(atPath: path) {
+        return URL(fileURLWithPath: path)
+    }
+
+    let pathEnvironment = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    for directory in pathEnvironment.split(separator: ":").map(String.init) where directory.isEmpty == false {
+        let candidatePath = URL(fileURLWithPath: directory)
+            .appendingPathComponent("fish")
+            .path
+        if FileManager.default.isExecutableFile(atPath: candidatePath) {
+            return URL(fileURLWithPath: candidatePath)
+        }
+    }
+
+    throw XCTSkip("fish is not installed")
 }
 
 private func runProcess(

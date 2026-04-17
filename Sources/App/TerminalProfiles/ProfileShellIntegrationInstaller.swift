@@ -8,6 +8,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
     case zsh
     case bash
+    case fish
 
     var displayName: String {
         switch self {
@@ -15,6 +16,8 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             return "Zsh"
         case .bash:
             return "Bash"
+        case .fish:
+            return "Fish"
         }
     }
 
@@ -24,6 +27,8 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             return "toastty-profile-shell-integration.zsh"
         case .bash:
             return "toastty-profile-shell-integration.bash"
+        case .fish:
+            return "toastty-profile-shell-integration.fish"
         }
     }
 
@@ -37,6 +42,8 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             return ".zshrc"
         case .bash:
             return ".bash_profile"
+        case .fish:
+            return ".config/fish/config.fish"
         }
     }
 
@@ -46,6 +53,8 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             return [".zshrc"]
         case .bash:
             return [".bash_profile", ".profile"]
+        case .fish:
+            return [".config/fish/config.fish"]
         }
     }
 
@@ -337,6 +346,201 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \tfi
             fi
             """
+        case .fish:
+            return """
+            # Toastty terminal profile shell integration.
+            # - idle prompt: cwd
+            # - running command: command
+            if not status --is-interactive
+            \treturn
+            end
+
+            function _toastty_restore_agent_shim_path
+            \tset --local shim_dir "$TOASTTY_AGENT_SHIM_DIR"
+            \ttest -n "$shim_dir"; or return
+
+            \tset --local updated_path "$shim_dir"
+            \tfor entry in $PATH
+            \t\ttest -n "$entry"; or continue
+            \t\ttest "$entry" = "$shim_dir"; and continue
+            \t\tset updated_path $updated_path "$entry"
+            \tend
+            \tset --export PATH $updated_path
+            end
+
+            function _toastty_ensure_pane_journal_directory
+            \tset --local pane_journal_file "$TOASTTY_PANE_JOURNAL_FILE"
+            \ttest -n "$pane_journal_file"; or return 1
+
+            \tset --local pane_journal_dir (/usr/bin/dirname "$pane_journal_file")
+            \ttest -n "$pane_journal_dir"; or return 1
+
+            \t/bin/mkdir -p -- "$pane_journal_dir" 2>/dev/null; or return 1
+            \treturn 0
+            end
+
+            function _toastty_make_pane_journal_snapshot --argument-names output_path
+            \tset --local pane_journal_file "$TOASTTY_PANE_JOURNAL_FILE"
+            \ttest -n "$pane_journal_file"; or return 1
+            \ttest -r "$pane_journal_file"; or return 1
+
+            \t/usr/bin/perl -0777 -ne 's/[^\\0]*\\z//s unless /\\0\\z/s; print' -- "$pane_journal_file" > "$output_path" 2>/dev/null
+            \tor begin
+            \t\t/bin/rm -f -- "$output_path"
+            \t\treturn 1
+            \tend
+            \treturn 0
+            end
+
+            function _toastty_compact_pane_journal
+            \tset --local pane_journal_file "$TOASTTY_PANE_JOURNAL_FILE"
+            \ttest -n "$pane_journal_file"; or return
+            \ttest -r "$pane_journal_file"; or return
+
+            \tset --local snapshot_path (/usr/bin/mktemp "$pane_journal_file.snapshot.XXXXXX" 2>/dev/null)
+            \ttest -n "$snapshot_path"; or return
+            \t_toastty_make_pane_journal_snapshot "$snapshot_path"; or begin
+            \t\t/bin/rm -f -- "$snapshot_path"
+            \t\treturn
+            \tend
+
+            \tset --local entries
+            \twhile read --null --local entry
+            \t\tset entries $entries "$entry"
+            \tend < "$snapshot_path"
+            \t/bin/rm -f -- "$snapshot_path"
+
+            \tset --local total_entries (count $entries)
+            \tset --local max_entries \(Self.defaultPaneJournalEntryCount)
+            \ttest $total_entries -gt $max_entries; or return
+
+            \tset --local start_index (math "$total_entries - $max_entries + 1")
+            \tset --local temp_file "$pane_journal_file.tmp.$fish_pid"
+            \tprintf '' > "$temp_file"; or return
+
+            \tfor index in (seq $start_index $total_entries)
+            \t\tprintf '%s\\0' "$entries[$index]" >> "$temp_file"
+            \t\tor begin
+            \t\t\t/bin/rm -f -- "$temp_file"
+            \t\t\treturn
+            \t\tend
+            \tend
+
+            \t/bin/mv -f -- "$temp_file" "$pane_journal_file" 2>/dev/null
+            \tor /bin/rm -f -- "$temp_file"
+            end
+
+            function _toastty_import_pane_journal_if_needed
+            \ttest "$TOASTTY_LAUNCH_REASON" = "restore"; or return
+            \ttest "$TOASTTY_PANE_JOURNAL_IMPORTED" = "1"; and return
+
+            \tif set -q fish_history; and test -z "$fish_history"
+            \t\treturn
+            \tend
+
+            \tset --local pane_journal_file "$TOASTTY_PANE_JOURNAL_FILE"
+            \ttest -n "$pane_journal_file"; or return
+            \ttest -r "$pane_journal_file"; or return
+
+            \tset --local snapshot_path (/usr/bin/mktemp "$pane_journal_file.snapshot.XXXXXX" 2>/dev/null)
+            \ttest -n "$snapshot_path"; or return
+            \t_toastty_make_pane_journal_snapshot "$snapshot_path"; or begin
+            \t\t/bin/rm -f -- "$snapshot_path"
+            \t\treturn
+            \tend
+
+            \twhile read --null --local entry
+            \t\tbuiltin history append -- "$entry"
+            \tend < "$snapshot_path"
+            \t/bin/rm -f -- "$snapshot_path"
+            end
+
+            function _toastty_initialize_pane_journal
+            \tset -q _TOASTTY_PANE_JOURNAL_INITIALIZED; and return
+
+            \tif _toastty_ensure_pane_journal_directory
+            \t\t_toastty_compact_pane_journal
+            \t\t_toastty_import_pane_journal_if_needed
+            \tend
+
+            \ttest "$TOASTTY_LAUNCH_REASON" = "restore"
+            \tand set --global --export TOASTTY_PANE_JOURNAL_IMPORTED 1
+
+            \tset --global _TOASTTY_PANE_JOURNAL_INITIALIZED 1
+            end
+
+            function _toastty_command_should_write_pane_journal --argument-names cmd
+            \ttest -n "$cmd"; or return 1
+
+            \tif set -q fish_history; and test -z "$fish_history"
+            \t\treturn 1
+            \tend
+
+            \tstring match -qr '^ ' -- "$cmd"; and return 1
+            \treturn 0
+            end
+
+            function _toastty_append_pending_history_entry_to_journal
+            \tset -q _TOASTTY_PENDING_JOURNAL_ENTRY; or return
+
+            \tset --local pane_journal_file "$TOASTTY_PANE_JOURNAL_FILE"
+            \ttest -n "$pane_journal_file"; or begin
+            \t\tset --erase _TOASTTY_PENDING_JOURNAL_ENTRY
+            \t\treturn
+            \tend
+
+            \tprintf '%s\\0' "$_TOASTTY_PENDING_JOURNAL_ENTRY" >> "$pane_journal_file" 2>/dev/null
+            \tor begin
+            \t\tset --erase _TOASTTY_PENDING_JOURNAL_ENTRY
+            \t\treturn
+            \tend
+
+            \tset --erase _TOASTTY_PENDING_JOURNAL_ENTRY
+
+            \tset --local write_count 0
+            \tset -q _TOASTTY_PANE_JOURNAL_WRITE_COUNT
+            \tand set write_count $_TOASTTY_PANE_JOURNAL_WRITE_COUNT
+            \tset write_count (math "$write_count + 1")
+            \tset --global _TOASTTY_PANE_JOURNAL_WRITE_COUNT $write_count
+
+            \tset --local compaction_interval \(Self.paneJournalCompactionInterval)
+            \ttest $compaction_interval -gt 0; or return
+            \ttest (math "$write_count % $compaction_interval") -eq 0
+            \tand _toastty_compact_pane_journal
+            end
+
+            function _toastty_emit_title --argument-names title
+            \ttest -t 1; or return
+            \ttest -w /dev/tty; or return
+
+            \tset --local sanitized_title "$title"
+            \tset sanitized_title (string replace -a -- (printf '\\033') '' -- "$sanitized_title")
+            \tset sanitized_title (string replace -a -- (printf '\\a') '' -- "$sanitized_title")
+            \tset sanitized_title (string replace -a -- (printf '\\r') '' -- "$sanitized_title")
+            \tset sanitized_title (string replace -a -- (printf '\\n') ' ' -- "$sanitized_title")
+
+            \tprintf '\\033]2;%s\\a' "$sanitized_title" > /dev/tty
+            end
+
+            function _toastty_on_fish_prompt --on-event fish_prompt
+            \t_toastty_emit_title (prompt_pwd)
+            end
+
+            function _toastty_on_fish_preexec --on-event fish_preexec --argument-names cmd
+            \tset --erase _TOASTTY_PENDING_JOURNAL_ENTRY
+            \t_toastty_emit_title "$cmd"
+
+            \t_toastty_command_should_write_pane_journal "$cmd"
+            \tand set --global _TOASTTY_PENDING_JOURNAL_ENTRY "$cmd"
+            end
+
+            function _toastty_on_fish_postexec --on-event fish_postexec --argument-names cmd
+            \t_toastty_append_pending_history_entry_to_journal
+            end
+
+            _toastty_restore_agent_shim_path
+            _toastty_initialize_pane_journal
+            """
         }
     }
 
@@ -354,6 +558,10 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
                     return candidateURL
                 }
             }
+            return homeDirectoryURL.appendingPathComponent(defaultInitFileName)
+        case .fish:
+            // Keep fish on the existing installer model by sourcing Toastty's managed
+            // snippet from config.fish instead of introducing a fish-only conf.d flow.
             return homeDirectoryURL.appendingPathComponent(defaultInitFileName)
         }
     }
@@ -402,7 +610,7 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable, Sendable 
         case .unsupportedShell(let shellPath):
             let resolvedShell = shellPath?.isEmpty == false ? shellPath! : "unknown"
             return """
-            Toastty can install shell integration for zsh and bash only. Detected shell: \(resolvedShell)
+            Toastty can install shell integration for zsh, bash, and fish only. Detected shell: \(resolvedShell)
 
             For other shells, add an equivalent OSC 2 title hook manually in your shell init file.
             """
@@ -587,6 +795,9 @@ final class ProfileShellIntegrationInstaller {
         if normalizedShellName.hasPrefix("bash") {
             return .bash
         }
+        if normalizedShellName.hasPrefix("fish") {
+            return .fish
+        }
         return nil
     }
 
@@ -666,6 +877,7 @@ final class ProfileShellIntegrationInstaller {
             + "\n"
 
         do {
+            try ensureDirectoryExists(at: initFileURL.deletingLastPathComponent())
             try updatedContents.write(to: initFileURL, atomically: true, encoding: .utf8)
         } catch {
             throw ProfileShellIntegrationInstallerError.unableToWriteFile(
