@@ -565,6 +565,30 @@ public struct AppReducer {
             state.windows[windowIndex].markdownTextScaleOverride = nil
             return true
 
+        case .setBrowserPanelPageZoom(let panelID, let zoom):
+            return setBrowserPanelPageZoom(panelID: panelID, zoom: zoom, state: &state)
+
+        case .increaseBrowserPanelPageZoom(let panelID):
+            return adjustBrowserPanelPageZoom(
+                panelID: panelID,
+                direction: .increase,
+                state: &state
+            )
+
+        case .decreaseBrowserPanelPageZoom(let panelID):
+            return adjustBrowserPanelPageZoom(
+                panelID: panelID,
+                direction: .decrease,
+                state: &state
+            )
+
+        case .resetBrowserPanelPageZoom(let panelID):
+            return setBrowserPanelPageZoom(
+                panelID: panelID,
+                zoom: WebPanelState.defaultBrowserPageZoom,
+                state: &state
+            )
+
         case .splitFocusedSlot(let workspaceID, let orientation):
             let direction: SlotSplitDirection = orientation == .horizontal ? .right : .down
             return splitFocusedSlot(workspaceID: workspaceID, direction: direction, state: &state)
@@ -768,6 +792,74 @@ public struct AppReducer {
             return false
         }
         state.windows[windowIndex].markdownTextScaleOverride = normalizedOverride
+        return true
+    }
+
+    private enum BrowserPageZoomAdjustmentDirection {
+        case increase
+        case decrease
+    }
+
+    private static func setBrowserPanelPageZoom(
+        panelID: UUID,
+        zoom: Double,
+        state: inout AppState
+    ) -> Bool {
+        mutateBrowserPanelState(panelID: panelID, state: &state) { webState in
+            let normalizedZoom = WebPanelState.normalizedBrowserPageZoom(zoom)
+            guard webState.browserPageZoom != normalizedZoom else {
+                return false
+            }
+            webState.browserPageZoom = normalizedZoom
+            return true
+        }
+    }
+
+    private static func adjustBrowserPanelPageZoom(
+        panelID: UUID,
+        direction: BrowserPageZoomAdjustmentDirection,
+        state: inout AppState
+    ) -> Bool {
+        mutateBrowserPanelState(panelID: panelID, state: &state) { webState in
+            let currentZoom = webState.effectiveBrowserPageZoom
+            let nextZoom: Double
+            switch direction {
+            case .increase:
+                nextZoom = WebPanelState.increasedBrowserPageZoom(from: currentZoom)
+            case .decrease:
+                nextZoom = WebPanelState.decreasedBrowserPageZoom(from: currentZoom)
+            }
+
+            let normalizedZoom = WebPanelState.normalizedBrowserPageZoom(nextZoom)
+            guard webState.browserPageZoom != normalizedZoom else {
+                return false
+            }
+            webState.browserPageZoom = normalizedZoom
+            return true
+        }
+    }
+
+    private static func mutateBrowserPanelState(
+        panelID: UUID,
+        state: inout AppState,
+        mutation: (inout WebPanelState) -> Bool
+    ) -> Bool {
+        guard let location = locatePanel(panelID, in: state) else { return false }
+        guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
+        guard let tabID = workspace.tabID(containingPanelID: panelID),
+              case .web(var webState) = workspace.tab(id: tabID)?.panels[panelID],
+              webState.definition == .browser else {
+            return false
+        }
+
+        guard mutation(&webState) else {
+            return false
+        }
+
+        _ = workspace.updateTab(id: tabID) { tab in
+            tab.panels[panelID] = .web(webState)
+        }
+        commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
         return true
     }
 

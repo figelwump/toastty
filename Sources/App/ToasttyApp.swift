@@ -1013,7 +1013,7 @@ final class DisplayShortcutInterceptor {
         for event: NSEvent,
         appOwnedWindowID: UUID?
     ) -> ShortcutAction? {
-        guard appOwnedFocusedTextSizeTarget(preferredWindowID: appOwnedWindowID) != nil else {
+        guard appOwnedFocusedScaleTarget(preferredWindowID: appOwnedWindowID) != nil else {
             return nil
         }
 
@@ -1061,7 +1061,7 @@ final class DisplayShortcutInterceptor {
         preferredWindowID: UUID?
     ) -> Bool {
         guard let store else { return false }
-        guard let target = appOwnedFocusedTextSizeTarget(preferredWindowID: preferredWindowID) else {
+        guard let target = appOwnedFocusedScaleTarget(preferredWindowID: preferredWindowID) else {
             return false
         }
 
@@ -1078,11 +1078,17 @@ final class DisplayShortcutInterceptor {
             _ = store.send(.decreaseWindowMarkdownTextScale(windowID: windowID))
         case (.markdown(let windowID), .reset):
             _ = store.send(.resetWindowMarkdownTextScale(windowID: windowID))
+        case (.browser(_, let panelID), .increase):
+            _ = store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
+        case (.browser(_, let panelID), .decrease):
+            _ = store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
+        case (.browser(_, let panelID), .reset):
+            _ = store.send(.resetBrowserPanelPageZoom(panelID: panelID))
         }
 
-        // Once a terminal or markdown panel is the focused target, keep the
-        // text-size shortcut app-owned so the embedded terminal or web view
-        // cannot reinterpret it as raw input.
+        // Once a terminal, markdown, or browser panel is the focused target,
+        // keep the scale shortcut app-owned so the embedded terminal or web
+        // view cannot reinterpret it as raw input.
         return true
     }
 
@@ -1278,14 +1284,14 @@ final class DisplayShortcutInterceptor {
         return focusedMarkdownSelection(preferredWindowID: preferredWindowID)
     }
 
-    private func appOwnedFocusedTextSizeTarget(
+    private func appOwnedFocusedScaleTarget(
         preferredWindowID: UUID?
-    ) -> FocusedTextSizeCommandTarget? {
+    ) -> FocusedScaleCommandTarget? {
         guard let preferredWindowID,
               let store else {
             return nil
         }
-        return store.focusedTextSizeCommandTarget(preferredWindowID: preferredWindowID)
+        return store.focusedScaleCommandTarget(preferredWindowID: preferredWindowID)
     }
 
     private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {

@@ -93,14 +93,42 @@ struct FocusedMarkdownPanelCommandSelection: Equatable {
     let panelID: UUID
 }
 
-enum FocusedTextSizeCommandTarget: Equatable {
+enum FocusedScaleCommandTarget: Equatable {
     case terminal(windowID: UUID)
     case markdown(windowID: UUID)
+    case browser(windowID: UUID, panelID: UUID)
 
     var windowID: UUID {
         switch self {
-        case .terminal(let windowID), .markdown(let windowID):
+        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _):
             return windowID
+        }
+    }
+
+    var increaseMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Zoom In"
+        case .terminal, .markdown:
+            return "Increase Text Size"
+        }
+    }
+
+    var decreaseMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Zoom Out"
+        case .terminal, .markdown:
+            return "Decrease Text Size"
+        }
+    }
+
+    var resetMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Actual Size"
+        case .terminal, .markdown:
+            return "Reset Text Size"
         }
     }
 }
@@ -311,9 +339,9 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func focusedTextSizeCommandTarget(
+    func focusedScaleCommandTarget(
         preferredWindowID: UUID?
-    ) -> FocusedTextSizeCommandTarget? {
+    ) -> FocusedScaleCommandTarget? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let panelID = selection.workspace.focusedPanelID,
               selection.workspace.slotID(containingPanelID: panelID) != nil,
@@ -324,10 +352,15 @@ final class AppStore: ObservableObject {
         switch panelState {
         case .terminal:
             return .terminal(windowID: selection.windowID)
-        case .web(let webState) where webState.definition == .localDocument:
-            return .markdown(windowID: selection.windowID)
-        case .web:
-            return nil
+        case .web(let webState):
+            switch webState.definition {
+            case .localDocument:
+                return .markdown(windowID: selection.windowID)
+            case .browser:
+                return .browser(windowID: selection.windowID, panelID: panelID)
+            case .scratchpad, .diff:
+                return nil
+            }
         }
     }
 

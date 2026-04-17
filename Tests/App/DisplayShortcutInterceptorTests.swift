@@ -412,7 +412,7 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
     }
 
-    func testTextSizeShortcutTargetsFocusedTerminalMarkdownAndNotBrowser() throws {
+    func testTextSizeShortcutTargetsFocusedTerminalMarkdownAndBrowser() throws {
         let increaseEvent = try makeKeyEvent(characters: "=", modifiers: [.command], keyCode: 0x18)
 
         let terminalStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
@@ -460,7 +460,10 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             )
         )
         let browserInterceptor = makeInterceptor(store: browserStore)
-        XCTAssertNil(browserInterceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: browserWindowID))
+        XCTAssertEqual(
+            browserInterceptor.shortcutAction(for: increaseEvent, appOwnedWindowID: browserWindowID),
+            .increaseTextSize
+        )
     }
 
     func testTextSizeShortcutHandleAdjustsFocusedMarkdownScale() throws {
@@ -488,6 +491,32 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
         XCTAssertEqual(store.state.effectiveMarkdownTextScale(for: windowID), 1.1, accuracy: 0.0001)
+        XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: windowID), AppState.defaultTerminalFontPoints)
+    }
+
+    func testTextSizeShortcutHandleAdjustsFocusedBrowserZoom() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: windowID,
+                request: BrowserPanelCreateRequest(
+                    initialURL: "https://example.com",
+                    placementOverride: .splitRight
+                )
+            )
+        )
+        let browserSelection = try XCTUnwrap(store.focusedBrowserPanelSelection(preferredWindowID: windowID))
+        let interceptor = makeInterceptor(store: store)
+
+        XCTAssertTrue(interceptor.handle(.increaseTextSize, appOwnedWindowID: windowID))
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[browserSelection.workspaceID])
+        guard case .web(let webState) = workspace.panels[browserSelection.panelID] else {
+            XCTFail("expected focused browser panel")
+            return
+        }
+        XCTAssertEqual(webState.effectiveBrowserPageZoom, 1.1, accuracy: 0.0001)
         XCTAssertEqual(store.state.effectiveTerminalFontPoints(for: windowID), AppState.defaultTerminalFontPoints)
     }
 

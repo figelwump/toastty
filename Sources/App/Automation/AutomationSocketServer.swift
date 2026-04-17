@@ -1126,6 +1126,18 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 runtimeState: runtime.automationState()
             )
 
+        case "automation.browser_panel_state":
+            try requireAutomationMode(for: command)
+            let resolved = try resolveBrowserTarget(payload: payload)
+            let runtime = webPanelRuntimeRegistry.browserRuntime(for: resolved.panelID)
+            runtime.apply(webState: resolved.webState)
+            return browserPanelStateSnapshot(
+                workspaceID: resolved.workspaceID,
+                panelID: resolved.panelID,
+                webState: resolved.webState,
+                runtimeState: runtime.automationState()
+            )
+
         case "automation.dump_state":
             try requireAutomationMode(for: command)
             flushCoalescedUpdates(at: Date())
@@ -1551,6 +1563,18 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         case "app.markdown_text.reset":
             didMutate = store.send(.resetWindowMarkdownTextScale(windowID: try resolveWindowID(args: args)))
 
+        case "app.browser_zoom.increase":
+            let target = try resolveBrowserTarget(payload: args)
+            didMutate = store.send(.increaseBrowserPanelPageZoom(panelID: target.panelID))
+
+        case "app.browser_zoom.decrease":
+            let target = try resolveBrowserTarget(payload: args)
+            didMutate = store.send(.decreaseBrowserPanelPageZoom(panelID: target.panelID))
+
+        case "app.browser_zoom.reset":
+            let target = try resolveBrowserTarget(payload: args)
+            didMutate = store.send(.resetBrowserPanelPageZoom(panelID: target.panelID))
+
         case "sidebar.workspaces.new":
             let windowID = try resolveWindowID(args: args)
             let title = args.string("title")
@@ -1758,6 +1782,51 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
+    private func resolveBrowserTarget(
+        payload: [String: AutomationJSONValue]
+    ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
+        if let rawPanelID = payload.string("panelID") {
+            guard let panelID = UUID(uuidString: rawPanelID) else {
+                throw AutomationSocketError.invalidPayload("panelID must be a UUID")
+            }
+            guard let location = locatePanel(panelID) else {
+                throw AutomationSocketError.invalidPayload("panelID does not exist")
+            }
+            guard let workspace = store.state.workspacesByID[location.workspaceID],
+                  let panelState = workspace.panelState(for: panelID),
+                  case .web(let webState) = panelState,
+                  webState.definition == .browser else {
+                throw AutomationSocketError.invalidPayload("panelID is not a browser panel")
+            }
+            return (location.workspaceID, panelID, webState)
+        }
+
+        let workspaceID = try resolveWorkspaceID(args: payload)
+        guard let workspace = store.state.workspacesByID[workspaceID] else {
+            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
+        }
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           let panelState = workspace.panels[focusedPanelID],
+           case .web(let webState) = panelState,
+           webState.definition == .browser {
+            return (workspaceID, focusedPanelID, webState)
+        }
+
+        for leaf in workspace.layoutTree.allSlotInfos {
+            let panelID = leaf.panelID
+            guard let panelState = workspace.panels[panelID],
+                  case .web(let webState) = panelState,
+                  webState.definition == .browser else {
+                continue
+            }
+            return (workspaceID, panelID, webState)
+        }
+
+        throw AutomationSocketError.invalidPayload("workspace has no browser panel to target")
+    }
+
+    @MainActor
     private func encodedStateData(includeRuntime: Bool) throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
@@ -1846,6 +1915,26 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
         }
 
         return result
+    }
+
+    @MainActor
+    private func browserPanelStateSnapshot(
+        workspaceID: UUID,
+        panelID: UUID,
+        webState: WebPanelState,
+        runtimeState: BrowserPanelRuntimeAutomationState
+    ) -> [String: AutomationJSONValue] {
+        [
+            "workspaceID": .string(workspaceID.uuidString),
+            "panelID": .string(panelID.uuidString),
+            "stateTitle": .string(webState.title),
+            "stateRestorableURL": webState.restorableURL.map { .string($0) } ?? .null,
+            "statePageZoom": .double(webState.effectiveBrowserPageZoom),
+            "statePageZoomOverride": webState.browserPageZoom.map { .double($0) } ?? .null,
+            "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
+            "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
+            "runtimePageZoom": .double(runtimeState.pageZoom),
+        ]
     }
 
     @MainActor

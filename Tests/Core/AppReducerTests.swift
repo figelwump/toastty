@@ -1458,7 +1458,8 @@ struct AppReducerTests {
                     workspaceID: workspaceID,
                     panel: WebPanelState(
                         definition: .browser,
-                        initialURL: "https://example.com/original"
+                        initialURL: "https://example.com/original",
+                        browserPageZoom: 1.25
                     ),
                     placement: .splitRight
                 ),
@@ -1488,6 +1489,7 @@ struct AppReducerTests {
         #expect(webState.initialURL == "https://example.com/original")
         #expect(webState.currentURL == "https://example.com")
         #expect(webState.restorableURL == "https://example.com")
+        #expect(webState.browserPageZoom == 1.25)
 
         #expect(
             reducer.send(
@@ -1510,6 +1512,7 @@ struct AppReducerTests {
         #expect(untitledWebState.initialURL == "https://example.com/original")
         #expect(untitledWebState.currentURL == "https://example.com/no-title")
         #expect(untitledWebState.restorableURL == "https://example.com/no-title")
+        #expect(untitledWebState.browserPageZoom == 1.25)
 
         #expect(
             reducer.send(
@@ -1532,6 +1535,58 @@ struct AppReducerTests {
         #expect(blankWebState.initialURL == "https://example.com/original")
         #expect(blankWebState.currentURL == "about:blank")
         #expect(blankWebState.restorableURL == "about:blank")
+        #expect(blankWebState.browserPageZoom == 1.25)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func browserPageZoomActionsAdjustAndResetPanelState() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+
+        let browserPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.increaseBrowserPanelPageZoom(panelID: browserPanelID), state: &state))
+        guard case .web(let increasedWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after zoom increase")
+            return
+        }
+        #expect(increasedWebState.effectiveBrowserPageZoom == 1.1)
+
+        #expect(reducer.send(.setBrowserPanelPageZoom(panelID: browserPanelID, zoom: 1.25), state: &state))
+        guard case .web(let customZoomWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after custom zoom")
+            return
+        }
+        #expect(customZoomWebState.browserPageZoom == 1.25)
+
+        #expect(reducer.send(.decreaseBrowserPanelPageZoom(panelID: browserPanelID), state: &state))
+        guard case .web(let decreasedWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after zoom decrease")
+            return
+        }
+        #expect(decreasedWebState.effectiveBrowserPageZoom == 1.1)
+
+        #expect(reducer.send(.resetBrowserPanelPageZoom(panelID: browserPanelID), state: &state))
+        guard case .web(let resetWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after zoom reset")
+            return
+        }
+        #expect(resetWebState.browserPageZoom == nil)
+        #expect(resetWebState.effectiveBrowserPageZoom == WebPanelState.defaultBrowserPageZoom)
 
         try StateValidator.validate(state)
     }
@@ -1666,7 +1721,8 @@ struct AppReducerTests {
                     panel: WebPanelState(
                         definition: .browser,
                         title: "Review",
-                        initialURL: "https://example.com/review"
+                        initialURL: "https://example.com/review",
+                        browserPageZoom: 1.25
                     ),
                     placement: .splitRight
                 ),
@@ -1703,7 +1759,8 @@ struct AppReducerTests {
                     panel: WebPanelState(
                         definition: .browser,
                         title: "Docs",
-                        initialURL: "https://example.com/docs"
+                        initialURL: "https://example.com/docs",
+                        browserPageZoom: 1.5
                     ),
                     placement: .newTab
                 ),

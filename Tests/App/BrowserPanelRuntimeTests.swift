@@ -1,6 +1,7 @@
 @testable import ToasttyApp
 import AppKit
 import CoreState
+import WebKit
 import XCTest
 
 @MainActor
@@ -129,6 +130,54 @@ final class BrowserPanelRuntimeTests: XCTestCase {
             runtime.navigationState.displayedURLString,
             "https://example.com/docs"
         )
+    }
+
+    func testApplyWebStateSetsBrowserPageZoomOnHostedWebView() throws {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        let attachment = PanelHostAttachmentToken.next()
+
+        runtime.attachHost(to: container, attachment: attachment)
+        runtime.apply(
+            webState: WebPanelState(
+                definition: .browser,
+                browserPageZoom: 1.25
+            )
+        )
+
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        XCTAssertEqual(webView.pageZoom, 1.25, accuracy: 0.0001)
+        XCTAssertEqual(runtime.automationState().pageZoom, 1.25, accuracy: 0.0001)
+    }
+
+    func testDidFinishReassertsPersistedBrowserPageZoom() throws {
+        let runtime = BrowserPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 240))
+        let attachment = PanelHostAttachmentToken.next()
+
+        runtime.attachHost(to: container, attachment: attachment)
+        runtime.apply(
+            webState: WebPanelState(
+                definition: .browser,
+                browserPageZoom: 1.5
+            )
+        )
+
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        webView.pageZoom = 1.0
+
+        runtime.webView(webView, didFinish: nil)
+
+        XCTAssertEqual(webView.pageZoom, 1.5, accuracy: 0.0001)
+        XCTAssertEqual(runtime.automationState().pageZoom, 1.5, accuracy: 0.0001)
     }
 
     func testUpdateReattachesImmediatelyAfterDetachWithNewAttachment() async {

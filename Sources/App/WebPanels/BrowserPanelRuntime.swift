@@ -4,6 +4,11 @@ import CoreState
 import Foundation
 import WebKit
 
+struct BrowserPanelRuntimeAutomationState: Equatable, Sendable {
+    let lifecycleState: PanelHostLifecycleState
+    let pageZoom: Double
+}
+
 struct BrowserPanelNavigationState: Equatable {
     var displayedURLString: String?
     var canGoBack = false
@@ -44,6 +49,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var isShowingStartPage = false
     private var faviconRefreshTask: Task<Void, Never>?
     private var pendingFaviconRequestID: UUID?
+    private var currentPageZoom: Double = WebPanelState.defaultBrowserPageZoom
 
     init(
         panelID: UUID,
@@ -252,6 +258,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             "BrowserPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
         synchronizeDisplayedContent(with: webState)
+        applyPageZoom(webState.effectiveBrowserPageZoom)
     }
 
     func requestLocationFieldFocus() {
@@ -319,6 +326,13 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         return true
     }
 
+    func automationState() -> BrowserPanelRuntimeAutomationState {
+        BrowserPanelRuntimeAutomationState(
+            lifecycleState: lifecycleState,
+            pageZoom: webView.pageZoom
+        )
+    }
+
     private func synchronizeDisplayedContent(with webState: WebPanelState) {
         let desiredURLString = webState.restorableURL
         let currentURLString = reportedCurrentURLString()
@@ -356,6 +370,15 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         }
         clearFavicon()
         webView.load(URLRequest(url: url))
+    }
+
+    private func applyPageZoom(_ zoom: Double) {
+        let nextZoom = WebPanelState.clampedBrowserPageZoom(zoom)
+        currentPageZoom = nextZoom
+        guard abs(webView.pageZoom - nextZoom) >= WebPanelState.browserPageZoomComparisonEpsilon else {
+            return
+        }
+        webView.pageZoom = nextZoom
     }
 
     private func observeMetadataChanges() {
@@ -937,6 +960,7 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
            observedURL.caseInsensitiveCompare("about:blank") != .orderedSame {
             isShowingStartPage = false
         }
+        applyPageZoom(currentPageZoom)
         publishObservedMetadata()
         publishNavigationState()
         refreshFavicon()

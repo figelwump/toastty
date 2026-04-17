@@ -162,6 +162,7 @@ Toastty reads these additional keys from Ghostty config:
 - New windows inherit the source window's current effective terminal font size
 - `Reset Text Size` on a focused terminal clears that window's terminal font override and returns it to the configured baseline
 - Focused markdown panels use the same shortcut family but keep a separate window-local markdown text-size override
+- Focused browser panels use the same shortcut family for per-panel page zoom, and those browser zoom changes do not affect terminal sizing
 
 ## Action parity
 

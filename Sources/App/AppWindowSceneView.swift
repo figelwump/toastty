@@ -41,15 +41,29 @@ struct AppWindowSceneView: View {
         return store.state.effectiveMarkdownTextScale(for: windowID)
     }
 
-    private var effectiveWindowTextMetrics: WindowTextMetrics? {
-        guard let terminalPoints = effectiveWindowFontPoints,
-              let markdownTextScale = effectiveWindowMarkdownTextScale else {
+    private var focusedScaleHUDMeasurement: FocusedScaleHUDMeasurement? {
+        guard windowState != nil,
+              let target = store.focusedScaleCommandTarget(preferredWindowID: windowID) else {
             return nil
         }
-        return WindowTextMetrics(
-            terminalPoints: terminalPoints,
-            markdownTextScale: markdownTextScale
-        )
+
+        switch target {
+        case .terminal(let windowID):
+            guard let terminalPoints = effectiveWindowFontPoints else { return nil }
+            return .terminal(windowID: windowID, points: terminalPoints)
+
+        case .markdown(let windowID):
+            guard let markdownTextScale = effectiveWindowMarkdownTextScale else { return nil }
+            return .markdown(windowID: windowID, scale: markdownTextScale)
+
+        case .browser(_, let panelID):
+            guard let selection = store.state.workspaceSelection(containingPanelID: panelID),
+                  let panelState = selection.workspace.panels[panelID],
+                  case .web(let webState) = panelState else {
+                return nil
+            }
+            return .browser(panelID: panelID, zoom: webState.effectiveBrowserPageZoom)
+        }
     }
 
     private var showsEmptyState: Bool {
@@ -114,16 +128,33 @@ struct AppWindowSceneView: View {
             hideFontHUDTask?.cancel()
             hideFontHUDTask = nil
         }
-        .onChange(of: effectiveWindowTextMetrics) { previousMetrics, nextMetrics in
-            guard let previousMetrics, let nextMetrics else { return }
+        .onChange(of: focusedScaleHUDMeasurement) { previousMeasurement, nextMeasurement in
+            guard let previousMeasurement, let nextMeasurement else { return }
 
-            if abs(nextMetrics.terminalPoints - previousMetrics.terminalPoints) >= AppState.terminalFontComparisonEpsilon {
-                showFontHUD(.terminal(points: nextMetrics.terminalPoints))
+            switch (previousMeasurement, nextMeasurement) {
+            case let (.terminal(previousWindowID, previousPoints), .terminal(nextWindowID, nextPoints)):
+                guard previousWindowID == nextWindowID,
+                      abs(nextPoints - previousPoints) >= AppState.terminalFontComparisonEpsilon else {
+                    return
+                }
+                showFontHUD(.terminal(points: nextPoints))
+
+            case let (.markdown(previousWindowID, previousScale), .markdown(nextWindowID, nextScale)):
+                guard previousWindowID == nextWindowID,
+                      abs(nextScale - previousScale) >= AppState.markdownTextScaleComparisonEpsilon else {
+                    return
+                }
+                showFontHUD(.markdown(scale: nextScale))
+
+            case let (.browser(previousPanelID, previousZoom), .browser(nextPanelID, nextZoom)):
+                guard previousPanelID == nextPanelID,
+                      abs(nextZoom - previousZoom) >= WebPanelState.browserPageZoomComparisonEpsilon else {
+                    return
+                }
+                showFontHUD(.browser(zoom: nextZoom))
+
+            default:
                 return
-            }
-
-            if abs(nextMetrics.markdownTextScale - previousMetrics.markdownTextScale) >= AppState.markdownTextScaleComparisonEpsilon {
-                showFontHUD(.markdown(scale: nextMetrics.markdownTextScale))
             }
         }
         .transaction { transaction in
@@ -179,14 +210,16 @@ struct AppWindowSceneView: View {
     }
 }
 
-private struct WindowTextMetrics: Equatable {
-    let terminalPoints: Double
-    let markdownTextScale: Double
+private enum FocusedScaleHUDMeasurement: Equatable {
+    case terminal(windowID: UUID, points: Double)
+    case markdown(windowID: UUID, scale: Double)
+    case browser(panelID: UUID, zoom: Double)
 }
 
 private enum FontHUDValue: Equatable {
     case terminal(points: Double)
     case markdown(scale: Double)
+    case browser(zoom: Double)
 }
 
 private struct FontHUD: View {
@@ -211,6 +244,8 @@ private struct FontHUD: View {
             return "Terminal Font \(Int(points.rounded())) pt"
         case .markdown(let scale):
             return "Markdown Text \(Int((scale * 100).rounded()))%"
+        case .browser(let zoom):
+            return "Zoom \(Int((zoom * 100).rounded()))%"
         }
     }
 }

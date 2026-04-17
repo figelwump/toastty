@@ -706,17 +706,17 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertNil(store.focusedBrowserPanelSelection(preferredWindowID: nil))
     }
 
-    func testFocusedTextSizeCommandTargetReturnsTerminalForFocusedTerminal() throws {
+    func testFocusedScaleCommandTargetReturnsTerminalForFocusedTerminal() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
 
         XCTAssertEqual(
-            store.focusedTextSizeCommandTarget(preferredWindowID: windowID),
+            store.focusedScaleCommandTarget(preferredWindowID: windowID),
             .terminal(windowID: windowID)
         )
     }
 
-    func testFocusedTextSizeCommandTargetReturnsMarkdownForFocusedMarkdown() throws {
+    func testFocusedScaleCommandTargetReturnsMarkdownForFocusedMarkdown() throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
@@ -739,12 +739,12 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            store.focusedTextSizeCommandTarget(preferredWindowID: windowID),
+            store.focusedScaleCommandTarget(preferredWindowID: windowID),
             .markdown(windowID: windowID)
         )
     }
 
-    func testFocusedTextSizeCommandTargetReturnsNilForFocusedBrowser() throws {
+    func testFocusedScaleCommandTargetReturnsBrowserForFocusedBrowser() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
 
@@ -758,7 +758,11 @@ final class AppStoreWindowSelectionTests: XCTestCase {
             )
         )
 
-        XCTAssertNil(store.focusedTextSizeCommandTarget(preferredWindowID: windowID))
+        let browserSelection = try XCTUnwrap(store.focusedBrowserPanelSelection(preferredWindowID: windowID))
+        XCTAssertEqual(
+            store.focusedScaleCommandTarget(preferredWindowID: windowID),
+            .browser(windowID: windowID, panelID: browserSelection.panelID)
+        )
     }
 
     func testFocusPanelContainingBrowserSelectsBrowserTab() throws {
