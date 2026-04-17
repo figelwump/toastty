@@ -105,6 +105,25 @@ extension LocalDocumentState {
 }
 
 public struct WebPanelState: Codable, Equatable, Sendable {
+    public static let defaultBrowserPageZoom: Double = 1
+    public static let minBrowserPageZoom: Double = 0.5
+    public static let maxBrowserPageZoom: Double = 3
+    public static let browserPageZoomComparisonEpsilon: Double = 0.0001
+    public static let browserPageZoomSteps: [Double] = [
+        0.5,
+        0.67,
+        0.8,
+        0.9,
+        1.0,
+        1.1,
+        1.25,
+        1.5,
+        1.75,
+        2.0,
+        2.5,
+        3.0,
+    ]
+
     public var definition: WebPanelDefinition
     public var title: String
     // `initialURL` captures creation intent while `currentURL` tracks the
@@ -112,6 +131,7 @@ public struct WebPanelState: Codable, Equatable, Sendable {
     public var initialURL: String?
     public var currentURL: String?
     public var localDocument: LocalDocumentState?
+    public var browserPageZoom: Double?
 
     public init(
         definition: WebPanelDefinition,
@@ -119,7 +139,8 @@ public struct WebPanelState: Codable, Equatable, Sendable {
         initialURL: String? = nil,
         currentURL: String? = nil,
         filePath: String? = nil,
-        localDocument: LocalDocumentState? = nil
+        localDocument: LocalDocumentState? = nil,
+        browserPageZoom: Double? = nil
     ) {
         self.definition = definition
         self.title = Self.resolvedTitle(
@@ -132,6 +153,10 @@ public struct WebPanelState: Codable, Equatable, Sendable {
             definition: definition,
             filePath: filePath,
             localDocument: localDocument
+        )
+        self.browserPageZoom = Self.resolvedBrowserPageZoom(
+            definition: definition,
+            browserPageZoom: browserPageZoom
         )
     }
 
@@ -147,6 +172,13 @@ public struct WebPanelState: Codable, Equatable, Sendable {
 
     public var restorableURL: String? {
         currentURL ?? initialURL
+    }
+
+    public var effectiveBrowserPageZoom: Double {
+        guard definition == .browser else {
+            return Self.defaultBrowserPageZoom
+        }
+        return browserPageZoom ?? Self.defaultBrowserPageZoom
     }
 
     public static func resolvedTitle(definition: WebPanelDefinition, title: String?) -> String {
@@ -173,6 +205,39 @@ public struct WebPanelState: Codable, Equatable, Sendable {
 
     public static func normalizedFilePath(_ value: String?) -> String? {
         normalizedWebPanelValue(value)
+    }
+
+    public static func clampedBrowserPageZoom(_ value: Double) -> Double {
+        min(max(value, minBrowserPageZoom), maxBrowserPageZoom)
+    }
+
+    public static func normalizedBrowserPageZoom(_ value: Double?) -> Double? {
+        guard let value else { return nil }
+        let clampedZoom = clampedBrowserPageZoom(value)
+        guard abs(clampedZoom - defaultBrowserPageZoom) >= browserPageZoomComparisonEpsilon else {
+            return nil
+        }
+        return clampedZoom
+    }
+
+    public static func increasedBrowserPageZoom(from currentZoom: Double) -> Double {
+        let normalizedZoom = clampedBrowserPageZoom(currentZoom)
+        for step in browserPageZoomSteps {
+            if step > normalizedZoom + browserPageZoomComparisonEpsilon {
+                return step
+            }
+        }
+        return browserPageZoomSteps.last ?? maxBrowserPageZoom
+    }
+
+    public static func decreasedBrowserPageZoom(from currentZoom: Double) -> Double {
+        let normalizedZoom = clampedBrowserPageZoom(currentZoom)
+        for step in browserPageZoomSteps.reversed() {
+            if step < normalizedZoom - browserPageZoomComparisonEpsilon {
+                return step
+            }
+        }
+        return browserPageZoomSteps.first ?? minBrowserPageZoom
     }
 
     private static func resolvedLocalDocumentState(
@@ -203,6 +268,18 @@ public struct WebPanelState: Codable, Equatable, Sendable {
 
         return LocalDocumentState(filePath: normalizedLegacyFilePath)
     }
+
+    private static func resolvedBrowserPageZoom(
+        definition: WebPanelDefinition,
+        browserPageZoom: Double?
+    ) -> Double? {
+        guard definition == .browser else {
+            assert(browserPageZoom == nil, "Only browser panels may carry browser zoom state.")
+            return nil
+        }
+
+        return normalizedBrowserPageZoom(browserPageZoom)
+    }
 }
 
 extension WebPanelState {
@@ -213,6 +290,7 @@ extension WebPanelState {
         case currentURL
         case localDocument
         case filePath
+        case browserPageZoom
     }
 
     public init(from decoder: Decoder) throws {
@@ -229,7 +307,8 @@ extension WebPanelState {
             localDocument: decodedLocalDocument ?? Self.legacyLocalDocumentState(
                 definition: definition,
                 filePath: legacyFilePath
-            )
+            ),
+            browserPageZoom: try container.decodeIfPresent(Double.self, forKey: .browserPageZoom)
         )
     }
 
@@ -240,6 +319,7 @@ extension WebPanelState {
         try container.encodeIfPresent(initialURL, forKey: .initialURL)
         try container.encodeIfPresent(currentURL, forKey: .currentURL)
         try container.encodeIfPresent(localDocument, forKey: .localDocument)
+        try container.encodeIfPresent(browserPageZoom, forKey: .browserPageZoom)
     }
 
     private static func legacyLocalDocumentState(

@@ -93,6 +93,46 @@ struct FocusedMarkdownPanelCommandSelection: Equatable {
     let panelID: UUID
 }
 
+enum FocusedScaleCommandTarget: Equatable {
+    case terminal(windowID: UUID)
+    case markdown(windowID: UUID)
+    case browser(windowID: UUID, panelID: UUID)
+
+    var windowID: UUID {
+        switch self {
+        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _):
+            return windowID
+        }
+    }
+
+    var increaseMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Zoom In"
+        case .terminal, .markdown:
+            return "Increase Text Size"
+        }
+    }
+
+    var decreaseMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Zoom Out"
+        case .terminal, .markdown:
+            return "Decrease Text Size"
+        }
+    }
+
+    var resetMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Actual Size"
+        case .terminal, .markdown:
+            return "Reset Text Size"
+        }
+    }
+}
+
 private enum WorkspaceCommandTarget {
     case existingWindow(UUID)
     case newWindow
@@ -297,6 +337,31 @@ final class AppStore: ObservableObject {
             workspaceID: selection.workspace.id,
             panelID: panelID
         )
+    }
+
+    func focusedScaleCommandTarget(
+        preferredWindowID: UUID?
+    ) -> FocusedScaleCommandTarget? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let panelID = selection.workspace.focusedPanelID,
+              selection.workspace.slotID(containingPanelID: panelID) != nil,
+              let panelState = selection.workspace.panels[panelID] else {
+            return nil
+        }
+
+        switch panelState {
+        case .terminal:
+            return .terminal(windowID: selection.windowID)
+        case .web(let webState):
+            switch webState.definition {
+            case .localDocument:
+                return .markdown(windowID: selection.windowID)
+            case .browser:
+                return .browser(windowID: selection.windowID, panelID: panelID)
+            case .scratchpad, .diff:
+                return nil
+            }
+        }
     }
 
     @discardableResult
@@ -1072,17 +1137,24 @@ final class AppStore: ObservableObject {
         let windowFontOverride = state.normalizedTerminalFontOverride(
             state.effectiveTerminalFontPoints(for: selection.windowID)
         )
+        let windowMarkdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(
+            state.effectiveMarkdownTextScale(for: selection.windowID)
+        )
 
         guard let focusedPanelID = selection.workspace.focusedPanelID,
               case .terminal(let terminalState)? = selection.workspace.panels[focusedPanelID] else {
-            guard let windowFontOverride else { return nil }
-            return WindowLaunchSeed(windowTerminalFontSizePointsOverride: windowFontOverride)
+            guard windowFontOverride != nil || windowMarkdownTextScaleOverride != nil else { return nil }
+            return WindowLaunchSeed(
+                windowTerminalFontSizePointsOverride: windowFontOverride,
+                windowMarkdownTextScaleOverride: windowMarkdownTextScaleOverride
+            )
         }
 
         return WindowLaunchSeed(
             terminalCWD: terminalState.workingDirectorySeed,
             terminalProfileBinding: terminalState.profileBinding ?? state.defaultTerminalProfileBinding,
-            windowTerminalFontSizePointsOverride: windowFontOverride
+            windowTerminalFontSizePointsOverride: windowFontOverride,
+            windowMarkdownTextScaleOverride: windowMarkdownTextScaleOverride
         )
     }
 

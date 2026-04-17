@@ -17,9 +17,10 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
     let isSaving: Bool
     let saveErrorMessage: String?
     let theme: MarkdownPanelTheme
+    let textScale: Double
 
     init(
-        contractVersion: Int = 3,
+        contractVersion: Int = 4,
         filePath: String?,
         displayName: String,
         content: String,
@@ -29,7 +30,8 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
         hasExternalConflict: Bool = false,
         isSaving: Bool = false,
         saveErrorMessage: String? = nil,
-        theme: MarkdownPanelTheme
+        theme: MarkdownPanelTheme,
+        textScale: Double
     ) {
         self.contractVersion = contractVersion
         self.filePath = filePath
@@ -42,6 +44,7 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
         self.isSaving = isSaving
         self.saveErrorMessage = saveErrorMessage
         self.theme = theme
+        self.textScale = textScale
     }
 }
 
@@ -58,7 +61,25 @@ extension MarkdownPanelBootstrap {
             hasExternalConflict: hasExternalConflict,
             isSaving: isSaving,
             saveErrorMessage: saveErrorMessage,
-            theme: theme
+            theme: theme,
+            textScale: textScale
+        )
+    }
+
+    func setting(textScale: Double) -> Self {
+        Self(
+            contractVersion: contractVersion,
+            filePath: filePath,
+            displayName: displayName,
+            content: content,
+            contentRevision: contentRevision,
+            isEditing: isEditing,
+            isDirty: isDirty,
+            hasExternalConflict: hasExternalConflict,
+            isSaving: isSaving,
+            saveErrorMessage: saveErrorMessage,
+            theme: theme,
+            textScale: textScale
         )
     }
 }

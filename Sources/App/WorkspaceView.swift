@@ -688,6 +688,7 @@ struct WorkspaceView: View {
                         webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                         terminalRuntimeContext: terminalRuntimeContext,
                         windowFontPoints: store.state.effectiveTerminalFontPoints(for: windowID),
+                        windowMarkdownTextScale: store.state.effectiveMarkdownTextScale(for: windowID),
                         appIsActive: appIsActive,
                         unfocusedSplitStyle: ghosttyHostStyleStore.unfocusedSplitStyle,
                         terminalShortcutNumbersByPanelID: terminalShortcutNumbersByPanelID,
@@ -1902,6 +1903,7 @@ private struct SlotPlacementView: View {
     @ObservedObject var webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let windowFontPoints: Double
+    let windowMarkdownTextScale: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let terminalShortcutNumbersByPanelID: [UUID: Int]
@@ -1922,6 +1924,7 @@ private struct SlotPlacementView: View {
                     panelSessionStatus: panelSessionStatusesByPanelID[placement.panelID],
                     shortcutNumber: terminalShortcutNumbersByPanelID[placement.panelID],
                     windowFontPoints: windowFontPoints,
+                    windowMarkdownTextScale: windowMarkdownTextScale,
                     appIsActive: appIsActive,
                     unfocusedSplitStyle: unfocusedSplitStyle,
                     panelFlashOverlayOpacity: panelFlashOverlayOpacity,
@@ -1961,6 +1964,7 @@ private struct PanelCardView: View {
     let panelSessionStatus: WorkspaceSessionStatus?
     let shortcutNumber: Int?
     let windowFontPoints: Double
+    let windowMarkdownTextScale: Double
     let appIsActive: Bool
     let unfocusedSplitStyle: GhosttyUnfocusedSplitStyle
     let panelFlashOverlayOpacity: Double
@@ -2270,7 +2274,8 @@ private struct PanelCardView: View {
             MarkdownPanelView(
                 webState: state,
                 runtime: webPanelRuntimeRegistry.markdownRuntime(for: panelID),
-                isEffectivelyVisible: isWorkspaceSelected && isTabSelected
+                isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
+                textScale: windowMarkdownTextScale
             )
             .frame(
                 maxWidth: .infinity,

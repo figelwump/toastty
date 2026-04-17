@@ -12,7 +12,8 @@ struct WindowStateCodableTests {
             workspaceIDs: [workspaceID],
             selectedWorkspaceID: workspaceID,
             sidebarVisible: false,
-            terminalFontSizePointsOverride: 17.5
+            terminalFontSizePointsOverride: 17.5,
+            markdownTextScaleOverride: 1.2
         )
 
         let data = try JSONEncoder().encode(original)
@@ -28,7 +29,8 @@ struct WindowStateCodableTests {
             frame: CGRectCodable(x: 32, y: 64, width: 1024, height: 768),
             workspaceIDs: [],
             selectedWorkspaceID: nil,
-            terminalFontSizePointsOverride: 16
+            terminalFontSizePointsOverride: 16,
+            markdownTextScaleOverride: 0.9
         )
 
         let data = try JSONEncoder().encode(original)
@@ -59,6 +61,7 @@ struct WindowStateCodableTests {
         #expect(decoded.selectedWorkspaceID == workspaceID)
         #expect(decoded.sidebarVisible)
         #expect(decoded.terminalFontSizePointsOverride == nil)
+        #expect(decoded.markdownTextScaleOverride == nil)
     }
 }
 

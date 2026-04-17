@@ -260,11 +260,32 @@ Supported action IDs:
   - `args.url` is optional
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
+  - terminal-only window font increase
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.font.decrease`
+  - terminal-only window font decrease
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.font.reset`
+  - terminal-only window font reset
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
+- `app.markdown_text.increase`
+  - window-local markdown text-size increase
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
+- `app.markdown_text.decrease`
+  - window-local markdown text-size decrease
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
+- `app.markdown_text.reset`
+  - window-local markdown text-size reset
+  - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
+- `app.browser_zoom.increase`
+  - browser-panel page zoom increase
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+- `app.browser_zoom.decrease`
+  - browser-panel page zoom decrease
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
+- `app.browser_zoom.reset`
+  - browser-panel page zoom reset to `100%`
+  - `args.panelID` is optional; when omitted, the target resolves from `args.workspaceID` or `args.windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order
 - `sidebar.workspaces.new`
   - `args.title` is optional
   - `args.windowID` is required when multiple windows exist
@@ -402,6 +423,30 @@ Result:
 - `cwd: String`
 - `shell: String`
 - `profileID: String | null`
+
+### `automation.browser_panel_state`
+
+Request payload:
+
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
+
+Result:
+
+- `workspaceID: UUID string`
+- `panelID: UUID string`
+- `stateTitle: String`
+- `stateRestorableURL: String | null`
+- `statePageZoom: Double`
+- `statePageZoomOverride: Double | null`
+- `hostLifecycleState: String`
+- `hostAttachmentID: UUID string | null`
+- `runtimePageZoom: Double`
+
+Behavior:
+
+- `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order.
 
 ### `automation.workspace_snapshot`
 

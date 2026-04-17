@@ -482,6 +482,9 @@ final class DisplayShortcutInterceptor {
         case createBrowser
         case createBrowserTab
         case createWorkspaceTab
+        case increaseTextSize
+        case decreaseTextSize
+        case resetTextSize
         case split(SlotSplitDirection)
         case cancelLocalDocumentEdit
         case saveMarkdown
@@ -563,6 +566,13 @@ final class DisplayShortcutInterceptor {
         if Self.isNewBrowserTabShortcut(event),
            appOwnedWindowID != nil {
             return .createBrowserTab
+        }
+
+        if let textSizeShortcutAction = textSizeShortcutAction(
+            for: event,
+            appOwnedWindowID: appOwnedWindowID
+        ) {
+            return textSizeShortcutAction
         }
 
         if let direction = Self.splitDirection(for: event),
@@ -658,6 +668,12 @@ final class DisplayShortcutInterceptor {
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
             createWorkspaceTab()
+        case .increaseTextSize:
+            adjustTextSize(direction: .increase, preferredWindowID: appOwnedWindowID)
+        case .decreaseTextSize:
+            adjustTextSize(direction: .decrease, preferredWindowID: appOwnedWindowID)
+        case .resetTextSize:
+            adjustTextSize(direction: .reset, preferredWindowID: appOwnedWindowID)
         case .split(let direction):
             split(direction: direction, preferredWindowID: appOwnedWindowID)
         case .cancelLocalDocumentEdit:
@@ -743,6 +759,40 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers.isEmpty
+    }
+
+    enum TextSizeShortcutDirection: Equatable {
+        case increase
+        case decrease
+        case reset
+    }
+
+    static func textSizeShortcutDirection(for event: NSEvent) -> TextSizeShortcutDirection? {
+        guard event.type == .keyDown,
+              event.isARepeat == false else {
+            return nil
+        }
+
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_Equal), Int(kVK_ANSI_KeypadPlus):
+            guard modifiers == [.command] || modifiers == [.command, .shift] else {
+                return nil
+            }
+            return .increase
+        case Int(kVK_ANSI_Minus), Int(kVK_ANSI_KeypadMinus):
+            guard modifiers == [.command] else {
+                return nil
+            }
+            return .decrease
+        case Int(kVK_ANSI_0), Int(kVK_ANSI_Keypad0):
+            guard modifiers == [.command] else {
+                return nil
+            }
+            return .reset
+        default:
+            return nil
+        }
     }
 
     static func splitDirection(for event: NSEvent) -> SlotSplitDirection? {
@@ -982,6 +1032,26 @@ final class DisplayShortcutInterceptor {
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
     }
 
+    private func textSizeShortcutAction(
+        for event: NSEvent,
+        appOwnedWindowID: UUID?
+    ) -> ShortcutAction? {
+        guard appOwnedFocusedScaleTarget(preferredWindowID: appOwnedWindowID) != nil else {
+            return nil
+        }
+
+        switch Self.textSizeShortcutDirection(for: event) {
+        case .increase:
+            return .increaseTextSize
+        case .decrease:
+            return .decreaseTextSize
+        case .reset:
+            return .resetTextSize
+        case nil:
+            return nil
+        }
+    }
+
     private func split(direction: SlotSplitDirection, preferredWindowID: UUID?) -> Bool {
         guard let store else { return false }
         guard let preferredWindowID else { return false }
@@ -1007,6 +1077,42 @@ final class DisplayShortcutInterceptor {
                 placementOverride: placement
             )
         )
+    }
+
+    private func adjustTextSize(
+        direction: TextSizeShortcutDirection,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        guard let store else { return false }
+        guard let target = appOwnedFocusedScaleTarget(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        switch (target, direction) {
+        case (.terminal(let windowID), .increase):
+            _ = store.send(.increaseWindowTerminalFont(windowID: windowID))
+        case (.terminal(let windowID), .decrease):
+            _ = store.send(.decreaseWindowTerminalFont(windowID: windowID))
+        case (.terminal(let windowID), .reset):
+            _ = store.send(.resetWindowTerminalFont(windowID: windowID))
+        case (.markdown(let windowID), .increase):
+            _ = store.send(.increaseWindowMarkdownTextScale(windowID: windowID))
+        case (.markdown(let windowID), .decrease):
+            _ = store.send(.decreaseWindowMarkdownTextScale(windowID: windowID))
+        case (.markdown(let windowID), .reset):
+            _ = store.send(.resetWindowMarkdownTextScale(windowID: windowID))
+        case (.browser(_, let panelID), .increase):
+            _ = store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
+        case (.browser(_, let panelID), .decrease):
+            _ = store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
+        case (.browser(_, let panelID), .reset):
+            _ = store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        }
+
+        // Once a terminal, markdown, or browser panel is the focused target,
+        // keep the scale shortcut app-owned so the embedded terminal or web
+        // view cannot reinterpret it as raw input.
+        return true
     }
 
     private func focusNextUnreadOrActivePanel() -> Bool {
@@ -1224,6 +1330,16 @@ final class DisplayShortcutInterceptor {
     ) -> FocusedMarkdownPanelCommandSelection? {
         guard let preferredWindowID else { return nil }
         return focusedMarkdownSelection(preferredWindowID: preferredWindowID)
+    }
+
+    private func appOwnedFocusedScaleTarget(
+        preferredWindowID: UUID?
+    ) -> FocusedScaleCommandTarget? {
+        guard let preferredWindowID,
+              let store else {
+            return nil
+        }
+        return store.focusedScaleCommandTarget(preferredWindowID: preferredWindowID)
     }
 
     private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {

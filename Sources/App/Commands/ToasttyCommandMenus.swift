@@ -168,6 +168,10 @@ struct ToasttyCommandMenus: Commands {
         return webPanelRuntimeRegistry.canSaveMarkdownPanel(panelID: focusedMarkdownPanelSelection.panelID)
     }
 
+    private var focusedScaleCommandTarget: FocusedScaleCommandTarget? {
+        store.focusedScaleCommandTarget(preferredWindowID: preferredCommandWindowID)
+    }
+
     private var canFocusNextUnreadOrActivePanel: Bool {
         Self.canFocusNextUnreadOrActivePanel(
             state: store.state,
@@ -236,7 +240,7 @@ struct ToasttyCommandMenus: Commands {
 
     var body: some Commands {
         let preferredWindowID = preferredCommandWindowID
-        let fontCommandWindowID = store.commandWindowID(preferredWindowID: preferredWindowID)
+        let scaleCommandTarget = focusedScaleCommandTarget
 
         CommandGroup(replacing: .newItem) {
             Button("New Tab") {
@@ -344,30 +348,41 @@ struct ToasttyCommandMenus: Commands {
             .disabled(!canNavigateScrollbackSearch)
         }
 
-        CommandMenu("Terminal") {
-            Button("Increase Terminal Font") {
-                guard let fontCommandWindowID else { return }
-                store.send(.increaseWindowTerminalFont(windowID: fontCommandWindowID))
-            }
-            .keyboardShortcut("+", modifiers: [.command])
-            .disabled(fontCommandWindowID == nil)
-
-            Button("Decrease Terminal Font") {
-                guard let fontCommandWindowID else { return }
-                store.send(.decreaseWindowTerminalFont(windowID: fontCommandWindowID))
-            }
-            .keyboardShortcut("-", modifiers: [.command])
-            .disabled(fontCommandWindowID == nil)
-
-            Button("Reset Terminal Font") {
-                guard let fontCommandWindowID else { return }
-                store.send(.resetWindowTerminalFont(windowID: fontCommandWindowID))
-            }
-            .keyboardShortcut("0", modifiers: [.command])
-            .disabled(fontCommandWindowID == nil)
-
+        CommandGroup(after: .toolbar) {
             Divider()
 
+            Button(scaleCommandTarget?.increaseMenuTitle ?? "Increase Text Size") {
+                guard let scaleCommandTarget else { return }
+                increaseTextSize(target: scaleCommandTarget)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.increaseTextSize.key,
+                modifiers: ToasttyKeyboardShortcuts.increaseTextSize.modifiers
+            )
+            .disabled(scaleCommandTarget == nil)
+
+            Button(scaleCommandTarget?.decreaseMenuTitle ?? "Decrease Text Size") {
+                guard let scaleCommandTarget else { return }
+                decreaseTextSize(target: scaleCommandTarget)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.decreaseTextSize.key,
+                modifiers: ToasttyKeyboardShortcuts.decreaseTextSize.modifiers
+            )
+            .disabled(scaleCommandTarget == nil)
+
+            Button(scaleCommandTarget?.resetMenuTitle ?? "Reset Text Size") {
+                guard let scaleCommandTarget else { return }
+                resetTextSize(target: scaleCommandTarget)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.resetTextSize.key,
+                modifiers: ToasttyKeyboardShortcuts.resetTextSize.modifiers
+            )
+            .disabled(scaleCommandTarget == nil)
+        }
+
+        CommandMenu("Terminal") {
             terminalProfileMenuItems()
 
             Divider()
@@ -785,6 +800,39 @@ struct ToasttyCommandMenus: Commands {
         // window-targeted actions so stale focused-scene state disables the
         // command instead of rerouting it to another window.
         store.commandWindowID(preferredWindowID: preferredWindowID)
+    }
+
+    private func increaseTextSize(target: FocusedScaleCommandTarget) {
+        switch target {
+        case .terminal(let windowID):
+            store.send(.increaseWindowTerminalFont(windowID: windowID))
+        case .markdown(let windowID):
+            store.send(.increaseWindowMarkdownTextScale(windowID: windowID))
+        case .browser(_, let panelID):
+            store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
+        }
+    }
+
+    private func decreaseTextSize(target: FocusedScaleCommandTarget) {
+        switch target {
+        case .terminal(let windowID):
+            store.send(.decreaseWindowTerminalFont(windowID: windowID))
+        case .markdown(let windowID):
+            store.send(.decreaseWindowMarkdownTextScale(windowID: windowID))
+        case .browser(_, let panelID):
+            store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
+        }
+    }
+
+    private func resetTextSize(target: FocusedScaleCommandTarget) {
+        switch target {
+        case .terminal(let windowID):
+            store.send(.resetWindowTerminalFont(windowID: windowID))
+        case .markdown(let windowID):
+            store.send(.resetWindowMarkdownTextScale(windowID: windowID))
+        case .browser(_, let panelID):
+            store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        }
     }
 }
 

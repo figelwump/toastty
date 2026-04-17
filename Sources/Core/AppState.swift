@@ -39,6 +39,11 @@ public struct AppState: Codable, Equatable, Sendable {
     public static let maxTerminalFontPoints: Double = 24
     public static let terminalFontStepPoints: Double = 1
     public static let terminalFontComparisonEpsilon: Double = 0.0001
+    public static let defaultMarkdownTextScale: Double = 1
+    public static let minMarkdownTextScale: Double = 0.8
+    public static let maxMarkdownTextScale: Double = 1.6
+    public static let markdownTextScaleStep: Double = 0.1
+    public static let markdownTextScaleComparisonEpsilon: Double = 0.0001
 
     public var windows: [WindowState]
     public var workspacesByID: [UUID: WorkspaceState]
@@ -62,6 +67,19 @@ public struct AppState: Codable, Equatable, Sendable {
 
     public static func clampedTerminalFontPoints(_ points: Double) -> Double {
         min(max(points, minTerminalFontPoints), maxTerminalFontPoints)
+    }
+
+    public static func clampedMarkdownTextScale(_ scale: Double) -> Double {
+        min(max(scale, minMarkdownTextScale), maxMarkdownTextScale)
+    }
+
+    public static func normalizedMarkdownTextScaleOverride(_ scale: Double?) -> Double? {
+        guard let scale else { return nil }
+        let clampedScale = clampedMarkdownTextScale(scale)
+        guard abs(clampedScale - defaultMarkdownTextScale) >= markdownTextScaleComparisonEpsilon else {
+            return nil
+        }
+        return clampedScale
     }
 
     public static func normalizedTerminalProfileID(_ profileID: String?) -> String? {
@@ -94,6 +112,13 @@ public struct AppState: Codable, Equatable, Sendable {
             return configuredTerminalFontBaselinePoints
         }
         return effectiveTerminalFontPoints(for: window)
+    }
+
+    public func effectiveMarkdownTextScale(for windowID: UUID) -> Double {
+        guard let window = window(id: windowID) else {
+            return Self.defaultMarkdownTextScale
+        }
+        return effectiveMarkdownTextScale(for: window)
     }
 
     public static func bootstrap(defaultTerminalProfileID: String? = nil) -> AppState {
@@ -332,6 +357,10 @@ public struct AppState: Codable, Equatable, Sendable {
 
     private func effectiveTerminalFontPoints(for window: WindowState) -> Double {
         window.terminalFontSizePointsOverride ?? configuredTerminalFontBaselinePoints
+    }
+
+    private func effectiveMarkdownTextScale(for window: WindowState) -> Double {
+        window.markdownTextScaleOverride ?? Self.defaultMarkdownTextScale
     }
 
     private func nextMatchingPanel(
