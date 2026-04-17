@@ -15,7 +15,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
 - `~/.toastty/terminal-profiles.toml`
   - Named terminal profile definitions loaded at startup and on config reload.
 - `~/.toastty/workspace-layout-profiles.json`
-  - Saved workspace and window layout snapshots, including window-local terminal font overrides, window-local markdown text-size overrides, and per-browser page zoom overrides.
+  - Saved workspace and window layout snapshots, including window-local terminal font overrides, window-local local-document text-size overrides, and per-browser page zoom overrides.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
   - Managed shell-integration snippets. The installer also appends a `source` line to your shell init file (`~/.zshrc` for zsh, `~/.bash_profile` or `~/.profile` for bash, `~/.config/fish/config.fish` for fish).
 - `~/.toastty/history/pane-journals/`

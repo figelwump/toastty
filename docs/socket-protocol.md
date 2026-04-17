@@ -1,6 +1,6 @@
 # toastty socket protocol (v1)
 
-Date: 2026-03-13
+Date: 2026-04-17
 
 This document describes the current socket protocol implemented by
 `Sources/App/Automation/AutomationSocketServer.swift`.
@@ -258,6 +258,15 @@ Supported action IDs:
   - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
   - When `args.placement` is omitted, the default is now `rootRight` rather than `newTab`
   - `args.url` is optional
+- `panel.create.localDocument`
+  - opens a supported local document: `md`, `markdown`, `mdown`, `mkd`, `yaml`, `yml`, or `toml`
+  - requires `args.filePath`
+  - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
+  - when `args.placement` is omitted, the default is `rootRight`
+  - if the same normalized file is already open in the target workspace, the action focuses that existing panel instead of creating a duplicate
+  - unsupported or extension-less file paths return `INVALID_PAYLOAD`
+- `panel.create.markdown`
+  - legacy alias for `panel.create.localDocument`
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
   - terminal-only window font increase
@@ -269,13 +278,13 @@ Supported action IDs:
   - terminal-only window font reset
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.markdown_text.increase`
-  - window-local markdown text-size increase
+  - window-local local-document text-size increase for supported local-document panels
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.markdown_text.decrease`
-  - window-local markdown text-size decrease
+  - window-local local-document text-size decrease for supported local-document panels
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.markdown_text.reset`
-  - window-local markdown text-size reset
+  - window-local local-document text-size reset to `100%`
   - `args.windowID` is optional when exactly one window exists, and required when multiple windows exist
 - `app.browser_zoom.increase`
   - browser-panel page zoom increase
@@ -423,6 +432,49 @@ Result:
 - `cwd: String`
 - `shell: String`
 - `profileID: String | null`
+
+### `automation.local_document_panel_state`
+
+Request payload:
+
+- `panelID?: UUID string`
+- `workspaceID?: UUID string`
+- `windowID?: UUID string`
+
+Result:
+
+- `workspaceID: UUID string`
+- `panelID: UUID string`
+- `stateTitle: String`
+- `stateFilePath: String | null`
+- `stateFormat: "markdown" | "yaml" | "toml" | null`
+- `hostLifecycleState: String`
+- `hostAttachmentID: UUID string | null`
+- `currentTheme: String`
+- `hasCurrentBootstrap: Bool`
+- `pendingBootstrapScript: Bool`
+- `currentAssetPath: String | null`
+- `bootstrapContractVersion: Int | null`
+- `bootstrapFilePath: String | null`
+- `bootstrapDisplayName: String | null`
+- `bootstrapFormat: "markdown" | "yaml" | "toml" | null`
+- `bootstrapShouldHighlight: Bool | null`
+- `bootstrapContentRevision: Int | null`
+- `bootstrapIsEditing: Bool | null`
+- `bootstrapIsDirty: Bool | null`
+- `bootstrapHasExternalConflict: Bool | null`
+- `bootstrapIsSaving: Bool | null`
+- `bootstrapSaveErrorMessage: String | null`
+- `bootstrapTheme: String | null`
+- `bootstrapTextScale: Double | null`
+- `bootstrapContentLength: Int | null`
+- `bootstrapContentSHA256: String | null`
+
+Behavior:
+
+- `panelID` is optional; when omitted, Toastty resolves the local-document panel from `workspaceID` or `windowID`, then prefers the focused local-document panel in that workspace and otherwise falls back to the first local-document panel in layout order.
+- `automation.markdown_panel_state` is accepted as a legacy alias and returns the same payload.
+- All `bootstrap*` fields are `null` when the panel runtime does not currently have an active bootstrap payload.
 
 ### `automation.browser_panel_state`
 

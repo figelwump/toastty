@@ -15,9 +15,9 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+W` | Close focused panel |
 
-`Cmd+W` and `File > Close` both use Toastty's panel-close behavior. The native red close button still asks for confirmation before closing the full window.
+`Cmd+W` and `File > Close` both use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, panels with a local-document save in progress refuse destructive close, and the native red close button still asks for confirmation before closing the full window.
 
-`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running, and choosing `Always quit without asking` in that alert turns the setting off.
+`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running or local-document drafts would be discarded, and it refuses destructive quit while a local-document save is still in progress. Choosing `Always quit without asking` in that alert turns the setting off.
 
 ## Pane and layout actions
 
@@ -66,7 +66,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 These shortcuts target the focused panel type:
 
 - focused terminal: adjust the window's terminal font size
-- focused markdown panel: adjust the window's markdown text size
+- focused local document panel: adjust the window's local-document text size
 - focused browser panel: zoom the current browser panel
 
 | Shortcut | Action |
@@ -75,7 +75,7 @@ These shortcuts target the focused panel type:
 | `Cmd+-` | Decrease text size or zoom |
 | `Cmd+0` | Reset text size or zoom |
 
-When a browser is focused, the `View` menu shows `Zoom In`, `Zoom Out`, and `Actual Size` instead of the text-size labels used for terminals and markdown panels.
+When a browser is focused, the `View` menu shows `Zoom In`, `Zoom Out`, and `Actual Size` instead of the text-size labels used for terminals and local documents.
 
 ## Browser
 
@@ -88,7 +88,7 @@ These shortcuts are available when the focused panel is a browser panel:
 
 ## Local documents
 
-These shortcuts are available when the focused panel is a local document in edit mode:
+These shortcuts are available when the focused panel is a local document in edit mode. Local documents currently support Markdown, YAML, and TOML files.
 
 | Shortcut | Action |
 |---|---|

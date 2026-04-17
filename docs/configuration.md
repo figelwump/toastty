@@ -62,13 +62,13 @@ url-opening-alternate-browser-placement = rootRight
 
 ## Related behavior
 
-- Toastty handles Ghostty-highlighted local markdown file links separately from the web URL routing settings above. `Cmd`-click opens those files in a markdown tab, and `Cmd`-`Shift`-click opens them in a root-right markdown split.
-- `View` uses contextual labels for the shared shortcut family: focused terminals and markdown panels show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
-- focused terminals and focused markdown panels keep separate window-local overrides; markdown text size resets to its own `100%` baseline, is not driven by `terminal-font-size`, and does not currently have its own config key
+- Toastty handles Ghostty-highlighted supported local file links separately from the web URL routing settings above. `Cmd`-click opens supported local documents (`md`, `markdown`, `mdown`, `mkd`, `yaml`, `yml`, `toml`) in a tab, and `Cmd`-`Shift`-click opens them in a root-right split.
+- `View` uses contextual labels for the shared shortcut family: focused terminals and local documents show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
+- focused terminals and focused local documents keep separate window-local overrides; local-document text size resets to its own `100%` baseline, is not driven by `terminal-font-size`, and does not currently have its own config key
 - focused browsers keep a separate per-panel zoom override; browser zoom resets to `100%`, is not driven by `terminal-font-size`, and does not currently have its own config key
 - `Search with Google` from a terminal selection always opens a new Toastty browser tab in the originating window; it does not use `url-opening-destination` or the browser placement override keys above
 - new windows inherit the source window's current effective terminal font size
-- new windows also inherit the source window's current markdown text size
+- new windows also inherit the source window's current local-document text size
 - duplicated or restored browser panels keep their own saved zoom level
 - runtime-isolated dev/test runs keep `config`, `config-reference`, and related UI-managed state inside the active runtime home instead of the shared user locations
 

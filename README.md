@@ -38,7 +38,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Scrollback find** — Search the active terminal's Ghostty scrollback in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
 - **Persisted terminal history** — With shell integration installed, restored `zsh`, `bash`, and `fish` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
-- **Text size and zoom control** — `Cmd+=`, `Cmd+-`, and `Cmd+0` adjust terminal font size for focused terminals, markdown text size for focused markdown panels, or page zoom for focused browser panels; terminal and markdown overrides persist per window, and browser zoom persists per browser panel
+- **Local documents** — Open supported local files (`.md`, `.markdown`, `.mdown`, `.mkd`, `.yaml`, `.yml`, `.toml`) in tabs or splits; Markdown documents render as preview/edit panels, while YAML and TOML use code views with line numbers
+- **Text size and zoom control** — `Cmd+=`, `Cmd+-`, and `Cmd+0` adjust terminal font size for focused terminals, local-document text size for focused local documents, or page zoom for focused browser panels; terminal and local-document overrides persist per window, and browser zoom persists per browser panel
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
 
@@ -78,9 +79,9 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Opt+<key>` | Launch agent profile (when profile defines `shortcutKey`) |
 | `Cmd+Opt+<key>` / `Cmd+Opt+Shift+<key>` | Profile split right / split down (when profile defines `shortcutKey`) |
 
-`Cmd+W` and `File > Close` use Toastty's panel-close behavior. The native red close button instead asks for confirmation before closing all terminals, tabs, and workspaces in that window.
+`Cmd+W` and `File > Close` use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, local-document saves in progress block destructive close, and the native red close button still asks for confirmation before closing all terminals, tabs, and workspaces in that window.
 
-`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running, and choosing `Always quit without asking` in that alert turns the setting off.
+`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running or local-document drafts would be discarded, and it blocks destructive quit while a local-document save is still in progress. Choosing `Always quit without asking` in that alert turns the setting off.
 
 For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md](docs/keyboard-shortcuts.md).
 
@@ -162,14 +163,14 @@ Toastty respects your Ghostty configuration. Config is loaded in this order:
 3. `~/.config/ghostty/config`
 4. Ghostty defaults
 
-Toastty uses `~/.toastty/config` for user-authored defaults and a small amount of macOS `UserDefaults` state for UI behavior. Window-local terminal and markdown text-size overrides, plus per-browser zoom overrides, are persisted with workspace/window layout snapshots instead of rewriting config files.
+Toastty uses `~/.toastty/config` for user-authored defaults and a small amount of macOS `UserDefaults` state for UI behavior. Window-local terminal and local-document text-size overrides, plus per-browser zoom overrides, are persisted with workspace/window layout snapshots instead of rewriting config files.
 
 Use `Toastty > Manage Config…` to open or create the live config file, `Toastty > Open Config Reference…` to inspect the generated commented template, and `Toastty > Reload Configuration` to apply edits without relaunching. For the full Toastty-owned config reference, see [docs/configuration.md](docs/configuration.md).
 
 - `terminal-font-size` in `~/.toastty/config` sets the baseline font size Toastty should prefer before any window-local terminal UI override
 - `default-terminal-profile` in `~/.toastty/config` applies a profile ID from `~/.toastty/terminal-profiles.toml` to newly created terminals only, including ordinary split shortcuts like `Cmd+D` and `Cmd+Shift+D`
 - `enable-agent-command-shims` in `~/.toastty/config` controls whether Toastty prepends managed wrappers into terminal `PATH` so manual built-in agent invocations inside Toastty report session status automatically, including configured wrapper executables declared through `manualCommandNames`. Set it to `false` if you do not want Toastty intercepting those commands. Agent menu launches still use their built-in instrumentation.
-- the `View` menu uses contextual labels for this shortcut family: focused terminals and markdown panels show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
+- the `View` menu uses contextual labels for this shortcut family: focused terminals and local documents show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
 
 Example:
 
@@ -290,7 +291,7 @@ State flows through a single `AppStore` using a reducer pattern: views dispatch 
 Toastty is local-first. The app itself does not send usage analytics or cloud telemetry. The only outbound network connection is Sparkle's update check against `https://updates.toastty.dev/appcast.xml`.
 
 - Toastty writes user-authored config to `~/.toastty/config`, or to `TOASTTY_RUNTIME_HOME/config` for isolated dev/test runs. `TOASTTY_DEV_WORKTREE_ROOT` also enables that isolated runtime-home behavior by deriving a stable sandbox under the worktree.
-- Toastty persists window-local terminal and markdown text-size overrides plus per-browser zoom overrides in its workspace layout snapshots, or in the active runtime home's snapshot file when runtime isolation is enabled.
+- Toastty persists window-local terminal and local-document text-size overrides plus per-browser zoom overrides in its workspace layout snapshots, or in the active runtime home's snapshot file when runtime isolation is enabled.
 - Toastty persists workspace layouts to `~/.toastty/workspace-layout-profiles.json`, or to the active runtime home's `workspace-layout-profiles.json` when runtime isolation is enabled.
 - By default, Toastty writes structured logs to `~/Library/Logs/Toastty/toastty.log`, or to the active runtime home's `logs/toastty.log` when runtime isolation is enabled.
 - Toastty requests macOS notification permission the first time it tries to deliver a desktop notification.
