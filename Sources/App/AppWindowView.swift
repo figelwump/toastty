@@ -22,6 +22,13 @@ struct AppWindowView: View {
         store.window(id: windowID)?.sidebarVisible ?? true
     }
 
+    private var sidebarToggleHasUnreadBadge: Bool {
+        Self.sidebarToggleShowsUnreadBadge(
+            sidebarVisible: sidebarVisible,
+            hasUnreadNotifications: store.state.windowHasAnyUnreadNotifications(windowID: windowID)
+        )
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             HStack(spacing: 0) {
@@ -140,6 +147,21 @@ struct AppWindowView: View {
         hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
     }
 
+    static func sidebarToggleShowsUnreadBadge(
+        sidebarVisible: Bool,
+        hasUnreadNotifications: Bool
+    ) -> Bool {
+        hasUnreadNotifications && !sidebarVisible
+    }
+
+    static func sidebarToggleAccessibilityLabel(sidebarVisible: Bool) -> String {
+        sidebarVisible ? "Hide Workspaces" : "Show Workspaces"
+    }
+
+    static func sidebarToggleAccessibilityValue(hasUnreadBadge: Bool) -> String {
+        hasUnreadBadge ? "Unread notifications" : ""
+    }
+
     static func shouldPresentAgentGetStartedFlow(windowID: UUID, notificationObject: Any?) -> Bool {
         guard let targetWindowID = notificationObject as? UUID else {
             return false
@@ -153,7 +175,8 @@ struct AppWindowView: View {
         } label: {
             SidebarToggleIconView(
                 color: sidebarVisible ? ToastyTheme.inactiveText : ToastyTheme.accent,
-                sidebarVisible: sidebarVisible
+                sidebarVisible: sidebarVisible,
+                hasUnread: sidebarToggleHasUnreadBadge
             )
         }
         .buttonStyle(.plain)
@@ -164,11 +187,13 @@ struct AppWindowView: View {
         .contentShape(Rectangle())
         .help(
             ToasttyKeyboardShortcuts.toggleSidebar.helpText(
-                sidebarVisible ? "Hide Workspaces" : "Show Workspaces"
+                Self.sidebarToggleAccessibilityLabel(sidebarVisible: sidebarVisible)
             )
         )
         .padding(.leading, ToastyTheme.titlebarSidebarToggleLeadingPadding)
         .padding(.top, ToastyTheme.titlebarSidebarToggleTopPadding)
+        .accessibilityLabel(Self.sidebarToggleAccessibilityLabel(sidebarVisible: sidebarVisible))
+        .accessibilityValue(Self.sidebarToggleAccessibilityValue(hasUnreadBadge: sidebarToggleHasUnreadBadge))
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 

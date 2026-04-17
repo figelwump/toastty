@@ -2457,6 +2457,7 @@ private struct TerminalProfileBadge {
 struct SidebarToggleIconView: View {
     let color: Color
     let sidebarVisible: Bool
+    var hasUnread: Bool = false
 
     var body: some View {
         Canvas { context, _ in
@@ -2477,6 +2478,12 @@ struct SidebarToggleIconView: View {
             }
         }
         .frame(width: 14, height: 14)
+        .overlay(alignment: .topTrailing) {
+            if hasUnread {
+                SessionStatusIndicator(state: .dot, size: 6, lineWidth: 1.2)
+                    .offset(x: 1.5, y: -1.5)
+            }
+        }
     }
 }
 

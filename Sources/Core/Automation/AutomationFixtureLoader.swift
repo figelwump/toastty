@@ -16,7 +16,9 @@ public enum AutomationFixtureLoader {
         case "workspace-tabs-wide":
             return makeWorkspaceTabsWideFixture()
         case "workspace-tabs-wide-unread":
-            return makeWorkspaceTabsWideUnreadFixture()
+            return makeWorkspaceTabsWideUnreadFixture(sidebarVisible: true)
+        case "workspace-tabs-wide-hidden-sidebar-unread":
+            return makeWorkspaceTabsWideUnreadFixture(sidebarVisible: false)
         default:
             return nil
         }
@@ -121,7 +123,7 @@ public enum AutomationFixtureLoader {
         )
     }
 
-    private static func makeWorkspaceTabsWideUnreadFixture() -> AppState {
+    private static func makeWorkspaceTabsWideUnreadFixture(sidebarVisible: Bool) -> AppState {
         var workspace = WorkspaceState.bootstrap(title: "Workspace 1")
         let unreadPanelID = UUID()
         let unreadTab = WorkspaceTabState(
@@ -142,7 +144,7 @@ public enum AutomationFixtureLoader {
             frame: CGRectCodable(x: 80, y: 80, width: 2300, height: 760),
             workspaceIDs: [workspace.id],
             selectedWorkspaceID: workspace.id,
-            sidebarVisible: true
+            sidebarVisible: sidebarVisible
         )
 
         return AppState(

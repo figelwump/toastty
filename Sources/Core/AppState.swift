@@ -148,6 +148,13 @@ public struct AppState: Codable, Equatable, Sendable {
         windows.first(where: { $0.id == windowID })
     }
 
+    public func windowHasAnyUnreadNotifications(windowID: UUID) -> Bool {
+        guard let window = window(id: windowID) else { return false }
+        return window.workspaceIDs.contains { workspaceID in
+            (workspacesByID[workspaceID]?.unreadNotificationCount ?? 0) > 0
+        }
+    }
+
     public func selectedWorkspaceID(in windowID: UUID) -> UUID? {
         guard let window = window(id: windowID) else { return nil }
         return window.selectedWorkspaceID ?? window.workspaceIDs.first
