@@ -157,7 +157,7 @@ final class CommandPalettePanelTests: XCTestCase {
 
         let frame = CommandPalettePanel.positionedFrame(
             relativeTo: originFrame,
-            visibleFrame: nil
+            visibleFrames: []
         )
 
         XCTAssertEqual(frame.origin.x, 280)
@@ -171,11 +171,29 @@ final class CommandPalettePanelTests: XCTestCase {
 
         let frame = CommandPalettePanel.positionedFrame(
             relativeTo: originFrame,
-            visibleFrame: visibleFrame
+            visibleFrames: [visibleFrame]
         )
 
         XCTAssertEqual(frame.origin.x, visibleFrame.maxX - CommandPalettePanel.defaultFrame.width)
         XCTAssertEqual(frame.origin.y, visibleFrame.maxY - CommandPalettePanel.defaultFrame.height)
+    }
+
+    func testPositionedFrameUsesMostRelevantScreenAcrossMultipleDisplays() {
+        let laptopVisibleFrame = CGRect(x: -1512, y: 38, width: 1512, height: 945)
+        let externalVisibleFrame = CGRect(x: 0, y: 25, width: 1728, height: 1055)
+        let originFrame = CGRect(x: -1450, y: 80, width: 1100, height: 860)
+
+        let frame = CommandPalettePanel.positionedFrame(
+            relativeTo: originFrame,
+            visibleFrames: [externalVisibleFrame, laptopVisibleFrame]
+        )
+
+        XCTAssertGreaterThanOrEqual(frame.minX, laptopVisibleFrame.minX)
+        XCTAssertLessThanOrEqual(frame.maxX, laptopVisibleFrame.maxX)
+        XCTAssertGreaterThanOrEqual(frame.minY, laptopVisibleFrame.minY)
+        XCTAssertLessThanOrEqual(frame.maxY, laptopVisibleFrame.maxY)
+        XCTAssertEqual(frame.origin.x, -1190)
+        XCTAssertEqual(frame.origin.y, 384)
     }
 }
 

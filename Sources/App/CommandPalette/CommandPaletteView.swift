@@ -32,55 +32,59 @@ struct CommandPaletteView: View {
             Divider()
                 .overlay(ToastyTheme.hairline)
 
-            Group {
-                if viewModel.results.isEmpty {
-                    VStack(spacing: 10) {
-                        Text("No matching commands")
-                            .font(ToastyTheme.fontBody)
-                            .foregroundStyle(ToastyTheme.inactiveText)
+            VStack(spacing: 0) {
+                Group {
+                    if viewModel.results.isEmpty {
+                        VStack(spacing: 10) {
+                            Text("No matching commands")
+                                .font(ToastyTheme.fontBody)
+                                .foregroundStyle(ToastyTheme.inactiveText)
 
-                        Text("Try a broader query.")
-                            .font(ToastyTheme.fontSubtext)
-                            .foregroundStyle(ToastyTheme.subtleText)
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 112)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
-                            CommandPaletteResultRow(
-                                title: result.title,
-                                shortcut: result.command.shortcut?.symbolLabel,
-                                isSelected: index == viewModel.selectedIndex
-                            )
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                viewModel.select(index: index)
-                                viewModel.submitSelection()
+                            Text("Try a broader query.")
+                                .font(ToastyTheme.fontSubtext)
+                                .foregroundStyle(ToastyTheme.subtleText)
+                        }
+                        .padding(.top, 28)
+                        .frame(maxWidth: .infinity, alignment: .top)
+                    } else {
+                        VStack(spacing: 0) {
+                            ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
+                                CommandPaletteResultRow(
+                                    title: result.title,
+                                    shortcut: result.command.shortcut?.symbolLabel,
+                                    isSelected: index == viewModel.selectedIndex
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    viewModel.select(index: index)
+                                    viewModel.submitSelection()
+                                }
                             }
                         }
+                        .padding(.top, 8)
                     }
-                    .padding(.vertical, 8)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(ToastyTheme.chromeBackground.opacity(0.96))
+
+                Divider()
+                    .overlay(ToastyTheme.hairline)
+
+                HStack {
+                    Text(resultCountText)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.subtleText)
+
+                    Spacer()
+
+                    Text("Return Execute   Esc Cancel")
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.subtleText)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 11)
             }
-            .frame(maxWidth: .infinity)
-            .background(ToastyTheme.chromeBackground.opacity(0.96))
-
-            Divider()
-                .overlay(ToastyTheme.hairline)
-
-            HStack {
-                Text(resultCountText)
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(ToastyTheme.subtleText)
-
-                Spacer()
-
-                Text("Return Execute   Esc Cancel")
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(ToastyTheme.subtleText)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(
             width: CommandPalettePanel.defaultFrame.width,
