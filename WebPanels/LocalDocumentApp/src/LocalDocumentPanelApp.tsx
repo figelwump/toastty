@@ -599,13 +599,9 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         </div>
       )}
       <div className="local-document-code-frame">
-        <div className="local-document-code-gutter" aria-hidden="true">
-          {lines.map((_, index) => (
-            <span key={index} className="local-document-code-gutter-line">
-              {index + 1}
-            </span>
-          ))}
-        </div>
+        <pre className="local-document-code-gutter" aria-hidden="true">
+          {lines.map((_, index) => String(index + 1)).join("\n")}
+        </pre>
         <pre className="local-document-code-scroll">
           {highlightedHTML ? (
             <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />

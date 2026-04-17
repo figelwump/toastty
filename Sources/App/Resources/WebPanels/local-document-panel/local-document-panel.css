@@ -163,6 +163,7 @@ body {
 
 .local-document-code-gutter {
   flex: 0 0 auto;
+  margin: 0;
   padding: 28px 14px 34px 18px;
   border-right: 1px solid rgba(255, 224, 191, 0.08);
   background: rgba(255, 224, 191, 0.03);
@@ -174,12 +175,7 @@ body {
   font-variant-numeric: tabular-nums;
   text-align: right;
   user-select: none;
-}
-
-.local-document-code-gutter-line {
-  display: block;
-  min-height: var(--local-document-code-line-height);
-  line-height: var(--local-document-code-line-height);
+  white-space: pre;
 }
 
 .local-document-code-scroll {
