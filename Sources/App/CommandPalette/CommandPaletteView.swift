@@ -26,64 +26,15 @@ struct CommandPaletteView: View {
                     onCancel: viewModel.dismiss
                 )
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
+            .fixedSize(horizontal: false, vertical: true)
 
             Divider()
                 .overlay(ToastyTheme.hairline)
 
-            VStack(spacing: 0) {
-                Group {
-                    if viewModel.results.isEmpty {
-                        VStack(spacing: 10) {
-                            Text("No matching commands")
-                                .font(ToastyTheme.fontBody)
-                                .foregroundStyle(ToastyTheme.inactiveText)
-
-                            Text("Try a broader query.")
-                                .font(ToastyTheme.fontSubtext)
-                                .foregroundStyle(ToastyTheme.subtleText)
-                        }
-                        .padding(.top, 28)
-                        .frame(maxWidth: .infinity, alignment: .top)
-                    } else {
-                        VStack(spacing: 0) {
-                            ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
-                                CommandPaletteResultRow(
-                                    title: result.title,
-                                    shortcut: result.command.shortcut?.symbolLabel,
-                                    isSelected: index == viewModel.selectedIndex
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    viewModel.select(index: index)
-                                    viewModel.submitSelection()
-                                }
-                            }
-                        }
-                        .padding(.top, 8)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .background(ToastyTheme.chromeBackground.opacity(0.96))
-
-                Divider()
-                    .overlay(ToastyTheme.hairline)
-
-                HStack {
-                    Text(resultCountText)
-                        .font(ToastyTheme.fontSubtext)
-                        .foregroundStyle(ToastyTheme.subtleText)
-
-                    Spacer()
-
-                    Text("Return Execute   Esc Cancel")
-                        .font(ToastyTheme.fontSubtext)
-                        .foregroundStyle(ToastyTheme.subtleText)
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 11)
-            }
+            resultsSection
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
         .frame(
@@ -104,6 +55,65 @@ struct CommandPaletteView: View {
     private var resultCountText: String {
         let count = viewModel.results.count
         return count == 1 ? "1 command" : "\(count) commands"
+    }
+
+    private var resultsSection: some View {
+        VStack(spacing: 0) {
+            Group {
+                if viewModel.results.isEmpty {
+                    VStack(spacing: 10) {
+                        Text("No matching commands")
+                            .font(ToastyTheme.fontBody)
+                            .foregroundStyle(ToastyTheme.inactiveText)
+
+                        Text("Try a broader query.")
+                            .font(ToastyTheme.fontSubtext)
+                            .foregroundStyle(ToastyTheme.subtleText)
+                    }
+                    .padding(.top, 28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                } else {
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(spacing: 0) {
+                            ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
+                                CommandPaletteResultRow(
+                                    title: result.title,
+                                    shortcut: result.command.shortcut?.symbolLabel,
+                                    isSelected: index == viewModel.selectedIndex
+                                )
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    viewModel.select(index: index)
+                                    viewModel.submitSelection()
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(ToastyTheme.chromeBackground.opacity(0.96))
+
+            Divider()
+                .overlay(ToastyTheme.hairline)
+
+            HStack {
+                Text(resultCountText)
+                    .font(ToastyTheme.fontSubtext)
+                    .foregroundStyle(ToastyTheme.subtleText)
+
+                Spacer()
+
+                Text("Return Execute   Esc Cancel")
+                    .font(ToastyTheme.fontSubtext)
+                    .foregroundStyle(ToastyTheme.subtleText)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
