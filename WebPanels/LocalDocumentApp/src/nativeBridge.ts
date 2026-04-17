@@ -1,4 +1,4 @@
-export type MarkdownPanelEvent =
+export type LocalDocumentPanelEvent =
   | { type: "enterEdit" }
   | { type: "draftDidChange"; content: string; baseContentRevision: number }
   | { type: "save"; baseContentRevision: number }
@@ -6,7 +6,7 @@ export type MarkdownPanelEvent =
   | { type: "overwriteAfterConflict"; baseContentRevision: number };
 
 interface WebKitMessageHandler {
-  postMessage: (event: MarkdownPanelEvent) => void;
+  postMessage: (event: LocalDocumentPanelEvent) => void;
 }
 
 declare global {
@@ -17,13 +17,13 @@ declare global {
   }
 }
 
-const handlerName = "toasttyMarkdownPanel";
+const handlerName = "toasttyLocalDocumentPanel";
 
-function postEvent(event: MarkdownPanelEvent) {
+function postEvent(event: LocalDocumentPanelEvent) {
   window.webkit?.messageHandlers?.[handlerName]?.postMessage(event);
 }
 
-export const markdownNativeBridge = {
+export const localDocumentNativeBridge = {
   enterEdit() {
     postEvent({ type: "enterEdit" });
   },

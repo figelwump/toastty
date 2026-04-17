@@ -368,8 +368,27 @@ public struct AppState: Codable, Equatable, Sendable {
         windowID: UUID,
         matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
     ) -> PanelNavigationTarget? {
-        let orderedTabIDs = orderedIDs(startingAt: workspace.resolvedSelectedTabID, in: workspace.tabIDs)
-        for tabID in orderedTabIDs {
+        guard let startingTabID = workspace.resolvedSelectedTabID,
+              let startingTab = workspace.tabsByID[startingTabID] else {
+            return nil
+        }
+
+        let focusedPanelID = startingTab.resolvedFocusedPanelID
+        if let panelID = nextMatchingPanel(
+            in: startingTab,
+            startingAfterPanelID: focusedPanelID,
+            wrap: false,
+            matches: matches
+        ) {
+            return PanelNavigationTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: startingTabID,
+                panelID: panelID
+            )
+        }
+
+        for tabID in orderedIDs(after: startingTabID, in: workspace.tabIDs) {
             guard let tab = workspace.tabsByID[tabID],
                   let panelID = nextMatchingPanel(
                       in: tab,
@@ -386,6 +405,20 @@ public struct AppState: Codable, Equatable, Sendable {
                 panelID: panelID
             )
         }
+
+        if let panelID = nextMatchingPanel(
+            in: startingTab,
+            endingAtOrIncludingPanelID: focusedPanelID,
+            matches: matches
+        ) {
+            return PanelNavigationTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: startingTabID,
+                panelID: panelID
+            )
+        }
+
         return nil
     }
 
@@ -561,6 +594,28 @@ public struct AppState: Codable, Equatable, Sendable {
         if let endingBeforePanelID,
            let endIndex = panelOrder.firstIndex(of: endingBeforePanelID) {
             for panelID in panelOrder[..<endIndex] where matches(tab, panelID) {
+                return panelID
+            }
+            return nil
+        }
+
+        for panelID in panelOrder where matches(tab, panelID) {
+            return panelID
+        }
+        return nil
+    }
+
+    private func nextMatchingPanel(
+        in tab: WorkspaceTabState,
+        endingAtOrIncludingPanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> UUID? {
+        let panelOrder = tab.layoutTree.allSlotInfos.map(\.panelID)
+        guard panelOrder.isEmpty == false else { return nil }
+
+        if let endingAtOrIncludingPanelID,
+           let endIndex = panelOrder.firstIndex(of: endingAtOrIncludingPanelID) {
+            for panelID in panelOrder[...endIndex] where matches(tab, panelID) {
                 return panelID
             }
             return nil

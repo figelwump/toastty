@@ -126,7 +126,7 @@ final class AppQuitConfirmationTests: XCTestCase {
     }
 
     func testAssessRequiresConfirmationForUnsavedMarkdownDraft() {
-        let state = makeMarkdownAppState()
+        let state = makeLocalDocumentAppState()
 
         let assessment = AppQuitConfirmation.assess(
             state: state,
@@ -134,15 +134,15 @@ final class AppQuitConfirmationTests: XCTestCase {
                 XCTFail("markdown-only quit confirmation should not request terminal assessments")
                 return nil
             },
-            markdownCloseConfirmationState: { _ in
-                MarkdownCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
+            localDocumentCloseConfirmationState: { _ in
+                LocalDocumentCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
             }
         )
 
         XCTAssertTrue(assessment.requiresConfirmation)
         XCTAssertTrue(assessment.allowsDestructiveConfirmation)
-        XCTAssertEqual(assessment.unsavedMarkdownDraftCount, 1)
-        XCTAssertEqual(assessment.firstUnsavedMarkdownDisplayName, "README.md")
+        XCTAssertEqual(assessment.unsavedLocalDocumentDraftCount, 1)
+        XCTAssertEqual(assessment.firstUnsavedLocalDocumentDisplayName, "README.md")
         XCTAssertEqual(
             assessment.informativeText,
             "\"README.md\" has unsaved markdown changes. Quitting Toastty will discard them."
@@ -150,7 +150,7 @@ final class AppQuitConfirmationTests: XCTestCase {
     }
 
     func testAssessRequiresWaitingForMarkdownSaveInProgress() {
-        let state = makeMarkdownAppState()
+        let state = makeLocalDocumentAppState()
 
         let assessment = AppQuitConfirmation.assess(
             state: state,
@@ -158,14 +158,14 @@ final class AppQuitConfirmationTests: XCTestCase {
                 XCTFail("markdown-only quit confirmation should not request terminal assessments")
                 return nil
             },
-            markdownCloseConfirmationState: { _ in
-                MarkdownCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
+            localDocumentCloseConfirmationState: { _ in
+                LocalDocumentCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
             }
         )
 
         XCTAssertTrue(assessment.requiresConfirmation)
         XCTAssertFalse(assessment.allowsDestructiveConfirmation)
-        XCTAssertEqual(assessment.markdownSaveInProgressCount, 1)
+        XCTAssertEqual(assessment.localDocumentSaveInProgressCount, 1)
         XCTAssertEqual(
             assessment.informativeText,
             "\"README.md\" is still saving. Wait for the save to finish before quitting Toastty."
@@ -174,7 +174,7 @@ final class AppQuitConfirmationTests: XCTestCase {
 
     func testAssessCombinesMarkdownAndTerminalWarnings() {
         let workspace = WorkspaceState.bootstrap(title: "Workspace")
-        let markdownState = makeMarkdownAppState()
+        let markdownState = makeLocalDocumentAppState()
         guard let busyPanelID = workspace.allTerminalPanelIDs.first else {
             return XCTFail("expected bootstrap workspace to contain a terminal panel")
         }
@@ -194,13 +194,13 @@ final class AppQuitConfirmationTests: XCTestCase {
                 }
                 return TerminalCloseConfirmationAssessment(requiresConfirmation: false)
             },
-            markdownCloseConfirmationState: { _ in
-                MarkdownCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
+            localDocumentCloseConfirmationState: { _ in
+                LocalDocumentCloseConfirmationState(kind: .dirtyDraft, displayName: "README.md")
             }
         )
 
         XCTAssertTrue(assessment.requiresConfirmation)
-        XCTAssertEqual(assessment.unsavedMarkdownDraftCount, 1)
+        XCTAssertEqual(assessment.unsavedLocalDocumentDraftCount, 1)
         XCTAssertEqual(
             assessment.informativeText,
             """
@@ -245,7 +245,7 @@ final class AppQuitConfirmationTests: XCTestCase {
         return makeAppState(workspaces: [workspace])
     }
 
-    private func makeMarkdownAppState() -> AppState {
+    private func makeLocalDocumentAppState() -> AppState {
         let panelID = UUID()
         let workspace = WorkspaceState(
             id: UUID(),

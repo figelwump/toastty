@@ -1,14 +1,17 @@
+import CoreState
 import Foundation
 
-enum MarkdownPanelTheme: String, Codable, Equatable, Sendable {
+enum LocalDocumentPanelTheme: String, Codable, Equatable, Sendable {
     case light
     case dark
 }
 
-struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
+struct LocalDocumentPanelBootstrap: Codable, Equatable, Sendable {
     let contractVersion: Int
     let filePath: String?
     let displayName: String
+    let format: LocalDocumentFormat
+    let shouldHighlight: Bool
     let content: String
     let contentRevision: Int
     let isEditing: Bool
@@ -16,13 +19,15 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
     let hasExternalConflict: Bool
     let isSaving: Bool
     let saveErrorMessage: String?
-    let theme: MarkdownPanelTheme
+    let theme: LocalDocumentPanelTheme
     let textScale: Double
 
     init(
         contractVersion: Int = 4,
         filePath: String?,
         displayName: String,
+        format: LocalDocumentFormat = .markdown,
+        shouldHighlight: Bool = true,
         content: String,
         contentRevision: Int,
         isEditing: Bool = false,
@@ -30,12 +35,14 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
         hasExternalConflict: Bool = false,
         isSaving: Bool = false,
         saveErrorMessage: String? = nil,
-        theme: MarkdownPanelTheme,
-        textScale: Double
+        theme: LocalDocumentPanelTheme,
+        textScale: Double = AppState.defaultMarkdownTextScale
     ) {
         self.contractVersion = contractVersion
         self.filePath = filePath
         self.displayName = displayName
+        self.format = format
+        self.shouldHighlight = shouldHighlight
         self.content = content
         self.contentRevision = contentRevision
         self.isEditing = isEditing
@@ -48,12 +55,14 @@ struct MarkdownPanelBootstrap: Codable, Equatable, Sendable {
     }
 }
 
-extension MarkdownPanelBootstrap {
-    func setting(theme: MarkdownPanelTheme) -> Self {
+extension LocalDocumentPanelBootstrap {
+    func setting(theme: LocalDocumentPanelTheme) -> Self {
         Self(
             contractVersion: contractVersion,
             filePath: filePath,
             displayName: displayName,
+            format: format,
+            shouldHighlight: shouldHighlight,
             content: content,
             contentRevision: contentRevision,
             isEditing: isEditing,
@@ -71,6 +80,8 @@ extension MarkdownPanelBootstrap {
             contractVersion: contractVersion,
             filePath: filePath,
             displayName: displayName,
+            format: format,
+            shouldHighlight: shouldHighlight,
             content: content,
             contentRevision: contentRevision,
             isEditing: isEditing,

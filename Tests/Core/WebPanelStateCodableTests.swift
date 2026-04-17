@@ -51,6 +51,46 @@ struct WebPanelStateCodableTests {
     }
 
     @Test
+    func localDocumentStateRoundTripsYamlFormat() throws {
+        let state = WebPanelState(
+            definition: .localDocument,
+            title: "config.yaml",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/project/config.yaml",
+                format: .yaml
+            )
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(decoded == state)
+        #expect(decoded.localDocument?.format == .yaml)
+    }
+
+    @Test
+    func decodingTypedLocalDocumentPayloadWithoutFormatDefaultsToMarkdown() throws {
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "definition": "localDocument",
+                "title": "README.md",
+                "localDocument": [
+                    "filePath": "/tmp/project/README.md",
+                ],
+            ]
+        )
+
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(
+            decoded.localDocument == LocalDocumentState(
+                filePath: "/tmp/project/README.md",
+                format: .markdown
+            )
+        )
+    }
+
+    @Test
     func decodingLegacyMarkdownPayloadHydratesLocalDocumentState() throws {
         let legacy = LegacyMarkdownWebPanelStatePayload(
             title: "README.md",

@@ -3,8 +3,8 @@ import CoreState
 import Foundation
 import WebKit
 
-enum MarkdownPanelAssetLocator {
-    private static let directory = "WebPanels/markdown-panel"
+enum LocalDocumentPanelAssetLocator {
+    private static let directory = "WebPanels/local-document-panel"
     private static let fileName = "index"
     private static let fileExtension = "html"
 
@@ -17,51 +17,67 @@ enum MarkdownPanelAssetLocator {
     }
 }
 
-struct MarkdownPanelRuntimeAutomationState: Equatable, Sendable {
+struct LocalDocumentPanelRuntimeAutomationState: Equatable, Sendable {
     let lifecycleState: PanelHostLifecycleState
-    let currentTheme: MarkdownPanelTheme
+    let currentTheme: LocalDocumentPanelTheme
     let hasPendingBootstrapScript: Bool
     let currentAssetPath: String?
-    let currentBootstrap: MarkdownPanelBootstrap?
+    let currentBootstrap: LocalDocumentPanelBootstrap?
 }
 
-struct MarkdownPanelDiskRevision: Equatable, Sendable {
+struct LocalDocumentPanelDiskRevision: Equatable, Sendable {
     let fileNumber: UInt64?
     let modificationDate: Date?
     let size: UInt64?
 }
 
-struct MarkdownPanelDocumentSnapshot: Equatable, Sendable {
+struct LocalDocumentPanelDocumentSnapshot: Equatable, Sendable {
     let filePath: String?
     let displayName: String
+    let format: LocalDocumentFormat
     let content: String
-    let diskRevision: MarkdownPanelDiskRevision?
+    let diskRevision: LocalDocumentPanelDiskRevision?
+
+    init(
+        filePath: String?,
+        displayName: String,
+        format: LocalDocumentFormat = .markdown,
+        content: String,
+        diskRevision: LocalDocumentPanelDiskRevision?
+    ) {
+        self.filePath = filePath
+        self.displayName = displayName
+        self.format = format
+        self.content = content
+        self.diskRevision = diskRevision
+    }
 }
 
-struct MarkdownSaveRequest: Equatable, Sendable {
+struct LocalDocumentSaveRequest: Equatable, Sendable {
     let filePath: String
     let displayName: String
     let content: String
     let baseContentRevision: Int
 }
 
-enum MarkdownCloseConfirmationKind: Equatable, Sendable {
+enum LocalDocumentCloseConfirmationKind: Equatable, Sendable {
     case dirtyDraft
     case saveInProgress
 }
 
-struct MarkdownCloseConfirmationState: Equatable, Sendable {
-    let kind: MarkdownCloseConfirmationKind
+struct LocalDocumentCloseConfirmationState: Equatable, Sendable {
+    let kind: LocalDocumentCloseConfirmationKind
     let displayName: String
 }
 
-struct MarkdownEditingSession: Equatable, Sendable {
+struct LocalDocumentEditingSession: Equatable, Sendable {
     var filePath: String?
     var displayName: String
+    var format: LocalDocumentFormat
     var loadedContent: String
     var draftContent: String
     var contentRevision: Int
-    var diskRevision: MarkdownPanelDiskRevision?
+    var diskRevision: LocalDocumentPanelDiskRevision?
     var isEditing: Bool
     var hasExternalConflict: Bool
     var isSaving: Bool
@@ -75,12 +91,12 @@ struct MarkdownEditingSession: Equatable, Sendable {
         isEditing ? draftContent : loadedContent
     }
 
-    var closeConfirmationState: MarkdownCloseConfirmationState? {
+    var closeConfirmationState: LocalDocumentCloseConfirmationState? {
         guard isEditing else {
             return nil
         }
         if isSaving {
-            return MarkdownCloseConfirmationState(
+            return LocalDocumentCloseConfirmationState(
                 kind: .saveInProgress,
                 displayName: displayName
             )
@@ -88,7 +104,7 @@ struct MarkdownEditingSession: Equatable, Sendable {
         guard isDirty else {
             return nil
         }
-        return MarkdownCloseConfirmationState(
+        return LocalDocumentCloseConfirmationState(
             kind: .dirtyDraft,
             displayName: displayName
         )
@@ -101,9 +117,10 @@ struct MarkdownEditingSession: Equatable, Sendable {
             hasExternalConflict == false
     }
 
-    init(document: MarkdownPanelDocumentSnapshot) {
+    init(document: LocalDocumentPanelDocumentSnapshot) {
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         draftContent = document.content
         contentRevision = 1
@@ -114,14 +131,16 @@ struct MarkdownEditingSession: Equatable, Sendable {
         saveErrorMessage = nil
     }
 
-    mutating func replaceCleanBaseline(with document: MarkdownPanelDocumentSnapshot) {
+    mutating func replaceCleanBaseline(with document: LocalDocumentPanelDocumentSnapshot) {
         let shouldAdvanceRevision = contentRevision == 0 ||
             filePath != document.filePath ||
+            format != document.format ||
             loadedContent != document.content
         let shouldReplaceDraftContent = isEditing == false || isDirty == false
 
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         diskRevision = document.diskRevision
         hasExternalConflict = false
@@ -175,7 +194,7 @@ struct MarkdownEditingSession: Equatable, Sendable {
     mutating func beginSave(
         baseContentRevision: Int,
         allowConflictOverwrite: Bool
-    ) -> MarkdownSaveRequest? {
+    ) -> LocalDocumentSaveRequest? {
         guard let filePath,
               isEditing,
               isSaving == false,
@@ -188,7 +207,7 @@ struct MarkdownEditingSession: Equatable, Sendable {
 
         saveErrorMessage = nil
         isSaving = true
-        return MarkdownSaveRequest(
+        return LocalDocumentSaveRequest(
             filePath: filePath,
             displayName: displayName,
             content: draftContent,
@@ -212,7 +231,7 @@ struct MarkdownEditingSession: Equatable, Sendable {
     }
 
     mutating func settleSave(
-        with document: MarkdownPanelDocumentSnapshot,
+        with document: LocalDocumentPanelDocumentSnapshot,
         expectedContent: String,
         baseContentRevision: Int
     ) -> Bool {
@@ -224,6 +243,7 @@ struct MarkdownEditingSession: Equatable, Sendable {
 
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         diskRevision = document.diskRevision
         isSaving = false
@@ -251,9 +271,10 @@ struct MarkdownEditingSession: Equatable, Sendable {
         return true
     }
 
-    mutating func applyExternalConflict(with document: MarkdownPanelDocumentSnapshot) {
+    mutating func applyExternalConflict(with document: LocalDocumentPanelDocumentSnapshot) {
         filePath = document.filePath
         displayName = document.displayName
+        format = document.format
         loadedContent = document.content
         diskRevision = document.diskRevision
         hasExternalConflict = true
@@ -263,11 +284,12 @@ struct MarkdownEditingSession: Equatable, Sendable {
 }
 
 @MainActor
-final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
-    typealias DocumentLoader = @Sendable (WebPanelState) async -> MarkdownPanelDocumentSnapshot
+final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
+    typealias DocumentLoader = @Sendable (WebPanelState) async -> LocalDocumentPanelDocumentSnapshot
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
-    typealias SavedDocumentReader = @Sendable (String, String) async throws -> MarkdownPanelDocumentSnapshot
-    private static let scriptMessageHandlerName = "toasttyMarkdownPanel"
+    typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
+    private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
+    nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
@@ -290,9 +312,9 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     private var reloadGeneration: UInt64 = 0
     private var pendingBootstrapScript: String?
     private var currentAssetURL: URL?
-    private var currentBootstrap: MarkdownPanelBootstrap?
-    private var session: MarkdownEditingSession?
-    private var currentTheme: MarkdownPanelTheme = .dark
+    private var currentBootstrap: LocalDocumentPanelBootstrap?
+    private var session: LocalDocumentEditingSession?
+    private var currentTheme: LocalDocumentPanelTheme = .dark
     private var currentTextScale: Double = AppState.defaultMarkdownTextScale
 
     init(
@@ -301,15 +323,15 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
         bundle: Bundle = .main,
         entryURL: URL? = nil,
-        documentLoader: @escaping DocumentLoader = { await MarkdownPanelRuntime.loadDocument(for: $0) },
-        documentSaver: @escaping DocumentSaver = { try await MarkdownPanelRuntime.writeMarkdownDocument(at: $0, content: $1) },
-        savedDocumentReader: @escaping SavedDocumentReader = { try await MarkdownPanelRuntime.readMarkdownDocument(at: $0, displayName: $1) },
+        documentLoader: @escaping DocumentLoader = { await LocalDocumentPanelRuntime.loadDocument(for: $0) },
+        documentSaver: @escaping DocumentSaver = { try await LocalDocumentPanelRuntime.writeLocalDocument(at: $0, content: $1) },
+        savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1, format: $2) },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
-        self.entryURL = entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle)
-        self.assetDirectoryURL = (entryURL ?? MarkdownPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
+        self.entryURL = entryURL ?? LocalDocumentPanelAssetLocator.entryURL(bundle: bundle)
+        self.assetDirectoryURL = (entryURL ?? LocalDocumentPanelAssetLocator.entryURL(bundle: bundle))?.deletingLastPathComponent()
         self.documentLoader = documentLoader
         self.documentSaver = documentSaver
         self.savedDocumentReader = savedDocumentReader
@@ -357,8 +379,8 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         return attachedToContainer && attachedToWindow ? .ready(activeAttachment) : .attached(activeAttachment)
     }
 
-    func automationState() -> MarkdownPanelRuntimeAutomationState {
-        MarkdownPanelRuntimeAutomationState(
+    func automationState() -> LocalDocumentPanelRuntimeAutomationState {
+        LocalDocumentPanelRuntimeAutomationState(
             lifecycleState: lifecycleState,
             currentTheme: currentTheme,
             hasPendingBootstrapScript: pendingBootstrapScript != nil,
@@ -369,11 +391,6 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 
     func canSaveFromCommand() -> Bool {
         session?.canSaveFromCommand == true
-    }
-
-    func canCancelEditFromCommand() -> Bool {
-        guard let session else { return false }
-        return session.isEditing && session.isSaving == false
     }
 
     @discardableResult
@@ -387,6 +404,12 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     }
 
     @discardableResult
+    func canCancelEditFromCommand() -> Bool {
+        guard let session else { return false }
+        return session.isEditing && session.isSaving == false
+    }
+
+    @discardableResult
     func cancelEditFromCommand() -> Bool {
         guard let session else { return false }
         guard session.isEditing, session.isSaving == false else {
@@ -396,7 +419,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         return true
     }
 
-    func closeConfirmationState() -> MarkdownCloseConfirmationState? {
+    func closeConfirmationState() -> LocalDocumentCloseConfirmationState? {
         session?.closeConfirmationState
     }
 
@@ -483,7 +506,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     func apply(webState: WebPanelState) {
         precondition(
             webState.definition == .localDocument,
-            "MarkdownPanelRuntime cannot host \(webState.definition.rawValue) panels."
+            "LocalDocumentPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
         let didChangeState = currentWebState != webState
         currentWebState = webState
@@ -532,7 +555,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
         pushThemeUpdateIfPossible()
     }
 
-    nonisolated static func theme(for appearance: NSAppearance?) -> MarkdownPanelTheme {
+    nonisolated static func theme(for appearance: NSAppearance?) -> LocalDocumentPanelTheme {
         switch appearance?.bestMatch(from: [.darkAqua, .aqua]) {
         case .aqua:
             return .light
@@ -552,49 +575,55 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
 
     nonisolated static func bootstrap(
         for webState: WebPanelState,
-        theme: MarkdownPanelTheme = .dark,
+        theme: LocalDocumentPanelTheme = .dark,
         textScale: Double = AppState.defaultMarkdownTextScale
-    ) async -> MarkdownPanelBootstrap {
+    ) async -> LocalDocumentPanelBootstrap {
         let document = await loadDocument(for: webState)
-        let session = MarkdownEditingSession(document: document)
+        let session = LocalDocumentEditingSession(document: document)
         return makeBootstrap(from: session, theme: theme, textScale: textScale)
     }
 
-    nonisolated static func loadDocument(for webState: WebPanelState) async -> MarkdownPanelDocumentSnapshot {
+    nonisolated static func loadDocument(for webState: WebPanelState) async -> LocalDocumentPanelDocumentSnapshot {
         precondition(
             webState.definition == .localDocument,
-            "MarkdownPanelRuntime cannot host \(webState.definition.rawValue) panels."
+            "LocalDocumentPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
+        let format = resolvedFormat(for: webState)
         let normalizedFilePath = WebPanelState.normalizedFilePath(webState.filePath)
         let displayName = resolvedDisplayName(for: webState, filePath: normalizedFilePath ?? "")
 
         guard let normalizedFilePath else {
-            return MarkdownPanelDocumentSnapshot(
+            return LocalDocumentPanelDocumentSnapshot(
                 filePath: nil,
                 displayName: displayName,
+                format: format,
                 content: missingFileDocument(
-                    title: displayName,
+                    format: format,
                     filePath: nil,
-                    message: "Toastty could not determine which markdown file this panel should render."
+                    message: "Toastty could not determine which local document this panel should render."
                 ),
                 diskRevision: nil
             )
         }
 
-        return await loadDocumentSnapshot(at: normalizedFilePath, displayName: displayName)
+        return await loadDocumentSnapshot(
+            at: normalizedFilePath,
+            displayName: displayName,
+            format: format
+        )
     }
 
-    nonisolated static func bootstrapJavaScript(for bootstrap: MarkdownPanelBootstrap) -> String? {
+    nonisolated static func bootstrapJavaScript(for bootstrap: LocalDocumentPanelBootstrap) -> String? {
         let encoder = JSONEncoder()
         guard let data = try? encoder.encode(bootstrap),
               let json = String(data: data, encoding: .utf8) else {
             return nil
         }
-        return "window.ToasttyMarkdownPanel?.receiveBootstrap(\(json));"
+        return "window.ToasttyLocalDocumentPanel?.receiveBootstrap(\(json));"
     }
 
     nonisolated static func textScaleJavaScript(for textScale: Double) -> String {
-        "window.ToasttyMarkdownPanel?.setTextScale(\(String(format: "%.4f", textScale)));"
+        "window.ToasttyLocalDocumentPanel?.setTextScale(\(String(format: "%.4f", textScale)));"
     }
 
     static func makeWebViewConfiguration(
@@ -609,13 +638,19 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     }
 
     nonisolated static func makeBootstrap(
-        from session: MarkdownEditingSession,
-        theme: MarkdownPanelTheme,
+        from session: LocalDocumentEditingSession,
+        theme: LocalDocumentPanelTheme,
         textScale: Double
-    ) -> MarkdownPanelBootstrap {
-        MarkdownPanelBootstrap(
+    ) -> LocalDocumentPanelBootstrap {
+        LocalDocumentPanelBootstrap(
             filePath: session.filePath,
             displayName: session.displayName,
+            format: session.format,
+            shouldHighlight: shouldHighlight(
+                format: session.format,
+                content: session.visibleContent,
+                diskRevision: session.diskRevision
+            ),
             content: session.visibleContent,
             contentRevision: session.contentRevision,
             isEditing: session.isEditing,
@@ -629,7 +664,7 @@ final class MarkdownPanelRuntime: NSObject, ObservableObject, PanelHostLifecycle
     }
 }
 
-private extension MarkdownPanelRuntime {
+private extension LocalDocumentPanelRuntime {
     enum BridgeEvent {
         case enterEdit
         case draftDidChange(content: String, baseContentRevision: Int)
@@ -751,7 +786,7 @@ private extension MarkdownPanelRuntime {
                 self.session = existingSession
             } else {
                 self.objectWillChange.send()
-                self.session = MarkdownEditingSession(document: document)
+                self.session = LocalDocumentEditingSession(document: document)
             }
 
             self.updateCurrentBootstrap(emitMetadata: true)
@@ -791,7 +826,11 @@ private extension MarkdownPanelRuntime {
         saveTask = Task { [weak self] in
             do {
                 try await documentSaver(request.filePath, request.content)
-                let document = try await savedDocumentReader(request.filePath, request.displayName)
+                let document = try await savedDocumentReader(
+                    request.filePath,
+                    request.displayName,
+                    session.format
+                )
                 await MainActor.run { [weak self] in
                     self?.completeSave(
                         operationID: operationID,
@@ -813,8 +852,8 @@ private extension MarkdownPanelRuntime {
 
     func completeSave(
         operationID: UUID,
-        request: MarkdownSaveRequest,
-        document: MarkdownPanelDocumentSnapshot
+        request: LocalDocumentSaveRequest,
+        document: LocalDocumentPanelDocumentSnapshot
     ) {
         guard activeSaveOperationID == operationID,
               var session else {
@@ -839,7 +878,7 @@ private extension MarkdownPanelRuntime {
 
     func failSave(
         operationID: UUID,
-        request: MarkdownSaveRequest,
+        request: LocalDocumentSaveRequest,
         error: Error
     ) {
         guard activeSaveOperationID == operationID,
@@ -865,8 +904,8 @@ private extension MarkdownPanelRuntime {
     func ensurePanelAppLoaded() {
         guard let entryURL, let assetDirectoryURL else {
             let fallbackHTML = Self.fallbackHTML(
-                title: "Markdown assets unavailable",
-                detail: "Toastty could not load the bundled markdown panel resources."
+                title: "Local document assets unavailable",
+                detail: "Toastty could not load the bundled local document panel resources."
             )
             webView.loadHTMLString(fallbackHTML, baseURL: nil)
             currentAssetURL = nil
@@ -962,23 +1001,25 @@ private extension MarkdownPanelRuntime {
         pendingBootstrapScript = script
     }
 
-    nonisolated static func readMarkdownDocument(
+    nonisolated static func readLocalDocument(
         at filePath: String,
-        displayName: String
-    ) async throws -> MarkdownPanelDocumentSnapshot {
+        displayName: String,
+        format: LocalDocumentFormat
+    ) async throws -> LocalDocumentPanelDocumentSnapshot {
         try await Task.detached(priority: .utility) {
             let fileURL = URL(fileURLWithPath: filePath)
             var encoding = String.Encoding.utf8
             let content = try String(contentsOf: fileURL, usedEncoding: &encoding)
             let attributes = try FileManager.default.attributesOfItem(atPath: filePath)
-            let diskRevision = MarkdownPanelDiskRevision(
+            let diskRevision = LocalDocumentPanelDiskRevision(
                 fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
                 modificationDate: attributes[.modificationDate] as? Date,
                 size: (attributes[.size] as? NSNumber)?.uint64Value
             )
-            return MarkdownPanelDocumentSnapshot(
+            return LocalDocumentPanelDocumentSnapshot(
                 filePath: filePath,
                 displayName: displayName,
+                format: format,
                 content: content,
                 diskRevision: diskRevision
             )
@@ -987,16 +1028,22 @@ private extension MarkdownPanelRuntime {
 
     nonisolated static func loadDocumentSnapshot(
         at filePath: String,
-        displayName: String
-    ) async -> MarkdownPanelDocumentSnapshot {
+        displayName: String,
+        format: LocalDocumentFormat
+    ) async -> LocalDocumentPanelDocumentSnapshot {
         do {
-            return try await readMarkdownDocument(at: filePath, displayName: displayName)
+            return try await readLocalDocument(
+                at: filePath,
+                displayName: displayName,
+                format: format
+            )
         } catch {
-            return MarkdownPanelDocumentSnapshot(
+            return LocalDocumentPanelDocumentSnapshot(
                 filePath: filePath,
                 displayName: displayName,
+                format: format,
                 content: missingFileDocument(
-                    title: displayName,
+                    format: format,
                     filePath: filePath,
                     message: error.localizedDescription
                 ),
@@ -1005,7 +1052,7 @@ private extension MarkdownPanelRuntime {
         }
     }
 
-    nonisolated static func writeMarkdownDocument(at filePath: String, content: String) async throws {
+    nonisolated static func writeLocalDocument(at filePath: String, content: String) async throws {
         try await Task.detached(priority: .utility) {
             let fileURL = URL(fileURLWithPath: filePath)
             try content.write(to: fileURL, atomically: true, encoding: .utf8)
@@ -1022,11 +1069,42 @@ private extension MarkdownPanelRuntime {
         return fileName.isEmpty ? webState.definition.defaultTitle : fileName
     }
 
-    nonisolated static func missingFileDocument(title: String, filePath: String?, message: String) -> String {
+    nonisolated static func resolvedFormat(for webState: WebPanelState) -> LocalDocumentFormat {
+        webState.localDocument?.format ?? .markdown
+    }
+
+    nonisolated static func shouldHighlight(
+        format: LocalDocumentFormat,
+        content: String,
+        diskRevision: LocalDocumentPanelDiskRevision?
+    ) -> Bool {
+        guard format != .markdown else {
+            return true
+        }
+        guard diskRevision != nil else {
+            return false
+        }
+        return content.utf8.count <= syntaxHighlightThresholdBytes
+    }
+
+    nonisolated static func missingFileDocument(
+        format: LocalDocumentFormat,
+        filePath: String?,
+        message: String
+    ) -> String {
+        switch format {
+        case .markdown:
+            return markdownMissingFileDocument(filePath: filePath, message: message)
+        case .yaml, .toml:
+            return codeMissingFileDocument(filePath: filePath, message: message)
+        }
+    }
+
+    nonisolated static func markdownMissingFileDocument(filePath: String?, message: String) -> String {
         var lines = [
-            "# \(title)",
+            "# Document unavailable",
             "",
-            "Toastty could not load this markdown file.",
+            "Toastty could not load this document.",
         ]
 
         if let filePath, filePath.isEmpty == false {
@@ -1042,6 +1120,28 @@ private extension MarkdownPanelRuntime {
             "",
             "**Reason**",
             "",
+            message,
+        ]
+
+        return lines.joined(separator: "\n")
+    }
+
+    nonisolated static func codeMissingFileDocument(filePath: String?, message: String) -> String {
+        var lines = [
+            "Toastty could not load this document.",
+        ]
+
+        if let filePath, filePath.isEmpty == false {
+            lines += [
+                "",
+                "Path:",
+                filePath,
+            ]
+        }
+
+        lines += [
+            "",
+            "Reason:",
             message,
         ]
 
@@ -1088,7 +1188,7 @@ private extension MarkdownPanelRuntime {
     }
 }
 
-extension MarkdownPanelRuntime: WKNavigationDelegate {
+extension LocalDocumentPanelRuntime: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pushPendingBootstrapIfPossible()
     }
@@ -1119,7 +1219,7 @@ extension MarkdownPanelRuntime: WKNavigationDelegate {
     }
 }
 
-extension MarkdownPanelRuntime: WKScriptMessageHandler {
+extension LocalDocumentPanelRuntime: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard message.name == Self.scriptMessageHandlerName,
               let event = BridgeEvent(messageBody: message.body) else {

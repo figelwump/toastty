@@ -105,9 +105,9 @@ struct AppWindowView: View {
                   request.windowID == windowID,
                   store.state.workspacesByID[request.workspaceID] != nil,
                   store.consumePendingWorkspaceCloseRequest(windowID: windowID) != nil else { return }
-            let closeConfirmationSummary: MarkdownCloseConfirmationSummary
+            let closeConfirmationSummary: LocalDocumentCloseConfirmationSummary
             if let workspace = store.state.workspacesByID[request.workspaceID] {
-                closeConfirmationSummary = webPanelRuntimeRegistry.markdownCloseConfirmationSummary(
+                closeConfirmationSummary = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
                     panelIDs: workspace.orderedTabs.flatMap { Array($0.panels.keys) }
                 )
             } else {
@@ -116,10 +116,10 @@ struct AppWindowView: View {
             pendingWorkspaceClose = PendingWorkspaceClose(
                 windowID: request.windowID,
                 workspaceID: request.workspaceID,
-                unsavedMarkdownDraftCount: closeConfirmationSummary.dirtyDraftCount,
-                firstUnsavedMarkdownDisplayName: closeConfirmationSummary.firstDirtyDraftDisplayName,
-                markdownSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
-                firstMarkdownSaveInProgressDisplayName: closeConfirmationSummary.firstSaveInProgressDisplayName
+                unsavedLocalDocumentDraftCount: closeConfirmationSummary.dirtyDraftCount,
+                firstUnsavedLocalDocumentDisplayName: closeConfirmationSummary.firstDirtyDraftDisplayName,
+                localDocumentSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
+                firstLocalDocumentSaveInProgressDisplayName: closeConfirmationSummary.firstSaveInProgressDisplayName
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
@@ -239,37 +239,37 @@ private struct WindowSlotFocusSignature: Equatable {
 private struct PendingWorkspaceClose: Identifiable {
     let windowID: UUID
     let workspaceID: UUID
-    let unsavedMarkdownDraftCount: Int
-    let firstUnsavedMarkdownDisplayName: String?
-    let markdownSaveInProgressCount: Int
-    let firstMarkdownSaveInProgressDisplayName: String?
+    let unsavedLocalDocumentDraftCount: Int
+    let firstUnsavedLocalDocumentDisplayName: String?
+    let localDocumentSaveInProgressCount: Int
+    let firstLocalDocumentSaveInProgressDisplayName: String?
 
     var id: UUID { workspaceID }
 
     var allowsDestructiveConfirmation: Bool {
-        markdownSaveInProgressCount == 0
+        localDocumentSaveInProgressCount == 0
     }
 
     var confirmationMessage: String {
         var paragraphs: [String] = []
 
-        if markdownSaveInProgressCount == 1,
-           let firstMarkdownSaveInProgressDisplayName {
+        if localDocumentSaveInProgressCount == 1,
+           let firstLocalDocumentSaveInProgressDisplayName {
             paragraphs.append(
-                "\"\(firstMarkdownSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this workspace."
+                "\"\(firstLocalDocumentSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this workspace."
             )
-        } else if markdownSaveInProgressCount > 1 {
+        } else if localDocumentSaveInProgressCount > 1 {
             paragraphs.append(
                 "This workspace still has markdown saves in progress. Wait for them to finish before closing the workspace."
             )
         }
 
-        if unsavedMarkdownDraftCount == 1,
-           let firstUnsavedMarkdownDisplayName {
+        if unsavedLocalDocumentDraftCount == 1,
+           let firstUnsavedLocalDocumentDisplayName {
             paragraphs.append(
-                "\"\(firstUnsavedMarkdownDisplayName)\" has unsaved markdown changes. Closing the workspace will discard them."
+                "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved markdown changes. Closing the workspace will discard them."
             )
-        } else if unsavedMarkdownDraftCount > 1 {
+        } else if unsavedLocalDocumentDraftCount > 1 {
             paragraphs.append("This workspace has unsaved markdown changes. Closing the workspace will discard them.")
         }
 

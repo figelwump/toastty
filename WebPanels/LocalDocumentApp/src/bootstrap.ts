@@ -1,9 +1,12 @@
-export type MarkdownPanelTheme = "light" | "dark";
+export type LocalDocumentPanelTheme = "light" | "dark";
+export type LocalDocumentFormat = "markdown" | "yaml" | "toml";
 
-export interface MarkdownPanelBootstrap {
+export interface LocalDocumentPanelBootstrap {
   contractVersion: 4;
   filePath: string | null;
   displayName: string;
+  format: LocalDocumentFormat;
+  shouldHighlight: boolean;
   content: string;
   contentRevision: number;
   isEditing: boolean;
@@ -11,44 +14,44 @@ export interface MarkdownPanelBootstrap {
   hasExternalConflict: boolean;
   isSaving: boolean;
   saveErrorMessage: string | null;
-  theme: MarkdownPanelTheme;
+  theme: LocalDocumentPanelTheme;
   textScale: number;
 }
 
-type BootstrapListener = (bootstrap: MarkdownPanelBootstrap | null) => void;
+type BootstrapListener = (bootstrap: LocalDocumentPanelBootstrap | null) => void;
 
 declare global {
   interface Window {
-    ToasttyMarkdownPanel?: {
-      receiveBootstrap: (bootstrap: MarkdownPanelBootstrap) => void;
+    ToasttyLocalDocumentPanel?: {
+      receiveBootstrap: (bootstrap: LocalDocumentPanelBootstrap) => void;
       setTextScale: (textScale: number) => void;
-      getCurrentBootstrap: () => MarkdownPanelBootstrap | null;
+      getCurrentBootstrap: () => LocalDocumentPanelBootstrap | null;
       subscribe: (listener: BootstrapListener) => () => void;
     };
   }
 }
 
 const listeners = new Set<BootstrapListener>();
-let currentBootstrap: MarkdownPanelBootstrap | null = null;
+let currentBootstrap: LocalDocumentPanelBootstrap | null = null;
 
-function applyTheme(bootstrap: MarkdownPanelBootstrap | null) {
+function applyTheme(bootstrap: LocalDocumentPanelBootstrap | null) {
   if (!bootstrap) {
     return;
   }
   document.documentElement.dataset.theme = bootstrap.theme;
 }
 
-function applyTextScale(bootstrap: MarkdownPanelBootstrap | null) {
+function applyTextScale(bootstrap: LocalDocumentPanelBootstrap | null) {
   document.documentElement.style.setProperty(
     "--toastty-markdown-text-scale",
     String(bootstrap?.textScale ?? 1)
   );
 }
 
-function warnOnContractMismatch(bootstrap: MarkdownPanelBootstrap) {
+function warnOnContractMismatch(bootstrap: LocalDocumentPanelBootstrap) {
   if (bootstrap.contractVersion !== 4) {
     console.warn(
-      `[ToasttyMarkdownPanel] Expected bootstrap contractVersion 4 but received ${bootstrap.contractVersion}.`
+      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 4 but received ${bootstrap.contractVersion}.`
     );
   }
 }
@@ -59,7 +62,7 @@ function notifyListeners() {
   }
 }
 
-window.ToasttyMarkdownPanel = {
+window.ToasttyLocalDocumentPanel = {
   receiveBootstrap(bootstrap) {
     currentBootstrap = bootstrap;
     warnOnContractMismatch(bootstrap);

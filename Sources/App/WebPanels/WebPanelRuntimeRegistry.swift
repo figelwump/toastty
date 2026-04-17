@@ -2,13 +2,13 @@ import Combine
 import CoreState
 import Foundation
 
-struct MarkdownCloseConfirmationSummary: Equatable, Sendable {
+struct LocalDocumentCloseConfirmationSummary: Equatable, Sendable {
     let dirtyDraftCount: Int
     let firstDirtyDraftDisplayName: String?
     let saveInProgressCount: Int
     let firstSaveInProgressDisplayName: String?
 
-    static let none = MarkdownCloseConfirmationSummary(
+    static let none = LocalDocumentCloseConfirmationSummary(
         dirtyDraftCount: 0,
         firstDirtyDraftDisplayName: nil,
         saveInProgressCount: 0,
@@ -26,8 +26,8 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     private var stateObservation: AnyCancellable?
     private var browserRuntimeByPanelID: [UUID: BrowserPanelRuntime] = [:]
     private var browserRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
-    private var markdownRuntimeByPanelID: [UUID: MarkdownPanelRuntime] = [:]
-    private var markdownRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
+    private var localDocumentRuntimeByPanelID: [UUID: LocalDocumentPanelRuntime] = [:]
+    private var localDocumentRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
 
     func bind(store: AppStore) {
         if let existingStore = self.store {
@@ -60,12 +60,12 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         return runtime
     }
 
-    func markdownRuntime(for panelID: UUID) -> MarkdownPanelRuntime {
-        if let runtime = markdownRuntimeByPanelID[panelID] {
+    func localDocumentRuntime(for panelID: UUID) -> LocalDocumentPanelRuntime {
+        if let runtime = localDocumentRuntimeByPanelID[panelID] {
             return runtime
         }
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: panelID,
             metadataDidChange: { [weak self] panelID, title, url in
                 guard let self else { return }
@@ -76,47 +76,47 @@ final class WebPanelRuntimeRegistry: ObservableObject {
                 _ = self.store?.focusPanel(containing: panelID)
             }
         )
-        markdownRuntimeByPanelID[panelID] = runtime
-        markdownRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
+        localDocumentRuntimeByPanelID[panelID] = runtime
+        localDocumentRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
         return runtime
     }
 
-    func loadedMarkdownRuntime(for panelID: UUID) -> MarkdownPanelRuntime? {
-        markdownRuntimeByPanelID[panelID]
+    func loadedLocalDocumentRuntime(for panelID: UUID) -> LocalDocumentPanelRuntime? {
+        localDocumentRuntimeByPanelID[panelID]
     }
 
-    func canSaveMarkdownPanel(panelID: UUID) -> Bool {
-        markdownRuntimeByPanelID[panelID]?.canSaveFromCommand() == true
+    func canSaveLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.canSaveFromCommand() == true
     }
 
-    func canCancelEditingMarkdownPanel(panelID: UUID) -> Bool {
-        markdownRuntimeByPanelID[panelID]?.canCancelEditFromCommand() == true
-    }
-
-    @discardableResult
-    func saveMarkdownPanel(panelID: UUID) -> Bool {
-        markdownRuntimeByPanelID[panelID]?.saveFromCommand() == true
+    func canCancelEditingLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.canCancelEditFromCommand() == true
     }
 
     @discardableResult
-    func cancelEditingMarkdownPanel(panelID: UUID) -> Bool {
-        markdownRuntimeByPanelID[panelID]?.cancelEditFromCommand() == true
+    func saveLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.saveFromCommand() == true
     }
 
-    func markdownCloseConfirmationState(panelID: UUID) -> MarkdownCloseConfirmationState? {
-        markdownRuntimeByPanelID[panelID]?.closeConfirmationState()
+    @discardableResult
+    func cancelEditingLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.cancelEditFromCommand() == true
     }
 
-    func markdownCloseConfirmationSummary(panelIDs: some Sequence<UUID>) -> MarkdownCloseConfirmationSummary {
+    func localDocumentCloseConfirmationState(panelID: UUID) -> LocalDocumentCloseConfirmationState? {
+        localDocumentRuntimeByPanelID[panelID]?.closeConfirmationState()
+    }
+
+    func localDocumentCloseConfirmationSummary(panelIDs: some Sequence<UUID>) -> LocalDocumentCloseConfirmationSummary {
         var dirtyDraftCount = 0
         var firstDirtyDraftDisplayName: String?
         var saveInProgressCount = 0
         var firstSaveInProgressDisplayName: String?
 
         for panelID in panelIDs {
-            guard let state = markdownCloseConfirmationState(panelID: panelID) else {
+            guard let state = localDocumentCloseConfirmationState(panelID: panelID) else {
                 continue
             }
 
@@ -138,7 +138,7 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         guard dirtyDraftCount > 0 || saveInProgressCount > 0 else {
             return .none
         }
-        return MarkdownCloseConfirmationSummary(
+        return LocalDocumentCloseConfirmationSummary(
             dirtyDraftCount: dirtyDraftCount,
             firstDirtyDraftDisplayName: firstDirtyDraftDisplayName,
             saveInProgressCount: saveInProgressCount,
@@ -165,12 +165,12 @@ private extension WebPanelRuntimeRegistry {
             liveBrowserPanelIDs.contains(panelID)
         }
 
-        let liveMarkdownPanelIDs = liveMarkdownPanelIDs(in: state)
-        markdownRuntimeByPanelID = markdownRuntimeByPanelID.filter { panelID, _ in
-            liveMarkdownPanelIDs.contains(panelID)
+        let liveLocalDocumentPanelIDs = liveLocalDocumentPanelIDs(in: state)
+        localDocumentRuntimeByPanelID = localDocumentRuntimeByPanelID.filter { panelID, _ in
+            liveLocalDocumentPanelIDs.contains(panelID)
         }
-        markdownRuntimeObservationByPanelID = markdownRuntimeObservationByPanelID.filter { panelID, _ in
-            liveMarkdownPanelIDs.contains(panelID)
+        localDocumentRuntimeObservationByPanelID = localDocumentRuntimeObservationByPanelID.filter { panelID, _ in
+            liveLocalDocumentPanelIDs.contains(panelID)
         }
     }
 
@@ -188,7 +188,7 @@ private extension WebPanelRuntimeRegistry {
         }
     }
 
-    func liveMarkdownPanelIDs(in state: AppState) -> Set<UUID> {
+    func liveLocalDocumentPanelIDs(in state: AppState) -> Set<UUID> {
         state.workspacesByID.values.reduce(into: Set<UUID>()) { result, workspace in
             for tab in workspace.orderedTabs {
                 for (panelID, panelState) in tab.panels {

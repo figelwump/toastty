@@ -15,7 +15,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -30,7 +30,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .markdownFile(path: fixture.markdownPath, placement: .rootRight)
+            .localDocumentFile(path: fixture.markdownPath, placement: .rootRight)
         )
     }
 
@@ -57,8 +57,50 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
         )
+    }
+
+    func testResolveTreatsYamlFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "config.yaml")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
+    func testResolveTreatsTomlFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "Toastty.toml")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
+    func testResolveFallsBackForUnsupportedLocalFileExtension() throws {
+        let fixture = try makeFixture(fileName: "config.txt")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(fixture.markdownURL))
     }
 
     func testResolveFallsBackForRemoteMarkdownURL() throws {
@@ -84,7 +126,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -99,7 +141,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -114,7 +156,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -129,7 +171,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .markdownFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
         )
     }
 

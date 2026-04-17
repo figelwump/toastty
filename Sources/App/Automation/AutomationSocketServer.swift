@@ -1114,12 +1114,13 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 panelID: resolved.panelID
             )
 
-        case "automation.markdown_panel_state":
+        case "automation.local_document_panel_state",
+             "automation.markdown_panel_state":
             try requireAutomationMode(for: command)
-            let resolved = try resolveMarkdownTarget(payload: payload)
-            let runtime = webPanelRuntimeRegistry.markdownRuntime(for: resolved.panelID)
+            let resolved = try resolveLocalDocumentTarget(payload: payload)
+            let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: resolved.panelID)
             runtime.apply(webState: resolved.webState)
-            return markdownPanelStateSnapshot(
+            return localDocumentPanelStateSnapshot(
                 workspaceID: resolved.workspaceID,
                 panelID: resolved.panelID,
                 webState: resolved.webState,
@@ -1530,13 +1531,14 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                 )
             )
 
-        case "panel.create.markdown":
+        case "panel.create.localDocument",
+             "panel.create.markdown":
             guard let filePath = normalizedOptionalText(args.string("filePath")) else {
                 throw AutomationSocketError.invalidPayload("filePath is required")
             }
-            didMutate = store.createMarkdownPanel(
+            didMutate = store.createLocalDocumentPanel(
                 workspaceID: try workspaceID(),
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: filePath,
                     placementOverride: try webPanelPlacement()
                 )
@@ -1737,7 +1739,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func resolveMarkdownTarget(
+    private func resolveLocalDocumentTarget(
         payload: [String: AutomationJSONValue]
     ) throws -> (workspaceID: UUID, panelID: UUID, webState: WebPanelState) {
         if let rawPanelID = payload.string("panelID") {
@@ -1751,7 +1753,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
                   let panelState = workspace.panelState(for: panelID),
                   case .web(let webState) = panelState,
                   webState.definition == .localDocument else {
-                throw AutomationSocketError.invalidPayload("panelID is not a markdown panel")
+                throw AutomationSocketError.invalidPayload("panelID is not a local document panel")
             }
             return (location.workspaceID, panelID, webState)
         }
@@ -1778,7 +1780,7 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             return (workspaceID, panelID, webState)
         }
 
-        throw AutomationSocketError.invalidPayload("workspace has no markdown panel to target")
+        throw AutomationSocketError.invalidPayload("workspace has no local document panel to target")
     }
 
     @MainActor
@@ -1865,17 +1867,18 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
     }
 
     @MainActor
-    private func markdownPanelStateSnapshot(
+    private func localDocumentPanelStateSnapshot(
         workspaceID: UUID,
         panelID: UUID,
         webState: WebPanelState,
-        runtimeState: MarkdownPanelRuntimeAutomationState
+        runtimeState: LocalDocumentPanelRuntimeAutomationState
     ) -> [String: AutomationJSONValue] {
         var result: [String: AutomationJSONValue] = [
             "workspaceID": .string(workspaceID.uuidString),
             "panelID": .string(panelID.uuidString),
             "stateTitle": .string(webState.title),
             "stateFilePath": webState.filePath.map { .string($0) } ?? .null,
+            "stateFormat": webState.localDocument.map { .string($0.format.rawValue) } ?? .null,
             "hostLifecycleState": .string(runtimeState.lifecycleState.automationLabel),
             "hostAttachmentID": runtimeState.lifecycleState.attachmentToken.map { .string($0.rawValue.uuidString) } ?? .null,
             "currentTheme": .string(runtimeState.currentTheme.rawValue),
@@ -1888,6 +1891,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             result["bootstrapContractVersion"] = .int(bootstrap.contractVersion)
             result["bootstrapFilePath"] = bootstrap.filePath.map { .string($0) } ?? .null
             result["bootstrapDisplayName"] = .string(bootstrap.displayName)
+            result["bootstrapFormat"] = .string(bootstrap.format.rawValue)
+            result["bootstrapShouldHighlight"] = .bool(bootstrap.shouldHighlight)
             result["bootstrapContentRevision"] = .int(bootstrap.contentRevision)
             result["bootstrapIsEditing"] = .bool(bootstrap.isEditing)
             result["bootstrapIsDirty"] = .bool(bootstrap.isDirty)
@@ -1902,6 +1907,8 @@ private final class AutomationCommandExecutor: @unchecked Sendable {
             result["bootstrapContractVersion"] = .null
             result["bootstrapFilePath"] = .null
             result["bootstrapDisplayName"] = .null
+            result["bootstrapFormat"] = .null
+            result["bootstrapShouldHighlight"] = .null
             result["bootstrapContentRevision"] = .null
             result["bootstrapIsEditing"] = .null
             result["bootstrapIsDirty"] = .null

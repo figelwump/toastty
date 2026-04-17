@@ -413,9 +413,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: windowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fileURL.path,
                     placementOverride: .splitRight
                 )
@@ -426,9 +426,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
 
         XCTAssertEqual(
             interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: windowID),
-            .saveMarkdown
+            .saveLocalDocument
         )
-        XCTAssertTrue(interceptor.handle(.saveMarkdown, appOwnedWindowID: windowID))
+        XCTAssertTrue(interceptor.handle(.saveLocalDocument, appOwnedWindowID: windowID))
         XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
     }
 
@@ -454,9 +454,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let markdownStore = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let markdownWindowID = try XCTUnwrap(markdownStore.state.windows.first?.id)
         XCTAssertTrue(
-            markdownStore.createMarkdownPanelFromCommand(
+            markdownStore.createLocalDocumentPanelFromCommand(
                 preferredWindowID: markdownWindowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fileURL.path,
                     placementOverride: .splitRight
                 )
@@ -498,9 +498,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: windowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fileURL.path,
                     placementOverride: .splitRight
                 )
@@ -527,14 +527,14 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             installEventMonitor: false
         )
 
-        let selection = try XCTUnwrap(store.focusedMarkdownPanelSelection(preferredWindowID: windowID))
+        let selection = try XCTUnwrap(store.focusedLocalDocumentPanelSelection(preferredWindowID: windowID))
         let workspace = try XCTUnwrap(store.state.workspacesByID[selection.workspaceID])
         guard case .web(let webState) = workspace.panels[selection.panelID] else {
             XCTFail("expected focused local-document panel")
             return
         }
 
-        let runtime = webPanelRuntimeRegistry.markdownRuntime(for: selection.panelID)
+        let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: selection.panelID)
         runtime.apply(webState: webState)
         try await waitUntil { runtime.automationState().currentBootstrap != nil }
 
@@ -570,9 +570,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: windowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fileURL.path,
                     placementOverride: .splitRight
                 )
@@ -637,9 +637,9 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
             let windowID = try XCTUnwrap(store.state.windows.first?.id)
             let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
             XCTAssertTrue(
-                store.createMarkdownPanelFromCommand(
+                store.createLocalDocumentPanelFromCommand(
                     preferredWindowID: windowID,
-                    request: MarkdownPanelCreateRequest(
+                    request: LocalDocumentPanelCreateRequest(
                         filePath: fileURL.path,
                         placementOverride: .splitRight
                     )

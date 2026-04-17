@@ -302,9 +302,9 @@ Implemented behavior:
 
 Implemented creation actions:
 
-- `Open Markdown File...`
-- `Open Markdown File in Tab...`
-- `Open Markdown File in Split...`
+- `Open Local File...`
+- `Open Local File in Tab...`
+- `Open Local File in Split...`
 
 ### markdown v1 content loading
 

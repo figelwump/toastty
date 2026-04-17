@@ -68,6 +68,8 @@ extension WebPanelDefinition {
 
 public enum LocalDocumentFormat: String, Codable, Equatable, Sendable {
     case markdown
+    case yaml
+    case toml
 }
 
 public struct LocalDocumentState: Codable, Equatable, Sendable {

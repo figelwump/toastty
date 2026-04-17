@@ -121,9 +121,9 @@ struct ToasttyCommandMenus: Commands {
     let openManageConfig: () -> Void
     let openConfigReference: () -> Void
     let openAgentProfilesConfiguration: () -> Void
-    let openMarkdownFile: @MainActor (UUID?) -> Void
-    let openMarkdownFileInTab: @MainActor (UUID?) -> Void
-    let openMarkdownFileInSplit: @MainActor (UUID?) -> Void
+    let openLocalDocumentFile: @MainActor (UUID?) -> Void
+    let openLocalDocumentFileInTab: @MainActor (UUID?) -> Void
+    let openLocalDocumentFileInSplit: @MainActor (UUID?) -> Void
 
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
 
@@ -157,15 +157,15 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.workspace
     }
 
-    private var focusedMarkdownPanelSelection: FocusedMarkdownPanelCommandSelection? {
-        store.focusedMarkdownPanelSelection(preferredWindowID: preferredCommandWindowID)
+    private var focusedLocalDocumentPanelSelection: FocusedLocalDocumentPanelCommandSelection? {
+        store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredCommandWindowID)
     }
 
-    private var canSaveFocusedMarkdownPanel: Bool {
-        guard let focusedMarkdownPanelSelection else {
+    private var canSaveFocusedLocalDocumentPanel: Bool {
+        guard let focusedLocalDocumentPanelSelection else {
             return false
         }
-        return webPanelRuntimeRegistry.canSaveMarkdownPanel(panelID: focusedMarkdownPanelSelection.panelID)
+        return webPanelRuntimeRegistry.canSaveLocalDocumentPanel(panelID: focusedLocalDocumentPanelSelection.panelID)
     }
 
     private var focusedScaleCommandTarget: FocusedScaleCommandTarget? {
@@ -263,11 +263,11 @@ struct ToasttyCommandMenus: Commands {
 
         CommandGroup(replacing: .saveItem) {
             Button("Save") {
-                guard let focusedMarkdownPanelSelection else { return }
-                _ = webPanelRuntimeRegistry.saveMarkdownPanel(panelID: focusedMarkdownPanelSelection.panelID)
+                guard let focusedLocalDocumentPanelSelection else { return }
+                _ = webPanelRuntimeRegistry.saveLocalDocumentPanel(panelID: focusedLocalDocumentPanelSelection.panelID)
             }
             .keyboardShortcut("s", modifiers: [.command])
-            .disabled(!canSaveFocusedMarkdownPanel)
+            .disabled(!canSaveFocusedLocalDocumentPanel)
         }
 
         CommandGroup(after: .appInfo) {
@@ -473,18 +473,18 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Button("Open Markdown File…") {
-                openMarkdownFile(preferredWindowID)
+            Button("Open Local File…") {
+                openLocalDocumentFile(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Open Markdown File in Tab…") {
-                openMarkdownFileInTab(preferredWindowID)
+            Button("Open Local File in Tab…") {
+                openLocalDocumentFileInTab(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Open Markdown File in Split…") {
-                openMarkdownFileInSplit(preferredWindowID)
+            Button("Open Local File in Split…") {
+                openLocalDocumentFileInSplit(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 

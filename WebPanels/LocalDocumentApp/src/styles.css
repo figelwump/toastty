@@ -66,18 +66,18 @@ body {
   min-height: 100vh;
 }
 
-.markdown-shell {
+.local-document-shell {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
-.markdown-shell-loading {
+.local-document-shell-loading {
   align-items: center;
   justify-content: center;
 }
 
-.markdown-panel-header {
+.local-document-panel-header {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -91,7 +91,7 @@ body {
   box-shadow: 0 1px 0 var(--header-shadow);
 }
 
-.markdown-panel-actions {
+.local-document-panel-actions {
   margin-left: auto;
   position: relative;
   display: flex;
@@ -99,14 +99,14 @@ body {
   gap: 10px;
 }
 
-.markdown-panel-title-wrap {
+.local-document-panel-title-wrap {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.markdown-panel-title {
+.local-document-panel-title {
   font:
     600
     calc(18px * var(--toastty-markdown-text-scale))
@@ -118,7 +118,7 @@ body {
   letter-spacing: -0.02em;
 }
 
-.markdown-panel-path {
+.local-document-panel-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -145,7 +145,88 @@ body {
   line-height: 1.6;
 }
 
-.markdown-editor-shell {
+.local-document-code-shell {
+  flex: 1;
+  width: min(1080px, calc(100vw - 40px));
+  margin: 28px auto 52px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.local-document-code-status-strip {
+  padding: 18px 22px 0;
+}
+
+.local-document-code-status {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--accent-soft);
+  color: var(--text);
+  font:
+    500
+    calc(13px * var(--toastty-markdown-text-scale))
+    / 1.45
+    "IBM Plex Sans",
+    "Avenir Next",
+    "Segoe UI",
+    sans-serif;
+}
+
+.local-document-code-frame {
+  --local-document-code-line-height: calc(24.75px * var(--toastty-markdown-text-scale));
+  display: flex;
+  align-items: stretch;
+  margin-top: 18px;
+  background: var(--pre-bg);
+  color: var(--pre-text);
+}
+
+.local-document-code-gutter {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 28px 14px 34px 18px;
+  border-right: 1px solid rgba(255, 224, 191, 0.08);
+  background: rgba(255, 224, 191, 0.03);
+  color: #8a7566;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-size: calc(15px * var(--toastty-markdown-text-scale));
+  font-weight: 500;
+  line-height: var(--local-document-code-line-height);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+
+.local-document-code-scroll {
+  flex: 1;
+  margin: 0;
+  overflow: auto;
+  padding: 28px 30px 34px;
+}
+
+.local-document-code-scroll code,
+.local-document-code-plain {
+  display: block;
+  min-width: max-content;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+  font-size: calc(15px * var(--toastty-markdown-text-scale));
+  font-weight: 500;
+  line-height: var(--local-document-code-line-height);
+  white-space: pre;
+  tab-size: 2;
+}
+
+.local-document-code-plain {
+  color: var(--pre-text);
+}
+
+.local-document-editor-shell {
   flex: 1;
   width: min(980px, calc(100vw - 40px));
   margin: 28px auto 52px;
@@ -157,14 +238,14 @@ body {
   overflow: hidden;
 }
 
-.markdown-editor-status-strip {
+.local-document-editor-status-strip {
   display: flex;
   flex-direction: column;
   gap: 10px;
   padding: 18px 22px 0;
 }
 
-.markdown-editor-status {
+.local-document-editor-status {
   margin: 0;
   padding: 12px 14px;
   border: 1px solid transparent;
@@ -179,24 +260,25 @@ body {
     sans-serif;
 }
 
-.markdown-editor-status-conflict {
+.local-document-editor-status-conflict {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
   border-color: color-mix(in srgb, var(--accent) 24%, transparent);
   color: var(--text);
 }
 
-.markdown-editor-status-error {
+.local-document-editor-status-error {
   background: rgba(165, 48, 32, 0.12);
   border-color: rgba(165, 48, 32, 0.24);
   color: #f6d9d2;
 }
 
 .markdown-prose,
-.markdown-editor-shell {
+.local-document-editor-shell,
+.local-document-code-shell {
   cursor: text;
 }
 
-.markdown-editor {
+.local-document-editor {
   width: 100%;
   min-height: calc(100vh - 184px);
   padding: 28px 30px 34px;
@@ -218,11 +300,11 @@ body {
   cursor: text;
 }
 
-:root[data-theme="light"] .markdown-editor-status-error {
+:root[data-theme="light"] .local-document-editor-status-error {
   color: #7f2618;
 }
 
-.markdown-action-button {
+.local-document-action-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -244,22 +326,22 @@ body {
   transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
 }
 
-.markdown-action-button:hover:enabled {
+.local-document-action-button:hover:enabled {
   transform: translateY(-1px);
 }
 
-.markdown-action-button:disabled {
+.local-document-action-button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.markdown-action-button-secondary {
+.local-document-action-button-secondary {
   background: transparent;
   color: var(--text);
   border-color: var(--border);
 }
 
-.markdown-session-badge {
+.local-document-session-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -279,7 +361,7 @@ body {
   letter-spacing: 0.08em;
 }
 
-.markdown-session-badge-dirty {
+.local-document-session-badge-dirty {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
@@ -375,8 +457,8 @@ body {
   color: var(--accent);
   font-weight: 600;
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Palatino, serif;
-  font-size: 1em;
-  line-height: inherit;
+  font-size: 1.08rem;
+  line-height: 1.6;
 }
 
 .markdown-prose ul {
@@ -400,7 +482,6 @@ body {
   color: var(--accent);
   text-decoration-thickness: 1.5px;
   text-underline-offset: 0.15em;
-  cursor: pointer;
 }
 
 .markdown-prose hr {
@@ -442,14 +523,7 @@ body {
 .markdown-prose table {
   width: 100%;
   border-collapse: collapse;
-  font:
-    500
-    0.95em
-    / 1.5
-    "IBM Plex Sans",
-    "Avenir Next",
-    "Segoe UI",
-    sans-serif;
+  font: 500 0.95rem/1.5 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
 .markdown-prose th,
@@ -466,17 +540,10 @@ body {
 .markdown-link-blocked,
 .markdown-image-blocked {
   color: var(--muted);
-  font:
-    500
-    0.95em
-    / 1.6
-    "IBM Plex Sans",
-    "Avenir Next",
-    "Segoe UI",
-    sans-serif;
+  font: 500 0.95em/1.6 "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
 }
 
-.markdown-empty-state {
+.local-document-empty-state {
   max-width: 460px;
   padding: 28px 30px;
   border: 1px solid var(--border);
@@ -486,7 +553,7 @@ body {
   text-align: center;
 }
 
-.markdown-empty-title {
+.local-document-empty-title {
   margin: 0 0 10px;
   font:
     600
@@ -498,7 +565,7 @@ body {
     sans-serif;
 }
 
-.markdown-empty-copy {
+.local-document-empty-copy {
   margin: 0;
   color: var(--muted);
   font:
@@ -511,7 +578,7 @@ body {
     sans-serif;
 }
 
-.markdown-editor::placeholder {
+.local-document-editor::placeholder {
   color: var(--muted);
 }
 
@@ -586,7 +653,7 @@ body {
   background: var(--accent-soft);
   font:
     500
-    0.82em
+    calc(0.82rem * var(--toastty-markdown-text-scale))
     / 1.5
     "IBM Plex Sans",
     "Avenir Next",
@@ -608,7 +675,7 @@ body {
 }
 
 /* Header stats (replaces badge) */
-.markdown-panel-stats {
+.local-document-panel-stats {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
@@ -650,6 +717,12 @@ body {
   color: var(--accent);
   border-color: var(--accent);
   background: var(--accent-soft);
+}
+
+.local-document-panel-stat-divider {
+  width: 1px;
+  height: 14px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 /* TOC dropdown panel */
@@ -702,7 +775,7 @@ body {
 }
 
 @media (max-width: 720px) {
-  .markdown-panel-header {
+  .local-document-panel-header {
     padding: 16px 16px 14px;
   }
 
