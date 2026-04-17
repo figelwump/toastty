@@ -992,7 +992,7 @@ Deferred from the original wave-1 surface:
   - click outside the palette and verify it dismisses without trying to persist
     across the window switch
 
-### wave 2: catalog foundation (next chunk)
+### wave 2: catalog foundation (shipped)
 
 Goal: grow beyond the routing shell by extracting shared command metadata and
 adding the next band of high-frequency built-ins, without trying to ship the
@@ -1045,23 +1045,47 @@ families, or palette-specific rendering upgrades here.
 - sync checks that the palette and menu-owned split/close labels resolve from
   the shared built-in metadata
 
-### wave 3: full command catalog completion
+### wave 3: workspace lifecycle and tab navigation (next chunk)
 
-Goal: make the command surface broad and coherent before ranking and provider
-work start depending on it.
+Goal: keep growing the built-in catalog through the highest-frequency
+workspace/tab commands that already exist in menus and app-owned command
+helpers, without pulling in the much larger pane-navigation or browser/action
+families yet.
 
-**3a. Catalog completion**
+**3a. Catalog**
 
-- fill out the remaining built-in user-facing commands
-- add icons and subtitles where they materially improve scanability
-- keep titles and shortcut badges sourced from shared metadata
+- extend the shared built-in metadata only for the next workspace/tab slice
+- keep origin-window targeting rooted in the existing controllers and app-store
+  command helpers
+- keep empty-query ordering curated and simple
+
+Suggested scope for this chunk:
+
+- New Window
+- Rename Workspace
+- Close Workspace
+- Rename Tab
+- Select Previous Tab
+- Select Next Tab
+- Jump to Next Active
+
+Execution notes:
+
+- do not bundle dynamic workspace-slot selection into this chunk yet; those
+  titles and shortcuts are window-relative and deserve their own pass
+- do not mix in pane focus/resize/equalize commands yet; that is a separate
+  directional family with a much larger metadata surface
+- do not pull browser, markdown-file, agent, or terminal-font actions into this
+  chunk; stay on the core workspace/tab lifecycle path first
 
 **3b. Wave-3 validation**
 
-- broader command projection tests
-- availability tests across multiple window/workspace states
-- integration check that empty-query results cover the expected built-ins for
-  the origin window
+- projection tests for ids, titles, shortcuts, and curated empty-query order
+- availability tests across no-workspace, single-tab, multi-tab, and
+  next-active-available states
+- origin-window execution tests for window/workspace/tab actions
+- confirm shared title/shortcut metadata stays aligned between menu surfaces and
+  palette results for the commands covered by this slice
 
 ### wave 4: usage frequency
 
