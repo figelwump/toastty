@@ -130,6 +130,11 @@ private enum ToasttyMenuActions {
         let confirmationAlert = NSAlert()
         confirmationAlert.messageText = "Install Shell Integration?"
         confirmationAlert.informativeText = ProfileShellIntegrationMessaging.installationPlanSummary(for: status)
+        if let debugBypassNotice = ProfileShellIntegrationInstaller.debugRealInstallBypassNotice(
+            environment: ProcessInfo.processInfo.environment
+        ) {
+            confirmationAlert.informativeText += "\n\n\(debugBypassNotice)"
+        }
         confirmationAlert.alertStyle = .informational
         confirmationAlert.addConfiguredButton(withTitle: "Install", behavior: .defaultAction)
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)

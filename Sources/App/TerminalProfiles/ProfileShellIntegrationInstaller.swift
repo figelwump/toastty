@@ -634,6 +634,9 @@ final class ProfileShellIntegrationInstaller {
         "# Keep this near the end of this file, after other PATH, history, and prompt-hook changes,",
         "# so Toastty can restore its shim directory and prompt-time title/journal hooks.",
     ]
+    #if DEBUG
+    static let debugAllowRealInstallEnvironmentKey = "TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL"
+    #endif
 
     private let fileManager: FileManager
     private let homeDirectoryURL: URL
@@ -661,7 +664,8 @@ final class ProfileShellIntegrationInstaller {
             homeDirectoryPath: homeDirectoryURL.path,
             environment: environment
         )
-        if let runtimeHomeURL = runtimePaths.runtimeHomeURL {
+        if let runtimeHomeURL = runtimePaths.runtimeHomeURL,
+           Self.debugAllowsRealInstall(environment: environment) == false {
             throw ProfileShellIntegrationInstallerError.runtimeHomeUnsupported(path: runtimeHomeURL.path)
         }
 
@@ -763,6 +767,9 @@ final class ProfileShellIntegrationInstaller {
         environment: [String: String],
         loginShellPath: String?
     ) -> String? {
+        if let debugShellPath = debugShellPathOverride(environment: environment) {
+            return debugShellPath
+        }
         if let loginShellPath, loginShellPath.isEmpty == false {
             return loginShellPath
         }
@@ -770,6 +777,17 @@ final class ProfileShellIntegrationInstaller {
             return environmentShell
         }
         return nil
+    }
+
+    static func debugRealInstallBypassNotice(environment: [String: String]) -> String? {
+        guard debugAllowsRealInstall(environment: environment),
+              ToasttyRuntimePaths.resolve(environment: environment).runtimeHomeURL != nil else {
+            return nil
+        }
+
+        return """
+        Debug override active: Toastty will install shell integration into your real shell files even though runtime isolation is enabled for this app run.
+        """
     }
 
     private static func loginShellPath() -> String? {
@@ -799,6 +817,36 @@ final class ProfileShellIntegrationInstaller {
             return .fish
         }
         return nil
+    }
+
+    private static func isEnabledFlag(_ rawValue: String?) -> Bool {
+        switch rawValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func debugAllowsRealInstall(environment: [String: String]) -> Bool {
+        #if DEBUG
+        return isEnabledFlag(environment[debugAllowRealInstallEnvironmentKey])
+        #else
+        return false
+        #endif
+    }
+
+    private static func debugShellPathOverride(environment: [String: String]) -> String? {
+        #if DEBUG
+        guard debugAllowsRealInstall(environment: environment) else {
+            return nil
+        }
+        return GhosttyDebugLoginShellOverride.normalizedShellPath(
+            from: environment[GhosttyDebugLoginShellOverride.environmentKey]
+        )
+        #else
+        return nil
+        #endif
     }
 
     private func ensureDirectoryExists(at directoryURL: URL) throws {

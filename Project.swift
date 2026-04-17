@@ -412,6 +412,7 @@ let project = Project(
                         "TOASTTY_DEV_WORKTREE_ROOT": .environmentVariable(value: "$(SRCROOT)", isEnabled: true),
                         "TOASTTY_LOG_LEVEL": .environmentVariable(value: "debug", isEnabled: true),
                         "TOASTTY_DEBUG_LOGIN_SHELL": .environmentVariable(value: debugFishShellPath, isEnabled: false),
+                        "TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL": .environmentVariable(value: "1", isEnabled: false),
                     ]
                 )
             )

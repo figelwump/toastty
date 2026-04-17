@@ -32,6 +32,33 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
     }
 
+    func testResolvedShellPathIgnoresDebugLoginShellOverrideWithoutRealInstallBypass() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: [
+                    GhosttyDebugLoginShellOverride.environmentKey: "/opt/homebrew/bin/fish",
+                    "SHELL": "/bin/bash",
+                ],
+                loginShellPath: "/bin/zsh"
+            ),
+            "/bin/zsh"
+        )
+    }
+
+    func testResolvedShellPathPrefersDebugLoginShellOverrideWhenRealInstallBypassEnabled() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: [
+                    ProfileShellIntegrationInstaller.debugAllowRealInstallEnvironmentKey: "1",
+                    GhosttyDebugLoginShellOverride.environmentKey: "/opt/homebrew/bin/fish",
+                    "SHELL": "/bin/bash",
+                ],
+                loginShellPath: "/bin/zsh"
+            ),
+            "/opt/homebrew/bin/fish"
+        )
+    }
+
     func testInstallationPlanAcceptsLoginShellPrefixedZshName() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
@@ -63,6 +90,33 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertEqual(
             plan.sourceLine,
             "source \"$HOME/.toastty/shell/toastty-profile-shell-integration.fish\""
+        )
+    }
+
+    func testInstallationPlanAllowsRuntimeIsolationWhenDebugRealInstallBypassEnabled() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let environment = [
+            "TOASTTY_RUNTIME_HOME": "/tmp/toastty-runtime-home-tests/shell-runtime",
+            ProfileShellIntegrationInstaller.debugAllowRealInstallEnvironmentKey: "1",
+            GhosttyDebugLoginShellOverride.environmentKey: "/opt/homebrew/bin/fish",
+        ]
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: environment,
+            shellPathProvider: {
+                ProfileShellIntegrationInstaller.resolvedShellPath(
+                    environment: environment,
+                    loginShellPath: "/bin/zsh"
+                )
+            }
+        )
+
+        let plan = try installer.installationPlan()
+
+        XCTAssertEqual(plan.shell, .fish)
+        XCTAssertEqual(
+            plan.initFileURL.path,
+            homeDirectoryURL.appendingPathComponent(".config/fish/config.fish").path
         )
     }
 
