@@ -86,7 +86,16 @@ function normalizeLineEndings(content: string): string {
 
 function contentLines(content: string): string[] {
   const normalized = normalizeLineEndings(content);
-  return normalized.length > 0 ? normalized.split("\n") : [""];
+  if (normalized.length === 0) {
+    return [""];
+  }
+
+  const lines = normalized.split("\n");
+  if (normalized.endsWith("\n")) {
+    lines.pop();
+  }
+
+  return lines.length > 0 ? lines : [""];
 }
 
 function shortenPath(filePath: string | null, displayName: string): string {

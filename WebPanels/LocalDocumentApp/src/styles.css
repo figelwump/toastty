@@ -168,9 +168,10 @@ body {
   background: rgba(255, 224, 191, 0.03);
   color: #8a7566;
   font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 500;
   line-height: var(--local-document-code-line-height);
+  font-variant-numeric: tabular-nums;
   text-align: right;
   user-select: none;
 }
