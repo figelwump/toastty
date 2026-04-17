@@ -77,7 +77,7 @@ struct TerminalProfileMenuModel: Equatable {
                 profileID: profile.id,
                 actions: [
                     Section.Action(
-                        title: "Split Right",
+                        title: ToasttyBuiltInCommand.splitRight.title,
                         direction: .right,
                         shortcut: registry.chord(
                             for: .terminalProfileSplit(
@@ -87,7 +87,7 @@ struct TerminalProfileMenuModel: Equatable {
                         )
                     ),
                     Section.Action(
-                        title: "Split Down",
+                        title: ToasttyBuiltInCommand.splitDown.title,
                         direction: .down,
                         shortcut: registry.chord(
                             for: .terminalProfileSplit(
@@ -239,12 +239,12 @@ struct ToasttyCommandMenus: Commands {
         let fontCommandWindowID = store.commandWindowID(preferredWindowID: preferredWindowID)
 
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") {
+            Button(ToasttyBuiltInCommand.newTab.title) {
                 store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.newTab.key,
-                modifiers: ToasttyKeyboardShortcuts.newTab.modifiers
+                ToasttyBuiltInCommand.newTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newTab.requiredShortcut.modifiers
             )
             .disabled(commandWorkspace == nil)
 
@@ -281,7 +281,7 @@ struct ToasttyCommandMenus: Commands {
             Divider()
 
             Button(action: reloadConfiguration) {
-                Label("Reload Configuration", systemImage: "arrow.clockwise")
+                Label(ToasttyBuiltInCommand.reloadConfiguration.title, systemImage: "arrow.clockwise")
             }
             .disabled(!supportsConfigurationReload)
 
@@ -378,23 +378,23 @@ struct ToasttyCommandMenus: Commands {
         }
 
         CommandGroup(replacing: .sidebar) {
-            Button(sidebarVisibleForCommand ? "Hide Sidebar" : "Show Sidebar") {
+            Button(ToasttyBuiltInCommand.toggleSidebarTitle(sidebarVisible: sidebarVisibleForCommand)) {
                 toggleSidebarFromCommandSelection()
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.toggleSidebar.key,
-                modifiers: ToasttyKeyboardShortcuts.toggleSidebar.modifiers
+                ToasttyBuiltInCommand.toggleSidebar.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.toggleSidebar.requiredShortcut.modifiers
             )
             .disabled(commandSelection == nil)
         }
 
         CommandMenu("Workspace") {
-            Button("New Workspace") {
+            Button(ToasttyBuiltInCommand.newWorkspace.title) {
                 store.createWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.newWorkspace.key,
-                modifiers: ToasttyKeyboardShortcuts.newWorkspace.modifiers
+                ToasttyBuiltInCommand.newWorkspace.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newWorkspace.requiredShortcut.modifiers
             )
             .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: preferredWindowID) == false)
 
@@ -475,7 +475,7 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Button("Close Panel") {
+            Button(ToasttyBuiltInCommand.closePanel.title) {
                 closeFocusedPanelFromCommandSelection()
             }
             .disabled(commandWorkspace?.focusedPanelID == nil)
@@ -507,7 +507,7 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Button("New Tab") {
+            Button(ToasttyBuiltInCommand.newTab.title) {
                 store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
             }
             .disabled(commandWorkspace == nil)

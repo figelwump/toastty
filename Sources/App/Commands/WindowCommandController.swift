@@ -295,7 +295,7 @@ final class SplitLayoutCommandController {
 @MainActor
 final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     private enum ItemTitle {
-        static let newWorkspace = "New Workspace"
+        static let newWorkspace = ToasttyBuiltInCommand.newWorkspace.title
         static let renameWorkspace = "Rename Workspace"
         static let closeWorkspace = "Close Workspace"
         static let renameTab = "Rename Tab"
@@ -443,7 +443,10 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
 final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     private let windowCommandController: WindowCommandController
     private let closeWorkspaceCommandController: CloseWorkspaceCommandController
-    private lazy var closePanelItem = makeManagedItem(title: "Close Panel", action: #selector(performCloseWindow(_:)))
+    private lazy var closePanelItem = makeManagedItem(
+        title: ToasttyBuiltInCommand.closePanel.title,
+        action: #selector(performCloseWindow(_:))
+    )
     private lazy var closeWorkspaceItem = makeManagedItem(
         title: "Close Workspace",
         action: #selector(performCloseWorkspace(_:))
@@ -503,7 +506,11 @@ final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     private func restoreOwnedItems() {
-        configureManagedItem(closePanelItem, title: "Close Panel", action: #selector(performCloseWindow(_:)))
+        configureManagedItem(
+            closePanelItem,
+            title: ToasttyBuiltInCommand.closePanel.title,
+            action: #selector(performCloseWindow(_:))
+        )
         configureManagedItem(
             closeWorkspaceItem,
             title: "Close Workspace",
@@ -615,7 +622,7 @@ final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     private static func isRetargetedCloseItem(_ item: NSMenuItem) -> Bool {
-        item.title == "Close Panel" || item.title == "Close Workspace"
+        item.title == ToasttyBuiltInCommand.closePanel.title || item.title == "Close Workspace"
     }
 
     private static func findFileMenu(in items: [NSMenuItem]) -> NSMenu? {
@@ -705,9 +712,9 @@ final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
     private func restoreOwnedItems() {
         configureMenuItem(
             splitRightItem,
-            title: "Split Right",
+            title: ToasttyBuiltInCommand.splitRight.title,
             action: #selector(splitRight(_:)),
-            shortcut: ToasttyKeyboardShortcuts.splitHorizontal
+            shortcut: ToasttyBuiltInCommand.splitRight.requiredShortcut
         )
         configureMenuItem(
             splitLeftItem,
@@ -716,9 +723,9 @@ final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
         )
         configureMenuItem(
             splitDownItem,
-            title: "Split Down",
+            title: ToasttyBuiltInCommand.splitDown.title,
             action: #selector(splitDown(_:)),
-            shortcut: ToasttyKeyboardShortcuts.splitVertical
+            shortcut: ToasttyBuiltInCommand.splitDown.requiredShortcut
         )
         configureMenuItem(
             splitUpItem,

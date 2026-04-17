@@ -1418,7 +1418,20 @@ struct ToasttyApp: App {
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
         let commandPaletteActionHandler = CommandPaletteActionHandler(
             store: store,
-            splitLayoutCommandController: splitLayoutCommandController
+            splitLayoutCommandController: splitLayoutCommandController,
+            focusedPanelCommandController: focusedPanelCommandController,
+            supportsConfigurationReload: { true },
+            reloadConfigurationAction: {
+                Self.reloadConfiguration(
+                    store: store,
+                    agentCatalogStore: agentCatalogStore,
+                    terminalProfileStore: terminalProfileStore,
+                    runtimePaths: runtimePaths,
+                    agentLaunchSocketPath: socketPath,
+                    agentLaunchCLIExecutablePath: cliExecutablePath,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                )
+            },
         )
         let commandPaletteController = CommandPaletteController(
             store: store,
@@ -1780,6 +1793,27 @@ struct ToasttyApp: App {
 
     @MainActor
     private func reloadConfiguration() {
+        Self.reloadConfiguration(
+            store: store,
+            agentCatalogStore: agentCatalogStore,
+            terminalProfileStore: terminalProfileStore,
+            runtimePaths: runtimePaths,
+            agentLaunchSocketPath: agentLaunchSocketPath,
+            agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
+            terminalRuntimeRegistry: terminalRuntimeRegistry
+        )
+    }
+
+    @MainActor
+    private static func reloadConfiguration(
+        store: AppStore,
+        agentCatalogStore: AgentCatalogStore,
+        terminalProfileStore: TerminalProfileStore,
+        runtimePaths: ToasttyRuntimePaths,
+        agentLaunchSocketPath: String,
+        agentLaunchCLIExecutablePath: String?,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry
+    ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
 
@@ -1866,7 +1900,12 @@ struct ToasttyApp: App {
         )
         #endif
 
-        let resolvedProfileShortcutRegistry = profileShortcutRegistry
+        let resolvedProfileShortcutRegistry = Self.makeProfileShortcutRegistry(
+            terminalProfiles: terminalProfileStore.catalog,
+            terminalProfilesFilePath: terminalProfileStore.fileURL.path,
+            agentProfiles: agentCatalogStore.catalog,
+            agentProfilesFilePath: agentCatalogStore.fileURL.path
+        )
         warningMessages.append(contentsOf: resolvedProfileShortcutRegistry.warningMessages)
         Self.logProfileShortcutWarnings(warningMessages)
 

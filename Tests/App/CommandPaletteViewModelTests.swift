@@ -137,12 +137,24 @@ private final class MockCommandPaletteActions: CommandPaletteActionHandling {
         return true
     }
 
-    func canSplitHorizontal(originWindowID: UUID) -> Bool {
+    func canCreateWorkspaceTab(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return true
     }
 
-    func splitHorizontal(originWindowID: UUID) -> Bool {
+    func createWorkspaceTab(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func canSplit(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
+        _ = direction
+        _ = originWindowID
+        return true
+    }
+
+    func split(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
+        _ = direction
         _ = originWindowID
         return true
     }
@@ -159,6 +171,24 @@ private final class MockCommandPaletteActions: CommandPaletteActionHandling {
 
     func sidebarTitle(originWindowID: UUID) -> String {
         _ = originWindowID
-        return "Show Sidebar"
+        return ToasttyBuiltInCommand.toggleSidebar.title
+    }
+
+    func canClosePanel(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func closePanel(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func canReloadConfiguration() -> Bool {
+        true
+    }
+
+    func reloadConfiguration() -> Bool {
+        true
     }
 }

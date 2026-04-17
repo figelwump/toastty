@@ -104,9 +104,17 @@ final class CommandPaletteControllerTests: XCTestCase {
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        let focusedPanelCommandController = FocusedPanelCommandController(
+            store: store,
+            runtimeRegistry: runtimeRegistry,
+            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+        )
         let actions = CommandPaletteActionHandler(
             store: store,
-            splitLayoutCommandController: splitLayoutCommandController
+            splitLayoutCommandController: splitLayoutCommandController,
+            focusedPanelCommandController: focusedPanelCommandController,
+            supportsConfigurationReload: { true },
+            reloadConfigurationAction: {}
         )
         var restoredWorkspaceIDs: [UUID] = []
         let controller = CommandPaletteController(
@@ -200,6 +208,10 @@ final class CommandPalettePanelTests: XCTestCase {
 @MainActor
 private final class RecordingCommandPaletteActions: CommandPaletteActionHandling {
     var createdWorkspaceWindowIDs: [UUID] = []
+    var createdWorkspaceTabWindowIDs: [UUID] = []
+    var splitCalls: [RecordedSplitCall] = []
+    var closePanelWindowIDs: [UUID] = []
+    var reloadConfigurationCount = 0
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
         _ = originWindowID
@@ -216,13 +228,24 @@ private final class RecordingCommandPaletteActions: CommandPaletteActionHandling
         return true
     }
 
-    func canSplitHorizontal(originWindowID: UUID) -> Bool {
+    func canCreateWorkspaceTab(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return true
     }
 
-    func splitHorizontal(originWindowID: UUID) -> Bool {
+    func createWorkspaceTab(originWindowID: UUID) -> Bool {
+        createdWorkspaceTabWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func canSplit(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
+        _ = direction
         _ = originWindowID
+        return true
+    }
+
+    func split(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
+        splitCalls.append(RecordedSplitCall(direction: direction, originWindowID: originWindowID))
         return true
     }
 
@@ -238,8 +261,32 @@ private final class RecordingCommandPaletteActions: CommandPaletteActionHandling
 
     func sidebarTitle(originWindowID: UUID) -> String {
         _ = originWindowID
-        return "Show Sidebar"
+        return ToasttyBuiltInCommand.toggleSidebar.title
     }
+
+    func canClosePanel(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func closePanel(originWindowID: UUID) -> Bool {
+        closePanelWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func canReloadConfiguration() -> Bool {
+        true
+    }
+
+    func reloadConfiguration() -> Bool {
+        reloadConfigurationCount += 1
+        return true
+    }
+}
+
+private struct RecordedSplitCall: Equatable {
+    let direction: SlotSplitDirection
+    let originWindowID: UUID
 }
 
 private final class FocusableTestView: NSView {

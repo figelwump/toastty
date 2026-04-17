@@ -1175,18 +1175,38 @@ final class WindowCommandControllerTests: XCTestCase {
 
         XCTAssertEqual(
             menuItemTitles(in: fileMenu),
-            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+            [
+                ToasttyBuiltInCommand.splitRight.title,
+                "Split Left",
+                ToasttyBuiltInCommand.splitDown.title,
+                "Split Up",
+                "<separator>",
+                ToasttyBuiltInCommand.closePanel.title,
+                "Close Workspace",
+            ]
         )
-        XCTAssertEqual(fileMenu.items[0].keyEquivalent, "d")
-        XCTAssertEqual(fileMenu.items[0].keyEquivalentModifierMask, [.command])
-        XCTAssertEqual(fileMenu.items[2].keyEquivalent, "d")
-        XCTAssertEqual(fileMenu.items[2].keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertEqual(
+            menuShortcutLabel(for: fileMenu.items[0]),
+            ToasttyBuiltInCommand.splitRight.requiredShortcut.symbolLabel
+        )
+        XCTAssertEqual(
+            menuShortcutLabel(for: fileMenu.items[2]),
+            ToasttyBuiltInCommand.splitDown.requiredShortcut.symbolLabel
+        )
         XCTAssertTrue(bridge.validateMenuItem(fileMenu.items[0]))
 
         bridge.installIfNeeded()
         XCTAssertEqual(
             menuItemTitles(in: fileMenu),
-            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+            [
+                ToasttyBuiltInCommand.splitRight.title,
+                "Split Left",
+                ToasttyBuiltInCommand.splitDown.title,
+                "Split Up",
+                "<separator>",
+                ToasttyBuiltInCommand.closePanel.title,
+                "Close Workspace",
+            ]
         )
     }
 
@@ -1675,6 +1695,24 @@ final class WindowCommandControllerTests: XCTestCase {
         menu.items.map { item in
             item.isSeparatorItem ? "<separator>" : item.title
         }
+    }
+
+    private func menuShortcutLabel(for item: NSMenuItem) -> String {
+        var label = ""
+        let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
+        if modifiers.contains(.control) {
+            label += "⌃"
+        }
+        if modifiers.contains(.option) {
+            label += "⌥"
+        }
+        if modifiers.contains(.shift) {
+            label += "⇧"
+        }
+        if modifiers.contains(.command) {
+            label += "⌘"
+        }
+        return label + item.keyEquivalent.uppercased()
     }
 }
 

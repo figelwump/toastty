@@ -143,7 +143,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
-            commands: Self.commands(),
+            commands: CommandPaletteCatalog.commands(),
             actions: actions,
             onCancel: { [weak self] in
                 self?.dismiss(reason: .cancelled)
@@ -245,48 +245,5 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
     private func resolveWindow(id windowID: UUID) -> NSWindow? {
         NSApp.windows.first(where: { $0.identifier?.rawValue == windowID.uuidString })
-    }
-
-    private static func commands() -> [PaletteCommand] {
-        [
-            PaletteCommand(
-                id: "layout.split.horizontal",
-                keywords: ["split", "horizontal", "right", "panel"],
-                shortcut: ToasttyKeyboardShortcuts.splitHorizontal,
-                title: { _ in "Split Horizontally" },
-                isAvailable: { context in
-                    context.actions.canSplitHorizontal(originWindowID: context.originWindowID)
-                },
-                execute: { context in
-                    context.actions.splitHorizontal(originWindowID: context.originWindowID)
-                }
-            ),
-            PaletteCommand(
-                id: "workspace.create",
-                keywords: ["workspace", "new", "create"],
-                shortcut: ToasttyKeyboardShortcuts.newWorkspace,
-                title: { _ in "New Workspace" },
-                isAvailable: { context in
-                    context.actions.canCreateWorkspace(originWindowID: context.originWindowID)
-                },
-                execute: { context in
-                    context.actions.createWorkspace(originWindowID: context.originWindowID)
-                }
-            ),
-            PaletteCommand(
-                id: "window.toggle-sidebar",
-                keywords: ["sidebar", "toggle", "show", "hide"],
-                shortcut: ToasttyKeyboardShortcuts.toggleSidebar,
-                title: { context in
-                    context.actions.sidebarTitle(originWindowID: context.originWindowID)
-                },
-                isAvailable: { context in
-                    context.actions.canToggleSidebar(originWindowID: context.originWindowID)
-                },
-                execute: { context in
-                    context.actions.toggleSidebar(originWindowID: context.originWindowID)
-                }
-            ),
-        ]
     }
 }

@@ -1003,41 +1003,47 @@ entire palette feature set at once.
 New file:
 
 - `Sources/App/CommandPalette/CommandPaletteCatalog.swift`
+- `Sources/App/Commands/ToasttyBuiltInCommand.swift`
 
 Changes:
 
-- extract shareable command titles and shortcut metadata before wiring the full
-  catalog so menus and palette results stay in lockstep
+- extract a small shared built-in metadata layer for the palette-covered slice
+  so menus and palette results stay in lockstep
 - define the next band of commands as a thin projection over existing helpers
   and controllers
-- factor shared titles/shortcuts into reusable constants where needed
+- keep that metadata intentionally narrow instead of turning it into a universal
+  command registry
 - keep availability and execution closures rooted in the existing command layer
+- move the inline command list out of `CommandPaletteController` into
+  `CommandPaletteCatalog`
 
 Suggested scope for this chunk:
 
-- Split Vertical
+- Split Down
 - New Tab
 - Close Panel
 - Reload Configuration
-- the remaining obvious split/layout commands already exposed by shortcuts or
-  menus
+- retitle the existing split command to `Split Right` so palette and menu titles
+  match the same directional naming
 
-Do not bundle in fuzzy scoring, usage ranking, or `@` mode here.
+Execution notes:
 
-**2b. Result rendering**
+- `Close Panel` must call the existing focused-panel controller path directly so
+  confirmation and focus restoration stay intact
+- `Reload Configuration` should stay behind the existing
+  `supportsConfigurationReload` gate and disappear from results when disabled
+- keep empty-query ordering static and curated for now
 
-Changes:
+Do not bundle in fuzzy scoring, usage ranking, `@` mode, broader split/layout
+families, or palette-specific rendering upgrades here.
 
-- render shortcut badges using `ToasttyKeyboardShortcut.symbolLabel`
-- show subtitles for commands that benefit from context
-- support icons per result
+**2b. Wave-2 validation**
 
-**2c. Wave-2 validation**
-
-- command projection tests
-- availability tests
-- integration check that the empty query shows the expected built-ins and hides
-  unavailable commands for the origin window
+- catalog projection tests for ids, titles, shortcuts, and empty-query ordering
+- availability tests, including `Reload Configuration` hidden when unsupported
+- submit-path tests for `Split Down`, `New Tab`, `Close Panel`, and `Reload Configuration`
+- sync checks that the palette and menu-owned split/close labels resolve from
+  the shared built-in metadata
 
 ### wave 3: full command catalog completion
 
