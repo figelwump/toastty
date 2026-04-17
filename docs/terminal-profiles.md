@@ -12,7 +12,7 @@ Toastty loads terminal profiles from:
 
 `TOASTTY_TERMINAL_PROFILES_PATH` supports absolute paths and `~/`-prefixed paths.
 
-Use `Terminal > Manage Terminal Profiles…` to open or create the file from Toastty.
+Use `Terminal > Manage Terminal Profiles…` to open or create the file inside Toastty.
 
 ## File format
 

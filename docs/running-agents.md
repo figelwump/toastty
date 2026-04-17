@@ -5,7 +5,7 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 ## Quick start
 
 1. If you want to type `codex`, `claude`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
-2. If you want dedicated header buttons, Agent menu entries, and optional keyboard shortcuts, open `Agent > Manage Agents...` or choose `Open agents.toml` from `Get Started…`
+2. If you want dedicated header buttons, Agent menu entries, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
 3. Uncomment or add a profile in `~/.toastty/agents.toml`
 4. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
 5. Click the agent name in the `Agent` menu or press its keyboard shortcut
@@ -334,7 +334,7 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 
 ## Troubleshooting
 
-**"No agents configured"** — `~/.toastty/agents.toml` does not exist or has no uncommented profiles. Open `Agent > Manage Agents...` to create or edit it.
+**"No agents configured"** — `~/.toastty/agents.toml` does not exist or has no uncommented profiles. Open `Agent > Manage Agents...` inside Toastty to create or edit it.
 
 **"The target terminal is not at an interactive prompt"** — Toastty asks Ghostty whether the terminal surface is currently at a prompt. Wait for the current command to finish, or use a different panel.
 

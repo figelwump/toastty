@@ -67,13 +67,16 @@ struct LocalDocumentPanelCreateRequest: Equatable, Sendable {
 
     var filePath: String
     var placementOverride: WebPanelPlacement?
+    var formatOverride: LocalDocumentFormat?
 
     init(
         filePath: String,
-        placementOverride: WebPanelPlacement? = nil
+        placementOverride: WebPanelPlacement? = nil,
+        formatOverride: LocalDocumentFormat? = nil
     ) {
         self.filePath = filePath
         self.placementOverride = placementOverride
+        self.formatOverride = formatOverride
     }
 
     var resolvedPlacement: WebPanelPlacement {
@@ -420,7 +423,10 @@ final class AppStore: ObservableObject {
         request: LocalDocumentPanelCreateRequest
     ) -> Bool {
         guard let workspace = state.workspacesByID[workspaceID],
-              let resolvedLocalDocument = Self.resolvedLocalDocument(request.filePath) else {
+              let resolvedLocalDocument = Self.resolvedLocalDocument(
+                  request.filePath,
+                  formatOverride: request.formatOverride
+              ) else {
             return false
         }
 
@@ -1062,7 +1068,8 @@ final class AppStore: ObservableObject {
     }
 
     private static func resolvedLocalDocument(
-        _ value: String
+        _ value: String,
+        formatOverride: LocalDocumentFormat? = nil
     ) -> (normalizedFilePath: String, format: LocalDocumentFormat)? {
         guard let trimmed = WebPanelState.normalizedFilePath(value) else {
             return nil
@@ -1071,7 +1078,7 @@ final class AppStore: ObservableObject {
         let url = URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath()
         let normalizedFilePath = url.path
         guard normalizedFilePath.isEmpty == false,
-              let format = LocalDocumentClassifier.format(
+              let format = formatOverride ?? LocalDocumentClassifier.format(
                   forPathExtension: url.pathExtension
               ) else {
             return nil

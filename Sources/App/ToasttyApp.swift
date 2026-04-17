@@ -57,10 +57,40 @@ enum KeyboardShortcutsReferenceLocator {
     }
 }
 
+typealias ManagedLocalDocumentOpener = @MainActor (URL, LocalDocumentFormat) -> Bool
+
 @MainActor
-private enum ToasttyMenuActions {
-    static func openTerminalProfilesConfiguration() {
-        switch openTerminalProfilesConfigurationResult() {
+private func openManagedLocalDocumentInToastty(
+    store: AppStore,
+    fileURL: URL,
+    format: LocalDocumentFormat,
+    preferredWindowID: UUID?
+) -> Bool {
+    let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+    guard normalizedFilePath.isEmpty == false else {
+        return false
+    }
+
+    return store.createLocalDocumentPanelFromCommand(
+        preferredWindowID: preferredWindowID,
+        request: LocalDocumentPanelCreateRequest(
+            filePath: normalizedFilePath,
+            placementOverride: .newTab,
+            formatOverride: format
+        )
+    )
+}
+
+@MainActor
+enum ToasttyMenuActions {
+    static func openTerminalProfilesConfiguration(
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        switch openTerminalProfilesConfigurationResult(
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        ) {
         case .success:
             return
         case .failure(let error):
@@ -71,21 +101,98 @@ private enum ToasttyMenuActions {
         }
     }
 
-    static func openTerminalProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+    static func openTerminalProfilesConfigurationResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
         openConfigurationFile(
-            ensureTemplate: {
-                try TerminalProfilesFile.ensureTemplateExists()
+            prepareFile: {
+                try TerminalProfilesFile.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath,
+                    environment: environment
+                )
             },
-            fileURL: TerminalProfilesFile.fileURL()
+            fileURL: TerminalProfilesFile.fileURL(
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
+            ),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
         )
     }
 
-    static func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+    static func openAgentProfilesConfigurationResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
         openConfigurationFile(
-            ensureTemplate: {
-                try AgentProfilesFile.ensureTemplateExists()
+            prepareFile: {
+                try AgentProfilesFile.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath
+                )
             },
-            fileURL: AgentProfilesFile.fileURL()
+            fileURL: AgentProfilesFile.fileURL(homeDirectoryPath: homeDirectoryPath),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        )
+    }
+
+    static func openToasttyConfigResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            prepareFile: {
+                try ToasttyConfigStore.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath,
+                    environment: environment
+                )
+            },
+            fileURL: ToasttyConfigStore.configFileURL(
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
+            ),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        )
+    }
+
+    static func openConfigReferenceResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            prepareFile: {
+                try ToasttyConfigStore.writeConfigReference(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath,
+                    environment: environment
+                )
+            },
+            fileURL: ToasttyConfigStore.configReferenceFileURL(
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
+            ),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
         )
     }
 
@@ -155,20 +262,30 @@ private enum ToasttyMenuActions {
     }
 
     private static func openConfigurationFile(
-        ensureTemplate: () throws -> Void,
-        fileURL: URL
+        prepareFile: () throws -> Void,
+        fileURL: URL,
+        fileFormat: LocalDocumentFormat,
+        openManagedLocalDocument: ManagedLocalDocumentOpener,
+        openExternally: (URL) -> Bool
     ) -> Result<Void, AgentGetStartedActionError> {
         do {
-            try ensureTemplate()
+            try prepareFile()
         } catch {
             return .failure(AgentGetStartedActionError(message: error.localizedDescription))
         }
 
-        return openExistingFile(fileURL)
+        if openManagedLocalDocument(fileURL, fileFormat) {
+            return .success(())
+        }
+
+        return openExistingFile(fileURL, openExternally: openExternally)
     }
 
-    private static func openExistingFile(_ fileURL: URL) -> Result<Void, AgentGetStartedActionError> {
-        guard NSWorkspace.shared.open(fileURL) else {
+    private static func openExistingFile(
+        _ fileURL: URL,
+        openExternally: (URL) -> Bool
+    ) -> Result<Void, AgentGetStartedActionError> {
+        guard openExternally(fileURL) else {
             return .failure(
                 AgentGetStartedActionError(message: "Toastty couldn't open \(fileURL.path).")
             )
@@ -1597,7 +1714,18 @@ struct ToasttyApp: App {
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             installShellIntegrationAction: ToasttyMenuActions.installShellIntegration,
-            openProfilesConfigurationAction: ToasttyMenuActions.openTerminalProfilesConfiguration
+            openProfilesConfigurationAction: { [store] in
+                ToasttyMenuActions.openTerminalProfilesConfiguration(
+                    openManagedLocalDocument: { fileURL, format in
+                        openManagedLocalDocumentInToastty(
+                            store: store,
+                            fileURL: fileURL,
+                            format: format,
+                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                        )
+                    }
+                )
+            }
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
@@ -2009,7 +2137,16 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
-        ToasttyMenuActions.openAgentProfilesConfigurationResult()
+        ToasttyMenuActions.openAgentProfilesConfigurationResult(
+            openManagedLocalDocument: { [store] fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                )
+            }
+        )
     }
 
     @MainActor
@@ -2028,53 +2165,49 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openManageConfig() {
-        do {
-            try ToasttyConfigStore.ensureTemplateExists()
-        } catch {
+        switch ToasttyMenuActions.openToasttyConfigResult(
+            openManagedLocalDocument: { [store] fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                )
+            }
+        ) {
+        case .success:
+            return
+        case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Config"
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
-            return
-        }
-
-        let fileURL = ToasttyConfigStore.configFileURL()
-        guard NSWorkspace.shared.open(fileURL) else {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Config"
-            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
         }
     }
 
     @MainActor
     private func openConfigReference() {
-        do {
-            try ToasttyConfigStore.writeConfigReference()
-        } catch {
+        switch ToasttyMenuActions.openConfigReferenceResult(
+            openManagedLocalDocument: { [store] fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                )
+            }
+        ) {
+        case .success:
+            return
+        case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Config Reference"
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
-            return
-        }
-
-        let fileURL = ToasttyConfigStore.configReferenceFileURL()
-        guard NSWorkspace.shared.open(fileURL) else {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Config Reference"
-            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
         }
     }
 
