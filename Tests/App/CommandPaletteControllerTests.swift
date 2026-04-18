@@ -90,7 +90,7 @@ final class CommandPaletteControllerTests: XCTestCase {
         XCTAssertFalse(originWindow.firstResponder === focusView)
     }
 
-    func testExecutedWorkspaceChangeRestoresFocusToCurrentWorkspace() throws {
+    func testSubmittedWorkspaceChangeRestoresFocusToCurrentWorkspace() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let originalWorkspaceID = try XCTUnwrap(
@@ -144,6 +144,35 @@ final class CommandPaletteControllerTests: XCTestCase {
 
         XCTAssertNotEqual(currentWorkspaceID, originalWorkspaceID)
         XCTAssertEqual(restoredWorkspaceIDs, [currentWorkspaceID])
+    }
+
+    func testToggleDismissesPaletteAfterSubmittedCommandReturnsFalse() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let originWindow = makeOriginWindow(windowID: windowID)
+        let actions = RecordingCommandPaletteActions()
+        actions.createWorkspaceResult = false
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        let controller = CommandPaletteController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            actions: actions
+        )
+        defer {
+            controller.dismiss(reason: .cancelled)
+            originWindow.close()
+        }
+
+        XCTAssertTrue(controller.toggle(originWindowID: windowID))
+        XCTAssertTrue(controller.isPresented)
+
+        let viewModel = try XCTUnwrap(controller.viewModel)
+        viewModel.query = "new workspace"
+        viewModel.submitSelection()
+
+        XCTAssertEqual(actions.createdWorkspaceWindowIDs, [windowID])
+        XCTAssertFalse(controller.isPresented)
     }
 
     private func makeOriginWindow(windowID: UUID) -> NSWindow {
@@ -219,6 +248,7 @@ private final class RecordingCommandPaletteActions: CommandPaletteActionHandling
     var tabSelectionCalls: [RecordedTabSelectionCall] = []
     var jumpedToNextActiveWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
+    var createWorkspaceResult = true
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
         _ = originWindowID
@@ -242,7 +272,7 @@ private final class RecordingCommandPaletteActions: CommandPaletteActionHandling
 
     func createWorkspace(originWindowID: UUID) -> Bool {
         createdWorkspaceWindowIDs.append(originWindowID)
-        return true
+        return createWorkspaceResult
     }
 
     func canCreateWorkspaceTab(originWindowID: UUID) -> Bool {

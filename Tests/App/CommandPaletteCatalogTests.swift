@@ -437,14 +437,14 @@ final class CommandPaletteCatalogTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
         let actions = makeLiveActions(store: store)
-        var executedCount = 0
+        var submitCount = 0
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
             commands: CommandPaletteCatalog.commands(),
             actions: actions,
             onCancel: {},
-            onExecuted: {
-                executedCount += 1
+            onSubmitted: {
+                submitCount += 1
             }
         )
 
@@ -454,21 +454,21 @@ final class CommandPaletteCatalogTests: XCTestCase {
         viewModel.submitSelection()
 
         XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(executedCount, 0)
+        XCTAssertEqual(submitCount, 1)
     }
 
     func testCatalogDoesNotExecuteNewWorkspaceAfterOriginWindowCloses() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
         let actions = makeLiveActions(store: store)
-        var executedCount = 0
+        var submitCount = 0
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
             commands: CommandPaletteCatalog.commands(),
             actions: actions,
             onCancel: {},
-            onExecuted: {
-                executedCount += 1
+            onSubmitted: {
+                submitCount += 1
             }
         )
 
@@ -478,7 +478,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         viewModel.submitSelection()
 
         XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(executedCount, 0)
+        XCTAssertEqual(submitCount, 1)
     }
 
     func testCatalogDoesNotExecuteNavigateSplitAfterOriginWindowCloses() throws {
@@ -486,14 +486,14 @@ final class CommandPaletteCatalogTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
         let actions = makeLiveActions(store: store)
-        var executedCount = 0
+        var submitCount = 0
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
             commands: CommandPaletteCatalog.commands(),
             actions: actions,
             onCancel: {},
-            onExecuted: {
-                executedCount += 1
+            onSubmitted: {
+                submitCount += 1
             }
         )
 
@@ -503,7 +503,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         viewModel.submitSelection()
 
         XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(executedCount, 0)
+        XCTAssertEqual(submitCount, 1)
     }
 
     func testCatalogDoesNotExecuteEqualizeSplitsAfterOriginWindowCloses() throws {
@@ -511,14 +511,14 @@ final class CommandPaletteCatalogTests: XCTestCase {
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
         let actions = makeLiveActions(store: store)
-        var executedCount = 0
+        var submitCount = 0
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
             commands: CommandPaletteCatalog.commands(),
             actions: actions,
             onCancel: {},
-            onExecuted: {
-                executedCount += 1
+            onSubmitted: {
+                submitCount += 1
             }
         )
 
@@ -528,7 +528,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
         viewModel.submitSelection()
 
         XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(executedCount, 0)
+        XCTAssertEqual(submitCount, 1)
     }
 
     func testCatalogHidesTabNavigationForSingleTabWorkspace() throws {
@@ -539,7 +539,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
             commands: CommandPaletteCatalog.commands(),
             actions: makeLiveActions(store: store),
             onCancel: {},
-            onExecuted: {}
+            onSubmitted: {}
         )
 
         XCTAssertFalse(viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousTab.id }))
@@ -555,7 +555,7 @@ final class CommandPaletteCatalogTests: XCTestCase {
             commands: CommandPaletteCatalog.commands(),
             actions: actions,
             onCancel: {},
-            onExecuted: {}
+            onSubmitted: {}
         )
     }
 

@@ -13,7 +13,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
     enum DismissReason {
         case cancelled
-        case executed
+        case submitted
         case toggled
         case clickAway
         case originWindowClosed
@@ -148,8 +148,8 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             onCancel: { [weak self] in
                 self?.dismiss(reason: .cancelled)
             },
-            onExecuted: { [weak self] in
-                self?.dismiss(reason: .executed)
+            onSubmitted: { [weak self] in
+                self?.dismiss(reason: .submitted)
             }
         )
         self.viewModel = viewModel
@@ -169,7 +169,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
     private func shouldRestoreFocus(for reason: DismissReason) -> Bool {
         switch reason {
-        case .cancelled, .executed, .toggled:
+        case .cancelled, .submitted, .toggled:
             return true
         case .clickAway, .originWindowClosed, .appDeactivated:
             return false
@@ -188,7 +188,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         let workspaceIDForRestore = currentWorkspaceID ?? originWorkspaceID
         resolvedOriginWindow?.makeKeyAndOrderFront(nil)
 
-        let shouldRestorePreviousResponder = reason != .executed || currentWorkspaceID == originWorkspaceID
+        let shouldRestorePreviousResponder = reason != .submitted || currentWorkspaceID == originWorkspaceID
 
         if shouldRestorePreviousResponder,
            let resolvedOriginWindow,

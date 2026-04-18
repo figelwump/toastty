@@ -16,7 +16,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             ],
             actions: actions,
             onCancel: {},
-            onExecuted: {}
+            onSubmitted: {}
         )
 
         XCTAssertEqual(viewModel.results.map(\.title), ["Alpha Command", "Show Sidebar"])
@@ -38,7 +38,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             ],
             actions: MockCommandPaletteActions(),
             onCancel: {},
-            onExecuted: {}
+            onSubmitted: {}
         )
 
         XCTAssertEqual(viewModel.selectedResult?.title, "Alpha")
@@ -66,7 +66,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             ],
             actions: MockCommandPaletteActions(),
             onCancel: {},
-            onExecuted: {}
+            onSubmitted: {}
         )
 
         viewModel.moveSelection(delta: 2)
@@ -116,11 +116,11 @@ final class CommandPaletteViewModelTests: XCTestCase {
         )
     }
 
-    func testSubmitSelectionExecutesAgainstOriginWindowAndDismissesOnSuccess() {
+    func testSubmitSelectionExecutesAgainstOriginWindowAndDismissesAfterSubmit() {
         let originWindowID = UUID()
         let actions = MockCommandPaletteActions()
         var executedWindowIDs: [UUID] = []
-        var didExecuteCount = 0
+        var didSubmitCount = 0
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
             commands: [
@@ -138,8 +138,8 @@ final class CommandPaletteViewModelTests: XCTestCase {
             ],
             actions: actions,
             onCancel: {},
-            onExecuted: {
-                didExecuteCount += 1
+            onSubmitted: {
+                didSubmitCount += 1
             }
         )
 
@@ -147,7 +147,33 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
         XCTAssertEqual(executedWindowIDs, [originWindowID])
         XCTAssertEqual(actions.createdWorkspaceWindowIDs, [originWindowID])
-        XCTAssertEqual(didExecuteCount, 1)
+        XCTAssertEqual(didSubmitCount, 1)
+    }
+
+    func testSubmitSelectionDismissesAfterFailedExecution() {
+        var didSubmitCount = 0
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                PaletteCommand(
+                    id: "noop",
+                    keywords: ["noop"],
+                    shortcut: nil,
+                    title: { _ in "No-op" },
+                    isAvailable: { _ in true },
+                    execute: { _ in false }
+                ),
+            ],
+            actions: MockCommandPaletteActions(),
+            onCancel: {},
+            onSubmitted: {
+                didSubmitCount += 1
+            }
+        )
+
+        viewModel.submitSelection()
+
+        XCTAssertEqual(didSubmitCount, 1)
     }
 
     func testDismissInvokesCancelCallback() {
@@ -159,7 +185,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             onCancel: {
                 didCancelCount += 1
             },
-            onExecuted: {}
+            onSubmitted: {}
         )
 
         viewModel.dismiss()

@@ -19,20 +19,20 @@ final class CommandPaletteViewModel: ObservableObject {
     private let commands: [PaletteCommand]
     private let actions: CommandPaletteActionHandling
     private let onCancel: () -> Void
-    private let onExecuted: () -> Void
+    private let onSubmitted: () -> Void
 
     init(
         originWindowID: UUID,
         commands: [PaletteCommand],
         actions: CommandPaletteActionHandling,
         onCancel: @escaping () -> Void,
-        onExecuted: @escaping () -> Void
+        onSubmitted: @escaping () -> Void
     ) {
         self.originWindowID = originWindowID
         self.commands = commands
         self.actions = actions
         self.onCancel = onCancel
-        self.onExecuted = onExecuted
+        self.onSubmitted = onSubmitted
         refreshResults()
     }
 
@@ -57,8 +57,10 @@ final class CommandPaletteViewModel: ObservableObject {
     func submitSelection() {
         guard let result = selectedResult else { return }
         let context = CommandExecutionContext(originWindowID: originWindowID, actions: actions)
-        guard result.command.execute(context) else { return }
-        onExecuted()
+        // Dismiss after any explicit submission so no-op commands do not leave
+        // the palette looking stuck when the underlying action returns false.
+        _ = result.command.execute(context)
+        onSubmitted()
     }
 
     func dismiss() {
