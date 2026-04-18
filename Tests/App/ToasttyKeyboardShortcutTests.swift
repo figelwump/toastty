@@ -25,6 +25,14 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             "Rename Tab\t⌥⇧E"
         )
         XCTAssertEqual(
+            ToasttyKeyboardShortcuts.selectPreviousTab.menuTitle("Select Previous Tab"),
+            "Select Previous Tab\t⇧⌘["
+        )
+        XCTAssertEqual(
+            ToasttyKeyboardShortcuts.selectNextTab.menuTitle("Select Next Tab"),
+            "Select Next Tab\t⇧⌘]"
+        )
+        XCTAssertEqual(
             ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"),
             "Close workspace\t⇧⌘W"
         )
@@ -37,6 +45,8 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameTab.symbolLabel, "⌥⇧E")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.selectPreviousTab.symbolLabel, "⇧⌘[")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.selectNextTab.symbolLabel, "⇧⌘]")
         XCTAssertEqual(ToasttyKeyboardShortcuts.closeWorkspace.symbolLabel, "⇧⌘W")
         XCTAssertEqual(ToasttyKeyboardShortcuts.find.symbolLabel, "⌘F")
         XCTAssertEqual(ToasttyKeyboardShortcuts.findNext.symbolLabel, "⌘G")
@@ -55,6 +65,8 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             ToasttyKeyboardShortcuts.newWorkspace,
             ToasttyKeyboardShortcuts.renameWorkspace,
             ToasttyKeyboardShortcuts.renameTab,
+            ToasttyKeyboardShortcuts.selectPreviousTab,
+            ToasttyKeyboardShortcuts.selectNextTab,
             ToasttyKeyboardShortcuts.closeWorkspace,
             ToasttyKeyboardShortcuts.toggleFocusedPanel,
             ToasttyKeyboardShortcuts.find,

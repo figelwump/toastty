@@ -1420,6 +1420,7 @@ struct ToasttyApp: App {
             store: store,
             splitLayoutCommandController: splitLayoutCommandController,
             focusedPanelCommandController: focusedPanelCommandController,
+            sessionRuntimeStore: sessionRuntimeStore,
             supportsConfigurationReload: { true },
             reloadConfigurationAction: {
                 Self.reloadConfiguration(

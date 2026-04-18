@@ -6,10 +6,17 @@ enum ToasttyBuiltInCommand {
     // a universal registry for every app command without revisiting that scope.
     case splitRight
     case splitDown
+    case newWindow
     case newWorkspace
     case newTab
     case toggleSidebar
     case closePanel
+    case renameWorkspace
+    case closeWorkspace
+    case renameTab
+    case selectPreviousTab
+    case selectNextTab
+    case jumpToNextActive
     case reloadConfiguration
 
     private static let showSidebarTitle = "Show Sidebar"
@@ -22,6 +29,8 @@ enum ToasttyBuiltInCommand {
             return "layout.split.horizontal"
         case .splitDown:
             return "layout.split.vertical"
+        case .newWindow:
+            return "window.create"
         case .newWorkspace:
             return "workspace.create"
         case .newTab:
@@ -30,6 +39,18 @@ enum ToasttyBuiltInCommand {
             return "window.toggle-sidebar"
         case .closePanel:
             return "panel.close"
+        case .renameWorkspace:
+            return "workspace.rename"
+        case .closeWorkspace:
+            return "workspace.close"
+        case .renameTab:
+            return "workspace.tab.rename"
+        case .selectPreviousTab:
+            return "workspace.tab.select-previous"
+        case .selectNextTab:
+            return "workspace.tab.select-next"
+        case .jumpToNextActive:
+            return "panel.focus-next-unread-or-active"
         case .reloadConfiguration:
             return "app.reload-configuration"
         }
@@ -41,6 +62,8 @@ enum ToasttyBuiltInCommand {
             return "Split Right"
         case .splitDown:
             return "Split Down"
+        case .newWindow:
+            return "New Window"
         case .newWorkspace:
             return "New Workspace"
         case .newTab:
@@ -49,6 +72,18 @@ enum ToasttyBuiltInCommand {
             return Self.showSidebarTitle
         case .closePanel:
             return "Close Panel"
+        case .renameWorkspace:
+            return "Rename Workspace"
+        case .closeWorkspace:
+            return "Close Workspace"
+        case .renameTab:
+            return "Rename Tab"
+        case .selectPreviousTab:
+            return "Select Previous Tab"
+        case .selectNextTab:
+            return "Select Next Tab"
+        case .jumpToNextActive:
+            return "Jump to Next Active"
         case .reloadConfiguration:
             return "Reload Configuration"
         }
@@ -60,6 +95,8 @@ enum ToasttyBuiltInCommand {
             return ToasttyKeyboardShortcuts.splitHorizontal
         case .splitDown:
             return ToasttyKeyboardShortcuts.splitVertical
+        case .newWindow:
+            return ToasttyKeyboardShortcuts.newWindow
         case .newWorkspace:
             return ToasttyKeyboardShortcuts.newWorkspace
         case .newTab:
@@ -68,6 +105,18 @@ enum ToasttyBuiltInCommand {
             return ToasttyKeyboardShortcuts.toggleSidebar
         case .closePanel:
             return ToasttyKeyboardShortcuts.closePanel
+        case .renameWorkspace:
+            return ToasttyKeyboardShortcuts.renameWorkspace
+        case .closeWorkspace:
+            return ToasttyKeyboardShortcuts.closeWorkspace
+        case .renameTab:
+            return ToasttyKeyboardShortcuts.renameTab
+        case .selectPreviousTab:
+            return ToasttyKeyboardShortcuts.selectPreviousTab
+        case .selectNextTab:
+            return ToasttyKeyboardShortcuts.selectNextTab
+        case .jumpToNextActive:
+            return ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel
         case .reloadConfiguration:
             return nil
         }
@@ -86,6 +135,8 @@ enum ToasttyBuiltInCommand {
             return ["split", "right", "horizontal", "panel"]
         case .splitDown:
             return ["split", "down", "vertical", "panel"]
+        case .newWindow:
+            return ["window", "new", "create"]
         case .newWorkspace:
             return ["workspace", "new", "create"]
         case .newTab:
@@ -94,6 +145,18 @@ enum ToasttyBuiltInCommand {
             return ["sidebar", "toggle", "show", "hide"]
         case .closePanel:
             return ["close", "panel", "remove"]
+        case .renameWorkspace:
+            return ["workspace", "rename", "edit", "title"]
+        case .closeWorkspace:
+            return ["workspace", "close", "remove"]
+        case .renameTab:
+            return ["tab", "rename", "edit", "title"]
+        case .selectPreviousTab:
+            return ["tab", "previous", "left", "back"]
+        case .selectNextTab:
+            return ["tab", "next", "right", "forward"]
+        case .jumpToNextActive:
+            return ["jump", "next", "active", "unread", "attention", "panel"]
         case .reloadConfiguration:
             return ["reload", "configuration", "config", "preferences"]
         }

@@ -120,11 +120,22 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
 @MainActor
 private final class MockCommandPaletteActions: CommandPaletteActionHandling {
+    var createdWindowIDs: [UUID] = []
     var createdWorkspaceWindowIDs: [UUID] = []
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
         _ = originWindowID
         return nil
+    }
+
+    func canCreateWindow(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func createWindow(originWindowID: UUID) -> Bool {
+        createdWindowIDs.append(originWindowID)
+        return true
     }
 
     func canCreateWorkspace(originWindowID: UUID) -> Bool {
@@ -180,6 +191,58 @@ private final class MockCommandPaletteActions: CommandPaletteActionHandling {
     }
 
     func closePanel(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func canRenameWorkspace(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func renameWorkspace(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func canCloseWorkspace(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func closeWorkspace(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func canRenameTab(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func renameTab(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
+        _ = direction
+        _ = originWindowID
+        return true
+    }
+
+    func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
+        _ = direction
+        _ = originWindowID
+        return true
+    }
+
+    func canJumpToNextActive(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func jumpToNextActive(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return true
     }

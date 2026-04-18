@@ -296,12 +296,12 @@ final class SplitLayoutCommandController {
 final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     private enum ItemTitle {
         static let newWorkspace = ToasttyBuiltInCommand.newWorkspace.title
-        static let renameWorkspace = "Rename Workspace"
-        static let closeWorkspace = "Close Workspace"
-        static let renameTab = "Rename Tab"
-        static let selectPreviousTab = "Select Previous Tab"
-        static let selectNextTab = "Select Next Tab"
-        static let jumpToNextUnreadOrActive = "Jump to Next Unread or Active"
+        static let renameWorkspace = ToasttyBuiltInCommand.renameWorkspace.title
+        static let closeWorkspace = ToasttyBuiltInCommand.closeWorkspace.title
+        static let renameTab = ToasttyBuiltInCommand.renameTab.title
+        static let selectPreviousTab = ToasttyBuiltInCommand.selectPreviousTab.title
+        static let selectNextTab = ToasttyBuiltInCommand.selectNextTab.title
+        static let jumpToNextUnreadOrActive = ToasttyBuiltInCommand.jumpToNextActive.title
     }
 
     private let createWorkspaceCommandController: CreateWorkspaceCommandController

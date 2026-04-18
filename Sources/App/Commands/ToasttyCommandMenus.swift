@@ -248,12 +248,12 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(commandWorkspace == nil)
 
-            Button("New Window") {
+            Button(ToasttyBuiltInCommand.newWindow.title) {
                 store.createWindowFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.newWindow.key,
-                modifiers: ToasttyKeyboardShortcuts.newWindow.modifiers
+                ToasttyBuiltInCommand.newWindow.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newWindow.requiredShortcut.modifiers
             )
         }
 
@@ -398,21 +398,21 @@ struct ToasttyCommandMenus: Commands {
             )
             .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: preferredWindowID) == false)
 
-            Button("Rename Workspace") {
+            Button(ToasttyBuiltInCommand.renameWorkspace.title) {
                 store.renameSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.renameWorkspace.key,
-                modifiers: ToasttyKeyboardShortcuts.renameWorkspace.modifiers
+                ToasttyBuiltInCommand.renameWorkspace.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.renameWorkspace.requiredShortcut.modifiers
             )
             .disabled(commandWorkspace == nil)
 
-            Button("Close Workspace") {
+            Button(ToasttyBuiltInCommand.closeWorkspace.title) {
                 store.closeSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.closeWorkspace.key,
-                modifiers: ToasttyKeyboardShortcuts.closeWorkspace.modifiers
+                ToasttyBuiltInCommand.closeWorkspace.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.closeWorkspace.requiredShortcut.modifiers
             )
             .disabled(commandWorkspace == nil)
 
@@ -512,42 +512,48 @@ struct ToasttyCommandMenus: Commands {
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Rename Tab") {
+            Button(ToasttyBuiltInCommand.renameTab.title) {
                 store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.renameTab.key,
-                modifiers: ToasttyKeyboardShortcuts.renameTab.modifiers
+                ToasttyBuiltInCommand.renameTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.renameTab.requiredShortcut.modifiers
             )
             .disabled(store.canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID) == false)
 
-            Button("Select Previous Tab") {
+            Button(ToasttyBuiltInCommand.selectPreviousTab.title) {
                 store.selectAdjacentWorkspaceTab(
                     preferredWindowID: preferredWindowID,
                     direction: .previous
                 )
             }
-            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectPreviousTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectPreviousTab.requiredShortcut.modifiers
+            )
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
-            Button("Select Next Tab") {
+            Button(ToasttyBuiltInCommand.selectNextTab.title) {
                 store.selectAdjacentWorkspaceTab(
                     preferredWindowID: preferredWindowID,
                     direction: .next
                 )
             }
-            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectNextTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectNextTab.requiredShortcut.modifiers
+            )
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
-            Button("Jump to Next Active") {
+            Button(ToasttyBuiltInCommand.jumpToNextActive.title) {
                 store.focusNextUnreadOrActivePanelFromCommand(
                     preferredWindowID: commandSelection?.windowID ?? preferredWindowID,
                     sessionRuntimeStore: sessionRuntimeStore
                 )
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.key,
-                modifiers: ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.modifiers
+                ToasttyBuiltInCommand.jumpToNextActive.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.jumpToNextActive.requiredShortcut.modifiers
             )
             .disabled(canFocusNextUnreadOrActivePanel == false)
         }

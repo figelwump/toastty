@@ -1045,7 +1045,7 @@ families, or palette-specific rendering upgrades here.
 - sync checks that the palette and menu-owned split/close labels resolve from
   the shared built-in metadata
 
-### wave 3: workspace lifecycle and tab navigation (next chunk)
+### wave 3: workspace lifecycle and tab navigation (shipped)
 
 Goal: keep growing the built-in catalog through the highest-frequency
 workspace/tab commands that already exist in menus and app-owned command
@@ -1077,6 +1077,9 @@ Execution notes:
   directional family with a much larger metadata surface
 - do not pull browser, markdown-file, agent, or terminal-font actions into this
   chunk; stay on the core workspace/tab lifecycle path first
+- keep palette execution anchored to the palette origin window; if that window
+  disappears while the palette is open, these built-ins should no-op instead of
+  silently retargeting another Toastty window
 
 **3b. Wave-3 validation**
 
@@ -1084,6 +1087,8 @@ Execution notes:
 - availability tests across no-workspace, single-tab, multi-tab, and
   next-active-available states
 - origin-window execution tests for window/workspace/tab actions
+- stale-origin-window regression coverage so `New Window` does not retarget a
+  different window after the palette origin closes
 - confirm shared title/shortcut metadata stays aligned between menu surfaces and
   palette results for the commands covered by this slice
 

@@ -42,6 +42,15 @@ enum CommandPaletteCatalog {
                 }
             ),
             makeCommand(
+                .newWindow,
+                isAvailable: { context in
+                    context.actions.canCreateWindow(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.createWindow(originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
                 .toggleSidebar,
                 title: { context in
                     context.actions.sidebarTitle(originWindowID: context.originWindowID)
@@ -60,6 +69,72 @@ enum CommandPaletteCatalog {
                 },
                 execute: { context in
                     context.actions.closePanel(originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .renameWorkspace,
+                isAvailable: { context in
+                    context.actions.canRenameWorkspace(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.renameWorkspace(originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .closeWorkspace,
+                isAvailable: { context in
+                    context.actions.canCloseWorkspace(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.closeWorkspace(originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .renameTab,
+                isAvailable: { context in
+                    context.actions.canRenameTab(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.renameTab(originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .selectPreviousTab,
+                isAvailable: { context in
+                    context.actions.canSelectAdjacentTab(
+                        direction: .previous,
+                        originWindowID: context.originWindowID
+                    )
+                },
+                execute: { context in
+                    context.actions.selectAdjacentTab(
+                        direction: .previous,
+                        originWindowID: context.originWindowID
+                    )
+                }
+            ),
+            makeCommand(
+                .selectNextTab,
+                isAvailable: { context in
+                    context.actions.canSelectAdjacentTab(
+                        direction: .next,
+                        originWindowID: context.originWindowID
+                    )
+                },
+                execute: { context in
+                    context.actions.selectAdjacentTab(
+                        direction: .next,
+                        originWindowID: context.originWindowID
+                    )
+                }
+            ),
+            makeCommand(
+                .jumpToNextActive,
+                isAvailable: { context in
+                    context.actions.canJumpToNextActive(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.jumpToNextActive(originWindowID: context.originWindowID)
                 }
             ),
             makeCommand(

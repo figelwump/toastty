@@ -469,13 +469,21 @@ final class WindowCommandControllerTests: XCTestCase {
         let mainMenu = NSMenu(title: "Main")
         let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
         let workspaceMenu = NSMenu(title: "Workspace")
-        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        let renameTabItem = NSMenuItem(title: ToasttyBuiltInCommand.renameTab.title, action: nil, keyEquivalent: "e")
         renameTabItem.keyEquivalentModifierMask = [.option, .shift]
-        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
+        let previousItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectPreviousTab.title,
+            action: nil,
+            keyEquivalent: "["
+        )
         previousItem.keyEquivalentModifierMask = [.command, .shift]
-        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
+        let nextItem = NSMenuItem(title: ToasttyBuiltInCommand.selectNextTab.title, action: nil, keyEquivalent: "]")
         nextItem.keyEquivalentModifierMask = [.command, .shift]
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
+        let unreadItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.jumpToNextActive.title,
+            action: nil,
+            keyEquivalent: "a"
+        )
         unreadItem.keyEquivalentModifierMask = [.command, .shift]
         workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(previousItem)
@@ -699,13 +707,29 @@ final class WindowCommandControllerTests: XCTestCase {
         let mainMenu = NSMenu(title: "Main")
         let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
         let workspaceMenu = NSMenu(title: "Workspace")
-        let newWorkspaceItem = NSMenuItem(title: "New Workspace", action: nil, keyEquivalent: "n")
-        let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
-        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
-        let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
-        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
-        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
+        let newWorkspaceItem = NSMenuItem(title: ToasttyBuiltInCommand.newWorkspace.title, action: nil, keyEquivalent: "n")
+        let renameWorkspaceItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.renameWorkspace.title,
+            action: nil,
+            keyEquivalent: "e"
+        )
+        let renameTabItem = NSMenuItem(title: ToasttyBuiltInCommand.renameTab.title, action: nil, keyEquivalent: "e")
+        let closeWorkspaceItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.closeWorkspace.title,
+            action: nil,
+            keyEquivalent: "w"
+        )
+        let previousItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectPreviousTab.title,
+            action: nil,
+            keyEquivalent: "["
+        )
+        let nextItem = NSMenuItem(title: ToasttyBuiltInCommand.selectNextTab.title, action: nil, keyEquivalent: "]")
+        let unreadItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.jumpToNextActive.title,
+            action: nil,
+            keyEquivalent: "a"
+        )
         workspaceMenu.addItem(newWorkspaceItem)
         workspaceMenu.addItem(renameWorkspaceItem)
         workspaceMenu.addItem(renameTabItem)

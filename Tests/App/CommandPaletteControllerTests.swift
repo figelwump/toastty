@@ -113,6 +113,7 @@ final class CommandPaletteControllerTests: XCTestCase {
             store: store,
             splitLayoutCommandController: splitLayoutCommandController,
             focusedPanelCommandController: focusedPanelCommandController,
+            sessionRuntimeStore: SessionRuntimeStore(),
             supportsConfigurationReload: { true },
             reloadConfigurationAction: {}
         )
@@ -207,15 +208,31 @@ final class CommandPalettePanelTests: XCTestCase {
 
 @MainActor
 private final class RecordingCommandPaletteActions: CommandPaletteActionHandling {
+    var createdWindowIDs: [UUID] = []
     var createdWorkspaceWindowIDs: [UUID] = []
     var createdWorkspaceTabWindowIDs: [UUID] = []
     var splitCalls: [RecordedSplitCall] = []
     var closePanelWindowIDs: [UUID] = []
+    var renamedWorkspaceWindowIDs: [UUID] = []
+    var closedWorkspaceWindowIDs: [UUID] = []
+    var renamedTabWindowIDs: [UUID] = []
+    var tabSelectionCalls: [RecordedTabSelectionCall] = []
+    var jumpedToNextActiveWindowIDs: [UUID] = []
     var reloadConfigurationCount = 0
 
     func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
         _ = originWindowID
         return nil
+    }
+
+    func canCreateWindow(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func createWindow(originWindowID: UUID) -> Bool {
+        createdWindowIDs.append(originWindowID)
+        return true
     }
 
     func canCreateWorkspace(originWindowID: UUID) -> Bool {
@@ -274,6 +291,59 @@ private final class RecordingCommandPaletteActions: CommandPaletteActionHandling
         return true
     }
 
+    func canRenameWorkspace(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func renameWorkspace(originWindowID: UUID) -> Bool {
+        renamedWorkspaceWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func canCloseWorkspace(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func closeWorkspace(originWindowID: UUID) -> Bool {
+        closedWorkspaceWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func canRenameTab(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func renameTab(originWindowID: UUID) -> Bool {
+        renamedTabWindowIDs.append(originWindowID)
+        return true
+    }
+
+    func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
+        _ = direction
+        _ = originWindowID
+        return true
+    }
+
+    func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
+        tabSelectionCalls.append(
+            RecordedTabSelectionCall(direction: direction, originWindowID: originWindowID)
+        )
+        return true
+    }
+
+    func canJumpToNextActive(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func jumpToNextActive(originWindowID: UUID) -> Bool {
+        jumpedToNextActiveWindowIDs.append(originWindowID)
+        return true
+    }
+
     func canReloadConfiguration() -> Bool {
         true
     }
@@ -286,6 +356,11 @@ private final class RecordingCommandPaletteActions: CommandPaletteActionHandling
 
 private struct RecordedSplitCall: Equatable {
     let direction: SlotSplitDirection
+    let originWindowID: UUID
+}
+
+private struct RecordedTabSelectionCall: Equatable {
+    let direction: TabNavigationDirection
     let originWindowID: UUID
 }
 
