@@ -1109,10 +1109,10 @@ Suggested scope for this chunk:
 
 - Select Previous Split
 - Select Next Split
-- Focus Split Up
-- Focus Split Down
-- Focus Split Left
-- Focus Split Right
+- Navigate Up
+- Navigate Down
+- Navigate Left
+- Navigate Right
 - Equalize Splits
 
 Execution notes:

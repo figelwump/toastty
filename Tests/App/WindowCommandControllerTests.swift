@@ -1089,8 +1089,8 @@ final class WindowCommandControllerTests: XCTestCase {
                 "Minimize",
                 "Arrange in Front",
                 "<separator>",
-                "Select Previous Split",
-                "Select Next Split",
+                ToasttyBuiltInCommand.selectPreviousSplit.title,
+                ToasttyBuiltInCommand.selectNextSplit.title,
                 "Navigate Splits",
                 "Resize Splits",
                 "<separator>",
@@ -1099,12 +1099,20 @@ final class WindowCommandControllerTests: XCTestCase {
         )
 
         let navigateMenu = try XCTUnwrap(rebuiltWindowMenu.items[5].submenu)
-        XCTAssertEqual(menuItemTitles(in: navigateMenu), ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"])
+        XCTAssertEqual(
+            menuItemTitles(in: navigateMenu),
+            [
+                ToasttyBuiltInCommand.navigateSplitUp.title,
+                ToasttyBuiltInCommand.navigateSplitDown.title,
+                ToasttyBuiltInCommand.navigateSplitLeft.title,
+                ToasttyBuiltInCommand.navigateSplitRight.title,
+            ]
+        )
 
         let resizeMenu = try XCTUnwrap(rebuiltWindowMenu.items[6].submenu)
         XCTAssertEqual(
             menuItemTitles(in: resizeMenu),
-            ["Equalize Splits", "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
+            [ToasttyBuiltInCommand.equalizeSplits.title, "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
         )
     }
 
@@ -1345,8 +1353,8 @@ final class WindowCommandControllerTests: XCTestCase {
                 "Minimize",
                 "Arrange in Front",
                 "<separator>",
-                "Select Previous Split",
-                "Select Next Split",
+                ToasttyBuiltInCommand.selectPreviousSplit.title,
+                ToasttyBuiltInCommand.selectNextSplit.title,
                 "Navigate Splits",
                 "Resize Splits",
                 "<separator>",
@@ -1355,44 +1363,61 @@ final class WindowCommandControllerTests: XCTestCase {
         )
 
         let previousItem = windowMenu.items[3]
-        XCTAssertEqual(previousItem.keyEquivalent, "[")
-        XCTAssertEqual(previousItem.keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(
+            previousItem.keyEquivalent,
+            String(ToasttyBuiltInCommand.selectPreviousSplit.requiredShortcut.key.character)
+        )
+        XCTAssertEqual(menuShortcutLabel(for: previousItem), ToasttyBuiltInCommand.selectPreviousSplit.requiredShortcut.symbolLabel)
         XCTAssertTrue(bridge.validateMenuItem(previousItem))
 
         let nextItem = windowMenu.items[4]
-        XCTAssertEqual(nextItem.keyEquivalent, "]")
-        XCTAssertEqual(nextItem.keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(
+            nextItem.keyEquivalent,
+            String(ToasttyBuiltInCommand.selectNextSplit.requiredShortcut.key.character)
+        )
+        XCTAssertEqual(menuShortcutLabel(for: nextItem), ToasttyBuiltInCommand.selectNextSplit.requiredShortcut.symbolLabel)
 
         let navigateMenu = try XCTUnwrap(windowMenu.items[5].submenu)
-        XCTAssertEqual(menuItemTitles(in: navigateMenu), ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"])
+        XCTAssertEqual(
+            menuItemTitles(in: navigateMenu),
+            [
+                ToasttyBuiltInCommand.navigateSplitUp.title,
+                ToasttyBuiltInCommand.navigateSplitDown.title,
+                ToasttyBuiltInCommand.navigateSplitLeft.title,
+                ToasttyBuiltInCommand.navigateSplitRight.title,
+            ]
+        )
         XCTAssertEqual(
             navigateMenu.items[0].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneUp.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitUp.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[0].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[0]), ToasttyBuiltInCommand.navigateSplitUp.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             navigateMenu.items[1].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneDown.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitDown.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[1].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[1]), ToasttyBuiltInCommand.navigateSplitDown.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             navigateMenu.items[2].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneLeft.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitLeft.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[2].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[2]), ToasttyBuiltInCommand.navigateSplitLeft.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             navigateMenu.items[3].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneRight.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitRight.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[3].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[3]), ToasttyBuiltInCommand.navigateSplitRight.requiredShortcut.symbolLabel)
 
         let resizeMenu = try XCTUnwrap(windowMenu.items[6].submenu)
         XCTAssertEqual(
             menuItemTitles(in: resizeMenu),
-            ["Equalize Splits", "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
+            [ToasttyBuiltInCommand.equalizeSplits.title, "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
         )
-        XCTAssertEqual(resizeMenu.items[0].keyEquivalent, "=")
-        XCTAssertEqual(resizeMenu.items[0].keyEquivalentModifierMask, [.command, .control])
+        XCTAssertEqual(
+            resizeMenu.items[0].keyEquivalent,
+            String(ToasttyBuiltInCommand.equalizeSplits.requiredShortcut.key.character)
+        )
+        XCTAssertEqual(menuShortcutLabel(for: resizeMenu.items[0]), ToasttyBuiltInCommand.equalizeSplits.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             resizeMenu.items[2].keyEquivalent,
             String(ToasttyKeyboardShortcuts.resizeSplitLeft.key.character)
@@ -1418,8 +1443,8 @@ final class WindowCommandControllerTests: XCTestCase {
                 "Minimize",
                 "Arrange in Front",
                 "<separator>",
-                "Select Previous Split",
-                "Select Next Split",
+                ToasttyBuiltInCommand.selectPreviousSplit.title,
+                ToasttyBuiltInCommand.selectNextSplit.title,
                 "Navigate Splits",
                 "Resize Splits",
                 "<separator>",
@@ -1489,7 +1514,12 @@ final class WindowCommandControllerTests: XCTestCase {
         let repairedNavigateMenu = try XCTUnwrap(windowMenu.items[5].submenu)
         XCTAssertEqual(
             menuItemTitles(in: repairedNavigateMenu),
-            ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"]
+            [
+                ToasttyBuiltInCommand.navigateSplitUp.title,
+                ToasttyBuiltInCommand.navigateSplitDown.title,
+                ToasttyBuiltInCommand.navigateSplitLeft.title,
+                ToasttyBuiltInCommand.navigateSplitRight.title,
+            ]
         )
     }
 

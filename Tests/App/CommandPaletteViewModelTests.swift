@@ -236,6 +236,27 @@ private final class MockCommandPaletteActions: CommandPaletteActionHandling {
         return true
     }
 
+    func canFocusSplit(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func focusSplit(direction: SlotFocusDirection, originWindowID: UUID) -> Bool {
+        _ = direction
+        _ = originWindowID
+        return true
+    }
+
+    func canEqualizeSplits(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
+    func equalizeSplits(originWindowID: UUID) -> Bool {
+        _ = originWindowID
+        return true
+    }
+
     func canToggleSidebar(originWindowID: UUID) -> Bool {
         _ = originWindowID
         return true

@@ -24,6 +24,69 @@ enum CommandPaletteCatalog {
                 }
             ),
             makeCommand(
+                .selectPreviousSplit,
+                isAvailable: { context in
+                    context.actions.canFocusSplit(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.focusSplit(direction: .previous, originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .selectNextSplit,
+                isAvailable: { context in
+                    context.actions.canFocusSplit(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.focusSplit(direction: .next, originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .navigateSplitUp,
+                isAvailable: { context in
+                    context.actions.canFocusSplit(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.focusSplit(direction: .up, originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .navigateSplitDown,
+                isAvailable: { context in
+                    context.actions.canFocusSplit(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.focusSplit(direction: .down, originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .navigateSplitLeft,
+                isAvailable: { context in
+                    context.actions.canFocusSplit(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.focusSplit(direction: .left, originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .navigateSplitRight,
+                isAvailable: { context in
+                    context.actions.canFocusSplit(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.focusSplit(direction: .right, originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
+                .equalizeSplits,
+                isAvailable: { context in
+                    context.actions.canEqualizeSplits(originWindowID: context.originWindowID)
+                },
+                execute: { context in
+                    context.actions.equalizeSplits(originWindowID: context.originWindowID)
+                }
+            ),
+            makeCommand(
                 .newWorkspace,
                 isAvailable: { context in
                     context.actions.canCreateWorkspace(originWindowID: context.originWindowID)

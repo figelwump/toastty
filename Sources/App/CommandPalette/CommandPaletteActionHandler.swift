@@ -12,6 +12,10 @@ protocol CommandPaletteActionHandling: AnyObject {
     func createWorkspaceTab(originWindowID: UUID) -> Bool
     func canSplit(direction: SlotSplitDirection, originWindowID: UUID) -> Bool
     func split(direction: SlotSplitDirection, originWindowID: UUID) -> Bool
+    func canFocusSplit(originWindowID: UUID) -> Bool
+    func focusSplit(direction: SlotFocusDirection, originWindowID: UUID) -> Bool
+    func canEqualizeSplits(originWindowID: UUID) -> Bool
+    func equalizeSplits(originWindowID: UUID) -> Bool
     func canToggleSidebar(originWindowID: UUID) -> Bool
     func toggleSidebar(originWindowID: UUID) -> Bool
     func sidebarTitle(originWindowID: UUID) -> String
@@ -102,6 +106,22 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
 
     func split(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
         splitLayoutCommandController.split(direction: direction, preferredWindowID: originWindowID)
+    }
+
+    func canFocusSplit(originWindowID: UUID) -> Bool {
+        splitLayoutCommandController.canFocusSplit(preferredWindowID: originWindowID)
+    }
+
+    func focusSplit(direction: SlotFocusDirection, originWindowID: UUID) -> Bool {
+        splitLayoutCommandController.focusSplit(direction: direction, preferredWindowID: originWindowID)
+    }
+
+    func canEqualizeSplits(originWindowID: UUID) -> Bool {
+        splitLayoutCommandController.canAdjustSplitLayout(preferredWindowID: originWindowID)
+    }
+
+    func equalizeSplits(originWindowID: UUID) -> Bool {
+        splitLayoutCommandController.equalizeSplits(preferredWindowID: originWindowID)
     }
 
     func canToggleSidebar(originWindowID: UUID) -> Bool {
