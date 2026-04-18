@@ -2,6 +2,7 @@ import SwiftUI
 
 struct CommandPaletteView: View {
     @ObservedObject var viewModel: CommandPaletteViewModel
+    @State private var resultFramesByID: [String: CGRect] = [:]
 
     var body: some View {
         let shape = RoundedRectangle(
@@ -73,33 +74,49 @@ struct CommandPaletteView: View {
                     .padding(.top, 28)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
-                    ScrollViewReader { proxy in
-                        ScrollView(.vertical, showsIndicators: false) {
-                            VStack(spacing: 0) {
-                                ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
-                                    CommandPaletteResultRow(
-                                        title: result.title,
-                                        shortcut: result.command.shortcut?.symbolLabel,
-                                        isSelected: index == viewModel.selectedIndex
-                                    )
-                                    .id(result.id)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        viewModel.select(index: index)
-                                        viewModel.submitSelection()
+                    GeometryReader { geometry in
+                        ScrollViewReader { proxy in
+                            ScrollView(.vertical, showsIndicators: false) {
+                                VStack(spacing: 0) {
+                                    ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
+                                        CommandPaletteResultRow(
+                                            title: result.title,
+                                            shortcut: result.command.shortcut?.symbolLabel,
+                                            isSelected: index == viewModel.selectedIndex
+                                        )
+                                        .id(result.id)
+                                        .background(
+                                            GeometryReader { rowGeometry in
+                                                Color.clear.preference(
+                                                    key: CommandPaletteResultFramePreferenceKey.self,
+                                                    value: [
+                                                        result.id: rowGeometry.frame(
+                                                            in: .named(CommandPaletteResultsScrollSpace.name)
+                                                        )
+                                                    ]
+                                                )
+                                            }
+                                        )
+                                        .contentShape(Rectangle())
+                                        .onTapGesture {
+                                            viewModel.select(index: index)
+                                            viewModel.submitSelection()
+                                        }
                                     }
                                 }
+                                .padding(.top, 8)
                             }
-                            .padding(.top, 8)
-                        }
-                        .onAppear {
-                            scrollToSelectedResult(using: proxy, resultID: viewModel.selectedResult?.id)
-                        }
-                        .onChange(of: viewModel.selectedIndex) { _, _ in
-                            scrollToSelectedResult(using: proxy, resultID: viewModel.selectedResult?.id)
-                        }
-                        .onChange(of: viewModel.results.map(\.id)) { _, _ in
-                            scrollToSelectedResult(using: proxy, resultID: viewModel.selectedResult?.id)
+                            .coordinateSpace(name: CommandPaletteResultsScrollSpace.name)
+                            .onChange(of: viewModel.selectedIndex) { _, _ in
+                                scrollSelectionIfNeeded(using: proxy, viewportHeight: geometry.size.height)
+                            }
+                            .onPreferenceChange(CommandPaletteResultFramePreferenceKey.self) { frames in
+                                resultFramesByID = frames
+                                scrollSelectionIfNeeded(using: proxy, viewportHeight: geometry.size.height)
+                            }
+                            .onChange(of: geometry.size.height) { _, newHeight in
+                                scrollSelectionIfNeeded(using: proxy, viewportHeight: newHeight)
+                            }
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -128,17 +145,68 @@ struct CommandPaletteView: View {
         }
     }
 
-    private func scrollToSelectedResult(using proxy: ScrollViewProxy, resultID: String?) {
-        guard let resultID else {
+    private func scrollSelectionIfNeeded(using proxy: ScrollViewProxy, viewportHeight: CGFloat) {
+        guard let selectedResultID = viewModel.selectedResult?.id else {
             return
         }
 
-        DispatchQueue.main.async {
-            guard viewModel.selectedResult?.id == resultID else {
-                return
-            }
-            proxy.scrollTo(resultID, anchor: .center)
+        guard let scrollTarget = CommandPaletteScrollVisibility.scrollTarget(
+            for: resultFramesByID[selectedResultID],
+            viewportHeight: viewportHeight
+        ) else {
+            return
         }
+
+        proxy.scrollTo(selectedResultID, anchor: scrollTarget.anchor)
+    }
+}
+
+enum CommandPaletteScrollTarget: Equatable {
+    case top
+    case bottom
+
+    var anchor: UnitPoint {
+        switch self {
+        case .top:
+            return .top
+        case .bottom:
+            return .bottom
+        }
+    }
+}
+
+struct CommandPaletteScrollVisibility {
+    private static let viewportTolerance: CGFloat = 1
+
+    static func scrollTarget(
+        for resultFrame: CGRect?,
+        viewportHeight: CGFloat
+    ) -> CommandPaletteScrollTarget? {
+        guard let resultFrame, viewportHeight > 0 else {
+            return nil
+        }
+
+        if resultFrame.minY < -viewportTolerance {
+            return .top
+        }
+
+        if resultFrame.maxY > viewportHeight + viewportTolerance {
+            return .bottom
+        }
+
+        return nil
+    }
+}
+
+private enum CommandPaletteResultsScrollSpace {
+    static let name = "command-palette.results.scroll"
+}
+
+private struct CommandPaletteResultFramePreferenceKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, next in next })
     }
 }
 

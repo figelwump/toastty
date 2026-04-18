@@ -78,6 +78,44 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedResult?.title, "Beta")
     }
 
+    func testScrollTargetIsNilWhenSelectedRowIsVisible() {
+        XCTAssertNil(
+            CommandPaletteScrollVisibility.scrollTarget(
+                for: CGRect(x: 0, y: 8, width: 320, height: 38),
+                viewportHeight: 120
+            )
+        )
+    }
+
+    func testScrollTargetUsesTopWhenSelectedRowIsAboveViewport() {
+        XCTAssertEqual(
+            CommandPaletteScrollVisibility.scrollTarget(
+                for: CGRect(x: 0, y: -12, width: 320, height: 38),
+                viewportHeight: 120
+            ),
+            .top
+        )
+    }
+
+    func testScrollTargetUsesBottomWhenSelectedRowIsBelowViewport() {
+        XCTAssertEqual(
+            CommandPaletteScrollVisibility.scrollTarget(
+                for: CGRect(x: 0, y: 96, width: 320, height: 38),
+                viewportHeight: 120
+            ),
+            .bottom
+        )
+    }
+
+    func testScrollTargetIgnoresSubpointOverflowWithinTolerance() {
+        XCTAssertNil(
+            CommandPaletteScrollVisibility.scrollTarget(
+                for: CGRect(x: 0, y: 82.2, width: 320, height: 38.4),
+                viewportHeight: 120
+            )
+        )
+    }
+
     func testSubmitSelectionExecutesAgainstOriginWindowAndDismissesOnSuccess() {
         let originWindowID = UUID()
         let actions = MockCommandPaletteActions()
