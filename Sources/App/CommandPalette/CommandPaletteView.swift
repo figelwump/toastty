@@ -93,13 +93,13 @@ struct CommandPaletteView: View {
                             .padding(.top, 8)
                         }
                         .onAppear {
-                            scrollToSelectedResult(using: proxy)
+                            scrollToSelectedResult(using: proxy, resultID: viewModel.selectedResult?.id)
                         }
                         .onChange(of: viewModel.selectedIndex) { _, _ in
-                            scrollToSelectedResult(using: proxy)
+                            scrollToSelectedResult(using: proxy, resultID: viewModel.selectedResult?.id)
                         }
                         .onChange(of: viewModel.results.map(\.id)) { _, _ in
-                            scrollToSelectedResult(using: proxy)
+                            scrollToSelectedResult(using: proxy, resultID: viewModel.selectedResult?.id)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -128,13 +128,16 @@ struct CommandPaletteView: View {
         }
     }
 
-    private func scrollToSelectedResult(using proxy: ScrollViewProxy) {
-        guard let selectedResultID = viewModel.selectedResult?.id else {
+    private func scrollToSelectedResult(using proxy: ScrollViewProxy, resultID: String?) {
+        guard let resultID else {
             return
         }
 
         DispatchQueue.main.async {
-            proxy.scrollTo(selectedResultID, anchor: .center)
+            guard viewModel.selectedResult?.id == resultID else {
+                return
+            }
+            proxy.scrollTo(resultID, anchor: .center)
         }
     }
 }
