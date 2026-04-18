@@ -45,8 +45,8 @@ final class CommandPaletteViewModel: ObservableObject {
 
     func moveSelection(delta: Int) {
         guard results.isEmpty == false else { return }
-        let nextIndex = (selectedIndex + delta).positiveModulo(results.count)
-        selectedIndex = nextIndex
+        let lastIndex = results.count - 1
+        selectedIndex = max(0, min(lastIndex, selectedIndex + delta))
     }
 
     func select(index: Int) {
@@ -104,14 +104,6 @@ final class CommandPaletteViewModel: ObservableObject {
         return command.keywords.contains { keyword in
             keyword.normalizedPaletteQuery.contains(query)
         }
-    }
-}
-
-private extension Int {
-    func positiveModulo(_ count: Int) -> Int {
-        guard count > 0 else { return 0 }
-        let remainder = self % count
-        return remainder >= 0 ? remainder : remainder + count
     }
 }
 

@@ -28,7 +28,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.results.map(\.title), ["Alpha Command"])
     }
 
-    func testSelectionWrapsAroundVisibleResults() {
+    func testSelectionStopsAtVisibleResultsBounds() {
         let viewModel = CommandPaletteViewModel(
             originWindowID: UUID(),
             commands: [
@@ -44,10 +44,38 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedResult?.title, "Alpha")
 
         viewModel.moveSelection(delta: -1)
+        XCTAssertEqual(viewModel.selectedResult?.title, "Alpha")
+
+        viewModel.moveSelection(delta: 1)
+        XCTAssertEqual(viewModel.selectedResult?.title, "Beta")
+
+        viewModel.moveSelection(delta: 10)
         XCTAssertEqual(viewModel.selectedResult?.title, "Gamma")
 
         viewModel.moveSelection(delta: 1)
-        XCTAssertEqual(viewModel.selectedResult?.title, "Alpha")
+        XCTAssertEqual(viewModel.selectedResult?.title, "Gamma")
+    }
+
+    func testSelectionClampsWhenFilteringShrinksVisibleResults() {
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                makeCommand(id: "alpha", title: "Alpha", keywords: []),
+                makeCommand(id: "beta", title: "Beta", keywords: []),
+                makeCommand(id: "gamma", title: "Gamma", keywords: []),
+            ],
+            actions: MockCommandPaletteActions(),
+            onCancel: {},
+            onExecuted: {}
+        )
+
+        viewModel.moveSelection(delta: 2)
+        XCTAssertEqual(viewModel.selectedResult?.title, "Gamma")
+
+        viewModel.query = "beta"
+
+        XCTAssertEqual(viewModel.results.map(\.title), ["Beta"])
+        XCTAssertEqual(viewModel.selectedResult?.title, "Beta")
     }
 
     func testSubmitSelectionExecutesAgainstOriginWindowAndDismissesOnSuccess() {

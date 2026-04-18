@@ -73,22 +73,34 @@ struct CommandPaletteView: View {
                     .padding(.top, 28)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 } else {
-                    ScrollView(.vertical, showsIndicators: false) {
-                        VStack(spacing: 0) {
-                            ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
-                                CommandPaletteResultRow(
-                                    title: result.title,
-                                    shortcut: result.command.shortcut?.symbolLabel,
-                                    isSelected: index == viewModel.selectedIndex
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    viewModel.select(index: index)
-                                    viewModel.submitSelection()
+                    ScrollViewReader { proxy in
+                        ScrollView(.vertical, showsIndicators: false) {
+                            VStack(spacing: 0) {
+                                ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
+                                    CommandPaletteResultRow(
+                                        title: result.title,
+                                        shortcut: result.command.shortcut?.symbolLabel,
+                                        isSelected: index == viewModel.selectedIndex
+                                    )
+                                    .id(result.id)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        viewModel.select(index: index)
+                                        viewModel.submitSelection()
+                                    }
                                 }
                             }
+                            .padding(.top, 8)
                         }
-                        .padding(.top, 8)
+                        .onAppear {
+                            scrollToSelectedResult(using: proxy)
+                        }
+                        .onChange(of: viewModel.selectedIndex) { _, _ in
+                            scrollToSelectedResult(using: proxy)
+                        }
+                        .onChange(of: viewModel.results.map(\.id)) { _, _ in
+                            scrollToSelectedResult(using: proxy)
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }
@@ -113,6 +125,16 @@ struct CommandPaletteView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 11)
             .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func scrollToSelectedResult(using proxy: ScrollViewProxy) {
+        guard let selectedResultID = viewModel.selectedResult?.id else {
+            return
+        }
+
+        DispatchQueue.main.async {
+            proxy.scrollTo(selectedResultID, anchor: .center)
         }
     }
 }
