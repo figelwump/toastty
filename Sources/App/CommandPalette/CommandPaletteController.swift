@@ -22,6 +22,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
     private weak var store: AppStore?
     private let actions: CommandPaletteActionHandling
+    private let usageTracker: CommandPaletteUsageTracking
     private let panelFactory: () -> CommandPalettePanel
     private let scheduleWorkspaceFocusRestore: @MainActor (UUID, Bool) -> Void
 
@@ -41,11 +42,13 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         actions: CommandPaletteActionHandling,
+        usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         panelFactory: @escaping () -> CommandPalettePanel = { CommandPalettePanel() },
         scheduleWorkspaceFocusRestore: (@MainActor (UUID, Bool) -> Void)? = nil
     ) {
         self.store = store
         self.actions = actions
+        self.usageTracker = usageTracker
         self.panelFactory = panelFactory
         self.scheduleWorkspaceFocusRestore = scheduleWorkspaceFocusRestore ?? { [weak terminalRuntimeRegistry] workspaceID, avoidStealingKeyboardFocus in
             terminalRuntimeRegistry?.scheduleWorkspaceFocusRestore(
@@ -145,6 +148,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             originWindowID: originWindowID,
             commands: CommandPaletteCatalog.commands(),
             actions: actions,
+            usageTracker: usageTracker,
             onCancel: { [weak self] in
                 self?.dismiss(reason: .cancelled)
             },

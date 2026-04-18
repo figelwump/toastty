@@ -1434,10 +1434,12 @@ struct ToasttyApp: App {
                 )
             },
         )
+        let commandPaletteUsageTracker = CommandPaletteUsageTracker(runtimePaths: runtimePaths)
         let commandPaletteController = CommandPaletteController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            actions: commandPaletteActionHandler
+            actions: commandPaletteActionHandler,
+            usageTracker: commandPaletteUsageTracker
         )
         self.commandPaletteController = commandPaletteController
         let preferredWorkspaceCommandWindowID: () -> UUID? = {

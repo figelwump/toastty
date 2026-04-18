@@ -1143,13 +1143,15 @@ Goal: frequently-used commands rise without fighting runtime isolation.
 
 New file:
 
-- `Sources/App/CommandPalette/UsageTracker.swift`
+- `Sources/App/CommandPalette/CommandPaletteUsageTracker.swift`
 
 Changes:
 
 - read/write `<config-directory>/command-palette-usage.json`
 - derive the config directory from `ToasttyRuntimePaths`
 - record usage after successful execution
+- keep empty-query ordering curated; apply usage boosts only within non-empty
+  query ranking
 
 **5b. Scoring integration**
 

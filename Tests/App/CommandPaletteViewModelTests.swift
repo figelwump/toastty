@@ -119,6 +119,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
     func testSubmitSelectionExecutesAgainstOriginWindowAndDismissesAfterSubmit() {
         let originWindowID = UUID()
         let actions = MockCommandPaletteActions()
+        let usageTracker = MockCommandPaletteUsageTracker()
         var executedWindowIDs: [UUID] = []
         var didSubmitCount = 0
         let viewModel = CommandPaletteViewModel(
@@ -137,6 +138,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
                 ),
             ],
             actions: actions,
+            usageTracker: usageTracker,
             onCancel: {},
             onSubmitted: {
                 didSubmitCount += 1
@@ -147,10 +149,12 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
         XCTAssertEqual(executedWindowIDs, [originWindowID])
         XCTAssertEqual(actions.createdWorkspaceWindowIDs, [originWindowID])
+        XCTAssertEqual(usageTracker.recordedCommandIDs, ["workspace.create"])
         XCTAssertEqual(didSubmitCount, 1)
     }
 
     func testSubmitSelectionDismissesAfterFailedExecution() {
+        let usageTracker = MockCommandPaletteUsageTracker()
         var didSubmitCount = 0
         let viewModel = CommandPaletteViewModel(
             originWindowID: UUID(),
@@ -165,6 +169,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
                 ),
             ],
             actions: MockCommandPaletteActions(),
+            usageTracker: usageTracker,
             onCancel: {},
             onSubmitted: {
                 didSubmitCount += 1
@@ -173,7 +178,98 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
         viewModel.submitSelection()
 
+        XCTAssertTrue(usageTracker.recordedCommandIDs.isEmpty)
         XCTAssertEqual(didSubmitCount, 1)
+    }
+
+    func testEmptyQueryKeepsCatalogOrderEvenWhenUsageCountsDiffer() {
+        let usageTracker = MockCommandPaletteUsageTracker()
+        usageTracker.counts = [
+            "window": 12,
+            "workspace": 3,
+        ]
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                makeCommand(id: "workspace", title: "New Workspace", keywords: []),
+                makeCommand(id: "window", title: "New Window", keywords: []),
+                makeCommand(id: "tab", title: "New Tab", keywords: []),
+            ],
+            actions: MockCommandPaletteActions(),
+            usageTracker: usageTracker,
+            onCancel: {},
+            onSubmitted: {}
+        )
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["workspace", "window", "tab"])
+    }
+
+    func testQueryRankingBoostsFrequentlyUsedCommandsWithinSameMatchBucket() {
+        let usageTracker = MockCommandPaletteUsageTracker()
+        usageTracker.counts = [
+            "window": 12,
+            "workspace": 1,
+        ]
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                makeCommand(id: "workspace", title: "New Workspace", keywords: []),
+                makeCommand(id: "window", title: "New Window", keywords: []),
+                makeCommand(id: "tab", title: "New Tab", keywords: []),
+            ],
+            actions: MockCommandPaletteActions(),
+            usageTracker: usageTracker,
+            onCancel: {},
+            onSubmitted: {}
+        )
+
+        viewModel.query = "new"
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["window", "workspace", "tab"])
+    }
+
+    func testStrongerTitleMatchBucketStaysAheadOfMoreFrequentWeakerTitleMatch() {
+        let usageTracker = MockCommandPaletteUsageTracker()
+        usageTracker.counts = [
+            "boundary": 40,
+        ]
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                makeCommand(id: "prefix", title: "Workspace Dashboard", keywords: []),
+                makeCommand(id: "boundary", title: "Open Workspace", keywords: []),
+            ],
+            actions: MockCommandPaletteActions(),
+            usageTracker: usageTracker,
+            onCancel: {},
+            onSubmitted: {}
+        )
+
+        viewModel.query = "workspace"
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["prefix", "boundary"])
+    }
+
+    func testTitleMatchesStayAheadOfKeywordMatchesDespiteHigherUsage() {
+        let usageTracker = MockCommandPaletteUsageTracker()
+        usageTracker.counts = [
+            "keyword": 25,
+        ]
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                makeCommand(id: "title", title: "Open Workspace", keywords: []),
+                makeCommand(id: "keyword", title: "Alpha Command", keywords: ["workspace"]),
+            ],
+            actions: MockCommandPaletteActions(),
+            usageTracker: usageTracker,
+            onCancel: {},
+            onSubmitted: {}
+        )
+
+        viewModel.query = "workspace"
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["title", "keyword"])
     }
 
     func testDismissInvokesCancelCallback() {
@@ -366,5 +462,20 @@ private final class MockCommandPaletteActions: CommandPaletteActionHandling {
 
     func reloadConfiguration() -> Bool {
         true
+    }
+}
+
+@MainActor
+private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking {
+    var counts: [String: Int] = [:]
+    var recordedCommandIDs: [String] = []
+
+    func useCount(for commandID: String) -> Int {
+        counts[commandID] ?? 0
+    }
+
+    func recordSuccessfulExecution(of commandID: String) {
+        recordedCommandIDs.append(commandID)
+        counts[commandID, default: 0] += 1
     }
 }
