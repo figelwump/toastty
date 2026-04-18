@@ -3,10 +3,15 @@ import SwiftUI
 
 @MainActor
 final class CommandPaletteViewModel: ObservableObject {
+    private enum SelectionRefreshBehavior {
+        case preserveCurrent
+        case resetToTop
+    }
+
     @Published var query = "" {
         didSet {
             guard query != oldValue else { return }
-            refreshResults()
+            refreshResults(selectionBehavior: .resetToTop)
         }
     }
 
@@ -36,7 +41,7 @@ final class CommandPaletteViewModel: ObservableObject {
         self.usageTracker = usageTracker
         self.onCancel = onCancel
         self.onSubmitted = onSubmitted
-        refreshResults()
+        refreshResults(selectionBehavior: .preserveCurrent)
     }
 
     var selectedResult: PaletteCommandResult? {
@@ -73,7 +78,7 @@ final class CommandPaletteViewModel: ObservableObject {
         onCancel()
     }
 
-    private func refreshResults() {
+    private func refreshResults(selectionBehavior: SelectionRefreshBehavior) {
         let context = CommandExecutionContext(originWindowID: originWindowID, actions: actions)
         let normalizedQuery = query.normalizedPaletteQuery
         let previouslySelectedID = selectedResult?.id
@@ -115,13 +120,18 @@ final class CommandPaletteViewModel: ObservableObject {
                 .map { $0.result }
         }
 
-        if let previouslySelectedID,
-           let preservedIndex = results.firstIndex(where: { $0.id == previouslySelectedID }) {
-            selectedIndex = preservedIndex
-            return
-        }
+        switch selectionBehavior {
+        case .preserveCurrent:
+            if let previouslySelectedID,
+               let preservedIndex = results.firstIndex(where: { $0.id == previouslySelectedID }) {
+                selectedIndex = preservedIndex
+                return
+            }
 
-        selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
+            selectedIndex = results.isEmpty ? 0 : min(selectedIndex, results.count - 1)
+        case .resetToTop:
+            selectedIndex = 0
+        }
     }
 
     private static func match(

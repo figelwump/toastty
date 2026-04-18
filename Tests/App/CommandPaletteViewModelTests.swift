@@ -56,7 +56,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedResult?.title, "Gamma")
     }
 
-    func testSelectionClampsWhenFilteringShrinksVisibleResults() {
+    func testQueryChangeResetsSelectionToTopResult() {
         let viewModel = CommandPaletteViewModel(
             originWindowID: UUID(),
             commands: [
@@ -76,6 +76,57 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
         XCTAssertEqual(viewModel.results.map(\.title), ["Beta"])
         XCTAssertEqual(viewModel.selectedResult?.title, "Beta")
+    }
+
+    func testQueryChangeSelectsTopRankedResultInsteadOfPreservingPreviousMatch() {
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                makeCommand(id: "select.next", title: "Select Next Split", keywords: []),
+                makeCommand(id: "select.previous", title: "Alpha Select Split", keywords: []),
+                makeCommand(id: "select.previous-tab", title: "Select Previous Tab", keywords: []),
+                makeCommand(id: "select.next-tab", title: "Select Next Tab", keywords: []),
+            ],
+            actions: MockCommandPaletteActions(),
+            onCancel: {},
+            onSubmitted: {}
+        )
+
+        viewModel.moveSelection(delta: 1)
+        XCTAssertEqual(viewModel.selectedResult?.id, "select.previous")
+
+        viewModel.query = "sele"
+
+        XCTAssertEqual(
+            viewModel.results.map(\.id),
+            ["select.next", "select.previous-tab", "select.next-tab", "select.previous"]
+        )
+        XCTAssertEqual(viewModel.selectedResult?.id, "select.next")
+
+        viewModel.moveSelection(delta: 1)
+        XCTAssertEqual(viewModel.selectedResult?.id, "select.previous-tab")
+    }
+
+    func testQueryChangeToNoResultsLeavesNoSelectedResult() {
+        let viewModel = CommandPaletteViewModel(
+            originWindowID: UUID(),
+            commands: [
+                makeCommand(id: "alpha", title: "Alpha", keywords: []),
+                makeCommand(id: "beta", title: "Beta", keywords: []),
+            ],
+            actions: MockCommandPaletteActions(),
+            onCancel: {},
+            onSubmitted: {}
+        )
+
+        viewModel.moveSelection(delta: 1)
+        XCTAssertEqual(viewModel.selectedResult?.id, "beta")
+
+        viewModel.query = "zzz"
+
+        XCTAssertTrue(viewModel.results.isEmpty)
+        XCTAssertEqual(viewModel.selectedIndex, 0)
+        XCTAssertNil(viewModel.selectedResult)
     }
 
     func testScrollTargetIsNilWhenSelectedRowIsVisible() {
