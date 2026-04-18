@@ -1,4 +1,6 @@
 import AppKit
+import Combine
+import CoreState
 import SwiftUI
 
 @MainActor
@@ -22,6 +24,9 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
     private weak var store: AppStore?
     private let actions: CommandPaletteActionHandling
+    private let agentCatalogStore: AgentCatalogStore
+    private let terminalProfileStore: TerminalProfileStore
+    private let profileShortcutRegistryProvider: @MainActor () -> ProfileShortcutRegistry
     private let usageTracker: CommandPaletteUsageTracking
     private let panelFactory: () -> CommandPalettePanel
     private let scheduleWorkspaceFocusRestore: @MainActor (UUID, Bool) -> Void
@@ -34,6 +39,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
     private var originWorkspaceID: UUID?
     private var appDidResignActiveObserver: ObserverTokenBox?
     private var originWindowWillCloseObserver: ObserverTokenBox?
+    private var catalogRefreshCancellables: [AnyCancellable] = []
     private var isDismissing = false
 
     private(set) var isPresented = false
@@ -42,12 +48,18 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
         actions: CommandPaletteActionHandling,
+        agentCatalogStore: AgentCatalogStore,
+        terminalProfileStore: TerminalProfileStore,
+        profileShortcutRegistryProvider: @escaping @MainActor () -> ProfileShortcutRegistry,
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         panelFactory: @escaping () -> CommandPalettePanel = { CommandPalettePanel() },
         scheduleWorkspaceFocusRestore: (@MainActor (UUID, Bool) -> Void)? = nil
     ) {
         self.store = store
         self.actions = actions
+        self.agentCatalogStore = agentCatalogStore
+        self.terminalProfileStore = terminalProfileStore
+        self.profileShortcutRegistryProvider = profileShortcutRegistryProvider
         self.usageTracker = usageTracker
         self.panelFactory = panelFactory
         self.scheduleWorkspaceFocusRestore = scheduleWorkspaceFocusRestore ?? { [weak terminalRuntimeRegistry] workspaceID, avoidStealingKeyboardFocus in
@@ -111,6 +123,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         self.originWorkspaceID = nil
         self.panel = nil
         self.viewModel = nil
+        catalogRefreshCancellables = []
 
         panel?.delegate = nil
         panel?.contentViewController = nil
@@ -146,8 +159,12 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
         let viewModel = CommandPaletteViewModel(
             originWindowID: originWindowID,
-            commands: CommandPaletteCatalog.commands(),
-            actions: actions,
+            projectCommands: { [weak self] in
+                self?.projectCommands(originWindowID: originWindowID) ?? []
+            },
+            executeCommand: { [weak self] invocation, commandOriginWindowID in
+                self?.actions.execute(invocation, originWindowID: commandOriginWindowID) ?? false
+            },
             usageTracker: usageTracker,
             onCancel: { [weak self] in
                 self?.dismiss(reason: .cancelled)
@@ -168,6 +185,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         self.panel = panel
 
         installObservers(originWindow: originWindow)
+        installCatalogRefreshObservers()
         panel.makeKeyAndOrderFront(nil)
     }
 
@@ -245,9 +263,36 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             notificationCenter.removeObserver(originWindowWillCloseObserver.token)
             self.originWindowWillCloseObserver = nil
         }
+
+        catalogRefreshCancellables = []
     }
 
     private func resolveWindow(id windowID: UUID) -> NSWindow? {
         NSApp.windows.first(where: { $0.identifier?.rawValue == windowID.uuidString })
+    }
+
+    private func installCatalogRefreshObservers() {
+        catalogRefreshCancellables = [
+            agentCatalogStore.$catalog.dropFirst().sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.viewModel?.refreshProjectedCommands()
+                }
+            },
+            terminalProfileStore.$catalog.dropFirst().sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.viewModel?.refreshProjectedCommands()
+                }
+            },
+        ]
+    }
+
+    private func projectCommands(originWindowID: UUID) -> [PaletteCommandDescriptor] {
+        CommandPaletteCatalog.commands(
+            originWindowID: originWindowID,
+            actions: actions,
+            agentCatalog: agentCatalogStore.catalog,
+            terminalProfileCatalog: terminalProfileStore.catalog,
+            profileShortcutRegistry: profileShortcutRegistryProvider()
+        )
     }
 }

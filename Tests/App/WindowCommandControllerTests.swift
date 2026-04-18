@@ -1588,6 +1588,18 @@ final class WindowCommandControllerTests: XCTestCase {
         let controller = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(
+                catalog: TerminalProfileCatalog(
+                    profiles: [
+                        TerminalProfile(
+                            id: "zmx",
+                            displayName: "ZMX",
+                            badgeLabel: "ZMX",
+                            startupCommand: "zmx attach"
+                        ),
+                    ]
+                )
+            ),
             installShellIntegrationAction: {},
             openProfilesConfigurationAction: {}
         )
@@ -1610,6 +1622,33 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(profiledPanels.count, 1)
     }
 
+    func testTerminalProfilesMenuControllerDoesNotSplitWhenProfileIsUnavailable() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        let workspaceID = store.selectedWorkspace?.id
+        let initialPanelCount = workspaceID.flatMap { store.state.workspacesByID[$0]?.panels.count }
+        let controller = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(catalog: .empty),
+            installShellIntegrationAction: {},
+            openProfilesConfigurationAction: {}
+        )
+
+        XCTAssertFalse(
+            controller.splitFocusedSlot(
+                profileID: "zmx",
+                direction: .right,
+                preferredWindowID: nil
+            )
+        )
+        XCTAssertEqual(
+            workspaceID.flatMap { store.state.workspacesByID[$0]?.panels.count },
+            initialPanelCount
+        )
+    }
+
     func testTerminalProfilesMenuControllerRunsShellIntegrationAction() {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let runtimeRegistry = TerminalRuntimeRegistry()
@@ -1618,6 +1657,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let controller = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(catalog: .empty),
             installShellIntegrationAction: {
                 didInstallShellIntegration = true
             },
@@ -1636,6 +1676,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let controller = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(catalog: .empty),
             installShellIntegrationAction: {},
             openProfilesConfigurationAction: {
                 didOpenProfilesConfiguration = true
@@ -1767,6 +1808,15 @@ final class WindowCommandControllerTests: XCTestCase {
             label += "⌘"
         }
         return label + item.keyEquivalent.uppercased()
+    }
+}
+
+@MainActor
+private final class StaticTerminalProfileProvider: TerminalProfileProviding {
+    let catalog: TerminalProfileCatalog
+
+    init(catalog: TerminalProfileCatalog) {
+        self.catalog = catalog
     }
 }
 

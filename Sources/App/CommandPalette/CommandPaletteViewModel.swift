@@ -21,23 +21,23 @@ final class CommandPaletteViewModel: ObservableObject {
     let originWindowID: UUID
     let focusRequestID = UUID()
 
-    private let commands: [PaletteCommand]
-    private let actions: CommandPaletteActionHandling
+    private let projectCommands: @MainActor () -> [PaletteCommandDescriptor]
+    private let executeCommand: @MainActor (PaletteCommandInvocation, UUID) -> Bool
     private let usageTracker: CommandPaletteUsageTracking
     private let onCancel: () -> Void
     private let onSubmitted: () -> Void
 
     init(
         originWindowID: UUID,
-        commands: [PaletteCommand],
-        actions: CommandPaletteActionHandling,
+        projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
+        executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool,
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         onCancel: @escaping () -> Void,
         onSubmitted: @escaping () -> Void
     ) {
         self.originWindowID = originWindowID
-        self.commands = commands
-        self.actions = actions
+        self.projectCommands = projectCommands
+        self.executeCommand = executeCommand
         self.usageTracker = usageTracker
         self.onCancel = onCancel
         self.onSubmitted = onSubmitted
@@ -64,12 +64,11 @@ final class CommandPaletteViewModel: ObservableObject {
 
     func submitSelection() {
         guard let result = selectedResult else { return }
-        let context = CommandExecutionContext(originWindowID: originWindowID, actions: actions)
         // Dismiss after any explicit submission so no-op commands do not leave
         // the palette looking stuck when the underlying action returns false.
-        let didExecute = result.command.execute(context)
-        if didExecute {
-            usageTracker.recordSuccessfulExecution(of: result.command.id)
+        let didExecute = executeCommand(result.command.invocation, originWindowID)
+        if didExecute, let usageKey = result.command.usageKey {
+            usageTracker.recordSuccessfulExecution(of: usageKey)
         }
         onSubmitted()
     }
@@ -78,36 +77,37 @@ final class CommandPaletteViewModel: ObservableObject {
         onCancel()
     }
 
+    func refreshProjectedCommands() {
+        refreshResults(selectionBehavior: .preserveCurrent)
+    }
+
     private func refreshResults(selectionBehavior: SelectionRefreshBehavior) {
-        let context = CommandExecutionContext(originWindowID: originWindowID, actions: actions)
         let normalizedQuery = query.normalizedPaletteQuery
         let previouslySelectedID = selectedResult?.id
+        let commands = projectCommands()
 
         let matchedResults = commands.enumerated().compactMap { index, command -> RankedPaletteCommandResult? in
-            guard command.isAvailable(context) else {
-                return nil
-            }
-
-            let title = command.title(context)
             if normalizedQuery.isEmpty {
                 return RankedPaletteCommandResult(
-                    result: PaletteCommandResult(command: command, title: title),
+                    result: PaletteCommandResult(command: command),
                     sourcePriority: 0,
-                    matchPriority: 0,
+                    matchScore: 0,
                     usageScore: 0,
                     catalogIndex: index
                 )
             }
 
-            guard let match = Self.match(command: command, title: title, query: normalizedQuery) else {
+            guard let match = Self.match(command: command, query: normalizedQuery) else {
                 return nil
             }
 
             return RankedPaletteCommandResult(
-                result: PaletteCommandResult(command: command, title: title),
+                result: PaletteCommandResult(command: command),
                 sourcePriority: match.source.priority,
-                matchPriority: match.kind.priority,
-                usageScore: Self.usageScore(for: usageTracker.useCount(for: command.id)),
+                matchScore: match.score,
+                usageScore: Self.usageScore(
+                    for: command.usageKey.map(usageTracker.useCount(for:))
+                ),
                 catalogIndex: index
             )
         }
@@ -135,50 +135,33 @@ final class CommandPaletteViewModel: ObservableObject {
     }
 
     private static func match(
-        command: PaletteCommand,
-        title: String,
+        command: PaletteCommandDescriptor,
         query: String
     ) -> PaletteCommandMatch? {
-        if let titleKind = matchKind(candidate: title.normalizedPaletteQuery, query: query) {
-            return PaletteCommandMatch(source: .title, kind: titleKind)
+        if let titleMatch = FuzzyScorer.match(query: query, candidate: command.title) {
+            return PaletteCommandMatch(source: .title, score: titleMatch.score)
         }
 
-        let keywordKind = command.keywords.compactMap { keyword in
-            matchKind(candidate: keyword.normalizedPaletteQuery, query: query)
-        }.max(by: { $0.priority < $1.priority })
-        if let keywordKind {
-            return PaletteCommandMatch(source: .keyword, kind: keywordKind)
+        let keywordScore = command.keywords.compactMap { keyword in
+            FuzzyScorer.match(query: query, candidate: keyword)?.score
+        }.max()
+        if let keywordScore {
+            return PaletteCommandMatch(source: .keyword, score: keywordScore)
         }
 
         return nil
     }
 
-    private static func matchKind(candidate: String, query: String) -> PaletteCommandMatch.Kind? {
-        guard let range = candidate.range(of: query) else {
-            return nil
-        }
-
-        if range.lowerBound == candidate.startIndex {
-            return .prefix
-        }
-
-        let previousCharacter = candidate[candidate.index(before: range.lowerBound)]
-        if previousCharacter.isLetter || previousCharacter.isNumber {
-            return .substring
-        }
-        return .wordBoundarySubstring
-    }
-
-    private static func usageScore(for useCount: Int) -> Double {
-        log1p(Double(max(0, useCount)))
+    private static func usageScore(for useCount: Int?) -> Double {
+        log1p(Double(max(0, useCount ?? 0)))
     }
 
     private static func ranksHigher(_ lhs: RankedPaletteCommandResult, _ rhs: RankedPaletteCommandResult) -> Bool {
         if lhs.sourcePriority != rhs.sourcePriority {
             return lhs.sourcePriority > rhs.sourcePriority
         }
-        if lhs.matchPriority != rhs.matchPriority {
-            return lhs.matchPriority > rhs.matchPriority
+        if lhs.matchScore != rhs.matchScore {
+            return lhs.matchScore > rhs.matchScore
         }
         if lhs.usageScore != rhs.usageScore {
             return lhs.usageScore > rhs.usageScore
@@ -190,29 +173,12 @@ final class CommandPaletteViewModel: ObservableObject {
 private struct RankedPaletteCommandResult {
     let result: PaletteCommandResult
     let sourcePriority: Int
-    let matchPriority: Int
+    let matchScore: Int
     let usageScore: Double
     let catalogIndex: Int
 }
 
 private struct PaletteCommandMatch {
-    enum Kind {
-        case prefix
-        case wordBoundarySubstring
-        case substring
-
-        var priority: Int {
-            switch self {
-            case .prefix:
-                return 2
-            case .wordBoundarySubstring:
-                return 1
-            case .substring:
-                return 0
-            }
-        }
-    }
-
     enum Source {
         case title
         case keyword
@@ -228,11 +194,5 @@ private struct PaletteCommandMatch {
     }
 
     let source: Source
-    let kind: Kind
-}
-
-private extension String {
-    var normalizedPaletteQuery: String {
-        trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
+    let score: Int
 }

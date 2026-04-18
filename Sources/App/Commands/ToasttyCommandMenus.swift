@@ -6,17 +6,20 @@ import SwiftUI
 final class TerminalProfilesMenuController {
     private let store: AppStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private let terminalProfileProvider: any TerminalProfileProviding
     private let installShellIntegrationAction: @MainActor () -> Void
     private let openProfilesConfigurationAction: @MainActor () -> Void
 
     init(
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        terminalProfileProvider: any TerminalProfileProviding,
         installShellIntegrationAction: @escaping @MainActor () -> Void,
         openProfilesConfigurationAction: @escaping @MainActor () -> Void
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.terminalProfileProvider = terminalProfileProvider
         self.installShellIntegrationAction = installShellIntegrationAction
         self.openProfilesConfigurationAction = openProfilesConfigurationAction
     }
@@ -31,6 +34,12 @@ final class TerminalProfilesMenuController {
         direction: SlotSplitDirection,
         preferredWindowID: UUID?
     ) -> Bool {
+        // Profile catalogs can reload while the palette or menus are open, so
+        // revalidate the profile ID at submission time instead of silently
+        // falling back to an unprofiled split when the entry has gone stale.
+        guard terminalProfileProvider.catalog.profile(id: profileID) != nil else {
+            return false
+        }
         guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }

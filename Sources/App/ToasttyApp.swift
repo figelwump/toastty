@@ -1688,11 +1688,39 @@ struct ToasttyApp: App {
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        terminalProfilesMenuController = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            terminalProfileProvider: terminalProfileStore,
+            installShellIntegrationAction: ToasttyMenuActions.installShellIntegration,
+            openProfilesConfigurationAction: { [store] in
+                ToasttyMenuActions.openTerminalProfilesConfiguration(
+                    openManagedLocalDocument: { fileURL, format in
+                        openManagedLocalDocumentInToastty(
+                            store: store,
+                            fileURL: fileURL,
+                            format: format,
+                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                        )
+                    }
+                )
+            }
+        )
+        agentLaunchService = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogStore,
+            socketPathProvider: { socketPath }
+        )
         let commandPaletteActionHandler = CommandPaletteActionHandler(
             store: store,
             splitLayoutCommandController: splitLayoutCommandController,
             focusedPanelCommandController: focusedPanelCommandController,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
+            agentLaunchService: agentLaunchService,
+            terminalProfilesMenuController: terminalProfilesMenuController,
             supportsConfigurationReload: { true },
             reloadConfigurationAction: {
                 Self.reloadConfiguration(
@@ -1705,12 +1733,29 @@ struct ToasttyApp: App {
                     terminalRuntimeRegistry: terminalRuntimeRegistry
                 )
             },
+            openLocalDocumentAction: { preferredWindowID, placement in
+                Self.openLocalDocumentFile(
+                    store: store,
+                    preferredWindowID: preferredWindowID,
+                    placement: placement
+                )
+            }
         )
         let commandPaletteUsageTracker = CommandPaletteUsageTracker(runtimePaths: runtimePaths)
         let commandPaletteController = CommandPaletteController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             actions: commandPaletteActionHandler,
+            agentCatalogStore: agentCatalogStore,
+            terminalProfileStore: terminalProfileStore,
+            profileShortcutRegistryProvider: {
+                Self.makeProfileShortcutRegistry(
+                    terminalProfiles: terminalProfileStore.catalog,
+                    terminalProfilesFilePath: terminalProfileStore.fileURL.path,
+                    agentProfiles: agentCatalogStore.catalog,
+                    agentProfilesFilePath: agentCatalogStore.fileURL.path
+                )
+            },
             usageTracker: commandPaletteUsageTracker
         )
         self.commandPaletteController = commandPaletteController
@@ -1764,23 +1809,6 @@ struct ToasttyApp: App {
             )
         }
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
-        terminalProfilesMenuController = TerminalProfilesMenuController(
-            store: store,
-            terminalRuntimeRegistry: terminalRuntimeRegistry,
-            installShellIntegrationAction: ToasttyMenuActions.installShellIntegration,
-            openProfilesConfigurationAction: { [store] in
-                ToasttyMenuActions.openTerminalProfilesConfiguration(
-                    openManagedLocalDocument: { fileURL, format in
-                        openManagedLocalDocumentInToastty(
-                            store: store,
-                            fileURL: fileURL,
-                            format: format,
-                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
-                        )
-                    }
-                )
-            }
-        )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
@@ -1841,13 +1869,6 @@ struct ToasttyApp: App {
                 ]
             )
         }
-        agentLaunchService = AgentLaunchService(
-            store: store,
-            terminalCommandRouter: terminalRuntimeRegistry,
-            sessionRuntimeStore: sessionRuntimeStore,
-            agentCatalogProvider: agentCatalogStore,
-            socketPathProvider: { socketPath }
-        )
         do {
             automationSocketServer = try AutomationSocketServer(
                 socketPath: socketPath,
@@ -2299,11 +2320,26 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private func openLocalDocumentFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
+    @discardableResult
+    private func openLocalDocumentFile(preferredWindowID: UUID?, placement: WebPanelPlacement) -> Bool {
+        Self.openLocalDocumentFile(
+            store: store,
+            preferredWindowID: preferredWindowID,
+            placement: placement
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openLocalDocumentFile(
+        store: AppStore,
+        preferredWindowID: UUID?,
+        placement: WebPanelPlacement
+    ) -> Bool {
         guard let fileURL = LocalDocumentOpenPanel.chooseFile(
             title: localDocumentOpenTitle(for: placement)
         ) else {
-            return
+            return false
         }
 
         let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
@@ -2315,7 +2351,7 @@ struct ToasttyApp: App {
             )
         )
 
-        guard didOpen == false else { return }
+        guard didOpen == false else { return true }
 
         let alert = NSAlert()
         alert.messageText = "Unable to Open Local File"
@@ -2323,9 +2359,10 @@ struct ToasttyApp: App {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+        return false
     }
 
-    private func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
+    private static func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
         case .rootRight:
             return "Open Local File"

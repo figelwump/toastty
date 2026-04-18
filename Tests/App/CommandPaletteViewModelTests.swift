@@ -1,25 +1,20 @@
-import Foundation
-@testable import ToasttyApp
 import CoreState
+import Foundation
 import XCTest
+@testable import ToasttyApp
 
 @MainActor
 final class CommandPaletteViewModelTests: XCTestCase {
-    func testQueryFilteringOnlyReturnsMatchingAvailableCommands() {
-        let actions = MockCommandPaletteActions()
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+    func testQueryFilteringOnlyReturnsMatchingCommands() {
+        let viewModel = makeViewModel(
             commands: [
                 makeCommand(id: "alpha", title: "Alpha Command", keywords: ["workspace"]),
                 makeCommand(id: "sidebar", title: "Show Sidebar", keywords: ["toggle", "chrome"]),
-                makeCommand(id: "hidden", title: "Hidden Command", keywords: ["internal"], isAvailable: false),
-            ],
-            actions: actions,
-            onCancel: {},
-            onSubmitted: {}
+                makeCommand(id: "browser", title: "New Browser", keywords: ["web"]),
+            ]
         )
 
-        XCTAssertEqual(viewModel.results.map(\.title), ["Alpha Command", "Show Sidebar"])
+        XCTAssertEqual(viewModel.results.map(\.title), ["Alpha Command", "Show Sidebar", "New Browser"])
 
         viewModel.query = "side"
         XCTAssertEqual(viewModel.results.map(\.title), ["Show Sidebar"])
@@ -29,16 +24,12 @@ final class CommandPaletteViewModelTests: XCTestCase {
     }
 
     func testSelectionStopsAtVisibleResultsBounds() {
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "alpha", title: "Alpha", keywords: []),
-                makeCommand(id: "beta", title: "Beta", keywords: []),
-                makeCommand(id: "gamma", title: "Gamma", keywords: []),
-            ],
-            actions: MockCommandPaletteActions(),
-            onCancel: {},
-            onSubmitted: {}
+                makeCommand(id: "alpha", title: "Alpha"),
+                makeCommand(id: "beta", title: "Beta"),
+                makeCommand(id: "gamma", title: "Gamma"),
+            ]
         )
 
         XCTAssertEqual(viewModel.selectedResult?.title, "Alpha")
@@ -57,16 +48,12 @@ final class CommandPaletteViewModelTests: XCTestCase {
     }
 
     func testQueryChangeResetsSelectionToTopResult() {
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "alpha", title: "Alpha", keywords: []),
-                makeCommand(id: "beta", title: "Beta", keywords: []),
-                makeCommand(id: "gamma", title: "Gamma", keywords: []),
-            ],
-            actions: MockCommandPaletteActions(),
-            onCancel: {},
-            onSubmitted: {}
+                makeCommand(id: "alpha", title: "Alpha"),
+                makeCommand(id: "beta", title: "Beta"),
+                makeCommand(id: "gamma", title: "Gamma"),
+            ]
         )
 
         viewModel.moveSelection(delta: 2)
@@ -79,17 +66,13 @@ final class CommandPaletteViewModelTests: XCTestCase {
     }
 
     func testQueryChangeSelectsTopRankedResultInsteadOfPreservingPreviousMatch() {
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "select.next", title: "Select Next Split", keywords: []),
-                makeCommand(id: "select.previous", title: "Alpha Select Split", keywords: []),
-                makeCommand(id: "select.previous-tab", title: "Select Previous Tab", keywords: []),
-                makeCommand(id: "select.next-tab", title: "Select Next Tab", keywords: []),
-            ],
-            actions: MockCommandPaletteActions(),
-            onCancel: {},
-            onSubmitted: {}
+                makeCommand(id: "select.next", title: "Select Next Split"),
+                makeCommand(id: "select.previous", title: "Alpha Select Split"),
+                makeCommand(id: "select.previous-tab", title: "Select Previous Tab"),
+                makeCommand(id: "select.next-tab", title: "Select Next Tab"),
+            ]
         )
 
         viewModel.moveSelection(delta: 1)
@@ -102,21 +85,14 @@ final class CommandPaletteViewModelTests: XCTestCase {
             ["select.next", "select.previous-tab", "select.next-tab", "select.previous"]
         )
         XCTAssertEqual(viewModel.selectedResult?.id, "select.next")
-
-        viewModel.moveSelection(delta: 1)
-        XCTAssertEqual(viewModel.selectedResult?.id, "select.previous-tab")
     }
 
     func testQueryChangeToNoResultsLeavesNoSelectedResult() {
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "alpha", title: "Alpha", keywords: []),
-                makeCommand(id: "beta", title: "Beta", keywords: []),
-            ],
-            actions: MockCommandPaletteActions(),
-            onCancel: {},
-            onSubmitted: {}
+                makeCommand(id: "alpha", title: "Alpha"),
+                makeCommand(id: "beta", title: "Beta"),
+            ]
         )
 
         viewModel.moveSelection(delta: 1)
@@ -169,68 +145,55 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
     func testSubmitSelectionExecutesAgainstOriginWindowAndDismissesAfterSubmit() {
         let originWindowID = UUID()
-        let actions = MockCommandPaletteActions()
         let usageTracker = MockCommandPaletteUsageTracker()
+        var executedInvocations: [PaletteCommandInvocation] = []
         var executedWindowIDs: [UUID] = []
-        var didSubmitCount = 0
-        let viewModel = CommandPaletteViewModel(
+        var submitCount = 0
+        let viewModel = makeViewModel(
             originWindowID: originWindowID,
             commands: [
-                PaletteCommand(
+                makeCommand(
                     id: "workspace.create",
-                    keywords: ["workspace"],
-                    shortcut: nil,
-                    title: { _ in "New Workspace" },
-                    isAvailable: { _ in true },
-                    execute: { context in
-                        executedWindowIDs.append(context.originWindowID)
-                        return context.actions.createWorkspace(originWindowID: context.originWindowID)
-                    }
+                    title: "New Workspace",
+                    usageKey: "workspace.create",
+                    invocation: .builtIn(.newWorkspace)
                 ),
             ],
-            actions: actions,
             usageTracker: usageTracker,
-            onCancel: {},
+            executeCommand: { invocation, originWindowID in
+                executedInvocations.append(invocation)
+                executedWindowIDs.append(originWindowID)
+                return true
+            },
             onSubmitted: {
-                didSubmitCount += 1
+                submitCount += 1
             }
         )
 
         viewModel.submitSelection()
 
+        XCTAssertEqual(executedInvocations, [.builtIn(.newWorkspace)])
         XCTAssertEqual(executedWindowIDs, [originWindowID])
-        XCTAssertEqual(actions.createdWorkspaceWindowIDs, [originWindowID])
         XCTAssertEqual(usageTracker.recordedCommandIDs, ["workspace.create"])
-        XCTAssertEqual(didSubmitCount, 1)
+        XCTAssertEqual(submitCount, 1)
     }
 
     func testSubmitSelectionDismissesAfterFailedExecution() {
         let usageTracker = MockCommandPaletteUsageTracker()
-        var didSubmitCount = 0
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
-            commands: [
-                PaletteCommand(
-                    id: "noop",
-                    keywords: ["noop"],
-                    shortcut: nil,
-                    title: { _ in "No-op" },
-                    isAvailable: { _ in true },
-                    execute: { _ in false }
-                ),
-            ],
-            actions: MockCommandPaletteActions(),
+        var submitCount = 0
+        let viewModel = makeViewModel(
+            commands: [makeCommand(id: "noop", title: "No-op", usageKey: "noop")],
             usageTracker: usageTracker,
-            onCancel: {},
+            executeCommand: { _, _ in false },
             onSubmitted: {
-                didSubmitCount += 1
+                submitCount += 1
             }
         )
 
         viewModel.submitSelection()
 
         XCTAssertTrue(usageTracker.recordedCommandIDs.isEmpty)
-        XCTAssertEqual(didSubmitCount, 1)
+        XCTAssertEqual(submitCount, 1)
     }
 
     func testEmptyQueryKeepsCatalogOrderEvenWhenUsageCountsDiffer() {
@@ -239,17 +202,13 @@ final class CommandPaletteViewModelTests: XCTestCase {
             "window": 12,
             "workspace": 3,
         ]
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "workspace", title: "New Workspace", keywords: []),
-                makeCommand(id: "window", title: "New Window", keywords: []),
-                makeCommand(id: "tab", title: "New Tab", keywords: []),
+                makeCommand(id: "workspace", title: "New Workspace"),
+                makeCommand(id: "window", title: "New Window"),
+                makeCommand(id: "tab", title: "New Tab"),
             ],
-            actions: MockCommandPaletteActions(),
-            usageTracker: usageTracker,
-            onCancel: {},
-            onSubmitted: {}
+            usageTracker: usageTracker
         )
 
         XCTAssertEqual(viewModel.results.map(\.id), ["workspace", "window", "tab"])
@@ -261,17 +220,13 @@ final class CommandPaletteViewModelTests: XCTestCase {
             "window": 12,
             "workspace": 1,
         ]
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "workspace", title: "New Workspace", keywords: []),
-                makeCommand(id: "window", title: "New Window", keywords: []),
-                makeCommand(id: "tab", title: "New Tab", keywords: []),
+                makeCommand(id: "workspace", title: "New Workspace"),
+                makeCommand(id: "window", title: "New Window"),
+                makeCommand(id: "tab", title: "New Tab"),
             ],
-            actions: MockCommandPaletteActions(),
-            usageTracker: usageTracker,
-            onCancel: {},
-            onSubmitted: {}
+            usageTracker: usageTracker
         )
 
         viewModel.query = "new"
@@ -279,21 +234,15 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.results.map(\.id), ["window", "workspace", "tab"])
     }
 
-    func testStrongerTitleMatchBucketStaysAheadOfMoreFrequentWeakerTitleMatch() {
+    func testStrongerTitleMatchStaysAheadOfMoreFrequentWeakerTitleMatch() {
         let usageTracker = MockCommandPaletteUsageTracker()
-        usageTracker.counts = [
-            "boundary": 40,
-        ]
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        usageTracker.counts = ["boundary": 40]
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "prefix", title: "Workspace Dashboard", keywords: []),
-                makeCommand(id: "boundary", title: "Open Workspace", keywords: []),
+                makeCommand(id: "prefix", title: "Workspace Dashboard"),
+                makeCommand(id: "boundary", title: "Open Workspace"),
             ],
-            actions: MockCommandPaletteActions(),
-            usageTracker: usageTracker,
-            onCancel: {},
-            onSubmitted: {}
+            usageTracker: usageTracker
         )
 
         viewModel.query = "workspace"
@@ -303,19 +252,13 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
     func testTitleMatchesStayAheadOfKeywordMatchesDespiteHigherUsage() {
         let usageTracker = MockCommandPaletteUsageTracker()
-        usageTracker.counts = [
-            "keyword": 25,
-        ]
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
+        usageTracker.counts = ["keyword": 25]
+        let viewModel = makeViewModel(
             commands: [
-                makeCommand(id: "title", title: "Open Workspace", keywords: []),
+                makeCommand(id: "title", title: "Open Workspace"),
                 makeCommand(id: "keyword", title: "Alpha Command", keywords: ["workspace"]),
             ],
-            actions: MockCommandPaletteActions(),
-            usageTracker: usageTracker,
-            onCancel: {},
-            onSubmitted: {}
+            usageTracker: usageTracker
         )
 
         viewModel.query = "workspace"
@@ -323,196 +266,126 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.results.map(\.id), ["title", "keyword"])
     }
 
+    func testNonContiguousQueryMatchesAcrossWordParts() {
+        let viewModel = makeViewModel(
+            commands: [
+                makeCommand(id: "split.down", title: "Split Down"),
+                makeCommand(id: "split.right", title: "Split Right"),
+            ]
+        )
+
+        viewModel.query = "dn"
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["split.down"])
+    }
+
+    func testCompactAbbreviationMatchesAcrossMultipleWords() {
+        let viewModel = makeViewModel(
+            commands: [
+                makeCommand(id: "split.down", title: "Split Down"),
+                makeCommand(id: "split.right", title: "Split Right"),
+                makeCommand(id: "sidebar", title: "Show Sidebar"),
+            ]
+        )
+
+        viewModel.query = "spdn"
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["split.down"])
+    }
+
+    func testRefreshProjectedCommandsUsesLatestProjectedCatalog() {
+        let projectedCommands = ProjectedCommandsBox(
+            value: [makeCommand(id: "alpha", title: "Alpha")]
+        )
+        let viewModel = makeViewModel(projectCommands: { projectedCommands.value })
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["alpha"])
+
+        projectedCommands.value = [
+            makeCommand(id: "beta", title: "Beta"),
+            makeCommand(id: "gamma", title: "Gamma"),
+        ]
+        viewModel.refreshProjectedCommands()
+
+        XCTAssertEqual(viewModel.results.map(\.id), ["beta", "gamma"])
+        XCTAssertEqual(viewModel.selectedResult?.id, "beta")
+    }
+
     func testDismissInvokesCancelCallback() {
-        var didCancelCount = 0
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: UUID(),
-            commands: [makeCommand(id: "alpha", title: "Alpha", keywords: [])],
-            actions: MockCommandPaletteActions(),
+        var cancelCount = 0
+        let viewModel = makeViewModel(
+            commands: [makeCommand(id: "alpha", title: "Alpha")],
             onCancel: {
-                didCancelCount += 1
-            },
-            onSubmitted: {}
+                cancelCount += 1
+            }
         )
 
         viewModel.dismiss()
 
-        XCTAssertEqual(didCancelCount, 1)
+        XCTAssertEqual(cancelCount, 1)
+    }
+
+    private func makeViewModel(
+        originWindowID: UUID = UUID(),
+        commands: [PaletteCommandDescriptor] = [],
+        usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
+        executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
+        onCancel: @escaping () -> Void = {},
+        onSubmitted: @escaping () -> Void = {}
+    ) -> CommandPaletteViewModel {
+        makeViewModel(
+            originWindowID: originWindowID,
+            projectCommands: { commands },
+            usageTracker: usageTracker,
+            executeCommand: executeCommand,
+            onCancel: onCancel,
+            onSubmitted: onSubmitted
+        )
+    }
+
+    private func makeViewModel(
+        originWindowID: UUID = UUID(),
+        projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
+        usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
+        executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
+        onCancel: @escaping () -> Void = {},
+        onSubmitted: @escaping () -> Void = {}
+    ) -> CommandPaletteViewModel {
+        CommandPaletteViewModel(
+            originWindowID: originWindowID,
+            projectCommands: projectCommands,
+            executeCommand: executeCommand,
+            usageTracker: usageTracker,
+            onCancel: onCancel,
+            onSubmitted: onSubmitted
+        )
     }
 
     private func makeCommand(
         id: String,
         title: String,
-        keywords: [String],
-        isAvailable: Bool = true
-    ) -> PaletteCommand {
-        PaletteCommand(
+        keywords: [String] = [],
+        usageKey: String? = nil,
+        shortcut: PaletteShortcut? = nil,
+        invocation: PaletteCommandInvocation = .builtIn(.newWindow)
+    ) -> PaletteCommandDescriptor {
+        PaletteCommandDescriptor(
             id: id,
+            usageKey: usageKey ?? id,
+            title: title,
             keywords: keywords,
-            shortcut: nil,
-            title: { _ in title },
-            isAvailable: { _ in isAvailable },
-            execute: { _ in true }
+            shortcut: shortcut,
+            invocation: invocation
         )
     }
 }
 
 @MainActor
-private final class MockCommandPaletteActions: CommandPaletteActionHandling {
-    var createdWindowIDs: [UUID] = []
-    var createdWorkspaceWindowIDs: [UUID] = []
+private final class ProjectedCommandsBox {
+    var value: [PaletteCommandDescriptor]
 
-    func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
-        _ = originWindowID
-        return nil
-    }
-
-    func canCreateWindow(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func createWindow(originWindowID: UUID) -> Bool {
-        createdWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canCreateWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func createWorkspace(originWindowID: UUID) -> Bool {
-        createdWorkspaceWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canCreateWorkspaceTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func createWorkspaceTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canSplit(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func split(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func canFocusSplit(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func focusSplit(direction: SlotFocusDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func canEqualizeSplits(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func equalizeSplits(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canToggleSidebar(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func toggleSidebar(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func sidebarTitle(originWindowID: UUID) -> String {
-        _ = originWindowID
-        return ToasttyBuiltInCommand.toggleSidebar.title
-    }
-
-    func canClosePanel(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func closePanel(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canRenameWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func renameWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canCloseWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func closeWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canRenameTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func renameTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func canJumpToNextActive(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func jumpToNextActive(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canReloadConfiguration() -> Bool {
-        true
-    }
-
-    func reloadConfiguration() -> Bool {
-        true
+    init(value: [PaletteCommandDescriptor]) {
+        self.value = value
     }
 }
 
@@ -522,7 +395,7 @@ private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking 
     var recordedCommandIDs: [String] = []
 
     func useCount(for commandID: String) -> Int {
-        counts[commandID] ?? 0
+        counts[commandID, default: 0]
     }
 
     func recordSuccessfulExecution(of commandID: String) {

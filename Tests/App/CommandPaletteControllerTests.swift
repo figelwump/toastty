@@ -1,7 +1,7 @@
 import AppKit
-@testable import ToasttyApp
 import CoreState
 import XCTest
+@testable import ToasttyApp
 
 @MainActor
 final class CommandPaletteControllerTests: XCTestCase {
@@ -9,13 +9,15 @@ final class CommandPaletteControllerTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let originWindow = makeOriginWindow(windowID: windowID)
-        let actions = RecordingCommandPaletteActions()
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
-        let controller = CommandPaletteController(
+        let actions = CommandPaletteActionSpy()
+        let catalogStores = try PaletteCatalogStoresFixture()
+        let controller = makeController(
             store: store,
-            terminalRuntimeRegistry: runtimeRegistry,
-            actions: actions
+            runtimeRegistry: runtimeRegistry,
+            actions: actions,
+            catalogStores: catalogStores
         )
         defer {
             controller.dismiss(reason: .cancelled)
@@ -43,10 +45,11 @@ final class CommandPaletteControllerTests: XCTestCase {
 
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
-        let controller = CommandPaletteController(
+        let controller = makeController(
             store: store,
-            terminalRuntimeRegistry: runtimeRegistry,
-            actions: RecordingCommandPaletteActions()
+            runtimeRegistry: runtimeRegistry,
+            actions: CommandPaletteActionSpy(),
+            catalogStores: try PaletteCatalogStoresFixture()
         )
         defer {
             controller.dismiss(reason: .cancelled)
@@ -72,10 +75,11 @@ final class CommandPaletteControllerTests: XCTestCase {
 
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
-        let controller = CommandPaletteController(
+        let controller = makeController(
             store: store,
-            terminalRuntimeRegistry: runtimeRegistry,
-            actions: RecordingCommandPaletteActions()
+            runtimeRegistry: runtimeRegistry,
+            actions: CommandPaletteActionSpy(),
+            catalogStores: try PaletteCatalogStoresFixture()
         )
         defer {
             controller.dismiss(reason: .cancelled)
@@ -103,25 +107,13 @@ final class CommandPaletteControllerTests: XCTestCase {
 
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
-        let splitLayoutCommandController = SplitLayoutCommandController(store: store)
-        let focusedPanelCommandController = FocusedPanelCommandController(
+        let actions = try makeLiveActions(store: store, runtimeRegistry: runtimeRegistry)
+        var restoredWorkspaceIDs: [UUID] = []
+        let controller = makeController(
             store: store,
             runtimeRegistry: runtimeRegistry,
-            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
-        )
-        let actions = CommandPaletteActionHandler(
-            store: store,
-            splitLayoutCommandController: splitLayoutCommandController,
-            focusedPanelCommandController: focusedPanelCommandController,
-            sessionRuntimeStore: SessionRuntimeStore(),
-            supportsConfigurationReload: { true },
-            reloadConfigurationAction: {}
-        )
-        var restoredWorkspaceIDs: [UUID] = []
-        let controller = CommandPaletteController(
-            store: store,
-            terminalRuntimeRegistry: runtimeRegistry,
             actions: actions,
+            catalogStores: try PaletteCatalogStoresFixture(),
             scheduleWorkspaceFocusRestore: { workspaceID, avoidStealingKeyboardFocus in
                 XCTAssertFalse(avoidStealingKeyboardFocus)
                 restoredWorkspaceIDs.append(workspaceID)
@@ -150,14 +142,15 @@ final class CommandPaletteControllerTests: XCTestCase {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let windowID = try XCTUnwrap(store.state.windows.first?.id)
         let originWindow = makeOriginWindow(windowID: windowID)
-        let actions = RecordingCommandPaletteActions()
-        actions.createWorkspaceResult = false
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
-        let controller = CommandPaletteController(
+        let actions = CommandPaletteActionSpy()
+        actions.createWorkspaceResult = false
+        let controller = makeController(
             store: store,
-            terminalRuntimeRegistry: runtimeRegistry,
-            actions: actions
+            runtimeRegistry: runtimeRegistry,
+            actions: actions,
+            catalogStores: try PaletteCatalogStoresFixture()
         )
         defer {
             controller.dismiss(reason: .cancelled)
@@ -173,6 +166,142 @@ final class CommandPaletteControllerTests: XCTestCase {
 
         XCTAssertEqual(actions.createdWorkspaceWindowIDs, [windowID])
         XCTAssertFalse(controller.isPresented)
+    }
+
+    func testPresentedPaletteRefreshesAfterProfileStoresReload() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let originWindow = makeOriginWindow(windowID: windowID)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        let actions = CommandPaletteActionSpy()
+        let catalogStores = try PaletteCatalogStoresFixture()
+        let controller = makeController(
+            store: store,
+            runtimeRegistry: runtimeRegistry,
+            actions: actions,
+            catalogStores: catalogStores
+        )
+        defer {
+            controller.dismiss(reason: .cancelled)
+            originWindow.close()
+        }
+
+        XCTAssertTrue(controller.toggle(originWindowID: windowID))
+        let viewModel = try XCTUnwrap(controller.viewModel)
+        XCTAssertFalse(viewModel.results.contains(where: { $0.id == "agent.run.codex" }))
+        XCTAssertFalse(viewModel.results.contains(where: { $0.id == "terminal-profile.zmx.split-right" }))
+
+        try catalogStores.writeAgentsToml(
+            """
+            [codex]
+            displayName = "Codex"
+            argv = ["codex"]
+            shortcutKey = "c"
+            """
+        )
+        try catalogStores.writeTerminalProfilesToml(
+            """
+            [zmx]
+            displayName = "ZMX"
+            badge = "ZMX"
+            startupCommand = "zmx attach"
+            shortcutKey = "z"
+            """
+        )
+
+        switch catalogStores.agentCatalogStore.reload() {
+        case .success:
+            break
+        case .failure(let error):
+            XCTFail("agent reload failed: \(error)")
+        }
+        switch catalogStores.terminalProfileStore.reload() {
+        case .success:
+            break
+        case .failure(let error):
+            XCTFail("terminal profile reload failed: \(error)")
+        }
+
+        await Task.yield()
+        await Task.yield()
+
+        XCTAssertTrue(viewModel.results.contains(where: { $0.id == "agent.run.codex" }))
+        XCTAssertTrue(viewModel.results.contains(where: { $0.id == "terminal-profile.zmx.split-right" }))
+        XCTAssertTrue(viewModel.results.contains(where: { $0.id == "terminal-profile.zmx.split-down" }))
+    }
+
+    private func makeController(
+        store: AppStore,
+        runtimeRegistry: TerminalRuntimeRegistry,
+        actions: CommandPaletteActionHandling,
+        catalogStores: PaletteCatalogStoresFixture,
+        scheduleWorkspaceFocusRestore: (@MainActor (UUID, Bool) -> Void)? = nil
+    ) -> CommandPaletteController {
+        CommandPaletteController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            actions: actions,
+            agentCatalogStore: catalogStores.agentCatalogStore,
+            terminalProfileStore: catalogStores.terminalProfileStore,
+            profileShortcutRegistryProvider: {
+                makeProfileShortcutRegistry(
+                    terminalProfiles: catalogStores.terminalProfileStore.catalog,
+                    terminalProfilesFilePath: catalogStores.terminalProfileStore.fileURL.path,
+                    agentProfiles: catalogStores.agentCatalogStore.catalog,
+                    agentProfilesFilePath: catalogStores.agentCatalogStore.fileURL.path
+                )
+            },
+            scheduleWorkspaceFocusRestore: scheduleWorkspaceFocusRestore
+        )
+    }
+
+    private func makeLiveActions(
+        store: AppStore,
+        runtimeRegistry: TerminalRuntimeRegistry
+    ) throws -> CommandPaletteActionHandler {
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        runtimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+
+        let agentCatalogStore = AgentCatalogStore(
+            fileManager: .default,
+            homeDirectoryPath: FileManager.default.temporaryDirectory.path
+        )
+        let agentLaunchService = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: runtimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogStore
+        )
+        let terminalProfilesMenuController = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: TerminalProfileStore(
+                fileManager: .default,
+                homeDirectoryPath: FileManager.default.temporaryDirectory.path,
+                environment: [:]
+            ),
+            installShellIntegrationAction: {},
+            openProfilesConfigurationAction: {}
+        )
+
+        return CommandPaletteActionHandler(
+            store: store,
+            splitLayoutCommandController: SplitLayoutCommandController(store: store),
+            focusedPanelCommandController: FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: runtimeRegistry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            ),
+            terminalRuntimeRegistry: runtimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentLaunchService: agentLaunchService,
+            terminalProfilesMenuController: terminalProfilesMenuController,
+            supportsConfigurationReload: { true },
+            reloadConfigurationAction: {},
+            openLocalDocumentAction: { _, _ in false }
+        )
     }
 
     private func makeOriginWindow(windowID: UUID) -> NSWindow {
@@ -235,186 +364,40 @@ final class CommandPalettePanelTests: XCTestCase {
     }
 }
 
-@MainActor
-private final class RecordingCommandPaletteActions: CommandPaletteActionHandling {
-    var createdWindowIDs: [UUID] = []
-    var createdWorkspaceWindowIDs: [UUID] = []
-    var createdWorkspaceTabWindowIDs: [UUID] = []
-    var splitCalls: [RecordedSplitCall] = []
-    var closePanelWindowIDs: [UUID] = []
-    var renamedWorkspaceWindowIDs: [UUID] = []
-    var closedWorkspaceWindowIDs: [UUID] = []
-    var renamedTabWindowIDs: [UUID] = []
-    var tabSelectionCalls: [RecordedTabSelectionCall] = []
-    var jumpedToNextActiveWindowIDs: [UUID] = []
-    var reloadConfigurationCount = 0
-    var createWorkspaceResult = true
-
-    func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
-        _ = originWindowID
-        return nil
-    }
-
-    func canCreateWindow(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func createWindow(originWindowID: UUID) -> Bool {
-        createdWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canCreateWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func createWorkspace(originWindowID: UUID) -> Bool {
-        createdWorkspaceWindowIDs.append(originWindowID)
-        return createWorkspaceResult
-    }
-
-    func canCreateWorkspaceTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func createWorkspaceTab(originWindowID: UUID) -> Bool {
-        createdWorkspaceTabWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canSplit(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func split(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
-        splitCalls.append(RecordedSplitCall(direction: direction, originWindowID: originWindowID))
-        return true
-    }
-
-    func canFocusSplit(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func focusSplit(direction: SlotFocusDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func canEqualizeSplits(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func equalizeSplits(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canToggleSidebar(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func toggleSidebar(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func sidebarTitle(originWindowID: UUID) -> String {
-        _ = originWindowID
-        return ToasttyBuiltInCommand.toggleSidebar.title
-    }
-
-    func canClosePanel(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func closePanel(originWindowID: UUID) -> Bool {
-        closePanelWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canRenameWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func renameWorkspace(originWindowID: UUID) -> Bool {
-        renamedWorkspaceWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canCloseWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func closeWorkspace(originWindowID: UUID) -> Bool {
-        closedWorkspaceWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canRenameTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func renameTab(originWindowID: UUID) -> Bool {
-        renamedTabWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
-        tabSelectionCalls.append(
-            RecordedTabSelectionCall(direction: direction, originWindowID: originWindowID)
-        )
-        return true
-    }
-
-    func canJumpToNextActive(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func jumpToNextActive(originWindowID: UUID) -> Bool {
-        jumpedToNextActiveWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canReloadConfiguration() -> Bool {
-        true
-    }
-
-    func reloadConfiguration() -> Bool {
-        reloadConfigurationCount += 1
-        return true
-    }
-}
-
-private struct RecordedSplitCall: Equatable {
-    let direction: SlotSplitDirection
-    let originWindowID: UUID
-}
-
-private struct RecordedTabSelectionCall: Equatable {
-    let direction: TabNavigationDirection
-    let originWindowID: UUID
-}
-
 private final class FocusableTestView: NSView {
     override var acceptsFirstResponder: Bool { true }
+}
+
+@MainActor
+private struct PaletteCatalogStoresFixture {
+    let tempHomeURL: URL
+    let agentCatalogStore: AgentCatalogStore
+    let terminalProfileStore: TerminalProfileStore
+
+    init() throws {
+        tempHomeURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempHomeURL, withIntermediateDirectories: true)
+        agentCatalogStore = AgentCatalogStore(
+            fileManager: .default,
+            homeDirectoryPath: tempHomeURL.path
+        )
+        terminalProfileStore = TerminalProfileStore(
+            fileManager: .default,
+            homeDirectoryPath: tempHomeURL.path,
+            environment: [:]
+        )
+    }
+
+    func writeAgentsToml(_ contents: String) throws {
+        let url = AgentProfilesFile.fileURL(homeDirectoryPath: tempHomeURL.path)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.appending("\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func writeTerminalProfilesToml(_ contents: String) throws {
+        let url = TerminalProfilesFile.fileURL(homeDirectoryPath: tempHomeURL.path, environment: [:])
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try contents.appending("\n").write(to: url, atomically: true, encoding: .utf8)
+    }
 }

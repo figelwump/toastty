@@ -1,7 +1,7 @@
 # toastty command palette
 
 Date: 2026-04-13
-Updated: 2026-04-17
+Updated: 2026-04-18
 
 This document describes the design and implementation plan for a command palette
 in Toastty. It covers presentation, command sourcing, search and ranking,
@@ -21,8 +21,8 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 5. The palette does not introduce a second command system. It is a thin
    projection over existing command helpers, command controllers, menu titles,
    and shortcut definitions.
-6. Default mode shows commands. `@` is a file-open mode in v1, routing markdown
-   files to markdown panels and HTML files to browser panels.
+6. Default mode shows commands. `@` is a file-open mode in v1, routing local
+   documents to local-document panels and HTML files to browser panels.
 7. Search uses fuzzy scoring with contiguity and word-boundary bonuses, boosted
    by persisted usage frequency.
 8. A `PaletteProvider` protocol keeps modes pluggable. `#` is intentionally
@@ -55,7 +55,7 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - The command palette plan should align with that local-document shape rather
   than inventing a parallel file-open path.
 
-## status update (2026-04-17)
+## status update (2026-04-18)
 
 ### shipped so far
 
@@ -71,6 +71,14 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - The built-in catalog now covers the core split, workspace, window, tab, and
   panel lifecycle commands already routed through existing menu/controller
   paths.
+- Command mode now includes the remaining high-frequency static command
+  families plus dynamic agent-profile launch commands and split-with-terminal-
+  profile commands.
+- Query ranking now uses non-contiguous fuzzy scoring with prefix,
+  word-boundary, and contiguous-run bonuses, with persisted usage as a
+  secondary tiebreak.
+- Presented palettes refresh live when `agents.toml` or `terminal-profiles.toml`
+  reload so newly-added dynamic commands appear without reopening the palette.
 - Tests cover shortcut interception, origin-window targeting, focus
   restoration, catalog execution, and keyboard-navigation behavior.
 - Local smoke validation has been run against the palette shell and its early
@@ -82,28 +90,23 @@ window/panel targeting, `@` file-open mode, and future extensibility.
   external-monitor layout. The palette should stay centered in the origin
   window, but that bug is not resolved yet.
 - The shell is intentionally not feature-complete:
-  - no complete built-in catalog yet
-  - no fuzzy scorer
-  - no usage tracking
   - no `@` mode
   - no menu item
-- The original wave-1 command list was too broad for the first landing. Waves
-  2 and 3 expanded the core catalog, but the split-navigation family is still
-  deferred.
+- The palette command layer is now broad enough to support future CLI
+  automation, but that automation surface is not implemented yet.
 
 ### next chunk
 
-The next chunk should be **pane/split navigation and layout commands**, not
-usage ranking or `@` mode.
+The next chunk should be **`@` file-open mode**, not more command-mode breadth.
 
 That means:
 
-- extend the shared built-in metadata for the split-navigation family
-- add the next high-frequency split commands already backed by existing
-  controller and menu paths
-- keep search simple while the built-in surface is still broadening
-- defer usage ranking, `@` mode, split resizing, and extra split-creation
-  directions until after the navigation slice lands
+- add routed file results without turning `@` into general workspace search
+- reuse the existing local-document and browser command paths
+- keep routing and supported extensions aligned with the local-document
+  implementation rather than inventing a second file-open path
+- defer broader provider systems, richer prefix modes, and menu polish until
+  after `@` mode lands
 
 ## goals
 
@@ -114,7 +117,7 @@ That means:
 - Make panel-local actions behave intuitively: split, close, detach, and
   similar actions should apply to the origin workspace's current focused-panel
   state.
-- Provide a contextual file-open mode in v1 for markdown and HTML files.
+- Provide a contextual file-open mode in v1 for local documents and HTML files.
 - Rank results by relevance and usage frequency so the palette gets faster the
   more it is used.
 - Keep the palette keyboard-native: open, type, navigate with arrows or
@@ -246,7 +249,7 @@ responder.
   - Example: `Switch to Workspace 3`
 - **File-open routed:** resolve a local file result, then route to the correct
   opener for that file type in the origin window
-  - Example: `@README.md` -> markdown panel
+  - Example: `@README.md` -> local-document panel
   - Example: `@index.html` -> browser panel
 
 ## presentation layer
@@ -519,7 +522,9 @@ including:
 - panel commands
 - split/layout commands
 - browser creation commands
-- markdown open commands once the markdown APIs land from the reference worktree
+- local-document open commands
+- dynamic agent-profile launch commands
+- dynamic split-with-terminal-profile commands
 - window and appearance commands
 
 The palette should not invent titles that differ from the menu bar. If the
@@ -545,12 +550,12 @@ keyword-only matches.
 
 ### frequency boost
 
-```text
-finalScore = fuzzyScore * (1 + ln(1 + useCount))
-```
+Usage should stay a secondary ranking signal, not part of the fuzzy score
+itself.
 
-The logarithmic boost prevents a single heavily-used command from dominating
-forever while still surfacing habits.
+Use `ln(1 + useCount)` as a tiebreaker after source priority and fuzzy score so
+habit can reorder equivalent matches without letting a frequently-used weak
+match outrank a stronger one.
 
 ### usage persistence
 
@@ -641,11 +646,8 @@ Important behavior:
 
 #### v1 supported file types
 
-- Markdown:
-  - `.md`
-  - `.markdown`
-  - `.mdown`
-  - `.mkd`
+- Local documents:
+  - use `LocalDocumentClassifier.supportedFilenameExtensions`
 - HTML:
   - `.html`
   - `.htm`
@@ -687,17 +689,17 @@ The file result carries a routed destination rather than a hardcoded panel type.
 
 ```swift
 enum FileOpenDestination {
-    case markdown(filePath: String)
+    case localDocument(filePath: String)
     case browser(fileURLString: String)
 }
 ```
 
 Execution must go through the existing app-owned openers:
 
-- Markdown:
+- Local documents:
   - call `createMarkdownPanelFromCommand(...)`
-  - preserve the markdown implementation's path normalization and same-workspace
-    reuse by file path
+  - preserve the local-document implementation's path normalization and
+    same-workspace reuse by file path
 - HTML:
   - call `createBrowserPanelFromCommand(...)` with `initialURL` set to the local
     `file://` URL string
@@ -710,7 +712,7 @@ supported later, `@` stays the same and only the router table grows.
 For v1, file-open results should use the default placement of the destination
 opener:
 
-- markdown -> `MarkdownPanelCreateRequest.defaultPlacement`
+- local document -> `MarkdownPanelCreateRequest.defaultPlacement`
 - html -> `BrowserPanelCreateRequest.defaultPlacement`
 
 This keeps the first version simple and consistent with existing app-owned open
@@ -787,17 +789,25 @@ app-owned command paths; it does not add new reducer-owned core state.
 
 - implement `UsageTracker`
 - persist under `ToasttyRuntimePaths.configDirectoryURL`
-- apply frequency boost in command ranking
+- apply usage as a secondary ranking tiebreak within command results
 
-### step 4: `@` file-open mode
+### step 4: complete command mode and fuzzy search
+
+- finish the remaining static command families
+- project dynamic agent-profile and terminal-profile commands
+- replace substring matching with a real non-contiguous fuzzy scorer
+- keep command projection flat so the palette and future CLI automation can
+  share the same invocation layer
+
+### step 5: `@` file-open mode
 
 - add `FileOpenProvider`
 - scan contextual roots
-- support markdown and HTML in v1
-- route markdown to markdown panels and HTML to browser panels
+- support local-document formats and HTML in v1
+- route local documents to local-document panels and HTML to browser panels
 - keep `#` reserved
 
-### step 5: polish and validation
+### step 6: polish and validation
 
 - smooth open/dismiss animation
 - selected-row visibility
@@ -855,7 +865,7 @@ app-owned command paths; it does not add new reducer-owned core state.
   - root resolution priority
   - skip-list behavior
   - supported extension filtering
-  - markdown vs HTML routing
+  - local-document vs HTML routing
   - file-scan cancellation on query change
   - symlink-loop safety
 
@@ -864,8 +874,8 @@ app-owned command paths; it does not add new reducer-owned core state.
 - palette open/dismiss lifecycle from the shortcut
 - command execution through existing helper/controller paths
 - command availability in the origin window
-- `@` mode returning markdown and HTML results from a fixture tree
-- markdown result executing through `createMarkdownPanelFromCommand(...)`
+- `@` mode returning local-document and HTML results from a fixture tree
+- local-document result executing through `createMarkdownPanelFromCommand(...)`
 - HTML result executing through `createBrowserPanelFromCommand(...)`
 
 ### automation
@@ -1154,24 +1164,70 @@ Changes:
 
 **5b. Scoring integration**
 
-- apply the logarithmic boost to command results
+- apply usage only as a secondary ranking tiebreak after source and fuzzy score
 
 **5c. Wave-5 validation**
 
 - unit tests for persistence and runtime-aware path resolution
-- manual verification that repeated commands rise for ambiguous prefixes
+- manual verification that repeated commands rise for ambiguous queries without
+  outranking stronger matches
 
-### wave 6: `@` file-open mode
+### wave 6: complete command mode and fuzzy search
 
-Goal: `@` opens markdown and HTML files from a contextual tree, routing each
+Goal: finish command-mode projection before adding a second provider family.
+
+**6a. Command projection**
+
+Changes:
+
+- add the remaining static command families:
+  - split left/up
+  - split resize commands
+  - browser creation commands
+  - local-document open commands
+  - focused-panel mode toggle
+- project workspace-switch commands for the current window
+- project dynamic agent-profile launch commands
+- project dynamic terminal-profile split commands
+- keep command descriptors flat and stable so the palette and future CLI
+  automation can share the same invocation model
+
+**6b. Fuzzy scoring**
+
+New file:
+
+- `Sources/App/CommandPalette/FuzzyScorer.swift`
+
+Changes:
+
+- replace contiguous substring matching with ordered character-by-character
+  fuzzy matching
+- add prefix, word-boundary, and contiguous-run bonuses
+- apply a small gap penalty
+- keep title matches ranked above keyword-only matches
+
+**6c. Live refresh**
+
+- refresh the presented palette when agent profiles or terminal profiles reload
+- ensure newly-added dynamic commands appear without dismissing and reopening
+  the palette
+
+**6d. Wave-6 validation**
+
+- projector tests for the new static and dynamic command families
+- fuzzy-scoring tests for compact queries like `dn` and `spdn`
+- controller tests for live refresh after reloading `agents.toml` and
+  `terminal-profiles.toml`
+
+### wave 7: `@` file-open mode
+
+Goal: `@` opens local documents and HTML files from a contextual tree, routing each
 result to the right destination.
 
-Prerequisite: the markdown APIs from `../toastty-markdown-panel` must be merged
-before wave 6 ships with markdown support. If that merge is not available yet,
-ship HTML-only routing first or hold `@` mode until the markdown command path is
-present.
+Prerequisite: the local-document command path must stay the single source of
+truth for supported document formats and panel reuse behavior.
 
-**6a. Provider and routing**
+**7a. Provider and routing**
 
 New files:
 
@@ -1183,32 +1239,33 @@ Changes:
 - detect `@` as the active provider prefix
 - scan the contextual file root
 - produce routed file results
-- route markdown files through `createMarkdownPanelFromCommand(...)`
+- route local-document files through `createMarkdownPanelFromCommand(...)`
 - route HTML files through `createBrowserPanelFromCommand(...)`
 
-**6b. Markdown alignment**
+**7b. Local-document alignment**
 
-Do not bypass the markdown implementation details that already exist in the
-reference worktree. The palette must preserve:
+Do not bypass the local-document implementation details that already exist in
+the app. The palette must preserve:
 
 - path normalization
-- supported markdown extensions
-- same-workspace reuse by file path
+- supported local-document extensions
+- same-workspace reuse by file path for local documents
 
-That means the palette should not construct raw markdown web panels directly.
+That means the palette should not construct raw local-document web panels
+directly.
 
-**6c. Wave-6 validation**
+**7c. Wave-7 validation**
 
 - provider tests for extension support and skip lists
-- routing tests for markdown vs HTML
-- integration test that opening the same markdown file twice reuses the same
-  markdown panel in the current workspace
+- routing tests for local-document vs HTML
+- integration test that opening the same local document twice reuses the same
+  local-document panel in the current workspace
 
-### wave 7: polish, docs, and end-to-end validation
+### wave 8: polish, docs, and end-to-end validation
 
 Goal: smooth presentation, clear discoverability, and stable verification.
 
-**7a. Polish**
+**8a. Polish**
 
 - fade in/out animation
 - better empty states
@@ -1224,7 +1281,7 @@ Update:
 
 - `docs/keyboard-shortcuts.md` for `Cmd+Shift+P`
 - command palette docs if one is added
-- web/markdown docs when palette-driven file open ships so markdown and browser
+- local-document and browser docs when palette-driven file open ships so those
   entry points stay documented consistently
 
 **7d. End-to-end validation**
@@ -1232,7 +1289,7 @@ Update:
 - adopt one explicit automation strategy from the testing section
 - include a smoke path for:
   - command execution in the correct origin window
-  - `@README.md` opening a markdown panel
+  - `@README.md` opening a local-document panel
   - `@index.html` opening a browser panel
 
 ## resolved decisions
@@ -1252,8 +1309,8 @@ Update:
 - **Default mode:** no-prefix = commands.
 - **File mode:** `@` = file open.
 - **Reserved prefix:** `#` stays available for future heading/symbol queries.
-- **V1 file routing:** markdown files open markdown panels; HTML files open
-  browser panels.
+- **V1 file routing:** local-document files open local-document panels; HTML
+  files open browser panels.
 - **File-search execution model:** bounded async search in v1, not streaming
   partial results.
 - **Usage storage:** runtime-aware config directory, not a hardcoded home path.

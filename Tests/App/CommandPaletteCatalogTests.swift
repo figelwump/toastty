@@ -1,13 +1,15 @@
-import Foundation
-@testable import ToasttyApp
 import CoreState
+import Foundation
 import XCTest
+@testable import ToasttyApp
 
 @MainActor
 final class CommandPaletteCatalogTests: XCTestCase {
     func testBuiltInCommandMetadataUsesStableIdentifiers() {
         XCTAssertEqual(ToasttyBuiltInCommand.splitRight.id, "layout.split.horizontal")
+        XCTAssertEqual(ToasttyBuiltInCommand.splitLeft.id, "layout.split.left")
         XCTAssertEqual(ToasttyBuiltInCommand.splitDown.id, "layout.split.vertical")
+        XCTAssertEqual(ToasttyBuiltInCommand.splitUp.id, "layout.split.up")
         XCTAssertEqual(ToasttyBuiltInCommand.selectPreviousSplit.id, "layout.split.select-previous")
         XCTAssertEqual(ToasttyBuiltInCommand.selectNextSplit.id, "layout.split.select-next")
         XCTAssertEqual(ToasttyBuiltInCommand.navigateSplitUp.id, "layout.split.navigate-up")
@@ -15,28 +17,30 @@ final class CommandPaletteCatalogTests: XCTestCase {
         XCTAssertEqual(ToasttyBuiltInCommand.navigateSplitLeft.id, "layout.split.navigate-left")
         XCTAssertEqual(ToasttyBuiltInCommand.navigateSplitRight.id, "layout.split.navigate-right")
         XCTAssertEqual(ToasttyBuiltInCommand.equalizeSplits.id, "layout.split.equalize")
-        XCTAssertEqual(ToasttyBuiltInCommand.newWindow.id, "window.create")
-        XCTAssertEqual(ToasttyBuiltInCommand.newWorkspace.id, "workspace.create")
-        XCTAssertEqual(ToasttyBuiltInCommand.newTab.id, "workspace.tab.create")
-        XCTAssertEqual(ToasttyBuiltInCommand.toggleSidebar.id, "window.toggle-sidebar")
-        XCTAssertEqual(ToasttyBuiltInCommand.closePanel.id, "panel.close")
-        XCTAssertEqual(ToasttyBuiltInCommand.renameWorkspace.id, "workspace.rename")
-        XCTAssertEqual(ToasttyBuiltInCommand.closeWorkspace.id, "workspace.close")
-        XCTAssertEqual(ToasttyBuiltInCommand.renameTab.id, "workspace.tab.rename")
-        XCTAssertEqual(ToasttyBuiltInCommand.selectPreviousTab.id, "workspace.tab.select-previous")
-        XCTAssertEqual(ToasttyBuiltInCommand.selectNextTab.id, "workspace.tab.select-next")
-        XCTAssertEqual(ToasttyBuiltInCommand.jumpToNextActive.id, "panel.focus-next-unread-or-active")
+        XCTAssertEqual(ToasttyBuiltInCommand.resizeSplitLeft.id, "layout.split.resize-left")
+        XCTAssertEqual(ToasttyBuiltInCommand.resizeSplitRight.id, "layout.split.resize-right")
+        XCTAssertEqual(ToasttyBuiltInCommand.resizeSplitUp.id, "layout.split.resize-up")
+        XCTAssertEqual(ToasttyBuiltInCommand.resizeSplitDown.id, "layout.split.resize-down")
+        XCTAssertEqual(ToasttyBuiltInCommand.newBrowser.id, "browser.create")
+        XCTAssertEqual(ToasttyBuiltInCommand.newBrowserTab.id, "browser.tab.create")
+        XCTAssertEqual(ToasttyBuiltInCommand.newBrowserSplit.id, "browser.split.create")
+        XCTAssertEqual(ToasttyBuiltInCommand.openLocalFile.id, "local-document.open")
+        XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInTab.id, "local-document.open-tab")
+        XCTAssertEqual(ToasttyBuiltInCommand.openLocalFileInSplit.id, "local-document.open-split")
+        XCTAssertEqual(ToasttyBuiltInCommand.toggleFocusedPanelMode.id, "panel.focus-mode.toggle")
         XCTAssertEqual(ToasttyBuiltInCommand.reloadConfiguration.id, "app.reload-configuration")
     }
 
-    func testCatalogExposesExpectedBuiltInsInStableOrder() {
-        let viewModel = makeViewModel(actions: MockCommandPaletteCatalogActions())
+    func testStaticCatalogExposesExpectedBuiltInsInStableOrder() {
+        let commands = makeCommands()
 
         XCTAssertEqual(
-            viewModel.results.map(\.id),
+            commands.map(\.id),
             [
                 ToasttyBuiltInCommand.splitRight.id,
+                ToasttyBuiltInCommand.splitLeft.id,
                 ToasttyBuiltInCommand.splitDown.id,
+                ToasttyBuiltInCommand.splitUp.id,
                 ToasttyBuiltInCommand.selectPreviousSplit.id,
                 ToasttyBuiltInCommand.selectNextSplit.id,
                 ToasttyBuiltInCommand.navigateSplitUp.id,
@@ -44,10 +48,21 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.navigateSplitLeft.id,
                 ToasttyBuiltInCommand.navigateSplitRight.id,
                 ToasttyBuiltInCommand.equalizeSplits.id,
+                ToasttyBuiltInCommand.resizeSplitLeft.id,
+                ToasttyBuiltInCommand.resizeSplitRight.id,
+                ToasttyBuiltInCommand.resizeSplitUp.id,
+                ToasttyBuiltInCommand.resizeSplitDown.id,
                 ToasttyBuiltInCommand.newWorkspace.id,
                 ToasttyBuiltInCommand.newTab.id,
                 ToasttyBuiltInCommand.newWindow.id,
+                ToasttyBuiltInCommand.newBrowser.id,
+                ToasttyBuiltInCommand.newBrowserTab.id,
+                ToasttyBuiltInCommand.newBrowserSplit.id,
+                ToasttyBuiltInCommand.openLocalFile.id,
+                ToasttyBuiltInCommand.openLocalFileInTab.id,
+                ToasttyBuiltInCommand.openLocalFileInSplit.id,
                 ToasttyBuiltInCommand.toggleSidebar.id,
+                ToasttyBuiltInCommand.toggleFocusedPanelMode.id,
                 ToasttyBuiltInCommand.closePanel.id,
                 ToasttyBuiltInCommand.renameWorkspace.id,
                 ToasttyBuiltInCommand.closeWorkspace.id,
@@ -58,419 +73,182 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 ToasttyBuiltInCommand.reloadConfiguration.id,
             ]
         )
+    }
+
+    func testCatalogUsesDynamicTitlesAndLocalFileNaming() throws {
+        let actions = CommandPaletteActionSpy()
+        actions.sidebarTitleValue = "Hide Sidebar"
+        actions.focusedPanelModeTitleValue = "Restore Layout"
+
+        let commands = makeCommands(actions: actions)
+
         XCTAssertEqual(
-            viewModel.results.map(\.title),
-            [
-                ToasttyBuiltInCommand.splitRight.title,
-                ToasttyBuiltInCommand.splitDown.title,
-                ToasttyBuiltInCommand.selectPreviousSplit.title,
-                ToasttyBuiltInCommand.selectNextSplit.title,
-                ToasttyBuiltInCommand.navigateSplitUp.title,
-                ToasttyBuiltInCommand.navigateSplitDown.title,
-                ToasttyBuiltInCommand.navigateSplitLeft.title,
-                ToasttyBuiltInCommand.navigateSplitRight.title,
-                ToasttyBuiltInCommand.equalizeSplits.title,
-                ToasttyBuiltInCommand.newWorkspace.title,
-                ToasttyBuiltInCommand.newTab.title,
-                ToasttyBuiltInCommand.newWindow.title,
-                ToasttyBuiltInCommand.toggleSidebar.title,
-                ToasttyBuiltInCommand.closePanel.title,
-                ToasttyBuiltInCommand.renameWorkspace.title,
-                ToasttyBuiltInCommand.closeWorkspace.title,
-                ToasttyBuiltInCommand.renameTab.title,
-                ToasttyBuiltInCommand.selectPreviousTab.title,
-                ToasttyBuiltInCommand.selectNextTab.title,
-                ToasttyBuiltInCommand.jumpToNextActive.title,
-                ToasttyBuiltInCommand.reloadConfiguration.title,
-            ]
+            try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.toggleSidebar.id })).title,
+            "Hide Sidebar"
         )
         XCTAssertEqual(
-            viewModel.results.map { $0.command.shortcut?.symbolLabel },
-            [
-                ToasttyBuiltInCommand.splitRight.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.splitDown.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.selectPreviousSplit.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.selectNextSplit.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.navigateSplitUp.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.navigateSplitDown.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.navigateSplitLeft.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.navigateSplitRight.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.equalizeSplits.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.newWorkspace.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.newTab.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.newWindow.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.toggleSidebar.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.closePanel.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.renameWorkspace.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.closeWorkspace.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.renameTab.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.selectPreviousTab.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.selectNextTab.requiredShortcut.symbolLabel,
-                ToasttyBuiltInCommand.jumpToNextActive.requiredShortcut.symbolLabel,
-                nil,
-            ]
+            try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.toggleFocusedPanelMode.id })).title,
+            "Restore Layout"
+        )
+        XCTAssertEqual(
+            commands.filter { $0.id.hasPrefix("local-document.") }.map(\.title),
+            ["Open Local File", "Open Local File in Tab", "Open Local File in Split"]
         )
     }
 
-    func testCatalogKeepsSplitNavigationBlockOrderedBeforeWorkspaceCommands() {
-        let viewModel = makeViewModel(actions: MockCommandPaletteCatalogActions())
-
-        XCTAssertEqual(
-            Array(viewModel.results.map(\.id).prefix(9)),
-            [
-                ToasttyBuiltInCommand.splitRight.id,
-                ToasttyBuiltInCommand.splitDown.id,
-                ToasttyBuiltInCommand.selectPreviousSplit.id,
-                ToasttyBuiltInCommand.selectNextSplit.id,
-                ToasttyBuiltInCommand.navigateSplitUp.id,
-                ToasttyBuiltInCommand.navigateSplitDown.id,
-                ToasttyBuiltInCommand.navigateSplitLeft.id,
-                ToasttyBuiltInCommand.navigateSplitRight.id,
-                ToasttyBuiltInCommand.equalizeSplits.id,
-            ]
-        )
-    }
-
-    func testCatalogHidesReloadConfigurationWhenUnsupported() {
-        let actions = MockCommandPaletteCatalogActions()
+    func testCatalogFiltersUnavailableCommands() {
+        let actions = CommandPaletteActionSpy()
+        actions.canEqualizeSplitsValue = false
+        actions.canCreateBrowserValue = false
+        actions.canOpenLocalDocumentValue = false
         actions.canReloadValue = false
 
-        let viewModel = makeViewModel(actions: actions)
+        let commands = makeCommands(actions: actions)
 
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id })
-        )
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.equalizeSplits.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.newBrowser.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.openLocalFile.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.reloadConfiguration.id }))
     }
 
-    func testCatalogHidesRenameWorkspaceWhenUnavailable() {
-        let actions = MockCommandPaletteCatalogActions()
-        actions.canRenameWorkspaceValue = false
+    func testCatalogProjectsWorkspaceSwitchCommandsWithoutUsageKeys() throws {
+        let actions = CommandPaletteActionSpy()
+        let workspaceID = UUID()
+        actions.workspaceSwitchOptionsValue = [
+            PaletteWorkspaceSwitchOption(
+                workspaceID: workspaceID,
+                title: "Review",
+                shortcut: PaletteShortcut(symbolLabel: "\u{2325}1")
+            ),
+        ]
 
-        let viewModel = makeViewModel(actions: actions)
-
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.renameWorkspace.id })
+        let commands = makeCommands(actions: actions)
+        let workspaceCommand = try XCTUnwrap(
+            commands.first(where: { $0.id == "workspace.switch.\(workspaceID.uuidString)" })
         )
+
+        XCTAssertEqual(workspaceCommand.title, "Switch to Workspace: Review")
+        XCTAssertNil(workspaceCommand.usageKey)
+        XCTAssertEqual(workspaceCommand.shortcut?.symbolLabel, "\u{2325}1")
+        XCTAssertEqual(workspaceCommand.invocation, .workspaceSwitch(workspaceID: workspaceID))
     }
 
-    func testCatalogHidesJumpToNextActiveWhenUnavailable() {
-        let actions = MockCommandPaletteCatalogActions()
-        actions.canJumpToNextActiveValue = false
-
-        let viewModel = makeViewModel(actions: actions)
-
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.jumpToNextActive.id })
+    func testCatalogProjectsAgentProfileCommandsWithStableIDsAndShortcuts() throws {
+        let actions = CommandPaletteActionSpy()
+        actions.allowedAgentProfileIDs = ["codex"]
+        let agentCatalog = AgentCatalog(
+            profiles: [
+                AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"], shortcutKey: "c"),
+                AgentProfile(id: "claude", displayName: "Claude", argv: ["claude"], shortcutKey: "d"),
+            ]
         )
+
+        let commands = makeCommands(
+            actions: actions,
+            agentCatalog: agentCatalog,
+            profileShortcutRegistry: makeProfileShortcutRegistry(agentProfiles: agentCatalog)
+        )
+
+        let agentCommand = try XCTUnwrap(commands.first(where: { $0.id == "agent.run.codex" }))
+        XCTAssertEqual(agentCommand.title, "Run Agent: Codex")
+        XCTAssertEqual(agentCommand.shortcut?.symbolLabel, "\u{2325}\u{2318}C")
+        XCTAssertEqual(agentCommand.invocation, .agentProfileLaunch(profileID: "codex"))
+        XCTAssertFalse(commands.contains(where: { $0.id == "agent.run.claude" }))
     }
 
-    func testCatalogHidesSplitNavigationWhenUnavailable() {
-        let actions = MockCommandPaletteCatalogActions()
-        actions.canFocusSplitValue = false
+    func testCatalogProjectsTerminalProfileSplitCommandsWithStableIDsAndShortcuts() throws {
+        let actions = CommandPaletteActionSpy()
+        let terminalProfiles = TerminalProfileCatalog(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach",
+                    shortcutKey: "z"
+                ),
+            ]
+        )
 
-        let viewModel = makeViewModel(actions: actions)
+        let commands = makeCommands(
+            actions: actions,
+            terminalProfileCatalog: terminalProfiles,
+            profileShortcutRegistry: makeProfileShortcutRegistry(terminalProfiles: terminalProfiles)
+        )
 
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousSplit.id })
+        let splitRightCommand = try XCTUnwrap(
+            commands.first(where: { $0.id == "terminal-profile.zmx.split-right" })
         )
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextSplit.id })
+        let splitDownCommand = try XCTUnwrap(
+            commands.first(where: { $0.id == "terminal-profile.zmx.split-down" })
         )
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.navigateSplitUp.id })
+
+        XCTAssertEqual(splitRightCommand.title, "Split Right With ZMX")
+        XCTAssertEqual(splitRightCommand.shortcut?.symbolLabel, "\u{2325}\u{2318}Z")
+        XCTAssertEqual(
+            splitRightCommand.invocation,
+            .terminalProfileSplit(profileID: "zmx", direction: .right)
         )
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.navigateSplitDown.id })
-        )
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.navigateSplitLeft.id })
-        )
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.navigateSplitRight.id })
-        )
+        XCTAssertEqual(splitDownCommand.shortcut?.symbolLabel, "\u{2325}\u{21E7}\u{2318}Z")
     }
 
-    func testCatalogHidesEqualizeSplitsWhenUnavailable() {
-        let actions = MockCommandPaletteCatalogActions()
-        actions.canEqualizeSplitsValue = false
-
-        let viewModel = makeViewModel(actions: actions)
-
-        XCTAssertFalse(
-            viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.equalizeSplits.id })
-        )
-    }
-
-    func testCatalogExecutesNewWindowAgainstOriginWindowID() {
+    func testCatalogInvocationsExecuteAgainstOriginWindowID() throws {
         let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
+        let workspaceID = UUID()
+        let actions = CommandPaletteActionSpy()
+        actions.workspaceSwitchOptionsValue = [
+            PaletteWorkspaceSwitchOption(workspaceID: workspaceID, title: "Review", shortcut: nil),
+        ]
+        let agentCatalog = AgentCatalog(
+            profiles: [AgentProfile(id: "codex", displayName: "Codex", argv: ["codex"])]
+        )
+        let terminalProfiles = TerminalProfileCatalog(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach"
+                ),
+            ]
+        )
 
-        viewModel.query = ToasttyBuiltInCommand.newWindow.title.lowercased()
-        viewModel.submitSelection()
+        let commands = makeCommands(
+            originWindowID: originWindowID,
+            actions: actions,
+            agentCatalog: agentCatalog,
+            terminalProfileCatalog: terminalProfiles,
+            profileShortcutRegistry: makeProfileShortcutRegistry(
+                terminalProfiles: terminalProfiles,
+                agentProfiles: agentCatalog
+            )
+        )
+
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == ToasttyBuiltInCommand.newWindow.id })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "workspace.switch.\(workspaceID.uuidString)" })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "agent.run.codex" })).invocation, originWindowID: originWindowID))
+        XCTAssertTrue(actions.execute(try XCTUnwrap(commands.first(where: { $0.id == "terminal-profile.zmx.split-right" })).invocation, originWindowID: originWindowID))
 
         XCTAssertEqual(actions.createdWindowIDs, [originWindowID])
-    }
-
-    func testCatalogExecutesNewTabAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.newTab.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.createdWorkspaceTabWindowIDs, [originWindowID])
-    }
-
-    func testNewTabQueryDoesNotSurfaceClosePanel() {
-        let viewModel = makeViewModel(actions: MockCommandPaletteCatalogActions())
-
-        viewModel.query = "new tab"
-
-        XCTAssertEqual(viewModel.results.map(\.id), [ToasttyBuiltInCommand.newTab.id])
-    }
-
-    func testCatalogExecutesSplitDownAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.splitDown.title.lowercased()
-        viewModel.submitSelection()
-
         XCTAssertEqual(
-            actions.splitCalls,
-            [RecordedCatalogSplitCall(direction: .down, originWindowID: originWindowID)]
+            actions.workspaceSwitchCalls,
+            [RecordedPaletteWorkspaceSwitchCall(workspaceID: workspaceID, originWindowID: originWindowID)]
         )
-    }
-
-    func testCatalogExecutesSelectPreviousSplitAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.selectPreviousSplit.title.lowercased()
-        viewModel.submitSelection()
-
         XCTAssertEqual(
-            actions.focusSplitCalls,
-            [RecordedCatalogFocusSplitCall(direction: .previous, originWindowID: originWindowID)]
+            actions.launchedAgentCalls,
+            [RecordedPaletteAgentLaunchCall(profileID: "codex", originWindowID: originWindowID)]
         )
-    }
-
-    func testCatalogExecutesSelectNextSplitAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.selectNextSplit.title.lowercased()
-        viewModel.submitSelection()
-
         XCTAssertEqual(
-            actions.focusSplitCalls,
-            [RecordedCatalogFocusSplitCall(direction: .next, originWindowID: originWindowID)]
+            actions.terminalProfileSplitCalls,
+            [RecordedPaletteTerminalProfileSplitCall(profileID: "zmx", direction: .right, originWindowID: originWindowID)]
         )
-    }
-
-    func testCatalogExecutesNavigateSplitUpAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.navigateSplitUp.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(
-            actions.focusSplitCalls,
-            [RecordedCatalogFocusSplitCall(direction: .up, originWindowID: originWindowID)]
-        )
-    }
-
-    func testCatalogExecutesNavigateSplitDownAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.navigateSplitDown.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(
-            actions.focusSplitCalls,
-            [RecordedCatalogFocusSplitCall(direction: .down, originWindowID: originWindowID)]
-        )
-    }
-
-    func testCatalogExecutesNavigateSplitLeftAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.navigateSplitLeft.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(
-            actions.focusSplitCalls,
-            [RecordedCatalogFocusSplitCall(direction: .left, originWindowID: originWindowID)]
-        )
-    }
-
-    func testCatalogExecutesNavigateSplitRightAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.navigateSplitRight.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(
-            actions.focusSplitCalls,
-            [RecordedCatalogFocusSplitCall(direction: .right, originWindowID: originWindowID)]
-        )
-    }
-
-    func testCatalogExecutesEqualizeSplitsAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.equalizeSplits.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.equalizedSplitWindowIDs, [originWindowID])
-    }
-
-    func testCatalogExecutesClosePanelAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.closePanel.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.closedPanelWindowIDs, [originWindowID])
-    }
-
-    func testCatalogExecutesRenameWorkspaceAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.renameWorkspace.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.renamedWorkspaceWindowIDs, [originWindowID])
-    }
-
-    func testCatalogExecutesCloseWorkspaceAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.closeWorkspace.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.closedWorkspaceWindowIDs, [originWindowID])
-    }
-
-    func testCatalogExecutesRenameTabAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.renameTab.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.renamedTabWindowIDs, [originWindowID])
-    }
-
-    func testCatalogExecutesSelectPreviousTabAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.selectPreviousTab.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(
-            actions.tabSelectionCalls,
-            [RecordedCatalogTabSelectionCall(direction: .previous, originWindowID: originWindowID)]
-        )
-    }
-
-    func testCatalogExecutesSelectNextTabAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.selectNextTab.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(
-            actions.tabSelectionCalls,
-            [RecordedCatalogTabSelectionCall(direction: .next, originWindowID: originWindowID)]
-        )
-    }
-
-    func testCatalogExecutesJumpToNextActiveAgainstOriginWindowID() {
-        let originWindowID = UUID()
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.jumpToNextActive.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.jumpToNextActiveWindowIDs, [originWindowID])
-    }
-
-    func testCatalogExecutesReloadConfigurationWhenSupported() {
-        let actions = MockCommandPaletteCatalogActions()
-        let viewModel = makeViewModel(actions: actions)
-
-        viewModel.query = ToasttyBuiltInCommand.reloadConfiguration.title.lowercased()
-        viewModel.submitSelection()
-
-        XCTAssertEqual(actions.reloadConfigurationCount, 1)
-    }
-
-    func testCatalogDoesNotExecuteNewWindowAfterOriginWindowCloses() throws {
-        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
-        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
-        let actions = makeLiveActions(store: store)
-        var submitCount = 0
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: originWindowID,
-            commands: CommandPaletteCatalog.commands(),
-            actions: actions,
-            onCancel: {},
-            onSubmitted: {
-                submitCount += 1
-            }
-        )
-
-        viewModel.query = ToasttyBuiltInCommand.newWindow.title.lowercased()
-        XCTAssertTrue(store.send(.closeWindow(windowID: originWindowID)))
-
-        viewModel.submitSelection()
-
-        XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(submitCount, 1)
     }
 
     func testCatalogDoesNotExecuteNewWorkspaceAfterOriginWindowCloses() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
-        let actions = makeLiveActions(store: store)
-        var submitCount = 0
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: originWindowID,
-            commands: CommandPaletteCatalog.commands(),
-            actions: actions,
-            onCancel: {},
-            onSubmitted: {
-                submitCount += 1
-            }
-        )
+        let actions = try makeLiveActions(store: store)
+        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
 
         viewModel.query = ToasttyBuiltInCommand.newWorkspace.title.lowercased()
         XCTAssertTrue(store.send(.closeWindow(windowID: originWindowID)))
@@ -478,24 +256,14 @@ final class CommandPaletteCatalogTests: XCTestCase {
         viewModel.submitSelection()
 
         XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(submitCount, 1)
     }
 
     func testCatalogDoesNotExecuteNavigateSplitAfterOriginWindowCloses() throws {
         let state = try XCTUnwrap(AutomationFixtureLoader.load(named: "split-workspace"))
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
-        let actions = makeLiveActions(store: store)
-        var submitCount = 0
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: originWindowID,
-            commands: CommandPaletteCatalog.commands(),
-            actions: actions,
-            onCancel: {},
-            onSubmitted: {
-                submitCount += 1
-            }
-        )
+        let actions = try makeLiveActions(store: store)
+        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
 
         viewModel.query = ToasttyBuiltInCommand.navigateSplitLeft.title.lowercased()
         XCTAssertTrue(store.send(.closeWindow(windowID: originWindowID)))
@@ -503,24 +271,14 @@ final class CommandPaletteCatalogTests: XCTestCase {
         viewModel.submitSelection()
 
         XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(submitCount, 1)
     }
 
     func testCatalogDoesNotExecuteEqualizeSplitsAfterOriginWindowCloses() throws {
         let state = try XCTUnwrap(AutomationFixtureLoader.load(named: "split-workspace"))
         let store = AppStore(state: state, persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
-        let actions = makeLiveActions(store: store)
-        var submitCount = 0
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: originWindowID,
-            commands: CommandPaletteCatalog.commands(),
-            actions: actions,
-            onCancel: {},
-            onSubmitted: {
-                submitCount += 1
-            }
-        )
+        let actions = try makeLiveActions(store: store)
+        let viewModel = makeViewModel(originWindowID: originWindowID, actions: actions)
 
         viewModel.query = ToasttyBuiltInCommand.equalizeSplits.title.lowercased()
         XCTAssertTrue(store.send(.closeWindow(windowID: originWindowID)))
@@ -528,43 +286,165 @@ final class CommandPaletteCatalogTests: XCTestCase {
         viewModel.submitSelection()
 
         XCTAssertTrue(store.state.windows.isEmpty)
-        XCTAssertEqual(submitCount, 1)
+    }
+
+    func testCatalogDoesNotExecuteTerminalProfileSplitWhenProfileIsUnavailable() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.selectedWorkspace?.id)
+        let initialPanelCount = try XCTUnwrap(store.state.workspacesByID[workspaceID]?.panels.count)
+
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        runtimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+
+        let configHome = try TemporaryPaletteConfigHome()
+        let agentCatalogStore = AgentCatalogStore(
+            fileManager: .default,
+            homeDirectoryPath: configHome.url.path
+        )
+        let terminalProfileStore = TerminalProfileStore(
+            fileManager: .default,
+            homeDirectoryPath: configHome.url.path,
+            environment: [:]
+        )
+        let actions = CommandPaletteActionHandler(
+            store: store,
+            splitLayoutCommandController: SplitLayoutCommandController(store: store),
+            focusedPanelCommandController: FocusedPanelCommandController(
+                store: store,
+                runtimeRegistry: runtimeRegistry,
+                slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+            ),
+            terminalRuntimeRegistry: runtimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentLaunchService: AgentLaunchService(
+                store: store,
+                terminalCommandRouter: runtimeRegistry,
+                sessionRuntimeStore: sessionRuntimeStore,
+                agentCatalogProvider: agentCatalogStore
+            ),
+            terminalProfilesMenuController: TerminalProfilesMenuController(
+                store: store,
+                terminalRuntimeRegistry: runtimeRegistry,
+                terminalProfileProvider: terminalProfileStore,
+                installShellIntegrationAction: {},
+                openProfilesConfigurationAction: {}
+            ),
+            supportsConfigurationReload: { true },
+            reloadConfigurationAction: {},
+            openLocalDocumentAction: { _, _ in false }
+        )
+        let staleCatalog = TerminalProfileCatalog(
+            profiles: [
+                TerminalProfile(
+                    id: "zmx",
+                    displayName: "ZMX",
+                    badgeLabel: "ZMX",
+                    startupCommand: "zmx attach"
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            originWindowID: originWindowID,
+            actions: actions,
+            terminalProfileCatalog: staleCatalog
+        )
+
+        viewModel.query = "split right with zmx"
+        viewModel.submitSelection()
+
+        XCTAssertEqual(store.state.workspacesByID[workspaceID]?.panels.count, initialPanelCount)
     }
 
     func testCatalogHidesTabNavigationForSingleTabWorkspace() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
-        let viewModel = CommandPaletteViewModel(
-            originWindowID: originWindowID,
-            commands: CommandPaletteCatalog.commands(),
-            actions: makeLiveActions(store: store),
-            onCancel: {},
-            onSubmitted: {}
-        )
+        let actions = try makeLiveActions(store: store)
 
-        XCTAssertFalse(viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousTab.id }))
-        XCTAssertFalse(viewModel.results.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextTab.id }))
+        let commands = makeCommands(originWindowID: originWindowID, actions: actions)
+
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectPreviousTab.id }))
+        XCTAssertFalse(commands.contains(where: { $0.id == ToasttyBuiltInCommand.selectNextTab.id }))
+    }
+
+    private func makeCommands(
+        originWindowID: UUID = UUID(),
+        actions: CommandPaletteActionHandling = CommandPaletteActionSpy(),
+        agentCatalog: AgentCatalog = .empty,
+        terminalProfileCatalog: TerminalProfileCatalog = .empty,
+        profileShortcutRegistry: ProfileShortcutRegistry = makeProfileShortcutRegistry()
+    ) -> [PaletteCommandDescriptor] {
+        CommandPaletteCatalog.commands(
+            originWindowID: originWindowID,
+            actions: actions,
+            agentCatalog: agentCatalog,
+            terminalProfileCatalog: terminalProfileCatalog,
+            profileShortcutRegistry: profileShortcutRegistry
+        )
     }
 
     private func makeViewModel(
-        originWindowID: UUID = UUID(),
-        actions: MockCommandPaletteCatalogActions
+        originWindowID: UUID,
+        actions: CommandPaletteActionHandling,
+        agentCatalog: AgentCatalog = .empty,
+        terminalProfileCatalog: TerminalProfileCatalog = .empty,
+        profileShortcutRegistry: ProfileShortcutRegistry = makeProfileShortcutRegistry()
     ) -> CommandPaletteViewModel {
         CommandPaletteViewModel(
             originWindowID: originWindowID,
-            commands: CommandPaletteCatalog.commands(),
-            actions: actions,
+            projectCommands: {
+                CommandPaletteCatalog.commands(
+                    originWindowID: originWindowID,
+                    actions: actions,
+                    agentCatalog: agentCatalog,
+                    terminalProfileCatalog: terminalProfileCatalog,
+                    profileShortcutRegistry: profileShortcutRegistry
+                )
+            },
+            executeCommand: { invocation, originWindowID in
+                actions.execute(invocation, originWindowID: originWindowID)
+            },
             onCancel: {},
             onSubmitted: {}
         )
     }
 
-    private func makeLiveActions(store: AppStore) -> CommandPaletteActionHandler {
+    private func makeLiveActions(store: AppStore) throws -> CommandPaletteActionHandler {
         let runtimeRegistry = TerminalRuntimeRegistry()
         runtimeRegistry.bind(store: store)
+
         let sessionRuntimeStore = SessionRuntimeStore()
         sessionRuntimeStore.bind(store: store)
         runtimeRegistry.bind(sessionLifecycleTracker: sessionRuntimeStore)
+
+        let configHome = try TemporaryPaletteConfigHome()
+        let agentCatalogStore = AgentCatalogStore(
+            fileManager: .default,
+            homeDirectoryPath: configHome.url.path
+        )
+        let terminalProfileStore = TerminalProfileStore(
+            fileManager: .default,
+            homeDirectoryPath: configHome.url.path,
+            environment: [:]
+        )
+        let agentLaunchService = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: runtimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogStore
+        )
+        let terminalProfilesMenuController = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: terminalProfileStore,
+            installShellIntegrationAction: {},
+            openProfilesConfigurationAction: {}
+        )
+
         return CommandPaletteActionHandler(
             store: store,
             splitLayoutCommandController: SplitLayoutCommandController(store: store),
@@ -573,214 +453,23 @@ final class CommandPaletteCatalogTests: XCTestCase {
                 runtimeRegistry: runtimeRegistry,
                 slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
             ),
+            terminalRuntimeRegistry: runtimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
+            agentLaunchService: agentLaunchService,
+            terminalProfilesMenuController: terminalProfilesMenuController,
             supportsConfigurationReload: { true },
-            reloadConfigurationAction: {}
+            reloadConfigurationAction: {},
+            openLocalDocumentAction: { _, _ in false }
         )
     }
 }
 
-@MainActor
-private final class MockCommandPaletteCatalogActions: CommandPaletteActionHandling {
-    var canCreateWindowValue = true
-    var canCreateWorkspaceValue = true
-    var canCreateWorkspaceTabValue = true
-    var canFocusSplitValue = true
-    var canEqualizeSplitsValue = true
-    var canToggleSidebarValue = true
-    var canClosePanelValue = true
-    var canRenameWorkspaceValue = true
-    var canCloseWorkspaceValue = true
-    var canRenameTabValue = true
-    var canSelectPreviousTabValue = true
-    var canSelectNextTabValue = true
-    var canJumpToNextActiveValue = true
-    var canReloadValue = true
-    var createdWindowIDs: [UUID] = []
-    var createdWorkspaceTabWindowIDs: [UUID] = []
-    var splitCalls: [RecordedCatalogSplitCall] = []
-    var focusSplitCalls: [RecordedCatalogFocusSplitCall] = []
-    var equalizedSplitWindowIDs: [UUID] = []
-    var closedPanelWindowIDs: [UUID] = []
-    var renamedWorkspaceWindowIDs: [UUID] = []
-    var closedWorkspaceWindowIDs: [UUID] = []
-    var renamedTabWindowIDs: [UUID] = []
-    var tabSelectionCalls: [RecordedCatalogTabSelectionCall] = []
-    var jumpToNextActiveWindowIDs: [UUID] = []
-    var reloadConfigurationCount = 0
+private struct TemporaryPaletteConfigHome {
+    let url: URL
 
-    func commandSelection(originWindowID: UUID) -> WindowCommandSelection? {
-        _ = originWindowID
-        return nil
+    init() throws {
+        url = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
-
-    func canCreateWindow(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canCreateWindowValue
-    }
-
-    func createWindow(originWindowID: UUID) -> Bool {
-        createdWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canCreateWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canCreateWorkspaceValue
-    }
-
-    func createWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func canCreateWorkspaceTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canCreateWorkspaceTabValue
-    }
-
-    func createWorkspaceTab(originWindowID: UUID) -> Bool {
-        createdWorkspaceTabWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canSplit(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
-        _ = direction
-        _ = originWindowID
-        return true
-    }
-
-    func split(direction: SlotSplitDirection, originWindowID: UUID) -> Bool {
-        splitCalls.append(RecordedCatalogSplitCall(direction: direction, originWindowID: originWindowID))
-        return true
-    }
-
-    func canFocusSplit(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canFocusSplitValue
-    }
-
-    func focusSplit(direction: SlotFocusDirection, originWindowID: UUID) -> Bool {
-        focusSplitCalls.append(RecordedCatalogFocusSplitCall(direction: direction, originWindowID: originWindowID))
-        return true
-    }
-
-    func canEqualizeSplits(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canEqualizeSplitsValue
-    }
-
-    func equalizeSplits(originWindowID: UUID) -> Bool {
-        equalizedSplitWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canToggleSidebar(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canToggleSidebarValue
-    }
-
-    func toggleSidebar(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return true
-    }
-
-    func sidebarTitle(originWindowID: UUID) -> String {
-        _ = originWindowID
-        return ToasttyBuiltInCommand.toggleSidebar.title
-    }
-
-    func canClosePanel(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canClosePanelValue
-    }
-
-    func closePanel(originWindowID: UUID) -> Bool {
-        closedPanelWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canRenameWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canRenameWorkspaceValue
-    }
-
-    func renameWorkspace(originWindowID: UUID) -> Bool {
-        renamedWorkspaceWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canCloseWorkspace(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canCloseWorkspaceValue
-    }
-
-    func closeWorkspace(originWindowID: UUID) -> Bool {
-        closedWorkspaceWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canRenameTab(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canRenameTabValue
-    }
-
-    func renameTab(originWindowID: UUID) -> Bool {
-        renamedTabWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canSelectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        switch direction {
-        case .previous:
-            return canSelectPreviousTabValue
-        case .next:
-            return canSelectNextTabValue
-        }
-    }
-
-    func selectAdjacentTab(direction: TabNavigationDirection, originWindowID: UUID) -> Bool {
-        tabSelectionCalls.append(
-            RecordedCatalogTabSelectionCall(direction: direction, originWindowID: originWindowID)
-        )
-        return true
-    }
-
-    func canJumpToNextActive(originWindowID: UUID) -> Bool {
-        _ = originWindowID
-        return canJumpToNextActiveValue
-    }
-
-    func jumpToNextActive(originWindowID: UUID) -> Bool {
-        jumpToNextActiveWindowIDs.append(originWindowID)
-        return true
-    }
-
-    func canReloadConfiguration() -> Bool {
-        canReloadValue
-    }
-
-    func reloadConfiguration() -> Bool {
-        guard canReloadValue else {
-            return false
-        }
-        reloadConfigurationCount += 1
-        return true
-    }
-}
-
-private struct RecordedCatalogSplitCall: Equatable {
-    let direction: SlotSplitDirection
-    let originWindowID: UUID
-}
-
-private struct RecordedCatalogFocusSplitCall: Equatable {
-    let direction: SlotFocusDirection
-    let originWindowID: UUID
-}
-
-private struct RecordedCatalogTabSelectionCall: Equatable {
-    let direction: TabNavigationDirection
-    let originWindowID: UUID
 }

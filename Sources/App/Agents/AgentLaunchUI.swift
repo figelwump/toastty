@@ -3,18 +3,21 @@ import Foundation
 
 @MainActor
 enum AgentLaunchUI {
+    @discardableResult
     static func launch(
         profileID: String,
         workspaceID: UUID?,
         agentLaunchService: AgentLaunchService
-    ) {
+    ) -> Bool {
         do {
             _ = try agentLaunchService.launch(
                 profileID: profileID,
                 workspaceID: workspaceID
             )
+            return true
         } catch {
             presentLaunchError(error)
+            return false
         }
     }
 
