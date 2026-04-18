@@ -37,6 +37,29 @@ enum AppURLRoute: Equatable {
 }
 
 enum AppURLRouter {
+    private static func externalOpenTarget(for url: URL) -> URL {
+        guard url.scheme == nil,
+              let localFileURL = localFileURL(forExternalOpen: url) else {
+            return url
+        }
+
+        return localFileURL
+    }
+
+    private static func localFileURL(forExternalOpen url: URL) -> URL? {
+        let path = url.path
+        guard path.hasPrefix("/") || path.hasPrefix("~/") else {
+            return nil
+        }
+
+        let expandedPath = NSString(string: path).standardizingPath
+        guard expandedPath.isEmpty == false else {
+            return nil
+        }
+
+        return URL(filePath: expandedPath)
+    }
+
     static func route(
         for url: URL,
         preferences: URLRoutingPreferences,
@@ -64,7 +87,7 @@ enum AppURLRouter {
         let resolvedPreferences = preferences ?? appStore.urlRoutingPreferences
         switch route(for: url, preferences: resolvedPreferences, useAlternatePlacement: useAlternatePlacement) {
         case .external:
-            return openExternally(url)
+            return openExternally(externalOpenTarget(for: url))
         case .toasttyBrowser(let placement):
             if appStore.openURLInBrowser(
                 preferredWindowID: preferredWindowID,
@@ -73,7 +96,7 @@ enum AppURLRouter {
             ) {
                 return true
             }
-            return openExternally(url)
+            return openExternally(externalOpenTarget(for: url))
         }
     }
 }
