@@ -67,14 +67,15 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - Command execution is anchored to `originWindowID`, so commands route to the
   window the palette came from instead of the palette window itself.
 - The palette currently ships as a fixed-size panel with a custom search field,
-  keyboard navigation, and a minimal result list.
-- The first routing-shell command set is intentionally narrow:
-  - `Split Horizontally`
-  - `New Workspace`
-  - `Toggle Sidebar`
+  bounded keyboard navigation, and selection autoscroll that only moves when
+  the highlighted row leaves the visible viewport.
+- The built-in catalog now covers the core split, workspace, window, tab, and
+  panel lifecycle commands already routed through existing menu/controller
+  paths.
 - Tests cover shortcut interception, origin-window targeting, focus
-  restoration, and basic view-model behavior.
-- Local smoke validation has been run against the routing shell.
+  restoration, catalog execution, and keyboard-navigation behavior.
+- Local smoke validation has been run against the palette shell and its early
+  catalog slices.
 
 ### known issues and deferred work
 
@@ -82,28 +83,28 @@ window/panel targeting, `@` file-open mode, and future extensibility.
   external-monitor layout. The palette should stay centered in the origin
   window, but that bug is not resolved yet.
 - The shell is intentionally not feature-complete:
-  - no full command catalog yet
+  - no complete built-in catalog yet
   - no fuzzy scorer
   - no usage tracking
   - no `@` mode
   - no menu item
-- The original wave-1 command list was too broad for the first landing. The
-  shipped slice proves routing and focus behavior first; the broader command
-  surface should come next.
+- The original wave-1 command list was too broad for the first landing. Waves
+  2 and 3 expanded the core catalog, but the split-navigation family is still
+  deferred.
 
 ### next chunk
 
-The next chunk should be **catalog foundation**, not fuzzy search or `@` mode.
+The next chunk should be **pane/split navigation and layout commands**, not
+usage ranking or `@` mode.
 
 That means:
 
-- extract shared command titles and shortcuts into reusable metadata where
-  needed
-- expand from the current 3-command shell to the next band of high-frequency
-  built-ins
-- keep search simple while the catalog is growing
-- defer usage ranking, `@` mode, and menu integration until the command surface
-  is meaningfully broader
+- extend the shared built-in metadata for the split-navigation family
+- add the next high-frequency split commands already backed by existing
+  controller and menu paths
+- keep search simple while the built-in surface is still broadening
+- defer usage ranking, `@` mode, split resizing, and extra split-creation
+  directions until after the navigation slice lands
 
 ## goals
 
@@ -1092,11 +1093,53 @@ Execution notes:
 - confirm shared title/shortcut metadata stays aligned between menu surfaces and
   palette results for the commands covered by this slice
 
-### wave 4: usage frequency
+### wave 4: pane/split navigation and layout commands
+
+Goal: finish the next band of high-frequency split commands that already exist
+behind menu/controller paths, before adding ranking or file-open modes.
+
+**4a. Catalog**
+
+- extend the shared built-in metadata for the split-navigation slice only
+- keep origin-window targeting rooted in the existing split controller and menu
+  behavior
+- keep empty-query ordering curated and simple
+
+Suggested scope for this chunk:
+
+- Select Previous Split
+- Select Next Split
+- Focus Split Up
+- Focus Split Down
+- Focus Split Left
+- Focus Split Right
+- Equalize Splits
+
+Execution notes:
+
+- keep this chunk to commands already supported by the existing split
+  controller paths
+- do not bundle split resizing into this chunk unless the wiring stays
+  completely mechanical; if it starts widening the metadata surface, defer it
+- do not add split-left or split-up creation here; those directions should be a
+  separate pass once controller/menu parity is verified
+- do not mix in usage ranking, `@` mode, browser/markdown actions, or broader
+  presentation polish here
+
+**4b. Wave-4 validation**
+
+- projection tests for ids, titles, shortcuts, and curated empty-query order
+- availability tests for split focus and equalize commands across no-workspace,
+  no-focused-panel, and focused-panel-present states
+- origin-window execution tests for split navigation and equalize actions
+- menu/palette sync checks for the split titles and shortcuts covered by this
+  slice
+
+### wave 5: usage frequency
 
 Goal: frequently-used commands rise without fighting runtime isolation.
 
-**3a. Usage tracker**
+**5a. Usage tracker**
 
 New file:
 
@@ -1108,26 +1151,26 @@ Changes:
 - derive the config directory from `ToasttyRuntimePaths`
 - record usage after successful execution
 
-**3b. Scoring integration**
+**5b. Scoring integration**
 
 - apply the logarithmic boost to command results
 
-**3c. Wave-3 validation**
+**5c. Wave-5 validation**
 
 - unit tests for persistence and runtime-aware path resolution
 - manual verification that repeated commands rise for ambiguous prefixes
 
-### wave 5: `@` file-open mode
+### wave 6: `@` file-open mode
 
 Goal: `@` opens markdown and HTML files from a contextual tree, routing each
 result to the right destination.
 
 Prerequisite: the markdown APIs from `../toastty-markdown-panel` must be merged
-before wave 5 ships with markdown support. If that merge is not available yet,
+before wave 6 ships with markdown support. If that merge is not available yet,
 ship HTML-only routing first or hold `@` mode until the markdown command path is
 present.
 
-**4a. Provider and routing**
+**6a. Provider and routing**
 
 New files:
 
@@ -1142,7 +1185,7 @@ Changes:
 - route markdown files through `createMarkdownPanelFromCommand(...)`
 - route HTML files through `createBrowserPanelFromCommand(...)`
 
-**4b. Markdown alignment**
+**6b. Markdown alignment**
 
 Do not bypass the markdown implementation details that already exist in the
 reference worktree. The palette must preserve:
@@ -1153,29 +1196,28 @@ reference worktree. The palette must preserve:
 
 That means the palette should not construct raw markdown web panels directly.
 
-**4c. Wave-4 validation**
+**6c. Wave-6 validation**
 
 - provider tests for extension support and skip lists
 - routing tests for markdown vs HTML
 - integration test that opening the same markdown file twice reuses the same
   markdown panel in the current workspace
 
-### wave 6: polish, docs, and end-to-end validation
+### wave 7: polish, docs, and end-to-end validation
 
 Goal: smooth presentation, clear discoverability, and stable verification.
 
-**5a. Polish**
+**7a. Polish**
 
 - fade in/out animation
-- selected-row autoscroll
 - better empty states
 
-**5b. Menu integration**
+**7b. Menu integration**
 
 - add `Command Palette…` to the menu bar
 - wire it to `Cmd+Shift+P`
 
-**5c. Docs updates**
+**7c. Docs updates**
 
 Update:
 
@@ -1184,7 +1226,7 @@ Update:
 - web/markdown docs when palette-driven file open ships so markdown and browser
   entry points stay documented consistently
 
-**5d. End-to-end validation**
+**7d. End-to-end validation**
 
 - adopt one explicit automation strategy from the testing section
 - include a smoke path for:
