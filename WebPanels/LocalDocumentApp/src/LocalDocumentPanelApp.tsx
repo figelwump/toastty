@@ -481,6 +481,11 @@ function LocalDocumentEditor(props: {
   draftContent: string;
   updateDraftContent: (nextContent: string) => void;
 }) {
+  const wrapsMarkdown = isMarkdownFormat(props.bootstrap.format);
+  const editorClassName = wrapsMarkdown
+    ? "local-document-editor local-document-editor-markdown"
+    : "local-document-editor";
+
   return (
     <section className="local-document-editor-shell">
       {(props.bootstrap.hasExternalConflict || props.bootstrap.saveErrorMessage) && (
@@ -498,12 +503,13 @@ function LocalDocumentEditor(props: {
         </div>
       )}
       <textarea
-        className="local-document-editor"
+        className={editorClassName}
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"
+        wrap={wrapsMarkdown ? "soft" : "off"}
         readOnly={props.bootstrap.isSaving}
       />
     </section>
