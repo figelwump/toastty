@@ -88,7 +88,8 @@ public struct AppReducer {
                 frame: initialFrame ?? CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
                 workspaceIDs: [workspace.id],
                 selectedWorkspaceID: workspace.id,
-                terminalFontSizePointsOverride: seed?.windowTerminalFontSizePointsOverride
+                terminalFontSizePointsOverride: seed?.windowTerminalFontSizePointsOverride,
+                markdownTextScaleOverride: seed?.windowMarkdownTextScaleOverride
             )
 
             commitWorkspace(workspace, workspaceID: workspace.id, state: &state)
@@ -311,6 +312,9 @@ public struct AppReducer {
                 selectedWorkspaceID: detachedWorkspaceID,
                 terminalFontSizePointsOverride: state.normalizedTerminalFontOverride(
                     state.effectiveTerminalFontPoints(for: sourceLocation.windowID)
+                ),
+                markdownTextScaleOverride: AppState.normalizedMarkdownTextScaleOverride(
+                    state.effectiveMarkdownTextScale(for: sourceLocation.windowID)
                 )
             )
 
@@ -538,12 +542,71 @@ public struct AppReducer {
             state.windows[windowIndex].terminalFontSizePointsOverride = nil
             return true
 
+        case .setWindowMarkdownTextScale(let windowID, let scale):
+            return setWindowMarkdownTextScale(windowID: windowID, scale: scale, state: &state)
+
+        case .increaseWindowMarkdownTextScale(let windowID):
+            return adjustWindowMarkdownTextScale(
+                windowID: windowID,
+                step: AppState.markdownTextScaleStep,
+                state: &state
+            )
+
+        case .decreaseWindowMarkdownTextScale(let windowID):
+            return adjustWindowMarkdownTextScale(
+                windowID: windowID,
+                step: -AppState.markdownTextScaleStep,
+                state: &state
+            )
+
+        case .resetWindowMarkdownTextScale(let windowID):
+            guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+            guard state.windows[windowIndex].markdownTextScaleOverride != nil else { return false }
+            state.windows[windowIndex].markdownTextScaleOverride = nil
+            return true
+
+        case .setBrowserPanelPageZoom(let panelID, let zoom):
+            return setBrowserPanelPageZoom(panelID: panelID, zoom: zoom, state: &state)
+
+        case .increaseBrowserPanelPageZoom(let panelID):
+            return adjustBrowserPanelPageZoom(
+                panelID: panelID,
+                direction: .increase,
+                state: &state
+            )
+
+        case .decreaseBrowserPanelPageZoom(let panelID):
+            return adjustBrowserPanelPageZoom(
+                panelID: panelID,
+                direction: .decrease,
+                state: &state
+            )
+
+        case .resetBrowserPanelPageZoom(let panelID):
+            return setBrowserPanelPageZoom(
+                panelID: panelID,
+                zoom: WebPanelState.defaultBrowserPageZoom,
+                state: &state
+            )
+
         case .splitFocusedSlot(let workspaceID, let orientation):
             let direction: SlotSplitDirection = orientation == .horizontal ? .right : .down
             return splitFocusedSlot(workspaceID: workspaceID, direction: direction, state: &state)
 
         case .splitFocusedSlotInDirection(let workspaceID, let direction):
             return splitFocusedSlot(workspaceID: workspaceID, direction: direction, state: &state)
+
+        case .splitFocusedSlotInDirectionWithWorkingDirectory(
+            let workspaceID,
+            let direction,
+            let workingDirectory
+        ):
+            return splitFocusedSlot(
+                workspaceID: workspaceID,
+                direction: direction,
+                workingDirectory: workingDirectory,
+                state: &state
+            )
 
         case .splitFocusedSlotInDirectionWithTerminalProfile(let workspaceID, let direction, let profileBinding):
             return splitFocusedSlot(
@@ -710,11 +773,114 @@ public struct AppReducer {
         return true
     }
 
+    private static func setWindowMarkdownTextScale(
+        windowID: UUID,
+        scale: Double,
+        state: inout AppState
+    ) -> Bool {
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        let normalizedOverride = AppState.normalizedMarkdownTextScaleOverride(scale)
+        guard state.windows[windowIndex].markdownTextScaleOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].markdownTextScaleOverride = normalizedOverride
+        return true
+    }
+
+    private static func adjustWindowMarkdownTextScale(
+        windowID: UUID,
+        step: Double,
+        state: inout AppState
+    ) -> Bool {
+        guard state.window(id: windowID) != nil else { return false }
+        let previousScale = state.effectiveMarkdownTextScale(for: windowID)
+        let nextScale = AppState.clampedMarkdownTextScale(previousScale + step)
+        guard abs(nextScale - previousScale) >= AppState.markdownTextScaleComparisonEpsilon else {
+            return false
+        }
+        let normalizedOverride = AppState.normalizedMarkdownTextScaleOverride(nextScale)
+        guard let windowIndex = state.windows.firstIndex(where: { $0.id == windowID }) else { return false }
+        guard state.windows[windowIndex].markdownTextScaleOverride != normalizedOverride else {
+            return false
+        }
+        state.windows[windowIndex].markdownTextScaleOverride = normalizedOverride
+        return true
+    }
+
+    private enum BrowserPageZoomAdjustmentDirection {
+        case increase
+        case decrease
+    }
+
+    private static func setBrowserPanelPageZoom(
+        panelID: UUID,
+        zoom: Double,
+        state: inout AppState
+    ) -> Bool {
+        mutateBrowserPanelState(panelID: panelID, state: &state) { webState in
+            let normalizedZoom = WebPanelState.normalizedBrowserPageZoom(zoom)
+            guard webState.browserPageZoom != normalizedZoom else {
+                return false
+            }
+            webState.browserPageZoom = normalizedZoom
+            return true
+        }
+    }
+
+    private static func adjustBrowserPanelPageZoom(
+        panelID: UUID,
+        direction: BrowserPageZoomAdjustmentDirection,
+        state: inout AppState
+    ) -> Bool {
+        mutateBrowserPanelState(panelID: panelID, state: &state) { webState in
+            let currentZoom = webState.effectiveBrowserPageZoom
+            let nextZoom: Double
+            switch direction {
+            case .increase:
+                nextZoom = WebPanelState.increasedBrowserPageZoom(from: currentZoom)
+            case .decrease:
+                nextZoom = WebPanelState.decreasedBrowserPageZoom(from: currentZoom)
+            }
+
+            let normalizedZoom = WebPanelState.normalizedBrowserPageZoom(nextZoom)
+            guard webState.browserPageZoom != normalizedZoom else {
+                return false
+            }
+            webState.browserPageZoom = normalizedZoom
+            return true
+        }
+    }
+
+    private static func mutateBrowserPanelState(
+        panelID: UUID,
+        state: inout AppState,
+        mutation: (inout WebPanelState) -> Bool
+    ) -> Bool {
+        guard let location = locatePanel(panelID, in: state) else { return false }
+        guard var workspace = state.workspacesByID[location.workspaceID] else { return false }
+        guard let tabID = workspace.tabID(containingPanelID: panelID),
+              case .web(var webState) = workspace.tab(id: tabID)?.panels[panelID],
+              webState.definition == .browser else {
+            return false
+        }
+
+        guard mutation(&webState) else {
+            return false
+        }
+
+        _ = workspace.updateTab(id: tabID) { tab in
+            tab.panels[panelID] = .web(webState)
+        }
+        commitWorkspace(workspace, workspaceID: location.workspaceID, state: &state)
+        return true
+    }
+
     @discardableResult
     private static func splitFocusedSlot(
         workspaceID: UUID,
         direction: SlotSplitDirection,
         profileBinding: TerminalProfileBinding? = nil,
+        workingDirectory: String? = nil,
         state: inout AppState
     ) -> Bool {
         guard var workspace = state.workspacesByID[workspaceID] else { return false }
@@ -723,7 +889,12 @@ public struct AppReducer {
         }
 
         let inheritedCWD: String
-        if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
+        if let workingDirectory {
+            guard let normalizedWorkingDirectory = normalizedWorkingDirectoryValue(workingDirectory) else {
+                return false
+            }
+            inheritedCWD = normalizedWorkingDirectory
+        } else if case .terminal(let focusedTerminalState) = workspace.panels[focusResolution.panelID] {
             inheritedCWD = focusedTerminalState.workingDirectorySeed
         } else {
             inheritedCWD = NSHomeDirectory()
@@ -763,6 +934,15 @@ public struct AppReducer {
         commitWorkspace(workspace, workspaceID: workspaceID, state: &state)
         return true
 
+    }
+
+    private static func normalizedWorkingDirectoryValue(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.isEmpty == false else { return nil }
+        let normalizedPath = (trimmed as NSString).standardizingPath
+        guard normalizedPath.isEmpty == false else { return nil }
+        return normalizedPath
     }
 
     @discardableResult

@@ -4,6 +4,11 @@ import CoreState
 import Foundation
 import WebKit
 
+struct BrowserPanelRuntimeAutomationState: Equatable, Sendable {
+    let lifecycleState: PanelHostLifecycleState
+    let pageZoom: Double
+}
+
 struct BrowserPanelNavigationState: Equatable {
     var displayedURLString: String?
     var canGoBack = false
@@ -21,6 +26,93 @@ struct FaviconLinkReference: Equatable, Sendable {
 }
 
 @MainActor
+private final class BrowserPopupCaptureController: NSObject, WKNavigationDelegate {
+    private static let timeoutNanoseconds: UInt64 = 5_000_000_000
+
+    let id = UUID()
+    let webView: WKWebView
+
+    private let openSecondaryURL: @MainActor (URL) -> Bool
+    private let cleanup: @MainActor (UUID) -> Void
+    private var timeoutTask: Task<Void, Never>?
+
+    init(
+        configuration: WKWebViewConfiguration,
+        openSecondaryURL: @escaping @MainActor (URL) -> Bool,
+        cleanup: @escaping @MainActor (UUID) -> Void
+    ) {
+        self.webView = WKWebView(frame: .zero, configuration: configuration)
+        self.openSecondaryURL = openSecondaryURL
+        self.cleanup = cleanup
+        super.init()
+        webView.navigationDelegate = self
+        timeoutTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.timeoutNanoseconds)
+            guard let self else { return }
+            self.cleanup(self.id)
+        }
+    }
+
+    func invalidate() {
+        timeoutTask?.cancel()
+        timeoutTask = nil
+        webView.navigationDelegate = nil
+    }
+
+    deinit {
+        timeoutTask?.cancel()
+    }
+
+    func webView(
+        _: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        if let url = BrowserLinkRoutingRules.popupCaptureURL(navigationAction.request.url) {
+            _ = openSecondaryURL(url)
+            cleanup(id)
+            decisionHandler(.cancel)
+            return
+        }
+
+        decisionHandler(.allow)
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        didFinish navigation: WKNavigation!
+    ) {
+        _ = navigation
+        guard let url = BrowserLinkRoutingRules.popupCaptureURL(webView.url) else {
+            return
+        }
+
+        _ = openSecondaryURL(url)
+        cleanup(id)
+    }
+
+    func webView(
+        _: WKWebView,
+        didFail navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        _ = navigation
+        _ = error
+        cleanup(id)
+    }
+
+    func webView(
+        _: WKWebView,
+        didFailProvisionalNavigation navigation: WKNavigation!,
+        withError error: Error
+    ) {
+        _ = navigation
+        _ = error
+        cleanup(id)
+    }
+}
+
+@MainActor
 final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     @Published private(set) var navigationState = BrowserPanelNavigationState()
     @Published private(set) var locationFieldFocusRequestID: UUID?
@@ -30,6 +122,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
 
     private let panelID: UUID
     private let metadataDidChange: @MainActor (UUID, String?, String?) -> Void
+    private let openSecondaryURLForPanel: @MainActor (UUID, URL) -> Bool
     private let webView: FocusAwareWKWebView
     private var urlObservation: NSKeyValueObservation?
     private var titleObservation: NSKeyValueObservation?
@@ -44,14 +137,18 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
     private var isShowingStartPage = false
     private var faviconRefreshTask: Task<Void, Never>?
     private var pendingFaviconRequestID: UUID?
+    private var currentPageZoom: Double = WebPanelState.defaultBrowserPageZoom
+    private var popupCaptureControllers: [UUID: BrowserPopupCaptureController] = [:]
 
     init(
         panelID: UUID,
         metadataDidChange: @escaping @MainActor (UUID, String?, String?) -> Void,
-        interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void
+        interactionDidRequestFocus: @escaping @MainActor (UUID) -> Void,
+        openSecondaryURL: @escaping @MainActor (UUID, URL) -> Bool = { _, _ in false }
     ) {
         self.panelID = panelID
         self.metadataDidChange = metadataDidChange
+        self.openSecondaryURLForPanel = openSecondaryURL
         let configuration = Self.makeWebViewConfiguration(
             for: WebPanelDefinition.browser.capabilityProfile
         )
@@ -76,6 +173,7 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         canGoBackObservation?.invalidate()
         canGoForwardObservation?.invalidate()
         loadingObservation?.invalidate()
+        popupCaptureControllers.removeAll()
         let webView = webView
         Task { @MainActor in
             webView.interactionDidRequestFocus = nil
@@ -252,6 +350,19 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
             "BrowserPanelRuntime cannot host \(webState.definition.rawValue) panels."
         )
         synchronizeDisplayedContent(with: webState)
+        applyPageZoom(webState.effectiveBrowserPageZoom)
+    }
+
+    func setEffectivelyVisible(_ visible: Bool) {
+        let shouldHideWebView = !visible
+        guard webView.isHidden != shouldHideWebView else {
+            return
+        }
+
+        // SwiftUI keeps hidden tabs/workspaces mounted with opacity, which
+        // leaves the WKWebView alive in the AppKit hierarchy. Use isHidden so
+        // AppKit stops treating that subtree as a cursor owner.
+        webView.isHidden = shouldHideWebView
     }
 
     func requestLocationFieldFocus() {
@@ -319,6 +430,13 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         return true
     }
 
+    func automationState() -> BrowserPanelRuntimeAutomationState {
+        BrowserPanelRuntimeAutomationState(
+            lifecycleState: lifecycleState,
+            pageZoom: webView.pageZoom
+        )
+    }
+
     private func synchronizeDisplayedContent(with webState: WebPanelState) {
         let desiredURLString = webState.restorableURL
         let currentURLString = reportedCurrentURLString()
@@ -356,6 +474,15 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         }
         clearFavicon()
         webView.load(URLRequest(url: url))
+    }
+
+    private func applyPageZoom(_ zoom: Double) {
+        let nextZoom = WebPanelState.clampedBrowserPageZoom(zoom)
+        currentPageZoom = nextZoom
+        guard abs(webView.pageZoom - nextZoom) >= WebPanelState.browserPageZoomComparisonEpsilon else {
+            return
+        }
+        webView.pageZoom = nextZoom
     }
 
     private func observeMetadataChanges() {
@@ -917,13 +1044,64 @@ final class BrowserPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleC
         }
         return configuration
     }
+
+    private func effectiveModifierFlags(for navigationAction: WKNavigationAction) -> NSEvent.ModifierFlags {
+        let actionModifierFlags = navigationAction.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if actionModifierFlags.contains(.command) {
+            return actionModifierFlags
+        }
+
+        // WKNavigationAction modifier flags can occasionally arrive empty for
+        // link activations even though the triggering mouse event still has the
+        // command key down. Fall back narrowly to the current AppKit event so
+        // browser Cmd-click keeps working without broadening non-link flows.
+        let currentEventModifierFlags = NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+        if navigationAction.navigationType == .linkActivated,
+           currentEventModifierFlags.contains(.command) {
+            return currentEventModifierFlags
+        }
+
+        return actionModifierFlags
+    }
+
+    @discardableResult
+    private func openSecondaryURL(_ url: URL) -> Bool {
+        openSecondaryURLForPanel(panelID, url)
+    }
+
+    private func installPopupCaptureController(configuration: WKWebViewConfiguration) -> WKWebView {
+        // Some popup flows begin as nil/about:blank and only navigate to the
+        // real destination after the new page has been created. Capture that
+        // first usable URL offscreen, then hand it to Toastty's router.
+        let controller = BrowserPopupCaptureController(
+            configuration: configuration,
+            openSecondaryURL: { [weak self] url in
+                self?.openSecondaryURL(url) ?? false
+            },
+            cleanup: { [weak self] controllerID in
+                self?.removePopupCaptureController(id: controllerID)
+            }
+        )
+        popupCaptureControllers[controller.id] = controller
+        return controller.webView
+    }
+
+    private func removePopupCaptureController(id: UUID) {
+        guard let controller = popupCaptureControllers.removeValue(forKey: id) else {
+            return
+        }
+        controller.invalidate()
+    }
 }
 
 extension BrowserPanelRuntime: WKNavigationDelegate {
     func webView(
-        _: WKWebView,
+        _ webView: WKWebView,
         didCommit _: WKNavigation!
     ) {
+        guard webView === self.webView else {
+            return
+        }
         clearFavicon()
         publishNavigationState()
     }
@@ -933,10 +1111,14 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
         didFinish navigation: WKNavigation!
     ) {
         _ = navigation
+        guard webView === self.webView else {
+            return
+        }
         if let observedURL = WebPanelState.normalizedCurrentURL(webView.url?.absoluteString),
            observedURL.caseInsensitiveCompare("about:blank") != .orderedSame {
             isShowingStartPage = false
         }
+        applyPageZoom(currentPageZoom)
         publishObservedMetadata()
         publishNavigationState()
         refreshFavicon()
@@ -949,6 +1131,9 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     ) {
         _ = navigation
         _ = error
+        guard webView === self.webView else {
+            return
+        }
         clearFavicon()
         publishObservedMetadata()
         publishNavigationState()
@@ -961,26 +1146,59 @@ extension BrowserPanelRuntime: WKNavigationDelegate {
     ) {
         _ = navigation
         _ = error
+        guard webView === self.webView else {
+            return
+        }
         clearFavicon()
         publishObservedMetadata()
         publishNavigationState()
+    }
+
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor navigationAction: WKNavigationAction,
+        decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void
+    ) {
+        guard webView === self.webView else {
+            decisionHandler(.allow)
+            return
+        }
+
+        switch BrowserLinkRoutingRules.navigationPolicyDecision(
+            url: navigationAction.request.url,
+            navigationType: navigationAction.navigationType,
+            modifierFlags: effectiveModifierFlags(for: navigationAction),
+            targetFrameIsNil: navigationAction.targetFrame == nil
+        ) {
+        case .allow:
+            decisionHandler(.allow)
+        case .openSecondary(let url):
+            _ = openSecondaryURL(url)
+            decisionHandler(.cancel)
+        }
     }
 }
 
 extension BrowserPanelRuntime: WKUIDelegate {
     func webView(
-        _ webView: WKWebView,
+        _: WKWebView,
         createWebViewWith configuration: WKWebViewConfiguration,
         for navigationAction: WKNavigationAction,
         windowFeatures: WKWindowFeatures
     ) -> WKWebView? {
-        _ = configuration
         _ = windowFeatures
-        guard navigationAction.targetFrame == nil,
-              let url = navigationAction.request.url else {
+        guard navigationAction.targetFrame == nil else {
             return nil
         }
-        webView.load(URLRequest(url: url))
-        return nil
+
+        switch BrowserLinkRoutingRules.popupRoutingDecision(
+            requestURL: navigationAction.request.url
+        ) {
+        case .openSecondary(let url):
+            _ = openSecondaryURL(url)
+            return nil
+        case .awaitCapturedURL:
+            return installPopupCaptureController(configuration: configuration)
+        }
     }
 }

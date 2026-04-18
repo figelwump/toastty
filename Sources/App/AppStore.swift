@@ -62,18 +62,21 @@ struct BrowserPanelCreateRequest: Equatable, Sendable {
     }
 }
 
-struct MarkdownPanelCreateRequest: Equatable, Sendable {
+struct LocalDocumentPanelCreateRequest: Equatable, Sendable {
     static let defaultPlacement: WebPanelPlacement = .rootRight
 
     var filePath: String
     var placementOverride: WebPanelPlacement?
+    var formatOverride: LocalDocumentFormat?
 
     init(
         filePath: String,
-        placementOverride: WebPanelPlacement? = nil
+        placementOverride: WebPanelPlacement? = nil,
+        formatOverride: LocalDocumentFormat? = nil
     ) {
         self.filePath = filePath
         self.placementOverride = placementOverride
+        self.formatOverride = formatOverride
     }
 
     var resolvedPlacement: WebPanelPlacement {
@@ -87,10 +90,50 @@ struct FocusedBrowserPanelCommandSelection: Equatable {
     let panelID: UUID
 }
 
-struct FocusedMarkdownPanelCommandSelection: Equatable {
+struct FocusedLocalDocumentPanelCommandSelection: Equatable {
     let windowID: UUID
     let workspaceID: UUID
     let panelID: UUID
+}
+
+enum FocusedScaleCommandTarget: Equatable {
+    case terminal(windowID: UUID)
+    case markdown(windowID: UUID)
+    case browser(windowID: UUID, panelID: UUID)
+
+    var windowID: UUID {
+        switch self {
+        case .terminal(let windowID), .markdown(let windowID), .browser(let windowID, _):
+            return windowID
+        }
+    }
+
+    var increaseMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Zoom In"
+        case .terminal, .markdown:
+            return "Increase Text Size"
+        }
+    }
+
+    var decreaseMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Zoom Out"
+        case .terminal, .markdown:
+            return "Decrease Text Size"
+        }
+    }
+
+    var resetMenuTitle: String {
+        switch self {
+        case .browser:
+            return "Actual Size"
+        case .terminal, .markdown:
+            return "Reset Text Size"
+        }
+    }
 }
 
 private enum WorkspaceCommandTarget {
@@ -281,9 +324,9 @@ final class AppStore: ObservableObject {
         )
     }
 
-    func focusedMarkdownPanelSelection(
+    func focusedLocalDocumentPanelSelection(
         preferredWindowID: UUID?
-    ) -> FocusedMarkdownPanelCommandSelection? {
+    ) -> FocusedLocalDocumentPanelCommandSelection? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID),
               let panelID = selection.workspace.focusedPanelID,
               selection.workspace.slotID(containingPanelID: panelID) != nil,
@@ -292,11 +335,36 @@ final class AppStore: ObservableObject {
             return nil
         }
 
-        return FocusedMarkdownPanelCommandSelection(
+        return FocusedLocalDocumentPanelCommandSelection(
             windowID: selection.windowID,
             workspaceID: selection.workspace.id,
             panelID: panelID
         )
+    }
+
+    func focusedScaleCommandTarget(
+        preferredWindowID: UUID?
+    ) -> FocusedScaleCommandTarget? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let panelID = selection.workspace.focusedPanelID,
+              selection.workspace.slotID(containingPanelID: panelID) != nil,
+              let panelState = selection.workspace.panels[panelID] else {
+            return nil
+        }
+
+        switch panelState {
+        case .terminal:
+            return .terminal(windowID: selection.windowID)
+        case .web(let webState):
+            switch webState.definition {
+            case .localDocument:
+                return .markdown(windowID: selection.windowID)
+            case .browser:
+                return .browser(windowID: selection.windowID, panelID: panelID)
+            case .scratchpad, .diff:
+                return nil
+            }
+        }
     }
 
     @discardableResult
@@ -350,30 +418,36 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func createMarkdownPanel(
+    func createLocalDocumentPanel(
         workspaceID: UUID,
-        request: MarkdownPanelCreateRequest
+        request: LocalDocumentPanelCreateRequest
     ) -> Bool {
         guard let workspace = state.workspacesByID[workspaceID],
-              let normalizedFilePath = Self.normalizedMarkdownFilePath(request.filePath) else {
+              let resolvedLocalDocument = Self.resolvedLocalDocument(
+                  request.filePath,
+                  formatOverride: request.formatOverride
+              ) else {
             return false
         }
 
-        if let existingPanelID = existingMarkdownPanelID(
+        if let existingPanelID = existingLocalDocumentPanelID(
             in: workspace,
-            normalizedFilePath: normalizedFilePath
+            normalizedFilePath: resolvedLocalDocument.normalizedFilePath
         ) {
             return focusPanel(containing: existingPanelID)
         }
 
-        let displayName = Self.markdownDisplayName(for: normalizedFilePath)
+        let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
         return send(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
                     definition: .localDocument,
                     title: displayName,
-                    filePath: normalizedFilePath
+                    localDocument: LocalDocumentState(
+                        filePath: resolvedLocalDocument.normalizedFilePath,
+                        format: resolvedLocalDocument.format
+                    )
                 ),
                 placement: request.resolvedPlacement
             )
@@ -381,15 +455,15 @@ final class AppStore: ObservableObject {
     }
 
     @discardableResult
-    func createMarkdownPanelFromCommand(
+    func createLocalDocumentPanelFromCommand(
         preferredWindowID: UUID?,
-        request: MarkdownPanelCreateRequest
+        request: LocalDocumentPanelCreateRequest
     ) -> Bool {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
             return false
         }
 
-        return createMarkdownPanel(
+        return createLocalDocumentPanel(
             workspaceID: selection.workspace.id,
             request: request
         )
@@ -976,7 +1050,7 @@ final class AppStore: ObservableObject {
         return values.isEmpty ? "none" : values.joined(separator: ",")
     }
 
-    private func existingMarkdownPanelID(
+    private func existingLocalDocumentPanelID(
         in workspace: WorkspaceState,
         normalizedFilePath: String
     ) -> UUID? {
@@ -984,7 +1058,7 @@ final class AppStore: ObservableObject {
             for (panelID, panelState) in tab.panels {
                 guard case .web(let webState) = panelState,
                       webState.definition == .localDocument,
-                      webState.filePath == normalizedFilePath else {
+                      webState.localDocument?.filePath == normalizedFilePath else {
                     continue
                 }
                 return panelID
@@ -993,16 +1067,27 @@ final class AppStore: ObservableObject {
         return nil
     }
 
-    private static func normalizedMarkdownFilePath(_ value: String) -> String? {
+    private static func resolvedLocalDocument(
+        _ value: String,
+        formatOverride: LocalDocumentFormat? = nil
+    ) -> (normalizedFilePath: String, format: LocalDocumentFormat)? {
         guard let trimmed = WebPanelState.normalizedFilePath(value) else {
             return nil
         }
 
         let url = URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath()
-        return WebPanelState.normalizedFilePath(url.path)
+        let normalizedFilePath = url.path
+        guard normalizedFilePath.isEmpty == false,
+              let format = formatOverride ?? LocalDocumentClassifier.format(
+                  forPathExtension: url.pathExtension
+              ) else {
+            return nil
+        }
+
+        return (normalizedFilePath, format)
     }
 
-    private static func markdownDisplayName(for normalizedFilePath: String) -> String {
+    private static func localDocumentDisplayName(for normalizedFilePath: String) -> String {
         let name = URL(fileURLWithPath: normalizedFilePath).lastPathComponent
         return name.isEmpty ? WebPanelDefinition.localDocument.defaultTitle : name
     }
@@ -1072,17 +1157,24 @@ final class AppStore: ObservableObject {
         let windowFontOverride = state.normalizedTerminalFontOverride(
             state.effectiveTerminalFontPoints(for: selection.windowID)
         )
+        let windowMarkdownTextScaleOverride = AppState.normalizedMarkdownTextScaleOverride(
+            state.effectiveMarkdownTextScale(for: selection.windowID)
+        )
 
         guard let focusedPanelID = selection.workspace.focusedPanelID,
               case .terminal(let terminalState)? = selection.workspace.panels[focusedPanelID] else {
-            guard let windowFontOverride else { return nil }
-            return WindowLaunchSeed(windowTerminalFontSizePointsOverride: windowFontOverride)
+            guard windowFontOverride != nil || windowMarkdownTextScaleOverride != nil else { return nil }
+            return WindowLaunchSeed(
+                windowTerminalFontSizePointsOverride: windowFontOverride,
+                windowMarkdownTextScaleOverride: windowMarkdownTextScaleOverride
+            )
         }
 
         return WindowLaunchSeed(
             terminalCWD: terminalState.workingDirectorySeed,
             terminalProfileBinding: terminalState.profileBinding ?? state.defaultTerminalProfileBinding,
-            windowTerminalFontSizePointsOverride: windowFontOverride
+            windowTerminalFontSizePointsOverride: windowFontOverride,
+            windowMarkdownTextScaleOverride: windowMarkdownTextScaleOverride
         )
     }
 

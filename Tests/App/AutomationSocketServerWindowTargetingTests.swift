@@ -303,7 +303,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             let createResponse = try sendRequest(
                 command: "automation.perform_action",
                 payload: [
-                    "action": "panel.create.markdown",
+                    "action": "panel.create.localDocument",
                     "args": [
                         "placement": "newTab",
                         "filePath": markdownURL.path,
@@ -328,7 +328,7 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             var snapshotResponse: AutomationSocketTestResponse?
             for _ in 0 ..< 40 {
                 let response = try sendRequest(
-                    command: "automation.markdown_panel_state",
+                    command: "automation.local_document_panel_state",
                     payload: [
                         "panelID": panelID.uuidString,
                     ],
@@ -346,14 +346,72 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             XCTAssertEqual(finalSnapshot.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
             XCTAssertEqual(finalSnapshot.result["panelID"] as? String, panelID.uuidString)
             XCTAssertEqual(finalSnapshot.result["stateFilePath"] as? String, markdownURL.path)
+            XCTAssertEqual(finalSnapshot.result["stateFormat"] as? String, "markdown")
             XCTAssertEqual(finalSnapshot.result["bootstrapFilePath"] as? String, markdownURL.path)
             XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "smoke.md")
+            XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "markdown")
+            XCTAssertEqual(finalSnapshot.result["bootstrapShouldHighlight"] as? Bool, true)
             XCTAssertEqual(finalSnapshot.result["bootstrapContentSHA256"] as? String, expectedHash)
             XCTAssertEqual(finalSnapshot.result["bootstrapContentRevision"] as? Int, 1)
             XCTAssertEqual(finalSnapshot.result["bootstrapIsEditing"] as? Bool, false)
             XCTAssertEqual(finalSnapshot.result["bootstrapIsDirty"] as? Bool, false)
             XCTAssertEqual(finalSnapshot.result["currentTheme"] as? String, "dark")
+            XCTAssertEqual(finalSnapshot.result["bootstrapTextScale"] as? Double, 1.0)
             XCTAssertEqual(finalSnapshot.result["hostLifecycleState"] as? String, "detached")
+        }
+    }
+
+    func testMarkdownAutomationAliasesStillCreateAndInspectLocalDocumentPanel() async throws {
+        let fixture = makeSingleWindowFixture()
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-markdown-automation-alias-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownURL = tempDirectory.appendingPathComponent("alias.md", isDirectory: false)
+        let markdownContent = "# Alias Smoke\n"
+        try markdownContent.write(to: markdownURL, atomically: true, encoding: .utf8)
+        let expectedHash = SHA256.hash(data: Data(markdownContent.utf8)).map { String(format: "%02x", $0) }.joined()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.markdown",
+                    "args": [
+                        "placement": "newTab",
+                        "filePath": markdownURL.path,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let panelID = try XCTUnwrap(workspace.focusedPanelID)
+            var snapshotResponse: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.markdown_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                snapshotResponse = response
+                if response.result["bootstrapContentSHA256"] as? String == expectedHash {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            let finalSnapshot = try XCTUnwrap(snapshotResponse)
+            XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "alias.md")
+            XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "markdown")
         }
     }
 
@@ -820,6 +878,126 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
                 state.effectiveTerminalFontPoints(for: fixture.secondWindowID),
                 AppState.defaultTerminalFontPoints + 1
             )
+        }
+    }
+
+    func testMarkdownTextActionUsesExplicitWindowSelection() async throws {
+        let fixture = makeTwoWindowFixture()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "app.markdown_text.increase",
+                    "args": [
+                        "windowID": fixture.secondWindowID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            XCTAssertEqual(state.effectiveMarkdownTextScale(for: fixture.firstWindowID), 1.0)
+            XCTAssertEqual(state.effectiveMarkdownTextScale(for: fixture.secondWindowID), 1.1, accuracy: 0.0001)
+        }
+    }
+
+    func testBrowserPanelStateReportsPersistedAndRuntimeZoom() async throws {
+        let fixture = makeSingleWindowFixture()
+        var state = fixture.state
+        let reducer = AppReducer()
+
+        XCTAssertTrue(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: fixture.workspaceID,
+                    panel: WebPanelState(
+                        definition: .browser,
+                        title: "Docs",
+                        initialURL: "https://example.com/docs",
+                        browserPageZoom: 1.25
+                    ),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+        let browserPanelID = try XCTUnwrap(state.workspacesByID[fixture.workspaceID]?.focusedPanelID)
+
+        try await withAutomationHarness(state: state) { harness in
+            let response = try sendRequest(
+                command: "automation.browser_panel_state",
+                payload: [
+                    "panelID": browserPanelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, browserPanelID.uuidString)
+            XCTAssertEqual(response.result["stateTitle"] as? String, "Docs")
+            XCTAssertEqual(response.result["stateRestorableURL"] as? String, "https://example.com/docs")
+            XCTAssertEqual(response.result["statePageZoom"] as? Double, 1.25)
+            XCTAssertEqual(response.result["statePageZoomOverride"] as? Double, 1.25)
+            XCTAssertEqual(response.result["runtimePageZoom"] as? Double, 1.25)
+            XCTAssertEqual(response.result["hostLifecycleState"] as? String, "detached")
+        }
+    }
+
+    func testBrowserZoomActionUsesExplicitPanelSelection() async throws {
+        let fixture = makeTwoWindowFixture()
+        var state = fixture.state
+        let reducer = AppReducer()
+
+        XCTAssertTrue(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: fixture.firstWorkspaceID,
+                    panel: WebPanelState(definition: .browser, initialURL: "https://example.com/one"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+        let firstBrowserPanelID = try XCTUnwrap(state.workspacesByID[fixture.firstWorkspaceID]?.focusedPanelID)
+
+        XCTAssertTrue(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: fixture.secondWorkspaceID,
+                    panel: WebPanelState(definition: .browser, initialURL: "https://example.com/two"),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+        let secondBrowserPanelID = try XCTUnwrap(state.workspacesByID[fixture.secondWorkspaceID]?.focusedPanelID)
+
+        try await withAutomationHarness(state: state) { harness in
+            let response = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "app.browser_zoom.increase",
+                    "args": [
+                        "panelID": secondBrowserPanelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+
+            let state = await MainActor.run { harness.store.state }
+            guard case .web(let firstWebState) = state.workspacesByID[fixture.firstWorkspaceID]?.panels[firstBrowserPanelID],
+                  case .web(let secondWebState) = state.workspacesByID[fixture.secondWorkspaceID]?.panels[secondBrowserPanelID] else {
+                XCTFail("expected browser panels in both windows")
+                return
+            }
+            XCTAssertEqual(firstWebState.effectiveBrowserPageZoom, WebPanelState.defaultBrowserPageZoom)
+            XCTAssertEqual(secondWebState.effectiveBrowserPageZoom, 1.1, accuracy: 0.0001)
         }
     }
 

@@ -10,6 +10,7 @@ struct AppWindowView: View {
     let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     @ObservedObject var sessionRuntimeStore: SessionRuntimeStore
     let profileShortcutRegistry: ProfileShortcutRegistry
+    let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
@@ -19,6 +20,13 @@ struct AppWindowView: View {
 
     private var sidebarVisible: Bool {
         store.window(id: windowID)?.sidebarVisible ?? true
+    }
+
+    private var sidebarToggleHasUnreadBadge: Bool {
+        Self.sidebarToggleShowsUnreadBadge(
+            sidebarVisible: sidebarVisible,
+            hasUnreadNotifications: store.state.windowHasAnyUnreadNotifications(windowID: windowID)
+        )
     }
 
     var body: some View {
@@ -48,6 +56,7 @@ struct AppWindowView: View {
                     webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                     sessionRuntimeStore: sessionRuntimeStore,
                     profileShortcutRegistry: profileShortcutRegistry,
+                    focusedPanelCommandController: focusedPanelCommandController,
                     agentLaunchService: agentLaunchService,
                     showAgentGetStartedFlow: presentAgentGetStartedFlow,
                     terminalRuntimeContext: terminalRuntimeContext,
@@ -105,9 +114,9 @@ struct AppWindowView: View {
                   request.windowID == windowID,
                   store.state.workspacesByID[request.workspaceID] != nil,
                   store.consumePendingWorkspaceCloseRequest(windowID: windowID) != nil else { return }
-            let closeConfirmationSummary: MarkdownCloseConfirmationSummary
+            let closeConfirmationSummary: LocalDocumentCloseConfirmationSummary
             if let workspace = store.state.workspacesByID[request.workspaceID] {
-                closeConfirmationSummary = webPanelRuntimeRegistry.markdownCloseConfirmationSummary(
+                closeConfirmationSummary = webPanelRuntimeRegistry.localDocumentCloseConfirmationSummary(
                     panelIDs: workspace.orderedTabs.flatMap { Array($0.panels.keys) }
                 )
             } else {
@@ -116,10 +125,10 @@ struct AppWindowView: View {
             pendingWorkspaceClose = PendingWorkspaceClose(
                 windowID: request.windowID,
                 workspaceID: request.workspaceID,
-                unsavedMarkdownDraftCount: closeConfirmationSummary.dirtyDraftCount,
-                firstUnsavedMarkdownDisplayName: closeConfirmationSummary.firstDirtyDraftDisplayName,
-                markdownSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
-                firstMarkdownSaveInProgressDisplayName: closeConfirmationSummary.firstSaveInProgressDisplayName
+                unsavedLocalDocumentDraftCount: closeConfirmationSummary.dirtyDraftCount,
+                firstUnsavedLocalDocumentDisplayName: closeConfirmationSummary.firstDirtyDraftDisplayName,
+                localDocumentSaveInProgressCount: closeConfirmationSummary.saveInProgressCount,
+                firstLocalDocumentSaveInProgressDisplayName: closeConfirmationSummary.firstSaveInProgressDisplayName
             )
         }
         .onReceive(NotificationCenter.default.publisher(for: .toasttyShowAgentGetStartedFlow)) { notification in
@@ -138,6 +147,21 @@ struct AppWindowView: View {
         hasEverLaunchedAgent ? ToastyTheme.sidebarWidth : ToastyTheme.sidebarWidthBeforeAgentLaunch
     }
 
+    static func sidebarToggleShowsUnreadBadge(
+        sidebarVisible: Bool,
+        hasUnreadNotifications: Bool
+    ) -> Bool {
+        hasUnreadNotifications && !sidebarVisible
+    }
+
+    static func sidebarToggleAccessibilityLabel(sidebarVisible: Bool) -> String {
+        sidebarVisible ? "Hide Workspaces" : "Show Workspaces"
+    }
+
+    static func sidebarToggleAccessibilityValue(hasUnreadBadge: Bool) -> String {
+        hasUnreadBadge ? "Unread notifications" : ""
+    }
+
     static func shouldPresentAgentGetStartedFlow(windowID: UUID, notificationObject: Any?) -> Bool {
         guard let targetWindowID = notificationObject as? UUID else {
             return false
@@ -151,7 +175,8 @@ struct AppWindowView: View {
         } label: {
             SidebarToggleIconView(
                 color: sidebarVisible ? ToastyTheme.inactiveText : ToastyTheme.accent,
-                sidebarVisible: sidebarVisible
+                sidebarVisible: sidebarVisible,
+                hasUnread: sidebarToggleHasUnreadBadge
             )
         }
         .buttonStyle(.plain)
@@ -162,11 +187,13 @@ struct AppWindowView: View {
         .contentShape(Rectangle())
         .help(
             ToasttyKeyboardShortcuts.toggleSidebar.helpText(
-                sidebarVisible ? "Hide Workspaces" : "Show Workspaces"
+                Self.sidebarToggleAccessibilityLabel(sidebarVisible: sidebarVisible)
             )
         )
         .padding(.leading, ToastyTheme.titlebarSidebarToggleLeadingPadding)
         .padding(.top, ToastyTheme.titlebarSidebarToggleTopPadding)
+        .accessibilityLabel(Self.sidebarToggleAccessibilityLabel(sidebarVisible: sidebarVisible))
+        .accessibilityValue(Self.sidebarToggleAccessibilityValue(hasUnreadBadge: sidebarToggleHasUnreadBadge))
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 
@@ -239,37 +266,37 @@ private struct WindowSlotFocusSignature: Equatable {
 private struct PendingWorkspaceClose: Identifiable {
     let windowID: UUID
     let workspaceID: UUID
-    let unsavedMarkdownDraftCount: Int
-    let firstUnsavedMarkdownDisplayName: String?
-    let markdownSaveInProgressCount: Int
-    let firstMarkdownSaveInProgressDisplayName: String?
+    let unsavedLocalDocumentDraftCount: Int
+    let firstUnsavedLocalDocumentDisplayName: String?
+    let localDocumentSaveInProgressCount: Int
+    let firstLocalDocumentSaveInProgressDisplayName: String?
 
     var id: UUID { workspaceID }
 
     var allowsDestructiveConfirmation: Bool {
-        markdownSaveInProgressCount == 0
+        localDocumentSaveInProgressCount == 0
     }
 
     var confirmationMessage: String {
         var paragraphs: [String] = []
 
-        if markdownSaveInProgressCount == 1,
-           let firstMarkdownSaveInProgressDisplayName {
+        if localDocumentSaveInProgressCount == 1,
+           let firstLocalDocumentSaveInProgressDisplayName {
             paragraphs.append(
-                "\"\(firstMarkdownSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this workspace."
+                "\"\(firstLocalDocumentSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this workspace."
             )
-        } else if markdownSaveInProgressCount > 1 {
+        } else if localDocumentSaveInProgressCount > 1 {
             paragraphs.append(
                 "This workspace still has markdown saves in progress. Wait for them to finish before closing the workspace."
             )
         }
 
-        if unsavedMarkdownDraftCount == 1,
-           let firstUnsavedMarkdownDisplayName {
+        if unsavedLocalDocumentDraftCount == 1,
+           let firstUnsavedLocalDocumentDisplayName {
             paragraphs.append(
-                "\"\(firstUnsavedMarkdownDisplayName)\" has unsaved markdown changes. Closing the workspace will discard them."
+                "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved markdown changes. Closing the workspace will discard them."
             )
-        } else if unsavedMarkdownDraftCount > 1 {
+        } else if unsavedLocalDocumentDraftCount > 1 {
             paragraphs.append("This workspace has unsaved markdown changes. Closing the workspace will discard them.")
         }
 

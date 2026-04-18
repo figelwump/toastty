@@ -70,6 +70,12 @@ final class TerminalStoreActionCoordinator {
             registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
         case .splitFocusedSlotInDirection(workspaceID: let workspaceID, direction: _):
             registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
+        case .splitFocusedSlotInDirectionWithWorkingDirectory(
+            workspaceID: let workspaceID,
+            direction: _,
+            workingDirectory: _
+        ):
+            registerPendingSplitSourceIfNeeded(workspaceID, previousState, nextState)
         case .closePanel(panelID: let panelID):
             armCloseTransitionViewportDeferralIfNeeded(
                 closedPanelID: panelID,

@@ -42,7 +42,7 @@ Toastty also prepares a few support paths inside the runtime home:
 
 - The preferred automation socket still lives under the system temp directory so the Unix socket path stays short enough for macOS limits. When a runtime-isolated launch finds that stable path already owned by a live Toastty listener, it falls back to a per-process sibling path such as `events-v1-<pid>.sock` instead of stealing the existing socket.
 - The app bundle and DerivedData location are only sandboxed if the caller chooses per-run paths. The automation helpers do this by default, but the app itself does not force it.
-- Shell integration installation is disabled while runtime sandboxing is enabled so isolated dev/test runs never rewrite the user's login shell files.
+- Shell integration installation is disabled while runtime sandboxing is enabled so isolated dev/test runs never rewrite the user's login shell files. In `DEBUG` builds only, `TOASTTY_DEBUG_ALLOW_REAL_SHELL_INTEGRATION_INSTALL=1` provides an explicit opt-in bypass for manual installer validation against the real shell config from an Xcode-launched run.
 
 ## `instance.json`
 

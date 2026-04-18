@@ -121,9 +121,9 @@ struct ToasttyCommandMenus: Commands {
     let openManageConfig: () -> Void
     let openConfigReference: () -> Void
     let openAgentProfilesConfiguration: () -> Void
-    let openMarkdownFile: @MainActor (UUID?) -> Void
-    let openMarkdownFileInTab: @MainActor (UUID?) -> Void
-    let openMarkdownFileInSplit: @MainActor (UUID?) -> Void
+    let openLocalDocumentFile: @MainActor (UUID?) -> Void
+    let openLocalDocumentFileInTab: @MainActor (UUID?) -> Void
+    let openLocalDocumentFileInSplit: @MainActor (UUID?) -> Void
 
     @FocusedValue(\.toasttyCommandWindowID) private var focusedWindowID
 
@@ -157,15 +157,19 @@ struct ToasttyCommandMenus: Commands {
         commandSelection?.workspace
     }
 
-    private var focusedMarkdownPanelSelection: FocusedMarkdownPanelCommandSelection? {
-        store.focusedMarkdownPanelSelection(preferredWindowID: preferredCommandWindowID)
+    private var focusedLocalDocumentPanelSelection: FocusedLocalDocumentPanelCommandSelection? {
+        store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredCommandWindowID)
     }
 
-    private var canSaveFocusedMarkdownPanel: Bool {
-        guard let focusedMarkdownPanelSelection else {
+    private var canSaveFocusedLocalDocumentPanel: Bool {
+        guard let focusedLocalDocumentPanelSelection else {
             return false
         }
-        return webPanelRuntimeRegistry.canSaveMarkdownPanel(panelID: focusedMarkdownPanelSelection.panelID)
+        return webPanelRuntimeRegistry.canSaveLocalDocumentPanel(panelID: focusedLocalDocumentPanelSelection.panelID)
+    }
+
+    private var focusedScaleCommandTarget: FocusedScaleCommandTarget? {
+        store.focusedScaleCommandTarget(preferredWindowID: preferredCommandWindowID)
     }
 
     private var canFocusNextUnreadOrActivePanel: Bool {
@@ -236,7 +240,7 @@ struct ToasttyCommandMenus: Commands {
 
     var body: some Commands {
         let preferredWindowID = preferredCommandWindowID
-        let fontCommandWindowID = store.commandWindowID(preferredWindowID: preferredWindowID)
+        let scaleCommandTarget = focusedScaleCommandTarget
 
         CommandGroup(replacing: .newItem) {
             Button(ToasttyBuiltInCommand.newTab.title) {
@@ -259,11 +263,11 @@ struct ToasttyCommandMenus: Commands {
 
         CommandGroup(replacing: .saveItem) {
             Button("Save") {
-                guard let focusedMarkdownPanelSelection else { return }
-                _ = webPanelRuntimeRegistry.saveMarkdownPanel(panelID: focusedMarkdownPanelSelection.panelID)
+                guard let focusedLocalDocumentPanelSelection else { return }
+                _ = webPanelRuntimeRegistry.saveLocalDocumentPanel(panelID: focusedLocalDocumentPanelSelection.panelID)
             }
             .keyboardShortcut("s", modifiers: [.command])
-            .disabled(!canSaveFocusedMarkdownPanel)
+            .disabled(!canSaveFocusedLocalDocumentPanel)
         }
 
         CommandGroup(after: .appInfo) {
@@ -344,30 +348,41 @@ struct ToasttyCommandMenus: Commands {
             .disabled(!canNavigateScrollbackSearch)
         }
 
-        CommandMenu("Terminal") {
-            Button("Increase Terminal Font") {
-                guard let fontCommandWindowID else { return }
-                store.send(.increaseWindowTerminalFont(windowID: fontCommandWindowID))
-            }
-            .keyboardShortcut("+", modifiers: [.command])
-            .disabled(fontCommandWindowID == nil)
-
-            Button("Decrease Terminal Font") {
-                guard let fontCommandWindowID else { return }
-                store.send(.decreaseWindowTerminalFont(windowID: fontCommandWindowID))
-            }
-            .keyboardShortcut("-", modifiers: [.command])
-            .disabled(fontCommandWindowID == nil)
-
-            Button("Reset Terminal Font") {
-                guard let fontCommandWindowID else { return }
-                store.send(.resetWindowTerminalFont(windowID: fontCommandWindowID))
-            }
-            .keyboardShortcut("0", modifiers: [.command])
-            .disabled(fontCommandWindowID == nil)
-
+        CommandGroup(after: .toolbar) {
             Divider()
 
+            Button(scaleCommandTarget?.increaseMenuTitle ?? "Increase Text Size") {
+                guard let scaleCommandTarget else { return }
+                increaseTextSize(target: scaleCommandTarget)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.increaseTextSize.key,
+                modifiers: ToasttyKeyboardShortcuts.increaseTextSize.modifiers
+            )
+            .disabled(scaleCommandTarget == nil)
+
+            Button(scaleCommandTarget?.decreaseMenuTitle ?? "Decrease Text Size") {
+                guard let scaleCommandTarget else { return }
+                decreaseTextSize(target: scaleCommandTarget)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.decreaseTextSize.key,
+                modifiers: ToasttyKeyboardShortcuts.decreaseTextSize.modifiers
+            )
+            .disabled(scaleCommandTarget == nil)
+
+            Button(scaleCommandTarget?.resetMenuTitle ?? "Reset Text Size") {
+                guard let scaleCommandTarget else { return }
+                resetTextSize(target: scaleCommandTarget)
+            }
+            .keyboardShortcut(
+                ToasttyKeyboardShortcuts.resetTextSize.key,
+                modifiers: ToasttyKeyboardShortcuts.resetTextSize.modifiers
+            )
+            .disabled(scaleCommandTarget == nil)
+        }
+
+        CommandMenu("Terminal") {
             terminalProfileMenuItems()
 
             Divider()
@@ -458,18 +473,18 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Button("Open Markdown File…") {
-                openMarkdownFile(preferredWindowID)
+            Button("Open Local File…") {
+                openLocalDocumentFile(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Open Markdown File in Tab…") {
-                openMarkdownFileInTab(preferredWindowID)
+            Button("Open Local File in Tab…") {
+                openLocalDocumentFileInTab(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Open Markdown File in Split…") {
-                openMarkdownFileInSplit(preferredWindowID)
+            Button("Open Local File in Split…") {
+                openLocalDocumentFileInSplit(preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
@@ -791,6 +806,39 @@ struct ToasttyCommandMenus: Commands {
         // window-targeted actions so stale focused-scene state disables the
         // command instead of rerouting it to another window.
         store.commandWindowID(preferredWindowID: preferredWindowID)
+    }
+
+    private func increaseTextSize(target: FocusedScaleCommandTarget) {
+        switch target {
+        case .terminal(let windowID):
+            store.send(.increaseWindowTerminalFont(windowID: windowID))
+        case .markdown(let windowID):
+            store.send(.increaseWindowMarkdownTextScale(windowID: windowID))
+        case .browser(_, let panelID):
+            store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
+        }
+    }
+
+    private func decreaseTextSize(target: FocusedScaleCommandTarget) {
+        switch target {
+        case .terminal(let windowID):
+            store.send(.decreaseWindowTerminalFont(windowID: windowID))
+        case .markdown(let windowID):
+            store.send(.decreaseWindowMarkdownTextScale(windowID: windowID))
+        case .browser(_, let panelID):
+            store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
+        }
+    }
+
+    private func resetTextSize(target: FocusedScaleCommandTarget) {
+        switch target {
+        case .terminal(let windowID):
+            store.send(.resetWindowTerminalFont(windowID: windowID))
+        case .markdown(let windowID):
+            store.send(.resetWindowMarkdownTextScale(windowID: windowID))
+        case .browser(_, let panelID):
+            store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        }
     }
 }
 

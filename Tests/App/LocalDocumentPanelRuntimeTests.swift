@@ -4,9 +4,9 @@ import CoreState
 import XCTest
 
 @MainActor
-final class MarkdownPanelRuntimeTests: XCTestCase {
+final class LocalDocumentPanelRuntimeTests: XCTestCase {
     func testLocalOnlyCapabilityProfileUsesNonPersistentWebsiteDataStore() {
-        let configuration = MarkdownPanelRuntime.makeWebViewConfiguration(for: .localOnly)
+        let configuration = LocalDocumentPanelRuntime.makeWebViewConfiguration(for: .localOnly)
 
         XCTAssertFalse(configuration.websiteDataStore.isPersistent)
     }
@@ -16,7 +16,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
         var metadataCallCount = 0
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
@@ -25,7 +25,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return MarkdownPanelDocumentSnapshot(
+                return LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Docs",
@@ -60,7 +60,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             .appendingPathComponent("Resources", isDirectory: true)
         let panelDirectoryURL = resourcesDirectoryURL
             .appendingPathComponent("WebPanels", isDirectory: true)
-            .appendingPathComponent("markdown-panel", isDirectory: true)
+            .appendingPathComponent("local-document-panel", isDirectory: true)
         let entryURL = panelDirectoryURL.appendingPathComponent("index.html")
 
         try FileManager.default.createDirectory(at: panelDirectoryURL, withIntermediateDirectories: true)
@@ -70,13 +70,13 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         let bundleURL = tempDirectoryURL.appendingPathComponent("Test.app", isDirectory: true)
         let bundle = try XCTUnwrap(Bundle(path: bundleURL.path))
 
-        XCTAssertEqual(MarkdownPanelAssetLocator.entryURL(bundle: bundle), entryURL)
-        XCTAssertEqual(MarkdownPanelAssetLocator.directoryURL(bundle: bundle), panelDirectoryURL)
+        XCTAssertEqual(LocalDocumentPanelAssetLocator.entryURL(bundle: bundle), entryURL)
+        XCTAssertEqual(LocalDocumentPanelAssetLocator.directoryURL(bundle: bundle), panelDirectoryURL)
     }
 
     func testEditingSessionAdvancesRevisionWhenCleanBaselineChanges() {
-        var session = MarkdownEditingSession(
-            document: MarkdownPanelDocumentSnapshot(
+        var session = LocalDocumentEditingSession(
+            document: LocalDocumentPanelDocumentSnapshot(
                 filePath: "/tmp/toastty/notes.md",
                 displayName: "notes.md",
                 content: "# First",
@@ -85,7 +85,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         )
 
         session.replaceCleanBaseline(
-            with: MarkdownPanelDocumentSnapshot(
+            with: LocalDocumentPanelDocumentSnapshot(
                 filePath: "/tmp/toastty/notes.md",
                 displayName: "notes.md",
                 content: "# Second",
@@ -100,8 +100,8 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
     }
 
     func testEditingSessionKeepsRevisionForSameContentRebootstrap() {
-        var session = MarkdownEditingSession(
-            document: MarkdownPanelDocumentSnapshot(
+        var session = LocalDocumentEditingSession(
+            document: LocalDocumentPanelDocumentSnapshot(
                 filePath: "/tmp/toastty/notes.md",
                 displayName: "notes.md",
                 content: "# Notes",
@@ -110,11 +110,11 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         )
 
         session.replaceCleanBaseline(
-            with: MarkdownPanelDocumentSnapshot(
+            with: LocalDocumentPanelDocumentSnapshot(
                 filePath: "/tmp/toastty/notes.md",
                 displayName: "Notes",
                 content: "# Notes",
-                diskRevision: MarkdownPanelDiskRevision(
+                diskRevision: LocalDocumentPanelDiskRevision(
                     fileNumber: 42,
                     modificationDate: Date(timeIntervalSince1970: 123),
                     size: 7
@@ -128,7 +128,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(session.draftContent, "# Notes")
         XCTAssertEqual(
             session.diskRevision,
-            MarkdownPanelDiskRevision(
+            LocalDocumentPanelDiskRevision(
                 fileNumber: 42,
                 modificationDate: Date(timeIntervalSince1970: 123),
                 size: 7
@@ -138,14 +138,14 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
     func testEnterEditModeSwitchesBootstrapIntoEditingState() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                MarkdownPanelDocumentSnapshot(
+                LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Draft",
@@ -175,14 +175,14 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
     func testDraftUpdateTracksEditingBufferWithoutAdvancingRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                MarkdownPanelDocumentSnapshot(
+                LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Original",
@@ -214,14 +214,14 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
     func testDraftUpdateIgnoresStaleRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                MarkdownPanelDocumentSnapshot(
+                LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Original",
@@ -253,14 +253,14 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
     func testCancelEditModeRestoresPreviewAndAdvancesRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                MarkdownPanelDocumentSnapshot(
+                LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Original",
@@ -299,12 +299,12 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
         try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                await MarkdownPanelRuntime.loadDocument(for: webState)
+                await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 10_000_000
         )
@@ -334,17 +334,59 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: fileURL, encoding: .utf8), "# Saved\n")
     }
 
+    func testCancelEditFromCommandRestoresPreviewAndAdvancesRevision() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
+
+        XCTAssertTrue(runtime.canCancelEditFromCommand())
+        XCTAssertTrue(runtime.cancelEditFromCommand())
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertFalse(bootstrap.isEditing)
+        XCTAssertFalse(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "# Original")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
+        XCTAssertFalse(runtime.canCancelEditFromCommand())
+    }
+
     func testSaveFailureKeepsEditingDraftAndSurfacesError() async throws {
         let missingDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let fileURL = missingDirectoryURL.appendingPathComponent("README.md")
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                MarkdownPanelDocumentSnapshot(
+                LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Original\n",
@@ -389,14 +431,14 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         var metadataCallCount = 0
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                await MarkdownPanelRuntime.loadDocument(for: webState)
+                await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -441,14 +483,14 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         var metadataCallCount = 0
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
             },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                await MarkdownPanelRuntime.loadDocument(for: webState)
+                await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -490,25 +532,26 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
 
         let saver = ControlledDocumentSaver()
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                await MarkdownPanelRuntime.loadDocument(for: webState)
+                await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             documentSaver: { filePath, content in
                 try await saver.save(filePath: filePath, content: content)
             },
-            savedDocumentReader: { filePath, displayName in
+            savedDocumentReader: { filePath, displayName, format in
                 var encoding = String.Encoding.utf8
                 let content = try String(contentsOf: URL(fileURLWithPath: filePath), usedEncoding: &encoding)
                 let attributes = try FileManager.default.attributesOfItem(atPath: filePath)
-                return MarkdownPanelDocumentSnapshot(
+                return LocalDocumentPanelDocumentSnapshot(
                     filePath: filePath,
                     displayName: displayName,
+                    format: format,
                     content: content,
-                    diskRevision: MarkdownPanelDiskRevision(
+                    diskRevision: LocalDocumentPanelDiskRevision(
                         fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
                         modificationDate: attributes[.modificationDate] as? Date,
                         size: (attributes[.size] as? NSNumber)?.uint64Value
@@ -549,6 +592,76 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(finalSaveCallCount, 1)
     }
 
+    func testSavePreservesYamlFormatThroughSavedDocumentReload() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("config.yaml")
+        try "mode: draft\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let capturedFormat = LockedBox<LocalDocumentFormat?>(nil)
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await LocalDocumentPanelRuntime.loadDocument(for: webState)
+            },
+            documentSaver: { filePath, content in
+                try content.write(toFile: filePath, atomically: true, encoding: .utf8)
+            },
+            savedDocumentReader: { filePath, displayName, format in
+                await capturedFormat.set(format)
+                var encoding = String.Encoding.utf8
+                let content = try String(contentsOf: URL(fileURLWithPath: filePath), usedEncoding: &encoding)
+                let attributes = try FileManager.default.attributesOfItem(atPath: filePath)
+                return LocalDocumentPanelDocumentSnapshot(
+                    filePath: filePath,
+                    displayName: displayName,
+                    format: format,
+                    content: content,
+                    diskRevision: LocalDocumentPanelDiskRevision(
+                        fileNumber: (attributes[.systemFileNumber] as? NSNumber)?.uint64Value,
+                        modificationDate: attributes[.modificationDate] as? Date,
+                        size: (attributes[.size] as? NSNumber)?.uint64Value
+                    )
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "config.yaml",
+            localDocument: LocalDocumentState(
+                filePath: fileURL.path,
+                format: .yaml
+            )
+        )
+
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("mode: saved\n", baseContentRevision: baseRevision)
+
+        runtime.save(baseContentRevision: baseRevision)
+        try await waitUntil {
+            guard let bootstrap = runtime.automationState().currentBootstrap else {
+                return false
+            }
+            return bootstrap.isEditing == false && bootstrap.isSaving == false
+        }
+
+        let bootstrap: LocalDocumentPanelBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        let capturedFormatValue = await capturedFormat.snapshot()
+        XCTAssertEqual(capturedFormatValue, .yaml)
+        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, "mode: saved\n")
+    }
+
     func testCloseConfirmationStateWaitsForSaveInProgress() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -559,12 +672,12 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         try "# Original\n".write(to: fileURL, atomically: true, encoding: .utf8)
 
         let saver = ControlledDocumentSaver()
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in },
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
-                await MarkdownPanelRuntime.loadDocument(for: webState)
+                await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             documentSaver: { filePath, content in
                 try await saver.save(filePath: filePath, content: content)
@@ -588,7 +701,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(
             runtime.closeConfirmationState(),
-            MarkdownCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
+            LocalDocumentCloseConfirmationState(kind: .saveInProgress, displayName: "README.md")
         )
 
         await saver.resume()
@@ -603,17 +716,22 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
         try "# Hello Toastty\n\nA local markdown panel.".write(to: fileURL, atomically: true, encoding: .utf8)
 
-        let bootstrap = await MarkdownPanelRuntime.bootstrap(
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
             for: WebPanelState(
                 definition: .localDocument,
                 title: "README.md",
-                filePath: fileURL.path
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .markdown
+                )
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 3)
+        XCTAssertEqual(bootstrap.contractVersion, 4)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .markdown)
+        XCTAssertTrue(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.content, "# Hello Toastty\n\nA local markdown panel.")
         XCTAssertEqual(bootstrap.contentRevision, 1)
         XCTAssertFalse(bootstrap.isEditing)
@@ -622,27 +740,106 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(bootstrap.isSaving)
         XCTAssertNil(bootstrap.saveErrorMessage)
         XCTAssertEqual(bootstrap.theme, .dark)
+        XCTAssertEqual(bootstrap.textScale, AppState.defaultMarkdownTextScale)
     }
 
     func testBootstrapFallsBackToErrorDocumentWhenFileIsMissing() async {
         let filePath = "/tmp/toastty/missing.md"
 
-        let bootstrap = await MarkdownPanelRuntime.bootstrap(
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
             for: WebPanelState(
                 definition: .localDocument,
                 title: "missing.md",
-                filePath: filePath
+                localDocument: LocalDocumentState(
+                    filePath: filePath,
+                    format: .markdown
+                )
             )
         )
 
         XCTAssertEqual(bootstrap.displayName, "missing.md")
         XCTAssertEqual(bootstrap.filePath, filePath)
-        XCTAssertTrue(bootstrap.content.contains("Toastty could not load this markdown file."))
+        XCTAssertTrue(bootstrap.content.contains("Toastty could not load this document."))
         XCTAssertTrue(bootstrap.content.contains(filePath))
     }
 
+    func testBootstrapForMissingYamlFallsBackToPlainTextCodeDocument() async {
+        let filePath = "/tmp/toastty/missing.yaml"
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "missing.yaml",
+                localDocument: LocalDocumentState(
+                    filePath: filePath,
+                    format: .yaml
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertTrue(bootstrap.content.hasPrefix("Toastty could not load this document."))
+        XCTAssertTrue(bootstrap.content.contains("Path:\n\(filePath)"))
+        XCTAssertTrue(bootstrap.content.contains("\n\nReason:\n"))
+        XCTAssertFalse(bootstrap.content.contains("**Path**"))
+        XCTAssertFalse(bootstrap.content.contains("# "))
+    }
+
+    func testBootstrapDisablesHighlightingForLargeTomlFiles() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("Toastty.toml")
+        let largeContent = String(repeating: "key = \"value\"\n", count: 40_500)
+        try largeContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "Toastty.toml",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .toml
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .toml)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
+    func testBootstrapKeepsHighlightingAtExactCodeThreshold() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("boundary.yaml")
+        let thresholdContent = String(repeating: "a", count: 524_288)
+        try thresholdContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "boundary.yaml",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .yaml
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content.utf8.count, 524_288)
+    }
+
     func testBootstrapJavaScriptEmbedsJSONPayload() throws {
-        let bootstrap = MarkdownPanelBootstrap(
+        let bootstrap = LocalDocumentPanelBootstrap(
             filePath: "/tmp/toastty/readme.md",
             displayName: "readme.md",
             content: "# Docs",
@@ -652,14 +849,17 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             hasExternalConflict: true,
             isSaving: false,
             saveErrorMessage: "Could not save",
-            theme: .dark
+            theme: .dark,
+            textScale: 1.3
         )
 
-        let script = try XCTUnwrap(MarkdownPanelRuntime.bootstrapJavaScript(for: bootstrap))
+        let script = try XCTUnwrap(LocalDocumentPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
-        XCTAssertTrue(script.contains("window.ToasttyMarkdownPanel?.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":3"))
+        XCTAssertTrue(script.contains("window.ToasttyLocalDocumentPanel?.receiveBootstrap("))
+        XCTAssertTrue(script.contains("\"contractVersion\":4"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
+        XCTAssertTrue(script.contains("\"format\":\"markdown\""))
+        XCTAssertTrue(script.contains("\"shouldHighlight\":true"))
         XCTAssertTrue(script.contains("\"content\":\"# Docs\""))
         XCTAssertTrue(script.contains("\"contentRevision\":7"))
         XCTAssertTrue(script.contains("\"isEditing\":true"))
@@ -667,19 +867,56 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.contains("\"hasExternalConflict\":true"))
         XCTAssertTrue(script.contains("\"saveErrorMessage\":\"Could not save\""))
         XCTAssertTrue(script.contains("\"theme\":\"dark\""))
+        XCTAssertTrue(script.contains("\"textScale\":1.3"))
     }
 
     func testThemeResolvesFromEffectiveAppearance() {
-        XCTAssertEqual(MarkdownPanelRuntime.theme(for: NSAppearance(named: .darkAqua)), .dark)
-        XCTAssertEqual(MarkdownPanelRuntime.theme(for: NSAppearance(named: .aqua)), .light)
-        XCTAssertEqual(MarkdownPanelRuntime.theme(for: nil), .dark)
+        XCTAssertEqual(LocalDocumentPanelRuntime.theme(for: NSAppearance(named: .darkAqua)), .dark)
+        XCTAssertEqual(LocalDocumentPanelRuntime.theme(for: NSAppearance(named: .aqua)), .light)
+        XCTAssertEqual(LocalDocumentPanelRuntime.theme(for: nil), .dark)
+    }
+
+    func testShouldApplyWebViewAppearanceSkipsSameNamedAppearance() {
+        XCTAssertFalse(
+            LocalDocumentPanelRuntime.shouldApplyWebViewAppearance(
+                current: NSAppearance(named: .aqua),
+                next: NSAppearance(named: .aqua)
+            )
+        )
+    }
+
+    func testShouldApplyWebViewAppearanceAllowsMeaningfulAppearanceChanges() {
+        XCTAssertTrue(
+            LocalDocumentPanelRuntime.shouldApplyWebViewAppearance(
+                current: NSAppearance(named: .darkAqua),
+                next: NSAppearance(named: .aqua)
+            )
+        )
+        XCTAssertTrue(
+            LocalDocumentPanelRuntime.shouldApplyWebViewAppearance(
+                current: nil,
+                next: NSAppearance(named: .aqua)
+            )
+        )
+        XCTAssertTrue(
+            LocalDocumentPanelRuntime.shouldApplyWebViewAppearance(
+                current: NSAppearance(named: .aqua),
+                next: nil
+            )
+        )
+        XCTAssertFalse(
+            LocalDocumentPanelRuntime.shouldApplyWebViewAppearance(
+                current: nil,
+                next: nil
+            )
+        )
     }
 
     func testApplyUsesCurrentEffectiveAppearanceThemeForBootstrap() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataExpectation.fulfill()
@@ -687,7 +924,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return MarkdownPanelDocumentSnapshot(
+                return LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Docs",
@@ -716,7 +953,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataExpectation.fulfill()
@@ -724,7 +961,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return MarkdownPanelDocumentSnapshot(
+                return LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
                     displayName: webState.title,
                     content: "# Docs",
@@ -749,6 +986,125 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrapCallCount, 1)
     }
 
+    func testApplyTextScaleDoesNotReReadMarkdownContent() async throws {
+        let bootstrapRecorder = BootstrapRecorder()
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                await bootstrapRecorder.recordCall()
+                return LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.applyTextScale(1.2)
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let bootstrapCallCount = await bootstrapRecorder.snapshot()
+        XCTAssertEqual(bootstrapCallCount, 1)
+        XCTAssertEqual(runtime.automationState().currentBootstrap?.textScale, 1.2)
+    }
+
+    func testAppearanceChangePreservesCurrentTextScale() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.applyTextScale(1.3)
+        runtime.applyEffectiveAppearance(NSAppearance(named: .aqua))
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertEqual(bootstrap.theme, .light)
+        XCTAssertEqual(bootstrap.textScale, 1.3)
+    }
+
+    func testApplyTextScaleClampsToConfiguredBounds() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.applyTextScale(0)
+        let minimumScale = try XCTUnwrap(runtime.automationState().currentBootstrap?.textScale)
+        XCTAssertEqual(
+            minimumScale,
+            AppState.minMarkdownTextScale,
+            accuracy: 0.0001
+        )
+
+        runtime.applyTextScale(10)
+        let maximumScale = try XCTUnwrap(runtime.automationState().currentBootstrap?.textScale)
+        XCTAssertEqual(
+            maximumScale,
+            AppState.maxMarkdownTextScale,
+            accuracy: 0.0001
+        )
+    }
+
     func testObservedFileReplacementReloadsUpdatedContent() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let tempDirectoryURL = FileManager.default.temporaryDirectory
@@ -761,7 +1117,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         var metadataCallCount = 0
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
@@ -769,7 +1125,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return await MarkdownPanelRuntime.loadDocument(for: webState)
+                return await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -806,7 +1162,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         var metadataCallCount = 0
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
@@ -814,7 +1170,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return await MarkdownPanelRuntime.loadDocument(for: webState)
+                return await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -830,7 +1186,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
         try FileManager.default.removeItem(at: fileURL)
         try await waitUntil { metadataCallCount >= 2 }
         let deletedBootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
-        XCTAssertTrue(deletedBootstrap.content.contains("Toastty could not load this markdown file."))
+        XCTAssertTrue(deletedBootstrap.content.contains("Toastty could not load this document."))
         XCTAssertTrue(deletedBootstrap.content.contains(fileURL.path))
 
         try "# Notes restored\n".write(to: fileURL, atomically: true, encoding: .utf8)
@@ -858,7 +1214,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
 
         var metadataCallCount = 0
 
-        let runtime = MarkdownPanelRuntime(
+        let runtime = LocalDocumentPanelRuntime(
             panelID: UUID(),
             metadataDidChange: { _, _, _ in
                 metadataCallCount += 1
@@ -866,7 +1222,7 @@ final class MarkdownPanelRuntimeTests: XCTestCase {
             interactionDidRequestFocus: { _ in },
             documentLoader: { webState in
                 await bootstrapRecorder.recordCall()
-                return await MarkdownPanelRuntime.loadDocument(for: webState)
+                return await LocalDocumentPanelRuntime.loadDocument(for: webState)
             },
             reloadDebounceNanoseconds: 50_000_000
         )
@@ -914,6 +1270,22 @@ private actor BootstrapRecorder {
 
     func snapshot() -> Int {
         callCount
+    }
+}
+
+private actor LockedBox<Value: Sendable> {
+    private var value: Value
+
+    init(_ value: Value) {
+        self.value = value
+    }
+
+    func set(_ value: Value) {
+        self.value = value
+    }
+
+    func snapshot() -> Value {
+        value
     }
 }
 

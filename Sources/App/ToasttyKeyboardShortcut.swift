@@ -142,6 +142,21 @@ enum ToasttyKeyboardShortcuts {
         modifiers: [.command]
     )
 
+    static let increaseTextSize = ToasttyKeyboardShortcut(
+        "+",
+        modifiers: [.command]
+    )
+
+    static let decreaseTextSize = ToasttyKeyboardShortcut(
+        "-",
+        modifiers: [.command]
+    )
+
+    static let resetTextSize = ToasttyKeyboardShortcut(
+        "0",
+        modifiers: [.command]
+    )
+
     static let focusNextUnreadOrActivePanel = ToasttyKeyboardShortcut(
         "a",
         modifiers: [.command, .shift]

@@ -51,6 +51,46 @@ struct WebPanelStateCodableTests {
     }
 
     @Test
+    func localDocumentStateRoundTripsYamlFormat() throws {
+        let state = WebPanelState(
+            definition: .localDocument,
+            title: "config.yaml",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/project/config.yaml",
+                format: .yaml
+            )
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(decoded == state)
+        #expect(decoded.localDocument?.format == .yaml)
+    }
+
+    @Test
+    func decodingTypedLocalDocumentPayloadWithoutFormatDefaultsToMarkdown() throws {
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "definition": "localDocument",
+                "title": "README.md",
+                "localDocument": [
+                    "filePath": "/tmp/project/README.md",
+                ],
+            ]
+        )
+
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(
+            decoded.localDocument == LocalDocumentState(
+                filePath: "/tmp/project/README.md",
+                format: .markdown
+            )
+        )
+    }
+
+    @Test
     func decodingLegacyMarkdownPayloadHydratesLocalDocumentState() throws {
         let legacy = LegacyMarkdownWebPanelStatePayload(
             title: "README.md",
@@ -89,7 +129,49 @@ struct WebPanelStateCodableTests {
         #expect(decoded.initialURL == "https://example.com/docs")
         #expect(decoded.currentURL == "https://example.com/docs/latest")
         #expect(decoded.restorableURL == "https://example.com/docs/latest")
+        #expect(decoded.browserPageZoom == nil)
+        #expect(decoded.effectiveBrowserPageZoom == WebPanelState.defaultBrowserPageZoom)
         #expect(decoded.localDocument == nil)
+    }
+
+    @Test
+    func browserPageZoomRoundTripsWhenPresent() throws {
+        let state = WebPanelState(
+            definition: .browser,
+            title: "Docs",
+            initialURL: "https://example.com/docs",
+            currentURL: "https://example.com/docs/latest",
+            browserPageZoom: 1.25
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(json["browserPageZoom"] as? Double == 1.25)
+
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+        #expect(decoded == state)
+        #expect(decoded.browserPageZoom == 1.25)
+        #expect(decoded.effectiveBrowserPageZoom == 1.25)
+    }
+
+    @Test
+    func defaultBrowserPageZoomNormalizesOutOfPersistence() throws {
+        let state = WebPanelState(
+            definition: .browser,
+            title: "Docs",
+            initialURL: "https://example.com/docs",
+            browserPageZoom: WebPanelState.defaultBrowserPageZoom
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(json["browserPageZoom"] == nil)
+
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+        #expect(decoded.browserPageZoom == nil)
+        #expect(decoded.effectiveBrowserPageZoom == WebPanelState.defaultBrowserPageZoom)
     }
 
     @Test

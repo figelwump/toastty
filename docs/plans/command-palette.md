@@ -47,14 +47,13 @@ window/panel targeting, `@` file-open mode, and future extensibility.
   truth for many command titles, enablement rules, and side effects.
 - There is no existing command palette, fuzzy search, or provider abstraction.
   Discoverability depends on menus and keyboard shortcuts.
-- Markdown v1 exists in the sibling worktree `../toastty-markdown-panel` as the
-  reference implementation for file-backed markdown panels. That worktree adds:
-  - `MarkdownPanelCreateRequest`
-  - `createMarkdownPanelFromCommand(...)`
+- The local-document implementation is now the reference shape for file-backed
+  editable documents. That work includes:
+  - `LocalDocumentPanelCreateRequest`
   - path normalization and same-workspace reuse by file path
-  - `Open Markdown File…` and `Open Markdown Beside Current`
-- The command palette plan should align with that markdown shape rather than
-  inventing a parallel markdown-open path.
+  - `Open Local File…`, `Open Local File in Tab…`, and `Open Local File in Split…`
+- The command palette plan should align with that local-document shape rather
+  than inventing a parallel file-open path.
 
 ## status update (2026-04-17)
 

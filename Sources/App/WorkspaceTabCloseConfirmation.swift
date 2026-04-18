@@ -6,57 +6,57 @@ struct WorkspaceTabCloseConfirmationAssessment: Equatable, Sendable {
     let terminalsRequiringConfirmationCount: Int
     let hasUnavailableTerminalAssessment: Bool
     let detectedRunningCommand: String?
-    let unsavedMarkdownDraftCount: Int
-    let firstUnsavedMarkdownDisplayName: String?
-    let markdownSaveInProgressCount: Int
-    let firstMarkdownSaveInProgressDisplayName: String?
+    let unsavedLocalDocumentDraftCount: Int
+    let firstUnsavedLocalDocumentDisplayName: String?
+    let localDocumentSaveInProgressCount: Int
+    let firstLocalDocumentSaveInProgressDisplayName: String?
 
     static let noConfirmation = WorkspaceTabCloseConfirmationAssessment(
         requiresConfirmation: false,
         terminalsRequiringConfirmationCount: 0,
         hasUnavailableTerminalAssessment: false,
         detectedRunningCommand: nil,
-        unsavedMarkdownDraftCount: 0,
-        firstUnsavedMarkdownDisplayName: nil,
-        markdownSaveInProgressCount: 0,
-        firstMarkdownSaveInProgressDisplayName: nil
+        unsavedLocalDocumentDraftCount: 0,
+        firstUnsavedLocalDocumentDisplayName: nil,
+        localDocumentSaveInProgressCount: 0,
+        firstLocalDocumentSaveInProgressDisplayName: nil
     )
 
     var allowsDestructiveConfirmation: Bool {
-        markdownSaveInProgressCount == 0
+        localDocumentSaveInProgressCount == 0
     }
 
     var confirmationMessage: String {
         let paragraphs = [
-            markdownSaveInProgressMessage,
-            markdownConfirmationMessage,
+            localDocumentSaveInProgressMessage,
+            localDocumentConfirmationMessage,
             terminalConfirmationMessage,
         ].compactMap { $0 }
 
         return paragraphs.joined(separator: "\n\n")
     }
 
-    private var markdownConfirmationMessage: String? {
-        guard unsavedMarkdownDraftCount > 0 else {
+    private var localDocumentConfirmationMessage: String? {
+        guard unsavedLocalDocumentDraftCount > 0 else {
             return nil
         }
 
-        if unsavedMarkdownDraftCount == 1,
-           let firstUnsavedMarkdownDisplayName {
-            return "\"\(firstUnsavedMarkdownDisplayName)\" has unsaved markdown changes. Closing the tab will discard them."
+        if unsavedLocalDocumentDraftCount == 1,
+           let firstUnsavedLocalDocumentDisplayName {
+            return "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved markdown changes. Closing the tab will discard them."
         }
 
         return "This tab has unsaved markdown changes. Closing the tab will discard them."
     }
 
-    private var markdownSaveInProgressMessage: String? {
-        guard markdownSaveInProgressCount > 0 else {
+    private var localDocumentSaveInProgressMessage: String? {
+        guard localDocumentSaveInProgressCount > 0 else {
             return nil
         }
 
-        if markdownSaveInProgressCount == 1,
-           let firstMarkdownSaveInProgressDisplayName {
-            return "\"\(firstMarkdownSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this tab."
+        if localDocumentSaveInProgressCount == 1,
+           let firstLocalDocumentSaveInProgressDisplayName {
+            return "\"\(firstLocalDocumentSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this tab."
         }
 
         return "This tab still has markdown saves in progress. Wait for them to finish before closing the tab."
@@ -97,7 +97,7 @@ enum WorkspaceTabCloseConfirmation {
         tab: WorkspaceTabState,
         shouldBypassConfirmation: Bool,
         terminalAssessment: (UUID) -> TerminalCloseConfirmationAssessment?,
-        markdownCloseConfirmationState: (UUID) -> MarkdownCloseConfirmationState? = { _ in nil }
+        localDocumentCloseConfirmationState: (UUID) -> LocalDocumentCloseConfirmationState? = { _ in nil }
     ) -> WorkspaceTabCloseConfirmationAssessment {
         guard shouldBypassConfirmation == false else {
             return .noConfirmation
@@ -106,10 +106,10 @@ enum WorkspaceTabCloseConfirmation {
         var terminalsRequiringConfirmationCount = 0
         var hasUnavailableTerminalAssessment = false
         var detectedRunningCommand: String?
-        var unsavedMarkdownDraftCount = 0
-        var firstUnsavedMarkdownDisplayName: String?
-        var markdownSaveInProgressCount = 0
-        var firstMarkdownSaveInProgressDisplayName: String?
+        var unsavedLocalDocumentDraftCount = 0
+        var firstUnsavedLocalDocumentDisplayName: String?
+        var localDocumentSaveInProgressCount = 0
+        var firstLocalDocumentSaveInProgressDisplayName: String?
 
         for slot in tab.layoutTree.allSlotInfos {
             let panelID = slot.panelID
@@ -132,21 +132,21 @@ enum WorkspaceTabCloseConfirmation {
                 }
 
             case .some(.web(let webState)) where webState.definition == .localDocument:
-                guard let closeConfirmationState = markdownCloseConfirmationState(panelID) else {
+                guard let closeConfirmationState = localDocumentCloseConfirmationState(panelID) else {
                     continue
                 }
 
                 switch closeConfirmationState.kind {
                 case .dirtyDraft:
-                    unsavedMarkdownDraftCount += 1
-                    if firstUnsavedMarkdownDisplayName == nil {
-                        firstUnsavedMarkdownDisplayName = closeConfirmationState.displayName
+                    unsavedLocalDocumentDraftCount += 1
+                    if firstUnsavedLocalDocumentDisplayName == nil {
+                        firstUnsavedLocalDocumentDisplayName = closeConfirmationState.displayName
                     }
 
                 case .saveInProgress:
-                    markdownSaveInProgressCount += 1
-                    if firstMarkdownSaveInProgressDisplayName == nil {
-                        firstMarkdownSaveInProgressDisplayName = closeConfirmationState.displayName
+                    localDocumentSaveInProgressCount += 1
+                    if firstLocalDocumentSaveInProgressDisplayName == nil {
+                        firstLocalDocumentSaveInProgressDisplayName = closeConfirmationState.displayName
                     }
                 }
 
@@ -158,17 +158,17 @@ enum WorkspaceTabCloseConfirmation {
         let requiresConfirmation =
             terminalsRequiringConfirmationCount > 0 ||
             hasUnavailableTerminalAssessment ||
-            unsavedMarkdownDraftCount > 0 ||
-            markdownSaveInProgressCount > 0
+            unsavedLocalDocumentDraftCount > 0 ||
+            localDocumentSaveInProgressCount > 0
         return WorkspaceTabCloseConfirmationAssessment(
             requiresConfirmation: requiresConfirmation,
             terminalsRequiringConfirmationCount: terminalsRequiringConfirmationCount,
             hasUnavailableTerminalAssessment: hasUnavailableTerminalAssessment,
             detectedRunningCommand: detectedRunningCommand,
-            unsavedMarkdownDraftCount: unsavedMarkdownDraftCount,
-            firstUnsavedMarkdownDisplayName: firstUnsavedMarkdownDisplayName,
-            markdownSaveInProgressCount: markdownSaveInProgressCount,
-            firstMarkdownSaveInProgressDisplayName: firstMarkdownSaveInProgressDisplayName
+            unsavedLocalDocumentDraftCount: unsavedLocalDocumentDraftCount,
+            firstUnsavedLocalDocumentDisplayName: firstUnsavedLocalDocumentDisplayName,
+            localDocumentSaveInProgressCount: localDocumentSaveInProgressCount,
+            firstLocalDocumentSaveInProgressDisplayName: firstLocalDocumentSaveInProgressDisplayName
         )
     }
 }

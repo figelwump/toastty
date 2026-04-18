@@ -419,6 +419,24 @@ struct AutomationTests {
     }
 
     @Test
+    func workspaceTabsWideHiddenSidebarUnreadFixtureLoadsExpectedShape() throws {
+        let fixture = try #require(AutomationFixtureLoader.load(named: "workspace-tabs-wide-hidden-sidebar-unread"))
+
+        #expect(fixture.windows.count == 1)
+        let window = try #require(fixture.windows.first)
+        #expect(window.frame.width == 2300)
+        #expect(window.sidebarVisible == false)
+        #expect(window.workspaceIDs.count == 1)
+        #expect(window.selectedWorkspaceID == window.workspaceIDs.first)
+
+        let workspaceID = try #require(window.workspaceIDs.first)
+        let workspace = try #require(fixture.workspacesByID[workspaceID])
+        #expect(workspace.unreadNotificationCount > 0)
+
+        try StateValidator.validate(fixture)
+    }
+
+    @Test
     func loadRequiredFixtureThrowsForUnknownFixture() {
         #expect(throws: AutomationFixtureError.unknownFixture("not-real")) {
             _ = try AutomationFixtureLoader.loadRequired(named: "not-real")

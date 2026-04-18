@@ -50,8 +50,21 @@ public enum AppAction: Equatable, Sendable {
     case increaseWindowTerminalFont(windowID: UUID)
     case decreaseWindowTerminalFont(windowID: UUID)
     case resetWindowTerminalFont(windowID: UUID)
+    case setWindowMarkdownTextScale(windowID: UUID, scale: Double)
+    case increaseWindowMarkdownTextScale(windowID: UUID)
+    case decreaseWindowMarkdownTextScale(windowID: UUID)
+    case resetWindowMarkdownTextScale(windowID: UUID)
+    case setBrowserPanelPageZoom(panelID: UUID, zoom: Double)
+    case increaseBrowserPanelPageZoom(panelID: UUID)
+    case decreaseBrowserPanelPageZoom(panelID: UUID)
+    case resetBrowserPanelPageZoom(panelID: UUID)
     case splitFocusedSlot(workspaceID: UUID, orientation: SplitOrientation)
     case splitFocusedSlotInDirection(workspaceID: UUID, direction: SlotSplitDirection)
+    case splitFocusedSlotInDirectionWithWorkingDirectory(
+        workspaceID: UUID,
+        direction: SlotSplitDirection,
+        workingDirectory: String
+    )
     case splitFocusedSlotInDirectionWithTerminalProfile(
         workspaceID: UUID,
         direction: SlotSplitDirection,
@@ -123,10 +136,28 @@ public extension AppAction {
             return "decreaseWindowTerminalFont"
         case .resetWindowTerminalFont:
             return "resetWindowTerminalFont"
+        case .setWindowMarkdownTextScale:
+            return "setWindowMarkdownTextScale"
+        case .increaseWindowMarkdownTextScale:
+            return "increaseWindowMarkdownTextScale"
+        case .decreaseWindowMarkdownTextScale:
+            return "decreaseWindowMarkdownTextScale"
+        case .resetWindowMarkdownTextScale:
+            return "resetWindowMarkdownTextScale"
+        case .setBrowserPanelPageZoom:
+            return "setBrowserPanelPageZoom"
+        case .increaseBrowserPanelPageZoom:
+            return "increaseBrowserPanelPageZoom"
+        case .decreaseBrowserPanelPageZoom:
+            return "decreaseBrowserPanelPageZoom"
+        case .resetBrowserPanelPageZoom:
+            return "resetBrowserPanelPageZoom"
         case .splitFocusedSlot:
             return "splitFocusedSlot"
         case .splitFocusedSlotInDirection:
             return "splitFocusedSlotInDirection"
+        case .splitFocusedSlotInDirectionWithWorkingDirectory:
+            return "splitFocusedSlotInDirectionWithWorkingDirectory"
         case .splitFocusedSlotInDirectionWithTerminalProfile:
             return "splitFocusedSlotInDirectionWithTerminalProfile"
         case .focusSlot:

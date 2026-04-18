@@ -363,7 +363,7 @@ compute_sha256() {
     openssl dgst -sha256 -r "$path" | awk '{print $1}'
     return
   fi
-  echo "error: shasum or openssl is required for markdown smoke hashing" >&2
+  echo "error: shasum or openssl is required for local document smoke hashing" >&2
   exit 1
 }
 
@@ -372,34 +372,45 @@ probe_terminal_send_text_availability() {
   send_request "automation.terminal_send_text" "{\"text\":\"\",\"submit\":false,\"allowUnavailable\":true,\"panelID\":\"${panel_id}\"}"
 }
 
-wait_for_markdown_panel_state() {
+wait_for_local_document_panel_state() {
   local panel_id="$1"
   local expected_file_path="$2"
   local expected_display_name="$3"
   local expected_hash="$4"
+  local expected_format="$5"
+  local expected_highlight="$6"
   local last_response=""
   local last_host_state=""
   local last_pending=""
   local last_state_file_path=""
+  local last_state_format=""
   local last_bootstrap_file_path=""
   local last_bootstrap_display_name=""
   local last_bootstrap_hash=""
+  local last_bootstrap_format=""
+  local last_bootstrap_should_highlight=""
 
   for _ in $(seq 1 80); do
-    last_response="$(send_request "automation.markdown_panel_state" "{\"panelID\":\"${panel_id}\"}")"
+    last_response="$(send_request "automation.local_document_panel_state" "{\"panelID\":\"${panel_id}\"}")"
     last_host_state="$(extract_string_field "$last_response" "hostLifecycleState")"
     last_pending="$(extract_bool_field "$last_response" "pendingBootstrapScript")"
     last_state_file_path="$(extract_string_field "$last_response" "stateFilePath")"
+    last_state_format="$(extract_string_field "$last_response" "stateFormat")"
     last_bootstrap_file_path="$(extract_string_field "$last_response" "bootstrapFilePath")"
     last_bootstrap_display_name="$(extract_string_field "$last_response" "bootstrapDisplayName")"
     last_bootstrap_hash="$(extract_string_field "$last_response" "bootstrapContentSHA256")"
+    last_bootstrap_format="$(extract_string_field "$last_response" "bootstrapFormat")"
+    last_bootstrap_should_highlight="$(extract_bool_field "$last_response" "bootstrapShouldHighlight")"
 
     if [[ "$last_host_state" == "ready" &&
           "$last_pending" == "false" &&
           "$last_state_file_path" == "$expected_file_path" &&
+          "$last_state_format" == "$expected_format" &&
           "$last_bootstrap_file_path" == "$expected_file_path" &&
           "$last_bootstrap_display_name" == "$expected_display_name" &&
-          "$last_bootstrap_hash" == "$expected_hash" ]]; then
+          "$last_bootstrap_hash" == "$expected_hash" &&
+          "$last_bootstrap_format" == "$expected_format" &&
+          "$last_bootstrap_should_highlight" == "$expected_highlight" ]]; then
       printf '%s' "$last_response"
       return 0
     fi
@@ -407,17 +418,22 @@ wait_for_markdown_panel_state() {
     sleep 0.1
   done
 
-  echo "error: timed out waiting for markdown panel state" >&2
+  echo "error: timed out waiting for local document panel state" >&2
   echo "panel id: ${panel_id}" >&2
   echo "expected file path: ${expected_file_path}" >&2
   echo "expected display name: ${expected_display_name}" >&2
   echo "expected hash: ${expected_hash}" >&2
+  echo "expected format: ${expected_format}" >&2
+  echo "expected shouldHighlight: ${expected_highlight}" >&2
   echo "last host lifecycle: ${last_host_state:-missing}" >&2
   echo "last pending bootstrap: ${last_pending:-missing}" >&2
   echo "last state file path: ${last_state_file_path:-missing}" >&2
+  echo "last state format: ${last_state_format:-missing}" >&2
   echo "last bootstrap file path: ${last_bootstrap_file_path:-missing}" >&2
   echo "last bootstrap display name: ${last_bootstrap_display_name:-missing}" >&2
   echo "last bootstrap hash: ${last_bootstrap_hash:-missing}" >&2
+  echo "last bootstrap format: ${last_bootstrap_format:-missing}" >&2
+  echo "last bootstrap shouldHighlight: ${last_bootstrap_should_highlight:-missing}" >&2
   echo "last response: ${last_response}" >&2
   exit 1
 }
@@ -633,6 +649,8 @@ TERMINAL_VIEWPORT_SCREENSHOT_PATH=""
 FOCUSED_TERMINAL_SCREENSHOT_PATH=""
 FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH=""
 MARKDOWN_SCREENSHOT_PATH=""
+YAML_SCREENSHOT_PATH=""
+TOML_SCREENSHOT_PATH=""
 if [[ "$GHOSTTY_INTEGRATION_DISABLED" != "1" && -d "$GHOSTTY_XCFRAMEWORK_PATH" ]]; then
   if [[ ! -f "$GHOSTTY_XCFRAMEWORK_PATH/Info.plist" ]]; then
     echo "error: Ghostty xcframework appears invalid (missing Info.plist): $GHOSTTY_XCFRAMEWORK_PATH" >&2
@@ -1155,7 +1173,7 @@ EOF
 MARKDOWN_EXPECTED_HASH="$(compute_sha256 "$MARKDOWN_SMOKE_FILE")"
 MARKDOWN_FILE_PATH="$(canonicalize_path "$MARKDOWN_SMOKE_FILE")"
 MARKDOWN_DISPLAY_NAME="$(basename "$MARKDOWN_FILE_PATH")"
-send_request "automation.perform_action" "{\"action\":\"panel.create.markdown\",\"args\":{\"placement\":\"newTab\",\"filePath\":\"$(json_escape_string "$MARKDOWN_FILE_PATH")\"}}" >/dev/null
+send_request "automation.perform_action" "{\"action\":\"panel.create.localDocument\",\"args\":{\"placement\":\"newTab\",\"filePath\":\"$(json_escape_string "$MARKDOWN_FILE_PATH")\"}}" >/dev/null
 MARKDOWN_TAB_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
 MARKDOWN_TAB_COUNT="$(extract_int_field "$MARKDOWN_TAB_SNAPSHOT" "tabCount")"
 MARKDOWN_SELECTED_TAB_INDEX="$(extract_int_field "$MARKDOWN_TAB_SNAPSHOT" "selectedTabIndex")"
@@ -1165,7 +1183,13 @@ if [[ "$MARKDOWN_TAB_COUNT" != "2" || "$MARKDOWN_SELECTED_TAB_INDEX" != "2" || -
   echo "snapshot response: ${MARKDOWN_TAB_SNAPSHOT}" >&2
   exit 1
 fi
-wait_for_markdown_panel_state "$MARKDOWN_PANEL_ID" "$MARKDOWN_FILE_PATH" "$MARKDOWN_DISPLAY_NAME" "$MARKDOWN_EXPECTED_HASH" >/dev/null
+wait_for_local_document_panel_state \
+  "$MARKDOWN_PANEL_ID" \
+  "$MARKDOWN_FILE_PATH" \
+  "$MARKDOWN_DISPLAY_NAME" \
+  "$MARKDOWN_EXPECTED_HASH" \
+  "markdown" \
+  "true" >/dev/null
 
 cat > "$MARKDOWN_SMOKE_FILE" <<'EOF'
 # Markdown Smoke Reloaded
@@ -1178,13 +1202,100 @@ This markdown content changed on disk.
 > live reload should refresh the panel.
 EOF
 MARKDOWN_RELOADED_HASH="$(compute_sha256 "$MARKDOWN_SMOKE_FILE")"
-wait_for_markdown_panel_state "$MARKDOWN_PANEL_ID" "$MARKDOWN_FILE_PATH" "$MARKDOWN_DISPLAY_NAME" "$MARKDOWN_RELOADED_HASH" >/dev/null
+wait_for_local_document_panel_state \
+  "$MARKDOWN_PANEL_ID" \
+  "$MARKDOWN_FILE_PATH" \
+  "$MARKDOWN_DISPLAY_NAME" \
+  "$MARKDOWN_RELOADED_HASH" \
+  "markdown" \
+  "true" >/dev/null
 
 MARKDOWN_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"markdown-panel-smoke"}')"
 MARKDOWN_SCREENSHOT_PATH="$(extract_string_field "$MARKDOWN_SCREENSHOT_RESPONSE" "path")"
 if [[ -z "$MARKDOWN_SCREENSHOT_PATH" || ! -f "$MARKDOWN_SCREENSHOT_PATH" ]]; then
   echo "error: markdown screenshot path missing or file not found" >&2
   echo "capture response: ${MARKDOWN_SCREENSHOT_RESPONSE}" >&2
+  exit 1
+fi
+
+YAML_SMOKE_FILE="$ARTIFACTS_DIR/local-document-smoke.yaml"
+cat > "$YAML_SMOKE_FILE" <<'EOF'
+version: 1
+mode: smoke
+features:
+  - tabs
+  - splits
+  - automation
+metadata:
+  owner: toastty
+EOF
+YAML_EXPECTED_HASH="$(compute_sha256 "$YAML_SMOKE_FILE")"
+YAML_FILE_PATH="$(canonicalize_path "$YAML_SMOKE_FILE")"
+YAML_DISPLAY_NAME="$(basename "$YAML_FILE_PATH")"
+send_request "automation.perform_action" "{\"action\":\"panel.create.localDocument\",\"args\":{\"placement\":\"newTab\",\"filePath\":\"$(json_escape_string "$YAML_FILE_PATH")\"}}" >/dev/null
+YAML_TAB_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+YAML_TAB_COUNT="$(extract_int_field "$YAML_TAB_SNAPSHOT" "tabCount")"
+YAML_SELECTED_TAB_INDEX="$(extract_int_field "$YAML_TAB_SNAPSHOT" "selectedTabIndex")"
+YAML_PANEL_ID="$(extract_string_field "$YAML_TAB_SNAPSHOT" "focusedPanelID")"
+if [[ "$YAML_TAB_COUNT" != "3" || "$YAML_SELECTED_TAB_INDEX" != "3" || -z "$YAML_PANEL_ID" ]]; then
+  echo "error: yaml new-tab smoke setup did not select the yaml tab as expected" >&2
+  echo "snapshot response: ${YAML_TAB_SNAPSHOT}" >&2
+  exit 1
+fi
+wait_for_local_document_panel_state \
+  "$YAML_PANEL_ID" \
+  "$YAML_FILE_PATH" \
+  "$YAML_DISPLAY_NAME" \
+  "$YAML_EXPECTED_HASH" \
+  "yaml" \
+  "true" >/dev/null
+
+YAML_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"yaml-panel-smoke"}')"
+YAML_SCREENSHOT_PATH="$(extract_string_field "$YAML_SCREENSHOT_RESPONSE" "path")"
+if [[ -z "$YAML_SCREENSHOT_PATH" || ! -f "$YAML_SCREENSHOT_PATH" ]]; then
+  echo "error: yaml screenshot path missing or file not found" >&2
+  echo "capture response: ${YAML_SCREENSHOT_RESPONSE}" >&2
+  exit 1
+fi
+
+TOML_SMOKE_FILE="$ARTIFACTS_DIR/local-document-smoke.toml"
+cat > "$TOML_SMOKE_FILE" <<'EOF'
+title = "Toastty Smoke"
+mode = "toml"
+
+[window]
+layout = "split"
+tabs = 3
+
+[features]
+automation = true
+EOF
+TOML_EXPECTED_HASH="$(compute_sha256 "$TOML_SMOKE_FILE")"
+TOML_FILE_PATH="$(canonicalize_path "$TOML_SMOKE_FILE")"
+TOML_DISPLAY_NAME="$(basename "$TOML_FILE_PATH")"
+send_request "automation.perform_action" "{\"action\":\"panel.create.localDocument\",\"args\":{\"placement\":\"newTab\",\"filePath\":\"$(json_escape_string "$TOML_FILE_PATH")\"}}" >/dev/null
+TOML_TAB_SNAPSHOT="$(send_request "automation.workspace_snapshot" '{}')"
+TOML_TAB_COUNT="$(extract_int_field "$TOML_TAB_SNAPSHOT" "tabCount")"
+TOML_SELECTED_TAB_INDEX="$(extract_int_field "$TOML_TAB_SNAPSHOT" "selectedTabIndex")"
+TOML_PANEL_ID="$(extract_string_field "$TOML_TAB_SNAPSHOT" "focusedPanelID")"
+if [[ "$TOML_TAB_COUNT" != "4" || "$TOML_SELECTED_TAB_INDEX" != "4" || -z "$TOML_PANEL_ID" ]]; then
+  echo "error: toml new-tab smoke setup did not select the toml tab as expected" >&2
+  echo "snapshot response: ${TOML_TAB_SNAPSHOT}" >&2
+  exit 1
+fi
+wait_for_local_document_panel_state \
+  "$TOML_PANEL_ID" \
+  "$TOML_FILE_PATH" \
+  "$TOML_DISPLAY_NAME" \
+  "$TOML_EXPECTED_HASH" \
+  "toml" \
+  "true" >/dev/null
+
+TOML_SCREENSHOT_RESPONSE="$(send_request "automation.capture_screenshot" '{"step":"toml-panel-smoke"}')"
+TOML_SCREENSHOT_PATH="$(extract_string_field "$TOML_SCREENSHOT_RESPONSE" "path")"
+if [[ -z "$TOML_SCREENSHOT_PATH" || ! -f "$TOML_SCREENSHOT_PATH" ]]; then
+  echo "error: toml screenshot path missing or file not found" >&2
+  echo "capture response: ${TOML_SCREENSHOT_RESPONSE}" >&2
   exit 1
 fi
 
@@ -1205,6 +1316,8 @@ echo "focused terminal screenshot: ${FOCUSED_TERMINAL_SCREENSHOT_PATH:-skipped}"
 echo "focused terminal second screenshot: ${FOCUSED_TERMINAL_SECOND_SCREENSHOT_PATH:-skipped}"
 echo "focused screenshot: ${FOCUSED_SCREENSHOT_PATH:-unknown}"
 echo "markdown screenshot: ${MARKDOWN_SCREENSHOT_PATH:-unknown}"
+echo "yaml screenshot: ${YAML_SCREENSHOT_PATH:-unknown}"
+echo "toml screenshot: ${TOML_SCREENSHOT_PATH:-unknown}"
 echo "screenshot: ${SCREENSHOT_PATH:-unknown}"
 echo "state dump: ${STATE_PATH:-unknown}"
 echo "state hash: ${STATE_HASH:-unknown}"

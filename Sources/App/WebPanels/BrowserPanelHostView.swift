@@ -5,6 +5,7 @@ import SwiftUI
 struct BrowserPanelHostView: NSViewRepresentable {
     @ObservedObject var runtime: BrowserPanelRuntime
     let webState: WebPanelState
+    let isEffectivelyVisible: Bool
 
     @MainActor
     final class Coordinator {
@@ -82,6 +83,7 @@ struct BrowserPanelHostView: NSViewRepresentable {
 
         containerView.onLayout = attach
         attach(containerView)
+        runtime.setEffectivelyVisible(isEffectivelyVisible)
 
         context.coordinator.scheduleApply(webState: webState, runtime: runtime)
     }

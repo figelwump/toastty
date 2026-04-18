@@ -126,9 +126,14 @@ final class TerminalSurfaceScrollView: NSScrollView {
     }
 
     func applyGhosttyCursor(
-        style: TerminalHostView.GhosttyMouseCursorStyle,
+        style: TerminalHostView.GhosttyMouseCursorStyle?,
         visible: Bool
     ) {
+        guard let style else {
+            documentCursor = nil
+            return
+        }
+
         ghosttyCursorVisible = visible
         documentCursor = style.nsCursor
         // Match Ghostty's native macOS host behavior for mouse-hide-while-typing.

@@ -167,6 +167,155 @@ final class AppStateSelectionTests: XCTestCase {
         XCTAssertEqual(state.normalizedTerminalFontOverride(15), 15)
     }
 
+    func testWindowHasAnyUnreadNotificationsReturnsFalseWithoutUnreadState() {
+        let workspace = WorkspaceState.bootstrap(title: "One")
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+
+        XCTAssertFalse(state.windowHasAnyUnreadNotifications(windowID: windowID))
+    }
+
+    func testWindowHasAnyUnreadNotificationsReturnsTrueForUnreadPanelInOwnedWorkspace() {
+        let unreadTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [0]
+        )
+        let workspace = makeWorkspaceFixture(
+            title: "One",
+            tabs: [unreadTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+
+        XCTAssertTrue(state.windowHasAnyUnreadNotifications(windowID: windowID))
+    }
+
+    func testWindowHasAnyUnreadNotificationsReturnsTrueForWorkspaceLevelUnreadOnly() {
+        var workspace = WorkspaceState.bootstrap(title: "One")
+        workspace.unreadWorkspaceNotificationCount = 2
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+
+        XCTAssertTrue(state.windowHasAnyUnreadNotifications(windowID: windowID))
+    }
+
+    func testWindowHasAnyUnreadNotificationsIgnoresUnreadWorkspacesInOtherWindows() {
+        let currentWorkspace = WorkspaceState.bootstrap(title: "One")
+        let unreadTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [0]
+        )
+        let unreadWorkspace = makeWorkspaceFixture(
+            title: "Two",
+            tabs: [unreadTab],
+            selectedTabIndex: 0
+        )
+        let currentWindowID = UUID()
+        let otherWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: currentWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [currentWorkspace.id],
+                    selectedWorkspaceID: currentWorkspace.id
+                ),
+                WindowState(
+                    id: otherWindowID,
+                    frame: CGRectCodable(x: 40, y: 40, width: 900, height: 700),
+                    workspaceIDs: [unreadWorkspace.id],
+                    selectedWorkspaceID: unreadWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                currentWorkspace.id: currentWorkspace,
+                unreadWorkspace.id: unreadWorkspace,
+            ],
+            selectedWindowID: currentWindowID
+        )
+
+        XCTAssertFalse(state.windowHasAnyUnreadNotifications(windowID: currentWindowID))
+        XCTAssertTrue(state.windowHasAnyUnreadNotifications(windowID: otherWindowID))
+    }
+
+    func testWindowHasAnyUnreadNotificationsReturnsFalseAfterUnreadStateClears() throws {
+        var workspace = WorkspaceState.bootstrap(title: "One")
+        let unreadPanelID = try XCTUnwrap(workspace.focusedPanelID)
+        workspace.unreadPanelIDs = [unreadPanelID]
+        let windowID = UUID()
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+
+        XCTAssertTrue(state.windowHasAnyUnreadNotifications(windowID: windowID))
+
+        state.workspacesByID[workspace.id]?.unreadPanelIDs = []
+
+        XCTAssertFalse(state.windowHasAnyUnreadNotifications(windowID: windowID))
+    }
+
+    func testWindowHasAnyUnreadNotificationsReturnsFalseForUnknownOrEmptyWindow() {
+        let emptyWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: emptyWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [],
+                    selectedWorkspaceID: nil
+                )
+            ],
+            workspacesByID: [:],
+            selectedWindowID: emptyWindowID
+        )
+
+        XCTAssertFalse(state.windowHasAnyUnreadNotifications(windowID: emptyWindowID))
+        XCTAssertFalse(state.windowHasAnyUnreadNotifications(windowID: UUID()))
+    }
+
     func testNextUnreadPanelSkipsFocusedPanelAndWrapsWithinCurrentTab() throws {
         let currentTab = makeTabFixture(
             focusedPanelIndex: 1,
@@ -484,6 +633,91 @@ final class AppStateSelectionTests: XCTestCase {
         XCTAssertEqual(target.workspaceID, siblingWorkspace.id)
         XCTAssertEqual(target.tabID, siblingWorkspaceTab.tab.id)
         XCTAssertEqual(target.panelID, siblingWorkspaceTab.panelIDs[0])
+    }
+
+    func testNextMatchingPanelReachesEarlierTabInSiblingWorkspaceBeforeRepeatingSelectedTab() throws {
+        let currentEarlierTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let currentSelectedTab = makeTabFixture(
+            focusedPanelIndex: 1,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let currentWorkspace = makeWorkspaceFixture(
+            title: "One",
+            tabs: [currentEarlierTab, currentSelectedTab],
+            selectedTabIndex: 1
+        )
+        let siblingTab = makeTabFixture(
+            focusedPanelIndex: 0,
+            unreadPanelIndices: [],
+            panelCount: 2
+        )
+        let siblingWorkspace = makeWorkspaceFixture(
+            title: "Two",
+            tabs: [siblingTab],
+            selectedTabIndex: 0
+        )
+        let windowID = UUID()
+        var state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [currentWorkspace.id, siblingWorkspace.id],
+                    selectedWorkspaceID: currentWorkspace.id
+                )
+            ],
+            workspacesByID: [
+                currentWorkspace.id: currentWorkspace,
+                siblingWorkspace.id: siblingWorkspace,
+            ],
+            selectedWindowID: windowID
+        )
+        let matchingPanelIDs: Set<UUID> = [
+            currentEarlierTab.panelIDs[0],
+            currentSelectedTab.panelIDs[0],
+            currentSelectedTab.panelIDs[1],
+            siblingTab.panelIDs[0],
+        ]
+
+        let firstTarget = try XCTUnwrap(
+            state.nextMatchingPanel(
+                fromWindowID: windowID,
+                workspaceID: currentWorkspace.id,
+                tabID: currentSelectedTab.tab.id,
+                focusedPanelID: currentSelectedTab.panelIDs[1]
+            ) { _, panelID in
+                matchingPanelIDs.contains(panelID)
+            }
+        )
+
+        XCTAssertEqual(firstTarget.workspaceID, siblingWorkspace.id)
+        XCTAssertEqual(firstTarget.tabID, siblingTab.tab.id)
+        XCTAssertEqual(firstTarget.panelID, siblingTab.panelIDs[0])
+
+        state.selectedWindowID = firstTarget.windowID
+        state.windows[0].selectedWorkspaceID = firstTarget.workspaceID
+        state.workspacesByID[siblingWorkspace.id]?.selectedTabID = firstTarget.tabID
+        state.workspacesByID[siblingWorkspace.id]?.focusedPanelID = firstTarget.panelID
+
+        let secondTarget = try XCTUnwrap(
+            state.nextMatchingPanel(
+                fromWindowID: windowID,
+                workspaceID: siblingWorkspace.id,
+                tabID: siblingTab.tab.id,
+                focusedPanelID: siblingTab.panelIDs[0]
+            ) { _, panelID in
+                matchingPanelIDs.contains(panelID)
+            }
+        )
+
+        XCTAssertEqual(secondTarget.workspaceID, currentWorkspace.id)
+        XCTAssertEqual(secondTarget.tabID, currentEarlierTab.tab.id)
+        XCTAssertEqual(secondTarget.panelID, currentEarlierTab.panelIDs[0])
     }
 }
 

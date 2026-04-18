@@ -1,16 +1,17 @@
 import AppKit
+import CoreState
 import UniformTypeIdentifiers
 
-enum MarkdownOpenPanel {
+enum LocalDocumentOpenPanel {
     @MainActor
     static func chooseFile(
-        title: String = "Open Markdown File",
+        title: String = "Open Local File",
         directoryURL: URL? = nil
     ) -> URL? {
         let panel = NSOpenPanel()
         panel.title = title
         panel.prompt = "Open"
-        panel.message = "Choose a markdown file to open in Toastty."
+        panel.message = "Choose a local file to open in Toastty."
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
@@ -18,13 +19,10 @@ enum MarkdownOpenPanel {
         panel.directoryURL = directoryURL
         return panel.runModal() == .OK ? panel.url : nil
     }
-}
 
-private extension MarkdownOpenPanel {
     static func allowedContentTypes() -> [UTType] {
         var types: [UTType] = []
-        let extensions = ["md", "markdown", "mdown", "mkd"]
-        for fileExtension in extensions {
+        for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
             if let type = UTType(filenameExtension: fileExtension, conformingTo: .plainText),
                types.contains(type) == false {
                 types.append(type)

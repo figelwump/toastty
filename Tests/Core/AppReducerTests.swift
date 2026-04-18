@@ -57,6 +57,51 @@ struct AppReducerTests {
     }
 
     @Test
+    func splitFocusedSlotInDirectionWithWorkingDirectorySeedsNewPanelFromExplicitDirectory() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+        var workspace = try #require(state.workspacesByID[workspaceID])
+        let focusedPanelID = try #require(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[focusedPanelID] else {
+            Issue.record("expected focused panel to be terminal before split")
+            return
+        }
+        terminalState.cwd = "/tmp/toastty/source"
+        workspace.panels[focusedPanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        #expect(
+            reducer.send(
+                .splitFocusedSlotInDirectionWithWorkingDirectory(
+                    workspaceID: workspaceID,
+                    direction: .right,
+                    workingDirectory: "/tmp/toastty/target/../target"
+                ),
+                state: &state
+            )
+        )
+
+        let workspaceAfter = try #require(state.workspacesByID[workspaceID])
+        let newFocusedPanelID = try #require(workspaceAfter.focusedPanelID)
+
+        guard case .terminal(let splitTerminalState) = workspaceAfter.panels[newFocusedPanelID] else {
+            Issue.record("expected split-created panel to be terminal")
+            return
+        }
+        #expect(splitTerminalState.cwd == "/tmp/toastty/target")
+
+        guard case .terminal(let sourceTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            Issue.record("expected source panel to remain terminal")
+            return
+        }
+        #expect(sourceTerminalState.cwd == "/tmp/toastty/source")
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
     func splitFocusedSlotFallsBackToHomeCWDWhenFocusedPanelIsWeb() throws {
         var state = AppState.bootstrap()
         let reducer = AppReducer()
@@ -743,7 +788,8 @@ struct AppReducerTests {
             workspaceTitle: "Client Logs",
             terminalCWD: "~/src/../tmp/toastty",
             terminalProfileBinding: TerminalProfileBinding(profileID: "zmx"),
-            windowTerminalFontSizePointsOverride: 15
+            windowTerminalFontSizePointsOverride: 15,
+            windowMarkdownTextScaleOverride: 1.2
         )
 
         #expect(reducer.send(.createWindow(seed: seed, initialFrame: nil), state: &state))
@@ -761,7 +807,9 @@ struct AppReducerTests {
         #expect(terminalState.cwd == ((NSHomeDirectory() + "/src/../tmp/toastty") as NSString).standardizingPath)
         #expect(terminalState.profileBinding == TerminalProfileBinding(profileID: "zmx"))
         #expect(window.terminalFontSizePointsOverride == 15)
+        #expect(window.markdownTextScaleOverride == 1.2)
         #expect(state.effectiveTerminalFontPoints(for: window.id) == 15)
+        #expect(state.effectiveMarkdownTextScale(for: window.id) == 1.2)
         try StateValidator.validate(state)
     }
 
@@ -1455,7 +1503,8 @@ struct AppReducerTests {
                     workspaceID: workspaceID,
                     panel: WebPanelState(
                         definition: .browser,
-                        initialURL: "https://example.com/original"
+                        initialURL: "https://example.com/original",
+                        browserPageZoom: 1.25
                     ),
                     placement: .splitRight
                 ),
@@ -1485,6 +1534,7 @@ struct AppReducerTests {
         #expect(webState.initialURL == "https://example.com/original")
         #expect(webState.currentURL == "https://example.com")
         #expect(webState.restorableURL == "https://example.com")
+        #expect(webState.browserPageZoom == 1.25)
 
         #expect(
             reducer.send(
@@ -1507,6 +1557,7 @@ struct AppReducerTests {
         #expect(untitledWebState.initialURL == "https://example.com/original")
         #expect(untitledWebState.currentURL == "https://example.com/no-title")
         #expect(untitledWebState.restorableURL == "https://example.com/no-title")
+        #expect(untitledWebState.browserPageZoom == 1.25)
 
         #expect(
             reducer.send(
@@ -1529,6 +1580,58 @@ struct AppReducerTests {
         #expect(blankWebState.initialURL == "https://example.com/original")
         #expect(blankWebState.currentURL == "about:blank")
         #expect(blankWebState.restorableURL == "about:blank")
+        #expect(blankWebState.browserPageZoom == 1.25)
+
+        try StateValidator.validate(state)
+    }
+
+    @Test
+    func browserPageZoomActionsAdjustAndResetPanelState() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let workspaceID = try #require(state.windows.first?.selectedWorkspaceID)
+
+        #expect(
+            reducer.send(
+                .createWebPanel(
+                    workspaceID: workspaceID,
+                    panel: WebPanelState(definition: .browser),
+                    placement: .splitRight
+                ),
+                state: &state
+            )
+        )
+
+        let browserPanelID = try #require(state.workspacesByID[workspaceID]?.focusedPanelID)
+
+        #expect(reducer.send(.increaseBrowserPanelPageZoom(panelID: browserPanelID), state: &state))
+        guard case .web(let increasedWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after zoom increase")
+            return
+        }
+        #expect(increasedWebState.effectiveBrowserPageZoom == 1.1)
+
+        #expect(reducer.send(.setBrowserPanelPageZoom(panelID: browserPanelID, zoom: 1.25), state: &state))
+        guard case .web(let customZoomWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after custom zoom")
+            return
+        }
+        #expect(customZoomWebState.browserPageZoom == 1.25)
+
+        #expect(reducer.send(.decreaseBrowserPanelPageZoom(panelID: browserPanelID), state: &state))
+        guard case .web(let decreasedWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after zoom decrease")
+            return
+        }
+        #expect(decreasedWebState.effectiveBrowserPageZoom == 1.1)
+
+        #expect(reducer.send(.resetBrowserPanelPageZoom(panelID: browserPanelID), state: &state))
+        guard case .web(let resetWebState) = state.workspacesByID[workspaceID]?.panels[browserPanelID] else {
+            Issue.record("expected browser panel after zoom reset")
+            return
+        }
+        #expect(resetWebState.browserPageZoom == nil)
+        #expect(resetWebState.effectiveBrowserPageZoom == WebPanelState.defaultBrowserPageZoom)
 
         try StateValidator.validate(state)
     }
@@ -1663,7 +1766,8 @@ struct AppReducerTests {
                     panel: WebPanelState(
                         definition: .browser,
                         title: "Review",
-                        initialURL: "https://example.com/review"
+                        initialURL: "https://example.com/review",
+                        browserPageZoom: 1.25
                     ),
                     placement: .splitRight
                 ),
@@ -1700,7 +1804,8 @@ struct AppReducerTests {
                     panel: WebPanelState(
                         definition: .browser,
                         title: "Docs",
-                        initialURL: "https://example.com/docs"
+                        initialURL: "https://example.com/docs",
+                        browserPageZoom: 1.5
                     ),
                     placement: .newTab
                 ),
@@ -2389,6 +2494,38 @@ struct AppReducerTests {
 
         #expect(reducer.send(.setWindowTerminalFont(windowID: windowID, points: defaultPoints), state: &state) == false)
         #expect(state.effectiveTerminalFontPoints(for: windowID) == defaultPoints)
+    }
+
+    @Test
+    func windowMarkdownTextActionsAdjustAndResetScale() throws {
+        var state = AppState.bootstrap()
+        let reducer = AppReducer()
+        let windowID = try #require(state.windows.first?.id)
+        let defaultScale = AppState.defaultMarkdownTextScale
+        let step = AppState.markdownTextScaleStep
+
+        #expect(reducer.send(.increaseWindowMarkdownTextScale(windowID: windowID), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == defaultScale + step)
+        #expect(state.window(id: windowID)?.markdownTextScaleOverride == defaultScale + step)
+
+        #expect(reducer.send(.decreaseWindowMarkdownTextScale(windowID: windowID), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == defaultScale)
+        #expect(state.window(id: windowID)?.markdownTextScaleOverride == nil)
+
+        #expect(reducer.send(.setWindowMarkdownTextScale(windowID: windowID, scale: 1.4), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == 1.4)
+
+        #expect(reducer.send(.resetWindowMarkdownTextScale(windowID: windowID), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == defaultScale)
+        #expect(state.window(id: windowID)?.markdownTextScaleOverride == nil)
+
+        #expect(reducer.send(.setWindowMarkdownTextScale(windowID: windowID, scale: AppState.maxMarkdownTextScale + 1), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == AppState.maxMarkdownTextScale)
+        #expect(reducer.send(.increaseWindowMarkdownTextScale(windowID: windowID), state: &state) == false)
+
+        #expect(reducer.send(.setWindowMarkdownTextScale(windowID: windowID, scale: AppState.minMarkdownTextScale), state: &state))
+        #expect(state.effectiveMarkdownTextScale(for: windowID) == AppState.minMarkdownTextScale)
+        #expect(reducer.send(.decreaseWindowMarkdownTextScale(windowID: windowID), state: &state) == false)
     }
 
     @Test

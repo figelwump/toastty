@@ -448,13 +448,184 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let selectedTab = try XCTUnwrap(firstWorkspaceAfter.tabsByID[selectedTabID])
         let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
         guard case .web(let webState) = selectedTab.panels[panelID] else {
-            XCTFail("expected markdown panel in source workspace")
+            XCTFail("expected local document panel in source workspace")
             return
         }
 
         XCTAssertEqual(webState.definition, .localDocument)
         XCTAssertEqual(webState.filePath, fixture.markdownPath)
         XCTAssertEqual(webState.title, "command-palette.md")
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickYamlRelativePathOpensLocalDocumentTabInTerminalOwningWindow() throws {
+        let fixture = try makeMarkdownFixture(
+            fileName: "config.yaml",
+            content: "version: 1\nmode: smoke\n"
+        )
+        let firstWorkspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let firstPanelID = try XCTUnwrap(firstWorkspace.layoutTree.allSlotInfos.first?.panelID)
+        let firstWorkspaceWithTerminal = WorkspaceState(
+            id: firstWorkspace.id,
+            title: firstWorkspace.title,
+            layoutTree: firstWorkspace.layoutTree,
+            panels: [
+                firstPanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: firstPanelID
+        )
+        let secondWorkspace = WorkspaceState.bootstrap(title: "Two")
+        let firstWindowID = UUID()
+        let secondWindowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstWindowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 1200, height: 800),
+                    workspaceIDs: [firstWorkspaceWithTerminal.id],
+                    selectedWorkspaceID: firstWorkspaceWithTerminal.id
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 80, y: 80, width: 1200, height: 800),
+                    workspaceIDs: [secondWorkspace.id],
+                    selectedWorkspaceID: secondWorkspace.id
+                ),
+            ],
+            workspacesByID: [
+                firstWorkspaceWithTerminal.id: firstWorkspaceWithTerminal,
+                secondWorkspace.id: secondWorkspace,
+            ],
+            selectedWindowID: secondWindowID
+        )
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/config.yaml")),
+                useAlternatePlacement: false,
+                from: firstPanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[firstWorkspaceWithTerminal.id])
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected local document panel in source workspace")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        XCTAssertEqual(webState.localDocument?.format, .yaml)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickDirectoryRelativePathCreatesRightSplitTerminal() throws {
+        let fixture = try makeDirectoryFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/worktrees/demo")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count + 1)
+
+        guard case .split(_, let orientation, _, _, _) = workspaceAfter.layoutTree else {
+            XCTFail("expected split root after directory command-click")
+            return
+        }
+        XCTAssertEqual(orientation, .horizontal)
+
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected focused split panel to be terminal")
+            return
+        }
+        XCTAssertEqual(newTerminalState.cwd, fixture.directoryPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testAlternateOpenCommandClickDirectoryRelativePathCreatesDownSplitTerminal() throws {
+        let fixture = try makeDirectoryFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "docs/worktrees/demo")),
+                useAlternatePlacement: true,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspace.tabIDs.count)
+        XCTAssertEqual(workspaceAfter.panels.count, workspace.panels.count + 1)
+
+        guard case .split(_, let orientation, _, _, _) = workspaceAfter.layoutTree else {
+            XCTFail("expected split root after alternate directory command-click")
+            return
+        }
+        XCTAssertEqual(orientation, .vertical)
+
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected focused split panel to be terminal")
+            return
+        }
+        XCTAssertEqual(newTerminalState.cwd, fixture.directoryPath)
         try StateValidator.validate(store.state)
     }
 
@@ -515,7 +686,7 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         XCTAssertEqual(workspaceAfter.panels.count, workspaceWithTerminal.panels.count + 1)
         let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
         guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
-            XCTFail("expected root-right markdown panel in source workspace")
+            XCTFail("expected root-right local document panel in source workspace")
             return
         }
 
@@ -566,9 +737,9 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
             persistTerminalFontPreference: false
         )
         XCTAssertTrue(
-            store.createMarkdownPanelFromCommand(
+            store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: windowID,
-                request: MarkdownPanelCreateRequest(
+                request: LocalDocumentPanelCreateRequest(
                     filePath: fixture.markdownPath,
                     placementOverride: .newTab
                 )
@@ -876,15 +1047,18 @@ final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
 }
 
 private extension TerminalRuntimeRegistryStoreBindingTests {
-    func makeMarkdownFixture() throws -> (rootPath: String, markdownPath: String, markdownURL: URL) {
+    func makeMarkdownFixture(
+        fileName: String = "command-palette.md",
+        content: String = "# Command Palette\n"
+    ) throws -> (rootPath: String, markdownPath: String, markdownURL: URL) {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
             .appendingPathComponent("toastty-registry-markdown-link-tests-\(UUID().uuidString)", isDirectory: true)
         let docsURL = rootURL.appendingPathComponent("docs", isDirectory: true)
-        let markdownURL = docsURL.appendingPathComponent("command-palette.md", isDirectory: false)
+        let markdownURL = docsURL.appendingPathComponent(fileName, isDirectory: false)
 
         try fileManager.createDirectory(at: docsURL, withIntermediateDirectories: true)
-        try Data("# Command Palette\n".utf8).write(to: markdownURL)
+        try Data(content.utf8).write(to: markdownURL)
         addTeardownBlock {
             try? fileManager.removeItem(at: rootURL)
         }
@@ -893,6 +1067,26 @@ private extension TerminalRuntimeRegistryStoreBindingTests {
             rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
             markdownPath: markdownURL.standardizedFileURL.resolvingSymlinksInPath().path,
             markdownURL: markdownURL
+        )
+    }
+
+    func makeDirectoryFixture() throws -> (rootPath: String, directoryPath: String) {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-registry-directory-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let directoryURL = rootURL
+            .appendingPathComponent("docs", isDirectory: true)
+            .appendingPathComponent("worktrees", isDirectory: true)
+            .appendingPathComponent("demo", isDirectory: true)
+
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        return (
+            rootPath: rootURL.standardizedFileURL.resolvingSymlinksInPath().path,
+            directoryPath: directoryURL.standardizedFileURL.path
         )
     }
 }

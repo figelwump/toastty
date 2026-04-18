@@ -39,6 +39,11 @@ public struct AppState: Codable, Equatable, Sendable {
     public static let maxTerminalFontPoints: Double = 24
     public static let terminalFontStepPoints: Double = 1
     public static let terminalFontComparisonEpsilon: Double = 0.0001
+    public static let defaultMarkdownTextScale: Double = 1
+    public static let minMarkdownTextScale: Double = 0.8
+    public static let maxMarkdownTextScale: Double = 1.6
+    public static let markdownTextScaleStep: Double = 0.1
+    public static let markdownTextScaleComparisonEpsilon: Double = 0.0001
 
     public var windows: [WindowState]
     public var workspacesByID: [UUID: WorkspaceState]
@@ -62,6 +67,19 @@ public struct AppState: Codable, Equatable, Sendable {
 
     public static func clampedTerminalFontPoints(_ points: Double) -> Double {
         min(max(points, minTerminalFontPoints), maxTerminalFontPoints)
+    }
+
+    public static func clampedMarkdownTextScale(_ scale: Double) -> Double {
+        min(max(scale, minMarkdownTextScale), maxMarkdownTextScale)
+    }
+
+    public static func normalizedMarkdownTextScaleOverride(_ scale: Double?) -> Double? {
+        guard let scale else { return nil }
+        let clampedScale = clampedMarkdownTextScale(scale)
+        guard abs(clampedScale - defaultMarkdownTextScale) >= markdownTextScaleComparisonEpsilon else {
+            return nil
+        }
+        return clampedScale
     }
 
     public static func normalizedTerminalProfileID(_ profileID: String?) -> String? {
@@ -96,6 +114,13 @@ public struct AppState: Codable, Equatable, Sendable {
         return effectiveTerminalFontPoints(for: window)
     }
 
+    public func effectiveMarkdownTextScale(for windowID: UUID) -> Double {
+        guard let window = window(id: windowID) else {
+            return Self.defaultMarkdownTextScale
+        }
+        return effectiveMarkdownTextScale(for: window)
+    }
+
     public static func bootstrap(defaultTerminalProfileID: String? = nil) -> AppState {
         let normalizedDefaultTerminalProfileID = normalizedTerminalProfileID(defaultTerminalProfileID)
         let workspace = WorkspaceState.bootstrap(
@@ -121,6 +146,13 @@ public struct AppState: Codable, Equatable, Sendable {
 
     public func window(id windowID: UUID) -> WindowState? {
         windows.first(where: { $0.id == windowID })
+    }
+
+    public func windowHasAnyUnreadNotifications(windowID: UUID) -> Bool {
+        guard let window = window(id: windowID) else { return false }
+        return window.workspaceIDs.contains { workspaceID in
+            (workspacesByID[workspaceID]?.unreadNotificationCount ?? 0) > 0
+        }
     }
 
     public func selectedWorkspaceID(in windowID: UUID) -> UUID? {
@@ -334,13 +366,36 @@ public struct AppState: Codable, Equatable, Sendable {
         window.terminalFontSizePointsOverride ?? configuredTerminalFontBaselinePoints
     }
 
+    private func effectiveMarkdownTextScale(for window: WindowState) -> Double {
+        window.markdownTextScaleOverride ?? Self.defaultMarkdownTextScale
+    }
+
     private func nextMatchingPanel(
         in workspace: WorkspaceState,
         windowID: UUID,
         matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
     ) -> PanelNavigationTarget? {
-        let orderedTabIDs = orderedIDs(startingAt: workspace.resolvedSelectedTabID, in: workspace.tabIDs)
-        for tabID in orderedTabIDs {
+        guard let startingTabID = workspace.resolvedSelectedTabID,
+              let startingTab = workspace.tabsByID[startingTabID] else {
+            return nil
+        }
+
+        let focusedPanelID = startingTab.resolvedFocusedPanelID
+        if let panelID = nextMatchingPanel(
+            in: startingTab,
+            startingAfterPanelID: focusedPanelID,
+            wrap: false,
+            matches: matches
+        ) {
+            return PanelNavigationTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: startingTabID,
+                panelID: panelID
+            )
+        }
+
+        for tabID in orderedIDs(after: startingTabID, in: workspace.tabIDs) {
             guard let tab = workspace.tabsByID[tabID],
                   let panelID = nextMatchingPanel(
                       in: tab,
@@ -357,6 +412,20 @@ public struct AppState: Codable, Equatable, Sendable {
                 panelID: panelID
             )
         }
+
+        if let panelID = nextMatchingPanel(
+            in: startingTab,
+            endingAtOrIncludingPanelID: focusedPanelID,
+            matches: matches
+        ) {
+            return PanelNavigationTarget(
+                windowID: windowID,
+                workspaceID: workspace.id,
+                tabID: startingTabID,
+                panelID: panelID
+            )
+        }
+
         return nil
     }
 
@@ -532,6 +601,28 @@ public struct AppState: Codable, Equatable, Sendable {
         if let endingBeforePanelID,
            let endIndex = panelOrder.firstIndex(of: endingBeforePanelID) {
             for panelID in panelOrder[..<endIndex] where matches(tab, panelID) {
+                return panelID
+            }
+            return nil
+        }
+
+        for panelID in panelOrder where matches(tab, panelID) {
+            return panelID
+        }
+        return nil
+    }
+
+    private func nextMatchingPanel(
+        in tab: WorkspaceTabState,
+        endingAtOrIncludingPanelID: UUID?,
+        matches: (_ tab: WorkspaceTabState, _ panelID: UUID) -> Bool
+    ) -> UUID? {
+        let panelOrder = tab.layoutTree.allSlotInfos.map(\.panelID)
+        guard panelOrder.isEmpty == false else { return nil }
+
+        if let endingAtOrIncludingPanelID,
+           let endIndex = panelOrder.firstIndex(of: endingAtOrIncludingPanelID) {
+            for panelID in panelOrder[...endIndex] where matches(tab, panelID) {
                 return panelID
             }
             return nil

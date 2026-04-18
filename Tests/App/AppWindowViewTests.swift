@@ -3,6 +3,46 @@ import XCTest
 
 @MainActor
 final class AppWindowViewTests: XCTestCase {
+    func testSidebarToggleShowsUnreadBadgeOnlyWhenSidebarIsHidden() {
+        XCTAssertTrue(
+            AppWindowView.sidebarToggleShowsUnreadBadge(
+                sidebarVisible: false,
+                hasUnreadNotifications: true
+            )
+        )
+        XCTAssertFalse(
+            AppWindowView.sidebarToggleShowsUnreadBadge(
+                sidebarVisible: true,
+                hasUnreadNotifications: true
+            )
+        )
+        XCTAssertFalse(
+            AppWindowView.sidebarToggleShowsUnreadBadge(
+                sidebarVisible: false,
+                hasUnreadNotifications: false
+            )
+        )
+    }
+
+    func testSidebarToggleAccessibilityCopyReflectsVisibilityAndUnreadState() {
+        XCTAssertEqual(
+            AppWindowView.sidebarToggleAccessibilityLabel(sidebarVisible: true),
+            "Hide Workspaces"
+        )
+        XCTAssertEqual(
+            AppWindowView.sidebarToggleAccessibilityLabel(sidebarVisible: false),
+            "Show Workspaces"
+        )
+        XCTAssertEqual(
+            AppWindowView.sidebarToggleAccessibilityValue(hasUnreadBadge: true),
+            "Unread notifications"
+        )
+        XCTAssertEqual(
+            AppWindowView.sidebarToggleAccessibilityValue(hasUnreadBadge: false),
+            ""
+        )
+    }
+
     func testEffectiveSidebarWidthUsesCompactDefaultBeforeAgentLaunch() {
         XCTAssertEqual(
             AppWindowView.effectiveSidebarWidth(hasEverLaunchedAgent: false),

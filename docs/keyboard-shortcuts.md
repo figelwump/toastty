@@ -15,9 +15,9 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+Shift+W` | Close workspace |
 | `Cmd+W` | Close focused panel |
 
-`Cmd+W` and `File > Close` both use Toastty's panel-close behavior. The native red close button still asks for confirmation before closing the full window.
+`Cmd+W` and `File > Close` both use Toastty's panel-close behavior. Dirty local-document drafts ask before discard, panels with a local-document save in progress refuse destructive close, and the native red close button still asks for confirmation before closing the full window.
 
-`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running, and choosing `Always quit without asking` in that alert turns the setting off.
+`Cmd+Q` follows `Toastty > Ask Before Quitting`; when enabled, Toastty warns before quitting if terminal work may still be running or local-document drafts would be discarded, and it refuses destructive quit while a local-document save is still in progress. Choosing `Always quit without asking` in that alert turns the setting off.
 
 ## Pane and layout actions
 
@@ -61,6 +61,22 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Cmd+G` | Find next match |
 | `Cmd+Shift+G` | Find previous match |
 
+## Text size and zoom
+
+These shortcuts target the focused panel type:
+
+- focused terminal: adjust the window's terminal font size
+- focused local document panel: adjust the window's local-document text size
+- focused browser panel: zoom the current browser panel
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+=` / `Cmd+Shift+=` | Increase text size or zoom |
+| `Cmd+-` | Decrease text size or zoom |
+| `Cmd+0` | Reset text size or zoom |
+
+When a browser is focused, the `View` menu shows `Zoom In`, `Zoom Out`, and `Actual Size` instead of the text-size labels used for terminals and local documents.
+
 ## Browser
 
 These shortcuts are available when the focused panel is a browser panel:
@@ -69,6 +85,15 @@ These shortcuts are available when the focused panel is a browser panel:
 |---|---|
 | `Cmd+L` | Focus the browser location field |
 | `Cmd+R` | Reload the current page, or stop while a page is loading |
+
+## Local documents
+
+These shortcuts are available when the focused panel is a local document in edit mode. Local documents currently support Markdown, YAML, and TOML files.
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+S` | Save the current draft |
+| `Escape` | Cancel edit mode and discard the current draft |
 
 ## Agents and terminal profiles
 

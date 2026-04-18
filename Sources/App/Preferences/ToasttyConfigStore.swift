@@ -102,7 +102,7 @@ enum ToasttyConfigStore {
             at: referenceURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
-        let contents = Data(render(config: ToasttyConfig()).utf8)
+        let contents = Data(renderReference(config: ToasttyConfig()).utf8)
         try contents.write(to: referenceURL)
     }
 
@@ -165,6 +165,10 @@ enum ToasttyConfigStore {
     }
 
     private static func render(config: ToasttyConfig) -> String {
+        renderedConfigLines(config: config).joined(separator: "\n") + "\n"
+    }
+
+    private static func renderedConfigLines(config: ToasttyConfig) -> [String] {
         var lines: [String] = [
             "# Toastty config",
             "",
@@ -244,7 +248,21 @@ enum ToasttyConfigStore {
             )
         }
 
-        return lines.joined(separator: "\n") + "\n"
+        return lines
+    }
+
+    private static func renderReference(config: ToasttyConfig) -> String {
+        let bodyLines = renderedConfigLines(config: config)
+        let referenceHeader: [String] = [
+            bodyLines.first ?? "# Toastty config",
+            "#",
+            "# Reference only: Toastty regenerates this file on launch and when you open",
+            "# Toastty > Open Config Reference…",
+            "# Edit the live Toastty config file instead of making changes here.",
+            "",
+        ]
+
+        return (referenceHeader + bodyLines.dropFirst()).joined(separator: "\n") + "\n"
     }
 
     private static func parseString<S: StringProtocol>(_ rawValue: S) -> String? {

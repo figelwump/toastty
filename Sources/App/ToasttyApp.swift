@@ -57,10 +57,40 @@ enum KeyboardShortcutsReferenceLocator {
     }
 }
 
+typealias ManagedLocalDocumentOpener = @MainActor (URL, LocalDocumentFormat) -> Bool
+
 @MainActor
-private enum ToasttyMenuActions {
-    static func openTerminalProfilesConfiguration() {
-        switch openTerminalProfilesConfigurationResult() {
+private func openManagedLocalDocumentInToastty(
+    store: AppStore,
+    fileURL: URL,
+    format: LocalDocumentFormat,
+    preferredWindowID: UUID?
+) -> Bool {
+    let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+    guard normalizedFilePath.isEmpty == false else {
+        return false
+    }
+
+    return store.createLocalDocumentPanelFromCommand(
+        preferredWindowID: preferredWindowID,
+        request: LocalDocumentPanelCreateRequest(
+            filePath: normalizedFilePath,
+            placementOverride: .newTab,
+            formatOverride: format
+        )
+    )
+}
+
+@MainActor
+enum ToasttyMenuActions {
+    static func openTerminalProfilesConfiguration(
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) {
+        switch openTerminalProfilesConfigurationResult(
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        ) {
         case .success:
             return
         case .failure(let error):
@@ -71,21 +101,98 @@ private enum ToasttyMenuActions {
         }
     }
 
-    static func openTerminalProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+    static func openTerminalProfilesConfigurationResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
         openConfigurationFile(
-            ensureTemplate: {
-                try TerminalProfilesFile.ensureTemplateExists()
+            prepareFile: {
+                try TerminalProfilesFile.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath,
+                    environment: environment
+                )
             },
-            fileURL: TerminalProfilesFile.fileURL()
+            fileURL: TerminalProfilesFile.fileURL(
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
+            ),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
         )
     }
 
-    static func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
+    static func openAgentProfilesConfigurationResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
         openConfigurationFile(
-            ensureTemplate: {
-                try AgentProfilesFile.ensureTemplateExists()
+            prepareFile: {
+                try AgentProfilesFile.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath
+                )
             },
-            fileURL: AgentProfilesFile.fileURL()
+            fileURL: AgentProfilesFile.fileURL(homeDirectoryPath: homeDirectoryPath),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        )
+    }
+
+    static func openToasttyConfigResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            prepareFile: {
+                try ToasttyConfigStore.ensureTemplateExists(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath,
+                    environment: environment
+                )
+            },
+            fileURL: ToasttyConfigStore.configFileURL(
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
+            ),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
+        )
+    }
+
+    static func openConfigReferenceResult(
+        fileManager: FileManager = .default,
+        homeDirectoryPath: String = NSHomeDirectory(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        openManagedLocalDocument: ManagedLocalDocumentOpener = { _, _ in false },
+        openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    ) -> Result<Void, AgentGetStartedActionError> {
+        openConfigurationFile(
+            prepareFile: {
+                try ToasttyConfigStore.writeConfigReference(
+                    fileManager: fileManager,
+                    homeDirectoryPath: homeDirectoryPath,
+                    environment: environment
+                )
+            },
+            fileURL: ToasttyConfigStore.configReferenceFileURL(
+                homeDirectoryPath: homeDirectoryPath,
+                environment: environment
+            ),
+            fileFormat: .toml,
+            openManagedLocalDocument: openManagedLocalDocument,
+            openExternally: openExternally
         )
     }
 
@@ -155,20 +262,30 @@ private enum ToasttyMenuActions {
     }
 
     private static func openConfigurationFile(
-        ensureTemplate: () throws -> Void,
-        fileURL: URL
+        prepareFile: () throws -> Void,
+        fileURL: URL,
+        fileFormat: LocalDocumentFormat,
+        openManagedLocalDocument: ManagedLocalDocumentOpener,
+        openExternally: (URL) -> Bool
     ) -> Result<Void, AgentGetStartedActionError> {
         do {
-            try ensureTemplate()
+            try prepareFile()
         } catch {
             return .failure(AgentGetStartedActionError(message: error.localizedDescription))
         }
 
-        return openExistingFile(fileURL)
+        if openManagedLocalDocument(fileURL, fileFormat) {
+            return .success(())
+        }
+
+        return openExistingFile(fileURL, openExternally: openExternally)
     }
 
-    private static func openExistingFile(_ fileURL: URL) -> Result<Void, AgentGetStartedActionError> {
-        guard NSWorkspace.shared.open(fileURL) else {
+    private static func openExistingFile(
+        _ fileURL: URL,
+        openExternally: (URL) -> Bool
+    ) -> Result<Void, AgentGetStartedActionError> {
+        guard openExternally(fileURL) else {
             return .failure(
                 AgentGetStartedActionError(message: "Toastty couldn't open \(fileURL.path).")
             )
@@ -400,8 +517,8 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
             terminalAssessment: { panelID in
                 terminalRuntimeRegistry.terminalCloseConfirmationAssessment(panelID: panelID)
             },
-            markdownCloseConfirmationState: { panelID in
-                webPanelRuntimeRegistry.markdownCloseConfirmationState(panelID: panelID)
+            localDocumentCloseConfirmationState: { panelID in
+                webPanelRuntimeRegistry.localDocumentCloseConfirmationState(panelID: panelID)
             }
         )
     }
@@ -480,8 +597,12 @@ final class DisplayShortcutInterceptor {
         case createBrowser
         case createBrowserTab
         case createWorkspaceTab
+        case increaseTextSize
+        case decreaseTextSize
+        case resetTextSize
         case split(SlotSplitDirection)
-        case saveMarkdown
+        case cancelLocalDocumentEdit
+        case saveLocalDocument
         case focusNextUnreadOrActivePanel
         case toggleFocusedPanelMode
         case renameSelectedTab
@@ -574,6 +695,13 @@ final class DisplayShortcutInterceptor {
             return .createBrowserTab
         }
 
+        if let textSizeShortcutAction = textSizeShortcutAction(
+            for: event,
+            appOwnedWindowID: appOwnedWindowID
+        ) {
+            return textSizeShortcutAction
+        }
+
         if let direction = Self.splitDirection(for: event),
            appOwnedWindowID != nil {
             return .split(direction)
@@ -584,9 +712,14 @@ final class DisplayShortcutInterceptor {
             return .closePanel
         }
 
+        if Self.isCancelEditShortcut(event),
+           canCancelFocusedLocalDocumentEdit(preferredWindowID: appOwnedWindowID) {
+            return .cancelLocalDocumentEdit
+        }
+
         if Self.isSaveShortcut(event),
-           appOwnedFocusedMarkdownSelection(preferredWindowID: appOwnedWindowID) != nil {
-            return .saveMarkdown
+           appOwnedFocusedLocalDocumentSelection(preferredWindowID: appOwnedWindowID) != nil {
+            return .saveLocalDocument
         }
 
         if Self.isFocusNextUnreadOrActiveShortcut(event),
@@ -664,10 +797,18 @@ final class DisplayShortcutInterceptor {
             createBrowser(preferredWindowID: appOwnedWindowID, placement: .newTab)
         case .createWorkspaceTab:
             createWorkspaceTab()
+        case .increaseTextSize:
+            adjustTextSize(direction: .increase, preferredWindowID: appOwnedWindowID)
+        case .decreaseTextSize:
+            adjustTextSize(direction: .decrease, preferredWindowID: appOwnedWindowID)
+        case .resetTextSize:
+            adjustTextSize(direction: .reset, preferredWindowID: appOwnedWindowID)
         case .split(let direction):
             split(direction: direction, preferredWindowID: appOwnedWindowID)
-        case .saveMarkdown:
-            handleSaveMarkdownShortcut(preferredWindowID: appOwnedWindowID)
+        case .cancelLocalDocumentEdit:
+            handleCancelLocalDocumentEditShortcut(preferredWindowID: appOwnedWindowID)
+        case .saveLocalDocument:
+            handleSaveLocalDocumentShortcut(preferredWindowID: appOwnedWindowID)
         case .focusNextUnreadOrActivePanel:
             focusNextUnreadOrActivePanel()
         case .toggleFocusedPanelMode:
@@ -747,6 +888,50 @@ final class DisplayShortcutInterceptor {
         }
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return modifiers == [.command]
+    }
+
+    static func isCancelEditShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              Int(event.keyCode) == Int(kVK_Escape) else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers.isEmpty
+    }
+
+    enum TextSizeShortcutDirection: Equatable {
+        case increase
+        case decrease
+        case reset
+    }
+
+    static func textSizeShortcutDirection(for event: NSEvent) -> TextSizeShortcutDirection? {
+        guard event.type == .keyDown,
+              event.isARepeat == false else {
+            return nil
+        }
+
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        switch Int(event.keyCode) {
+        case Int(kVK_ANSI_Equal), Int(kVK_ANSI_KeypadPlus):
+            guard modifiers == [.command] || modifiers == [.command, .shift] else {
+                return nil
+            }
+            return .increase
+        case Int(kVK_ANSI_Minus), Int(kVK_ANSI_KeypadMinus):
+            guard modifiers == [.command] else {
+                return nil
+            }
+            return .decrease
+        case Int(kVK_ANSI_0), Int(kVK_ANSI_Keypad0):
+            guard modifiers == [.command] else {
+                return nil
+            }
+            return .reset
+        default:
+            return nil
+        }
     }
 
     static func splitDirection(for event: NSEvent) -> SlotSplitDirection? {
@@ -986,6 +1171,26 @@ final class DisplayShortcutInterceptor {
         return store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
     }
 
+    private func textSizeShortcutAction(
+        for event: NSEvent,
+        appOwnedWindowID: UUID?
+    ) -> ShortcutAction? {
+        guard appOwnedFocusedScaleTarget(preferredWindowID: appOwnedWindowID) != nil else {
+            return nil
+        }
+
+        switch Self.textSizeShortcutDirection(for: event) {
+        case .increase:
+            return .increaseTextSize
+        case .decrease:
+            return .decreaseTextSize
+        case .reset:
+            return .resetTextSize
+        case nil:
+            return nil
+        }
+    }
+
     private func split(direction: SlotSplitDirection, preferredWindowID: UUID?) -> Bool {
         guard let store else { return false }
         guard let preferredWindowID else { return false }
@@ -1011,6 +1216,38 @@ final class DisplayShortcutInterceptor {
                 placementOverride: placement
             )
         )
+    }
+
+    private func adjustTextSize(
+        direction: TextSizeShortcutDirection,
+        preferredWindowID: UUID?
+    ) -> Bool {
+        guard let store else { return false }
+        guard let target = appOwnedFocusedScaleTarget(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+
+        switch (target, direction) {
+        case (.terminal(let windowID), .increase):
+            _ = store.send(.increaseWindowTerminalFont(windowID: windowID))
+        case (.terminal(let windowID), .decrease):
+            _ = store.send(.decreaseWindowTerminalFont(windowID: windowID))
+        case (.terminal(let windowID), .reset):
+            _ = store.send(.resetWindowTerminalFont(windowID: windowID))
+        case (.markdown(let windowID), .increase):
+            _ = store.send(.increaseWindowMarkdownTextScale(windowID: windowID))
+        case (.markdown(let windowID), .decrease):
+            _ = store.send(.decreaseWindowMarkdownTextScale(windowID: windowID))
+        case (.markdown(let windowID), .reset):
+            _ = store.send(.resetWindowMarkdownTextScale(windowID: windowID))
+        case (.browser(_, let panelID), .increase):
+            _ = store.send(.increaseBrowserPanelPageZoom(panelID: panelID))
+        case (.browser(_, let panelID), .decrease):
+            _ = store.send(.decreaseBrowserPanelPageZoom(panelID: panelID))
+        case (.browser(_, let panelID), .reset):
+            _ = store.send(.resetBrowserPanelPageZoom(panelID: panelID))
+        }
+        return true
     }
 
     private func focusNextUnreadOrActivePanel() -> Bool {
@@ -1167,19 +1404,44 @@ final class DisplayShortcutInterceptor {
         return true
     }
 
-    private func saveFocusedMarkdown(preferredWindowID: UUID?) -> Bool {
-        guard let selection = focusedMarkdownSelection(preferredWindowID: preferredWindowID) else {
+    private func saveFocusedLocalDocument(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
             return false
         }
-        return webPanelRuntimeRegistry.saveMarkdownPanel(panelID: selection.panelID)
+        return webPanelRuntimeRegistry.saveLocalDocumentPanel(panelID: selection.panelID)
     }
 
-    private func handleSaveMarkdownShortcut(preferredWindowID: UUID?) -> Bool {
-        guard focusedMarkdownSelection(preferredWindowID: preferredWindowID) != nil else {
+    private func canCancelFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
             return false
         }
-        _ = saveFocusedMarkdown(preferredWindowID: preferredWindowID)
-        // Cmd+S is app-owned for focused markdown panels, even when save is
+        return webPanelRuntimeRegistry.canCancelEditingLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func cancelFocusedLocalDocumentEdit(preferredWindowID: UUID?) -> Bool {
+        guard let selection = focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        return webPanelRuntimeRegistry.cancelEditingLocalDocumentPanel(panelID: selection.panelID)
+    }
+
+    private func handleCancelLocalDocumentEditShortcut(preferredWindowID: UUID?) -> Bool {
+        guard canCancelFocusedLocalDocumentEdit(preferredWindowID: preferredWindowID) else {
+            return false
+        }
+        // Keep bare Escape with the active local-document editor only while it
+        // has a cancelable edit session; otherwise let the embedded view or the
+        // default responder handle Escape normally.
+        _ = cancelFocusedLocalDocumentEdit(preferredWindowID: preferredWindowID)
+        return true
+    }
+
+    private func handleSaveLocalDocumentShortcut(preferredWindowID: UUID?) -> Bool {
+        guard focusedLocalDocumentSelection(preferredWindowID: preferredWindowID) != nil else {
+            return false
+        }
+        _ = saveFocusedLocalDocument(preferredWindowID: preferredWindowID)
+        // Cmd+S is app-owned for focused local-document panels, even when save is
         // currently disabled in preview mode or conflict state.
         return true
     }
@@ -1198,11 +1460,21 @@ final class DisplayShortcutInterceptor {
         return focusedBrowserSelection(preferredWindowID: preferredWindowID)
     }
 
-    private func appOwnedFocusedMarkdownSelection(
+    private func appOwnedFocusedLocalDocumentSelection(
         preferredWindowID: UUID?
-    ) -> FocusedMarkdownPanelCommandSelection? {
+    ) -> FocusedLocalDocumentPanelCommandSelection? {
         guard let preferredWindowID else { return nil }
-        return focusedMarkdownSelection(preferredWindowID: preferredWindowID)
+        return focusedLocalDocumentSelection(preferredWindowID: preferredWindowID)
+    }
+
+    private func appOwnedFocusedScaleTarget(
+        preferredWindowID: UUID?
+    ) -> FocusedScaleCommandTarget? {
+        guard let preferredWindowID,
+              let store else {
+            return nil
+        }
+        return store.focusedScaleCommandTarget(preferredWindowID: preferredWindowID)
     }
 
     private func focusedBrowserSelection(preferredWindowID: UUID?) -> FocusedBrowserPanelCommandSelection? {
@@ -1210,9 +1482,9 @@ final class DisplayShortcutInterceptor {
         return store.focusedBrowserPanelSelection(preferredWindowID: preferredWindowID)
     }
 
-    private func focusedMarkdownSelection(preferredWindowID: UUID?) -> FocusedMarkdownPanelCommandSelection? {
+    private func focusedLocalDocumentSelection(preferredWindowID: UUID?) -> FocusedLocalDocumentPanelCommandSelection? {
         guard let store else { return nil }
-        return store.focusedMarkdownPanelSelection(preferredWindowID: preferredWindowID)
+        return store.focusedLocalDocumentPanelSelection(preferredWindowID: preferredWindowID)
     }
 }
 
@@ -1463,8 +1735,7 @@ struct ToasttyApp: App {
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
         fileSplitMenuBridge = FileSplitMenuBridge(
-            splitLayoutCommandController: splitLayoutCommandController,
-            preferredWindowIDProvider: { currentToasttyAppOwnedWindowID(in: store) }
+            splitLayoutCommandController: splitLayoutCommandController
         )
         fileCloseMenuBridge = FileCloseMenuBridge(
             windowCommandController: WindowCommandController(
@@ -1497,7 +1768,18 @@ struct ToasttyApp: App {
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             installShellIntegrationAction: ToasttyMenuActions.installShellIntegration,
-            openProfilesConfigurationAction: ToasttyMenuActions.openTerminalProfilesConfiguration
+            openProfilesConfigurationAction: { [store] in
+                ToasttyMenuActions.openTerminalProfilesConfiguration(
+                    openManagedLocalDocument: { fileURL, format in
+                        openManagedLocalDocumentInToastty(
+                            store: store,
+                            fileURL: fileURL,
+                            format: format,
+                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                        )
+                    }
+                )
+            }
         )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
@@ -1735,6 +2017,7 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 profileShortcutRegistry: profileShortcutRegistry,
+                focusedPanelCommandController: focusedPanelCommandController,
                 agentLaunchService: agentLaunchService,
                 openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                 openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
@@ -1768,20 +2051,20 @@ struct ToasttyApp: App {
                 openManageConfig: openManageConfig,
                 openConfigReference: openConfigReference,
                 openAgentProfilesConfiguration: openAgentProfilesConfiguration,
-                openMarkdownFile: { preferredWindowID in
-                    self.openMarkdownFile(
+                openLocalDocumentFile: { preferredWindowID in
+                    self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.rootRight
                     )
                 },
-                openMarkdownFileInTab: { preferredWindowID in
-                    self.openMarkdownFile(
+                openLocalDocumentFileInTab: { preferredWindowID in
+                    self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.newTab
                     )
                 },
-                openMarkdownFileInSplit: { preferredWindowID in
-                    self.openMarkdownFile(
+                openLocalDocumentFileInSplit: { preferredWindowID in
+                    self.openLocalDocumentFile(
                         preferredWindowID: preferredWindowID,
                         placement: WebPanelPlacement.splitRight
                     )
@@ -1941,7 +2224,16 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openAgentProfilesConfigurationResult() -> Result<Void, AgentGetStartedActionError> {
-        ToasttyMenuActions.openAgentProfilesConfigurationResult()
+        ToasttyMenuActions.openAgentProfilesConfigurationResult(
+            openManagedLocalDocument: { [store] fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                )
+            }
+        )
     }
 
     @MainActor
@@ -1960,68 +2252,64 @@ struct ToasttyApp: App {
 
     @MainActor
     private func openManageConfig() {
-        do {
-            try ToasttyConfigStore.ensureTemplateExists()
-        } catch {
+        switch ToasttyMenuActions.openToasttyConfigResult(
+            openManagedLocalDocument: { [store] fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                )
+            }
+        ) {
+        case .success:
+            return
+        case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Config"
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
-            return
-        }
-
-        let fileURL = ToasttyConfigStore.configFileURL()
-        guard NSWorkspace.shared.open(fileURL) else {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Config"
-            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
         }
     }
 
     @MainActor
     private func openConfigReference() {
-        do {
-            try ToasttyConfigStore.writeConfigReference()
-        } catch {
+        switch ToasttyMenuActions.openConfigReferenceResult(
+            openManagedLocalDocument: { [store] fileURL, format in
+                openManagedLocalDocumentInToastty(
+                    store: store,
+                    fileURL: fileURL,
+                    format: format,
+                    preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                )
+            }
+        ) {
+        case .success:
+            return
+        case .failure(let error):
             let alert = NSAlert()
             alert.messageText = "Unable to Open Config Reference"
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
             alert.addButton(withTitle: "OK")
             alert.runModal()
-            return
-        }
-
-        let fileURL = ToasttyConfigStore.configReferenceFileURL()
-        guard NSWorkspace.shared.open(fileURL) else {
-            let alert = NSAlert()
-            alert.messageText = "Unable to Open Config Reference"
-            alert.informativeText = "Toastty couldn't open \(fileURL.path)."
-            alert.alertStyle = .warning
-            alert.addButton(withTitle: "OK")
-            alert.runModal()
-            return
         }
     }
 
     @MainActor
-    private func openMarkdownFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
-        guard let fileURL = MarkdownOpenPanel.chooseFile(
-            title: markdownOpenTitle(for: placement)
+    private func openLocalDocumentFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
+        guard let fileURL = LocalDocumentOpenPanel.chooseFile(
+            title: localDocumentOpenTitle(for: placement)
         ) else {
             return
         }
 
         let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
-        let didOpen = store.createMarkdownPanelFromCommand(
+        let didOpen = store.createLocalDocumentPanelFromCommand(
             preferredWindowID: preferredWindowID,
-            request: MarkdownPanelCreateRequest(
+            request: LocalDocumentPanelCreateRequest(
                 filePath: normalizedFilePath,
                 placementOverride: placement
             )
@@ -2030,21 +2318,21 @@ struct ToasttyApp: App {
         guard didOpen == false else { return }
 
         let alert = NSAlert()
-        alert.messageText = "Unable to Open Markdown File"
+        alert.messageText = "Unable to Open Local File"
         alert.informativeText = "Toastty couldn't open \(normalizedFilePath) in the current workspace."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
 
-    private func markdownOpenTitle(for placement: WebPanelPlacement) -> String {
+    private func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
         case .rootRight:
-            return "Open Markdown File"
+            return "Open Local File"
         case .newTab:
-            return "Open Markdown File in Tab"
+            return "Open Local File in Tab"
         case .splitRight:
-            return "Open Markdown File in Split"
+            return "Open Local File in Split"
         }
     }
 

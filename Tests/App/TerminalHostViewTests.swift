@@ -294,6 +294,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewAppliesGhosttyPointerCursorToDocumentCursor() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_POINTER)
 
@@ -303,6 +304,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewAppliesGhosttyTextCursorToDocumentCursor() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
 
@@ -312,6 +314,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewTracksGhosttyCursorVisibility() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseVisibility(GHOSTTY_MOUSE_HIDDEN)
         XCTAssertFalse(scrollView.ghosttyCursorVisible)
@@ -323,6 +326,7 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewUsesLinkCursorForMouseOverLinkFallback() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
         hostView.setGhosttyMouseOverLink("https://example.com")
@@ -333,12 +337,52 @@ final class TerminalHostViewTests: XCTestCase {
     func testSurfaceScrollViewRestoresBaseCursorWhenMouseOverLinkClears() {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        _ = attachToVisibleWindow(scrollView)
 
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
         hostView.setGhosttyMouseOverLink("https://example.com")
         hostView.setGhosttyMouseOverLink(nil)
 
         XCTAssertTrue(scrollView.documentCursor === NSCursor.iBeam)
+    }
+
+    func testSurfaceScrollViewDoesNotApplyGhosttyPointerCursorWhenAncestorIsTransparent() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let ancestor = NSView(frame: contentView.bounds)
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+        ancestor.alphaValue = 0
+
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(scrollView)
+
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_POINTER)
+
+        XCTAssertNil(scrollView.documentCursor)
+    }
+
+    func testSurfaceScrollViewRelinquishesCursorWhenPresentationVisibilityTurnsHidden() {
+        let hostView = TerminalHostView()
+        let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let ancestor = NSView(frame: contentView.bounds)
+        window.forcedOcclusionState = [.visible]
+        window.contentView = contentView
+
+        contentView.addSubview(ancestor)
+        ancestor.addSubview(scrollView)
+
+        hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_POINTER)
+        XCTAssertTrue(scrollView.documentCursor === NSCursor.pointingHand)
+
+        ancestor.alphaValue = 0
+
+        XCTAssertFalse(hostView.synchronizePresentationVisibility(reason: "test_cursor_hidden"))
+        XCTAssertNil(scrollView.documentCursor)
     }
 
     func testMakeContextMenuIncludesSearchWithGoogleForSearchableSelection() {
@@ -1001,7 +1045,7 @@ final class TerminalHostViewTests: XCTestCase {
                 guard transientClearPending.takeIfTrue() else {
                     return
                 }
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     hostView.setGhosttyMouseOverLink(nil)
                 }
             },
@@ -1048,10 +1092,156 @@ final class TerminalHostViewTests: XCTestCase {
         XCTAssertTrue(usedAlternatePlacement)
     }
 
+    func testCommandShiftClickSurvivesSynchronousLinkClearDuringShiftKeyPress() throws {
+        // Ghostty can synchronously emit mouse_over_link(nil) while processing a
+        // Shift key press on a Cmd-hovered link. The suppression window must
+        // cover the key event itself, not just the follow-up hover refresh.
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        var openedURL: URL?
+        var usedAlternatePlacement = false
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in
+                // Simulate Ghostty synchronously clearing the hovered link
+                // when the shift modifier press is forwarded.
+                hostView.setGhosttyMouseOverLink(nil)
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1248))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+        hostView.openCommandClickLink = { url, useAlternatePlacement in
+            openedURL = url
+            usedAlternatePlacement = useAlternatePlacement
+            return true
+        }
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+
+        hostView.mouseDown(
+            with: try makeMouseEvent(
+                type: .leftMouseDown,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        hostView.mouseUp(
+            with: try makeMouseEvent(
+                type: .leftMouseUp,
+                window: window,
+                modifierFlags: [.command, .shift]
+            )
+        )
+
+        XCTAssertEqual(openedURL?.absoluteString, "https://example.com/docs")
+        XCTAssertTrue(usedAlternatePlacement)
+    }
+
+    func testShiftFlagsChangedIsWithheldFromGhosttyWhileCmdHoveringLink() throws {
+        // Ghostty renders the link underline from its own tracked modifier
+        // state, so forwarding a Shift press while the pointer is Cmd-hovering
+        // a link visually turns the underline off even though the cached URL
+        // stays armed. The matching release must be swallowed too, otherwise
+        // Ghostty sees a release for a press it never observed.
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let keyCallCount = SendableIntBox(0)
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in
+                keyCallCount.increment()
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x1249))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.setGhosttyMouseOverLink("https://example.com/docs")
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        XCTAssertEqual(keyCallCount.value, 0, "Shift press while Cmd-hovering must not reach Ghostty")
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command]
+            )
+        )
+        XCTAssertEqual(keyCallCount.value, 0, "Matching Shift release must also be swallowed")
+    }
+
+    func testShiftFlagsChangedForwardsNormallyWithoutCachedLinkHover() throws {
+        // The suppression must be scoped to Cmd-hovered links. Shift without a
+        // cached hover (or without Cmd) still needs to reach Ghostty so it can
+        // track modifier state for selection drags and keyboard shortcuts.
+        let hostView = TerminalHostView()
+        let window = TestWindow()
+        let contentView = NSView(frame: window.frame)
+        let keyCallCount = SendableIntBox(0)
+
+        hostView.ghosttySurfaceHooks = .init(
+            setFocus: { _, _ in },
+            setOcclusion: { _, _ in },
+            refresh: { _ in },
+            sendMousePosition: { _, _, _, _ in },
+            keyTranslationMods: { _, mods in mods },
+            sendKey: { _, _ in
+                keyCallCount.increment()
+                return true
+            }
+        )
+        hostView.setGhosttySurface(fakeSurfaceHandle(0x124A))
+        window.contentView = contentView
+        window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
+        contentView.addSubview(hostView)
+
+        hostView.flagsChanged(
+            with: try makeKeyEvent(
+                type: .flagsChanged,
+                keyCode: 0x38,
+                modifierFlags: [.command, .shift]
+            )
+        )
+        XCTAssertEqual(keyCallCount.value, 1, "Shift without a cached hover must still reach Ghostty")
+    }
+
     func testMouseExitStillClearsHoveredLinkAfterSyntheticHoverRefresh() throws {
         let hostView = TerminalHostView()
         let scrollView = TerminalSurfaceScrollView(terminalHostView: hostView)
-        let window = TestWindow()
+        let window = attachToVisibleWindow(scrollView)
         let transientClearPending = SendableBooleanBox(true)
 
         hostView.ghosttySurfaceHooks = .init(
@@ -1071,7 +1261,6 @@ final class TerminalHostViewTests: XCTestCase {
         )
         hostView.setGhosttySurface(fakeSurfaceHandle(0x1247))
         hostView.setGhosttyMouseShape(GHOSTTY_MOUSE_SHAPE_TEXT)
-        window.contentView = scrollView
         window.forcedMouseLocationOutsideOfEventStream = NSPoint(x: 28, y: 32)
 
         hostView.setGhosttyMouseOverLink("https://example.com/docs")
@@ -1581,6 +1770,23 @@ private func makeMouseEvent(
     location: NSPoint = NSPoint(x: 12, y: 12),
     modifierFlags: NSEvent.ModifierFlags = []
 ) throws -> NSEvent {
+    if type == .mouseEntered || type == .mouseExited {
+        guard let event = NSEvent.enterExitEvent(
+            with: type,
+            location: location,
+            modifierFlags: modifierFlags,
+            timestamp: 0,
+            windowNumber: window.windowNumber,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        ) else {
+            throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
+        }
+        return event
+    }
+
     guard let event = NSEvent.mouseEvent(
         with: type,
         location: location,
@@ -1595,6 +1801,16 @@ private func makeMouseEvent(
         throw NSError(domain: "TerminalHostViewTests", code: 1, userInfo: nil)
     }
     return event
+}
+
+@MainActor
+private func attachToVisibleWindow(_ view: NSView) -> TestWindow {
+    let window = TestWindow()
+    let contentView = NSView(frame: window.frame)
+    window.forcedOcclusionState = [.visible]
+    window.contentView = contentView
+    contentView.addSubview(view)
+    return window
 }
 
 private func makeKeyEvent(
@@ -1705,6 +1921,27 @@ private final class SendableBooleanBox: @unchecked Sendable {
         }
         value = false
         return true
+    }
+}
+
+private final class SendableIntBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedValue: Int
+
+    init(_ value: Int) {
+        self.storedValue = value
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedValue
+    }
+
+    func increment() {
+        lock.lock()
+        storedValue += 1
+        lock.unlock()
     }
 }
 

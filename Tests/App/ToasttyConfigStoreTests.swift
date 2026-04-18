@@ -200,6 +200,8 @@ final class ToasttyConfigStoreTests: XCTestCase {
         )
         let contents = try String(contentsOf: referenceURL, encoding: .utf8)
         XCTAssertTrue(contents.contains("# Toastty config"))
+        XCTAssertTrue(contents.contains("# Reference only: Toastty regenerates this file on launch and when you open"))
+        XCTAssertTrue(contents.contains("# Edit the live Toastty config file instead of making changes here."))
         XCTAssertTrue(contents.contains("# terminal-font-size"))
         XCTAssertTrue(contents.contains("# default-terminal-profile"))
         XCTAssertTrue(contents.contains("# url-opening-destination"))
