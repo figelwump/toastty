@@ -628,6 +628,17 @@ enum ProfileShellIntegrationInstallerError: LocalizedError, Equatable, Sendable 
     }
 }
 
+private enum ProfileShellIntegrationResolvedShellSource: String, Sendable {
+    case debugOverride = "debug_override"
+    case environmentShell = "environment_shell"
+    case loginShell = "login_shell"
+}
+
+private struct ProfileShellIntegrationResolvedShellPath: Equatable, Sendable {
+    let path: String
+    let source: ProfileShellIntegrationResolvedShellSource
+}
+
 final class ProfileShellIntegrationInstaller {
     private static let managedSourceCommentLines = [
         "# Added by Toastty terminal profile shell integration",
@@ -641,13 +652,13 @@ final class ProfileShellIntegrationInstaller {
     private let fileManager: FileManager
     private let homeDirectoryURL: URL
     private let environment: [String: String]
-    private let shellPathProvider: () -> String?
+    private let shellPathProvider: (() -> String?)?
 
     init(
         homeDirectoryPath: String? = nil,
         fileManager: FileManager = .default,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        shellPathProvider: @escaping () -> String? = ProfileShellIntegrationInstaller.defaultShellPath
+        shellPathProvider: (() -> String?)? = nil
     ) {
         self.fileManager = fileManager
         if let homeDirectoryPath {
@@ -669,10 +680,38 @@ final class ProfileShellIntegrationInstaller {
             throw ProfileShellIntegrationInstallerError.runtimeHomeUnsupported(path: runtimeHomeURL.path)
         }
 
-        let shellPath = shellPathProvider()
+        let loginShellPath = Self.loginShellPath()
+        let defaultShellResolution = Self.resolvedShell(
+            environment: environment,
+            loginShellPath: loginShellPath
+        )
+        let shellPath = shellPathProvider?() ?? defaultShellResolution?.path
         guard let shell = Self.detectedShell(from: shellPath) else {
+            ToasttyLog.warning(
+                "Shell integration detection did not resolve to a supported shell",
+                category: .bootstrap,
+                metadata: Self.shellResolutionMetadata(
+                    environment: environment,
+                    loginShellPath: loginShellPath,
+                    defaultShellResolution: defaultShellResolution,
+                    resolvedShellPath: shellPath,
+                    resolvedShell: nil
+                )
+            )
             throw ProfileShellIntegrationInstallerError.unsupportedShell(shellPath: shellPath)
         }
+
+        ToasttyLog.info(
+            "Resolved shell integration target shell",
+            category: .bootstrap,
+            metadata: Self.shellResolutionMetadata(
+                environment: environment,
+                loginShellPath: loginShellPath,
+                defaultShellResolution: defaultShellResolution,
+                resolvedShellPath: shellPath,
+                resolvedShell: shell
+            )
+        )
 
         return ProfileShellIntegrationInstallPlan(
             shell: shell,
@@ -739,13 +778,6 @@ final class ProfileShellIntegrationInstaller {
         )
     }
 
-    private static func defaultShellPath() -> String? {
-        resolvedShellPath(
-            environment: ProcessInfo.processInfo.environment,
-            loginShellPath: loginShellPath()
-        )
-    }
-
     private func shouldRefreshManagedSnippet(
         for plan: ProfileShellIntegrationInstallPlan
     ) throws -> Bool {
@@ -767,15 +799,36 @@ final class ProfileShellIntegrationInstaller {
         environment: [String: String],
         loginShellPath: String?
     ) -> String? {
+        resolvedShell(environment: environment, loginShellPath: loginShellPath)?.path
+    }
+
+    private static func resolvedShell(
+        environment: [String: String],
+        loginShellPath: String?
+    ) -> ProfileShellIntegrationResolvedShellPath? {
         if let debugShellPath = debugShellPathOverride(environment: environment) {
-            return debugShellPath
+            return ProfileShellIntegrationResolvedShellPath(
+                path: debugShellPath,
+                source: .debugOverride
+            )
         }
-        if let loginShellPath, loginShellPath.isEmpty == false {
-            return loginShellPath
+
+        let environmentShellPath = normalizedShellPath(from: environment["SHELL"])
+        if let environmentShellPath,
+           detectedShell(from: environmentShellPath) != nil {
+            return ProfileShellIntegrationResolvedShellPath(
+                path: environmentShellPath,
+                source: .environmentShell
+            )
         }
-        if let environmentShell = environment["SHELL"], environmentShell.isEmpty == false {
-            return environmentShell
+
+        if let loginShellPath = normalizedShellPath(from: loginShellPath) {
+            return ProfileShellIntegrationResolvedShellPath(
+                path: loginShellPath,
+                source: .loginShell
+            )
         }
+
         return nil
     }
 
@@ -847,6 +900,74 @@ final class ProfileShellIntegrationInstaller {
         #else
         return nil
         #endif
+    }
+
+    private static func normalizedShellPath(from rawValue: String?) -> String? {
+        guard let trimmed = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              trimmed.isEmpty == false else {
+            return nil
+        }
+        return trimmed
+    }
+
+    private static func shellResolutionMetadata(
+        environment: [String: String],
+        loginShellPath: String?,
+        defaultShellResolution: ProfileShellIntegrationResolvedShellPath?,
+        resolvedShellPath: String?,
+        resolvedShell: ProfileShellIntegrationShell?
+    ) -> [String: String] {
+        let debugShellPath = debugShellPathOverride(environment: environment)
+        let environmentShellPath = normalizedShellPath(from: environment["SHELL"])
+        let normalizedLoginShellPath = normalizedShellPath(from: loginShellPath)
+
+        var metadata: [String: String] = [
+            "resolved_shell_source": shellResolutionSource(
+                resolvedShellPath: resolvedShellPath,
+                defaultShellResolution: defaultShellResolution
+            ),
+            "resolved_shell_supported": resolvedShell == nil ? "false" : "true",
+        ]
+
+        if let resolvedShellPath {
+            metadata["resolved_shell_path"] = resolvedShellPath
+        }
+        if let resolvedShell {
+            metadata["resolved_shell"] = resolvedShell.displayName.lowercased()
+        }
+        if let debugShellPath {
+            metadata["debug_shell_path"] = debugShellPath
+        }
+        if let environmentShellPath {
+            metadata["environment_shell_path"] = environmentShellPath
+            metadata["environment_shell_supported"] = detectedShell(from: environmentShellPath) == nil
+                ? "false"
+                : "true"
+        }
+        if let normalizedLoginShellPath {
+            metadata["login_shell_path"] = normalizedLoginShellPath
+            metadata["login_shell_supported"] = detectedShell(from: normalizedLoginShellPath) == nil
+                ? "false"
+                : "true"
+        }
+
+        return metadata
+    }
+
+    private static func shellResolutionSource(
+        resolvedShellPath: String?,
+        defaultShellResolution: ProfileShellIntegrationResolvedShellPath?
+    ) -> String {
+        if let defaultShellResolution,
+           defaultShellResolution.path == resolvedShellPath {
+            return defaultShellResolution.source.rawValue
+        }
+        switch resolvedShellPath {
+        case .some:
+            return "custom_provider"
+        case .none:
+            return "none"
+        }
     }
 
     private func ensureDirectoryExists(at directoryURL: URL) throws {

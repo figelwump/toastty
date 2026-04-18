@@ -231,7 +231,11 @@ their current profile bindings.
 Use `Toastty > Install Shell Integration…` to set up live pane titles and restored-pane command recall for `zsh`, `bash`, and `fish` automatically while preserving shared shell history. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Toastty…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
-`source` line to the shell init file it detects:
+`source` line to the detected shell init file.
+
+When `SHELL` for the current Toastty app launch resolves to `zsh`, `bash`, or
+`fish`, Toastty prefers that shell. Otherwise it falls back to the account
+login shell from macOS.
 
 - `zsh` → `~/.zshrc`
 - `bash` → `~/.bash_profile` by default, or an existing `~/.profile`
