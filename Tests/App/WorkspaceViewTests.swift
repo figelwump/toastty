@@ -301,6 +301,25 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
     }
 
+    func testWorkspaceTabFocusIndicatorStyleKeepsFullLabelAtIdealWidth() {
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabFocusIndicatorStyle(tabWidth: ToastyTheme.workspaceTabWidth),
+            .fullLabel
+        )
+    }
+
+    func testWorkspaceTabFocusIndicatorStyleUsesIconOnlyWhenTabsCompress() {
+        let compressedTabWidth = WorkspaceView.resolvedWorkspaceTabWidth(
+            availableWidth: 524,
+            tabCount: 5
+        )
+
+        XCTAssertEqual(
+            WorkspaceView.workspaceTabFocusIndicatorStyle(tabWidth: compressedTabWidth),
+            .iconOnly
+        )
+    }
+
     func testFocusedPanelToggleTitleShowsUnfocusOnlyWhenActive() {
         XCTAssertEqual(WorkspaceView.focusedPanelToggleTitle(isActive: true), "Unfocus")
         XCTAssertNil(WorkspaceView.focusedPanelToggleTitle(isActive: false))
