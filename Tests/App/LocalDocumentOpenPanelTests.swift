@@ -8,7 +8,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
     func testSupportedFilenameExtensionsResolveToContentTypes() {
         for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
             XCTAssertNotNil(
-                UTType(filenameExtension: fileExtension, conformingTo: .plainText),
+                UTType(filenameExtension: fileExtension),
                 "expected \(fileExtension) to resolve to a UTType"
             )
         }
@@ -17,7 +17,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
     func testAllowedContentTypesMatchSharedSupportedExtensions() {
         let expectedTypeIdentifiers = Set(
             LocalDocumentClassifier.supportedFilenameExtensions.compactMap {
-                UTType(filenameExtension: $0, conformingTo: .plainText)?.identifier
+                UTType(filenameExtension: $0)?.identifier
             }
         )
         let actualTypeIdentifiers = Set(
@@ -26,5 +26,17 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
 
         XCTAssertFalse(expectedTypeIdentifiers.isEmpty)
         XCTAssertEqual(actualTypeIdentifiers, expectedTypeIdentifiers)
+    }
+
+    func testAllowedContentTypesCoverYAMLAndTOMLExtensions() {
+        let allowedTypes = LocalDocumentOpenPanel.allowedContentTypes()
+        for fileExtension in ["yaml", "yml", "toml"] {
+            XCTAssertTrue(
+                allowedTypes.contains(where: { type in
+                    type.tags[.filenameExtension]?.contains(fileExtension) == true
+                }),
+                "expected allowed content types to include an entry for .\(fileExtension)"
+            )
+        }
     }
 }
