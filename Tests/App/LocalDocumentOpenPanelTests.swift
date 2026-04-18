@@ -8,7 +8,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
     func testSupportedFilenameExtensionsResolveToContentTypes() {
         for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
             XCTAssertNotNil(
-                UTType(filenameExtension: fileExtension, conformingTo: .plainText),
+                UTType(filenameExtension: fileExtension),
                 "expected \(fileExtension) to resolve to a UTType"
             )
         }
@@ -17,7 +17,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
     func testAllowedContentTypesMatchSharedSupportedExtensions() {
         let expectedTypeIdentifiers = Set(
             LocalDocumentClassifier.supportedFilenameExtensions.compactMap {
-                UTType(filenameExtension: $0, conformingTo: .plainText)?.identifier
+                UTType(filenameExtension: $0)?.identifier
             }
         )
         let actualTypeIdentifiers = Set(
@@ -26,5 +26,50 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
 
         XCTAssertFalse(expectedTypeIdentifiers.isEmpty)
         XCTAssertEqual(actualTypeIdentifiers, expectedTypeIdentifiers)
+    }
+
+    func testAllowedContentTypesAcceptFilesystemReportedTypesForSupportedFiles() throws {
+        let allowedContentTypes = Set(LocalDocumentOpenPanel.allowedContentTypes())
+        let temporaryDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: temporaryDirectoryURL,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(at: temporaryDirectoryURL)
+        }
+
+        for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
+            let fileURL = temporaryDirectoryURL.appendingPathComponent(
+                "sample.\(fileExtension)",
+                isDirectory: false
+            )
+            try sampleContent(for: fileExtension).write(
+                to: fileURL,
+                atomically: true,
+                encoding: .utf8
+            )
+
+            let contentType = try XCTUnwrap(
+                try fileURL.resourceValues(forKeys: [.contentTypeKey]).contentType,
+                "expected filesystem content type for \(fileExtension)"
+            )
+            XCTAssertTrue(
+                allowedContentTypes.contains(contentType),
+                "expected picker types to accept filesystem content type \(contentType.identifier) for \(fileExtension)"
+            )
+        }
+    }
+
+    private func sampleContent(for fileExtension: String) -> String {
+        switch fileExtension.lowercased() {
+        case "yaml", "yml":
+            return "key: value\n"
+        case "toml":
+            return "key = \"value\"\n"
+        default:
+            return "# Sample\n"
+        }
     }
 }
