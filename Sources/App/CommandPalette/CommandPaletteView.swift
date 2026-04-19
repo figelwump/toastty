@@ -33,7 +33,7 @@ struct CommandPaletteView: View {
             .fixedSize(horizontal: false, vertical: true)
 
             Divider()
-                .overlay(ToastyTheme.hairline)
+                .overlay(Color.white.opacity(0.09))
 
             resultsSection
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -43,7 +43,7 @@ struct CommandPaletteView: View {
             height: CommandPalettePanel.defaultFrame.height
         )
         .background(
-            shape.fill(Color(red: 0.18, green: 0.15, blue: 0.13).opacity(0.98))
+            shape.fill(Color(red: 0.10, green: 0.10, blue: 0.11).opacity(0.96))
         )
         .overlay(
             shape.stroke(Color.white.opacity(0.1), lineWidth: 1)
@@ -51,11 +51,6 @@ struct CommandPaletteView: View {
         .clipShape(shape)
         .compositingGroup()
         .shadow(color: Color.black.opacity(0.5), radius: 28, y: 12)
-    }
-
-    private var resultCountText: String {
-        let count = viewModel.results.count
-        return count == 1 ? "1 command" : "\(count) commands"
     }
 
     private var resultsSection: some View {
@@ -123,21 +118,15 @@ struct CommandPaletteView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-            .background(ToastyTheme.chromeBackground.opacity(0.96))
 
             Divider()
-                .overlay(ToastyTheme.hairline)
+                .overlay(Color.white.opacity(0.09))
 
-            HStack {
-                Text(resultCountText)
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(ToastyTheme.subtleText)
-
+            HStack(spacing: 16) {
                 Spacer()
 
-                Text("Return Execute   Esc Cancel")
-                    .font(ToastyTheme.fontSubtext)
-                    .foregroundStyle(ToastyTheme.subtleText)
+                CommandPaletteFooterHint(label: "Execute", shortcut: "\u{21A9}")
+                CommandPaletteFooterHint(label: "Cancel", shortcut: "Esc")
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 11)
@@ -210,6 +199,33 @@ private struct CommandPaletteResultFramePreferenceKey: PreferenceKey {
     }
 }
 
+private struct CommandPaletteFooterHint: View {
+    let label: String
+    let shortcut: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(ToastyTheme.fontSubtext)
+                .foregroundStyle(ToastyTheme.subtleText)
+
+            Text(shortcut)
+                .font(ToastyTheme.fontShortcutBadge)
+                .foregroundStyle(ToastyTheme.subtleText)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .fill(Color.white.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                )
+        }
+    }
+}
+
 private struct CommandPaletteResultRow: View {
     let title: String
     let shortcut: String?
@@ -230,12 +246,17 @@ private struct CommandPaletteResultRow: View {
             if let shortcut {
                 Text(shortcut)
                     .font(ToastyTheme.fontShortcutBadge)
+                    .tracking(2)
                     .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.subtleText)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.white.opacity(isSelected ? 0.08 : 0.04))
+                            .fill(Color.white.opacity(0.06))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
                     )
             }
         }
@@ -243,7 +264,7 @@ private struct CommandPaletteResultRow: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? ToastyTheme.accent.opacity(0.16) : Color.clear)
+                .fill(isSelected ? ToastyTheme.accent.opacity(0.12) : Color.clear)
                 .padding(.horizontal, 8)
         )
     }

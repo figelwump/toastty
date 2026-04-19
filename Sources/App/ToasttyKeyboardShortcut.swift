@@ -13,7 +13,7 @@ struct ToasttyKeyboardShortcut: Equatable {
     }
 
     var symbolLabel: String {
-        "\(modifiers.symbolLabel)\(String(key.character).uppercased())"
+        "\(modifiers.symbolLabel)\(key.displaySymbol)"
     }
 
     func helpText(_ title: String) -> String {
@@ -24,6 +24,26 @@ struct ToasttyKeyboardShortcut: Equatable {
     // This shows the hint in contextual menus without rebinding the shortcut.
     func menuTitle(_ title: String) -> String {
         "\(title)\t\(symbolLabel)"
+    }
+}
+
+private extension KeyEquivalent {
+    // KeyEquivalent's arrow constants use private-use Unicode codepoints that
+    // most UI fonts can't render (shows up as a missing-glyph box or "?").
+    // Map them (and other common special keys) to display glyphs.
+    var displaySymbol: String {
+        switch character {
+        case KeyEquivalent.leftArrow.character: return "\u{2190}"
+        case KeyEquivalent.rightArrow.character: return "\u{2192}"
+        case KeyEquivalent.upArrow.character: return "\u{2191}"
+        case KeyEquivalent.downArrow.character: return "\u{2193}"
+        case KeyEquivalent.escape.character: return "\u{238B}"
+        case KeyEquivalent.return.character: return "\u{21A9}"
+        case KeyEquivalent.tab.character: return "\u{21E5}"
+        case KeyEquivalent.space.character: return "\u{2423}"
+        case KeyEquivalent.delete.character: return "\u{232B}"
+        default: return String(character).uppercased()
+        }
     }
 }
 
