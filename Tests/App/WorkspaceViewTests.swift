@@ -715,6 +715,7 @@ final class WorkspaceViewTests: XCTestCase {
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
             showAgentGetStartedFlow: {},
+            toggleCommandPalette: { _ in },
             terminalRuntimeContext: TerminalWindowRuntimeContext(
                 windowID: windowID,
                 runtimeRegistry: registry

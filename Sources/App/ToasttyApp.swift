@@ -2042,6 +2042,9 @@ struct ToasttyApp: App {
                 agentLaunchService: agentLaunchService,
                 openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                 openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
+                toggleCommandPalette: { [weak commandPaletteController] originWindowID in
+                    _ = commandPaletteController?.toggle(originWindowID: originWindowID)
+                },
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,

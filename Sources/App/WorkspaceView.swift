@@ -69,6 +69,7 @@ struct WorkspaceView: View {
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let showAgentGetStartedFlow: () -> Void
+    let toggleCommandPalette: @MainActor (UUID) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -510,6 +511,15 @@ struct WorkspaceView: View {
                     .accessibilityIdentifier("topbar.agent.\(action.profileID)")
                 }
             }
+
+            topBarFlashButton(icon: { highlighted in
+                CommandPaletteIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
+            }) {
+                toggleCommandPalette(windowID)
+            }
+            .help(ToasttyKeyboardShortcuts.commandPalette.helpText("Open Command Palette"))
+            .accessibilityLabel("Open Command Palette")
+            .accessibilityIdentifier("topbar.command-palette")
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
@@ -2524,6 +2534,18 @@ struct FocusIconView: View {
             context.fill(dot, with: .color(color))
         }
         .frame(width: 14, height: 14)
+    }
+}
+
+/// macOS command glyph — mirrors the ⇧⌘P shortcut that opens the palette.
+struct CommandPaletteIconView: View {
+    let color: Color
+
+    var body: some View {
+        Image(systemName: "command")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(color)
+            .frame(width: 14, height: 14)
     }
 }
 

@@ -65,6 +65,7 @@ struct AppWindowSceneHostView: View {
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let toggleCommandPalette: @MainActor (UUID) -> Void
     let sceneCoordinator: AppWindowSceneCoordinator
     let automationLifecycle: AutomationLifecycle?
     let automationStartupError: String?
@@ -104,6 +105,7 @@ struct AppWindowSceneHostView: View {
                     agentLaunchService: agentLaunchService,
                     openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                     openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
+                    toggleCommandPalette: toggleCommandPalette,
                     onWindowCloseInitiated: handleWindowCloseInitiated,
                     disableAnimations: disableAnimations
                 )
