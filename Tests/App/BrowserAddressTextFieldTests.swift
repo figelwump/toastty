@@ -5,6 +5,30 @@ import XCTest
 
 @MainActor
 final class BrowserAddressTextFieldTests: XCTestCase {
+    func testAddressEditingActivationSkipsAlreadyActivePanel() {
+        XCTAssertFalse(
+            BrowserPanelView.shouldActivatePanelWhenAddressEditingChanges(
+                isEditing: true,
+                isActivePanel: true
+            )
+        )
+    }
+
+    func testAddressEditingActivationFocusesInactivePanel() {
+        XCTAssertTrue(
+            BrowserPanelView.shouldActivatePanelWhenAddressEditingChanges(
+                isEditing: true,
+                isActivePanel: false
+            )
+        )
+        XCTAssertFalse(
+            BrowserPanelView.shouldActivatePanelWhenAddressEditingChanges(
+                isEditing: false,
+                isActivePanel: false
+            )
+        )
+    }
+
     func testRequestFocusActivatesFieldEditorAndSelectsAllAddressText() {
         var text = "https://example.com/docs"
         let coordinator = BrowserAddressTextField.Coordinator(
