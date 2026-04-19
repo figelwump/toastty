@@ -233,9 +233,10 @@ Use `Toastty > Install Shell Integration…` to set up live pane titles and rest
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
 `source` line to the detected shell init file.
 
-When `SHELL` for the current Toastty app launch resolves to `zsh`, `bash`, or
-`fish`, Toastty prefers that shell. Otherwise it falls back to the account
-login shell from macOS.
+When Toastty can resolve the executable path for the live shell running in the
+current terminal window and that path maps to `zsh`, `bash`, or `fish`, it
+prefers that shell for installation. Otherwise it falls back to `SHELL` for the
+current Toastty app launch, then the account login shell from macOS.
 
 - `zsh` → `~/.zshrc`
 - `bash` → `~/.bash_profile` by default, or an existing `~/.profile`

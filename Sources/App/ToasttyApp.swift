@@ -211,7 +211,17 @@ enum ToasttyMenuActions {
     }
 
     static func installShellIntegration() {
-        let installer = ProfileShellIntegrationInstaller()
+        installShellIntegration(preferredShellPath: nil)
+    }
+
+    static func installShellIntegration(
+        preferredShellPath: String?,
+        preferredShellSource: ProfileShellIntegrationResolvedShellSource = .liveTerminalShell
+    ) {
+        let installer = ProfileShellIntegrationInstaller(
+            preferredShellPath: preferredShellPath,
+            preferredShellSource: preferredShellSource
+        )
         let status: ProfileShellIntegrationInstallStatus
 
         do {
@@ -1713,7 +1723,13 @@ struct ToasttyApp: App {
         terminalProfilesMenuController = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
-            installShellIntegrationAction: ToasttyMenuActions.installShellIntegration,
+            installShellIntegrationAction: { [store, terminalRuntimeRegistry] in
+                ToasttyMenuActions.installShellIntegration(
+                    preferredShellPath: terminalRuntimeRegistry.resolveShellIntegrationShellPath(
+                        preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                    )
+                )
+            },
             openProfilesConfigurationAction: { [store] in
                 ToasttyMenuActions.openTerminalProfilesConfiguration(
                     openManagedLocalDocument: { fileURL, format in
