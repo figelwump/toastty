@@ -11,6 +11,7 @@ final class WorkspaceViewTests: XCTestCase {
         let workspaceID: UUID
         let panelID: UUID
         let store: AppStore
+        let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
         let hostingView: NSView
         let window: NSWindow
     }
@@ -657,6 +658,33 @@ final class WorkspaceViewTests: XCTestCase {
         harness.window.orderOut(nil)
     }
 
+    @MainActor
+    func testBlankBrowserCreationConsumesPendingLocationFocusRequestWhenBrowserBecomesVisible() throws {
+        let harness = try makeWorkspaceHarness()
+
+        XCTAssertTrue(
+            harness.store.createBrowserPanelFromCommand(
+                preferredWindowID: harness.windowID,
+                request: BrowserPanelCreateRequest(placementOverride: .splitRight)
+            )
+        )
+
+        let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        let browserPanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.store.pendingBrowserLocationFocusRequest)
+        XCTAssertNotNil(
+            harness.webPanelRuntimeRegistry
+                .browserRuntime(for: browserPanelID)
+                .locationFieldFocusRequestID
+        )
+
+        harness.window.orderOut(nil)
+    }
+
     private func assertColor(
         _ actual: Color,
         equals expected: Color,
@@ -756,6 +784,7 @@ final class WorkspaceViewTests: XCTestCase {
             workspaceID: workspaceID,
             panelID: panelID,
             store: store,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             hostingView: hostingView,
             window: window
         )

@@ -394,6 +394,7 @@ struct WorkspaceView: View {
             appIsActive = NSApplication.shared.isActive
             scheduleFocusedUnreadPanelClearIfNeeded()
             handlePendingPanelFlashRequest()
+            handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleFocusedUnreadPanelClearIfNeeded()
@@ -410,6 +411,9 @@ struct WorkspaceView: View {
         .onChange(of: store.pendingPanelFlashRequest) { _, _ in
             handlePendingPanelFlashRequest()
         }
+        .onChange(of: store.pendingBrowserLocationFocusRequest) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
+        }
         .onChange(of: selectedWorkspaceFocusModePresentationState) { oldValue, newValue in
             handleFocusModePresentationChange(from: oldValue, to: newValue)
         }
@@ -418,6 +422,10 @@ struct WorkspaceView: View {
             prunePendingWorkspaceTabCloseState()
             pruneTransientPanelFlashState()
             pruneTransientUnfocusHighlightState()
+            handlePendingBrowserLocationFocusRequest()
+        }
+        .onChange(of: selectedWorkspace?.focusedPanelID) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
         }
         .onDisappear {
             focusedUnreadClearTask?.cancel()
@@ -885,6 +893,27 @@ struct WorkspaceView: View {
             }
             flashPanel(request.panelID, requestID: request.requestID)
         }
+    }
+
+    @MainActor
+    private func handlePendingBrowserLocationFocusRequest() {
+        guard let request = store.pendingBrowserLocationFocusRequest,
+              request.windowID == windowID,
+              let workspace = selectedWorkspace,
+              workspace.id == request.workspaceID,
+              workspace.focusedPanelID == request.panelID,
+              case .web(let webState)? = workspace.panelState(for: request.panelID),
+              webState.definition == .browser else {
+            return
+        }
+
+        guard let consumedRequest = store.consumePendingBrowserLocationFocusRequest(windowID: windowID) else {
+            return
+        }
+
+        webPanelRuntimeRegistry
+            .browserRuntime(for: consumedRequest.panelID)
+            .requestLocationFieldFocus()
     }
 
     @MainActor
