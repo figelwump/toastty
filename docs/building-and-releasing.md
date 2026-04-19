@@ -89,9 +89,22 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
 
-# Foreground-capable remote GUI validation
+# Remote smoke validation
 TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
-./scripts/remote/gui-validate.sh \
+./scripts/remote/validate.sh \
+  --smoke-test smoke-ui \
+  --scope working-tree
+
+# Require the remote host instead of falling back locally
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
+  --smoke-test workspace-tabs \
+  --scope head \
+  --require-remote
+
+# Foreground-capable remote validation escape hatch
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
   --scope working-tree \
   --validation-command 'peekaboo menu list --pid "$TOASTTY_PID" --json | tee "$TOASTTY_ARTIFACTS_DIR/peekaboo-menu.json"'
 ```

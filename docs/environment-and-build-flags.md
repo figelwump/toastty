@@ -175,23 +175,27 @@ Local permissions note:
 - `scripts/automation/shortcut-trace.sh` requires local Accessibility permission because it drives real keyboard shortcuts with `osascript`.
 - `peekaboo` workflows also require local Accessibility for interaction. Run `peekaboo permissions --json` first, and if Accessibility is missing, stop and ask the user to grant it before continuing locally.
 
-### `scripts/remote/gui-validate.sh`
+### `scripts/remote/validate.sh`
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TOASTTY_REMOTE_GUI_HOST` | unset | Required SSH host for the dedicated remote GUI validation machine. |
+| `TOASTTY_REMOTE_GUI_HOST` | unset | SSH host for the dedicated remote GUI validation machine. Required when the run must execute remotely. |
 | `TOASTTY_REMOTE_GUI_REPO_ROOT` | local Toastty repo path | Absolute Toastty repo path on the remote host. The wrapper creates disposable remote git worktrees from this repo. |
 | `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
-| `RUN_LABEL` | timestamped `gui-validate-*` value | Optional stable label for the remote validation run. Prefer `--run-label` for explicit CLI usage. |
+| `RUN_LABEL` | timestamped `validate-*` value | Optional stable label for the remote validation run. Prefer `--run-label` for explicit CLI usage. |
 
 CLI notes:
 
+- `--smoke-test smoke-ui|workspace-tabs` is the primary supported mode. It runs that smoke test on the remote host after syncing the requested scope.
 - `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
 - `--scope head` exports the current checked-out commit without uncommitted changes.
 - `--scope ref --ref <rev>` exports an explicit local git ref.
-- `--validation-command` runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
-- If `--validation-command` is omitted, the wrapper defaults to `peekaboo menu list --pid "$TOASTTY_PID" --json`.
-- The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions.
+- Remote smoke preflight checks SSH reachability, the remote repo root, and remote run-root writability once up front.
+- If remote preflight fails for a smoke run, the wrapper falls back to a local smoke run by default and records that in `artifacts/remote-gui/<run-label>/result.json`.
+- For `--scope head` or `--scope ref`, that local fallback runs from a temporary local worktree at the requested ref instead of the current working tree.
+- Pass `--require-remote` to fail instead of falling back when the remote path itself matters.
+- `--validation-command` remains available as a debug escape hatch for foreground-capable remote validation. It runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
+- The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions for any custom remote validation command.
 
 ### `scripts/release/release.sh`
 
