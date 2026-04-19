@@ -302,6 +302,72 @@ final class WorkspaceViewTests: XCTestCase {
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
     }
 
+    func testFocusedUnreadClearCandidateRequiresActiveApp() throws {
+        let workspace = try makeFocusedUnreadWorkspace()
+
+        XCTAssertNil(
+            WorkspaceView.focusedUnreadClearCandidate(
+                workspace: workspace,
+                appIsActive: false
+            )
+        )
+        XCTAssertEqual(
+            WorkspaceView.focusedUnreadClearCandidate(
+                workspace: workspace,
+                appIsActive: true
+            ),
+            WorkspaceView.FocusedUnreadClearCandidate(
+                workspaceID: workspace.id,
+                panelID: try XCTUnwrap(workspace.focusedPanelID)
+            )
+        )
+    }
+
+    func testShouldClearFocusedUnreadRequiresMatchingFocusedUnreadPanelInActiveApp() throws {
+        var workspace = try makeFocusedUnreadWorkspace()
+        let candidate = try XCTUnwrap(
+            WorkspaceView.focusedUnreadClearCandidate(
+                workspace: workspace,
+                appIsActive: true
+            )
+        )
+
+        XCTAssertTrue(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: true
+            )
+        )
+
+        XCTAssertFalse(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: false
+            )
+        )
+
+        workspace.unreadPanelIDs = []
+        XCTAssertFalse(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: true
+            )
+        )
+
+        workspace = try makeFocusedUnreadWorkspace()
+        workspace.focusedPanelID = UUID()
+        XCTAssertFalse(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: true
+            )
+        )
+    }
+
     func testWorkspaceTabFocusIndicatorStyleKeepsFullLabelAtIdealWidth() {
         XCTAssertEqual(
             WorkspaceView.workspaceTabFocusIndicatorStyle(tabWidth: ToastyTheme.workspaceTabWidth),
@@ -709,6 +775,15 @@ final class WorkspaceViewTests: XCTestCase {
             agentProfiles: agentProfiles,
             agentProfilesFilePath: "/tmp/agents.toml"
         )
+    }
+
+    private func makeFocusedUnreadWorkspace() throws -> WorkspaceState {
+        let state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
+        workspace.unreadPanelIDs = [focusedPanelID]
+        return workspace
     }
 
     @MainActor

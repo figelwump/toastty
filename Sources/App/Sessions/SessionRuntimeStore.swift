@@ -511,6 +511,9 @@ final class SessionRuntimeStore: ObservableObject {
               currentRecord.usesSessionStatusNotifications else {
             return
         }
+        guard isApplicationActive() || !isPanelCurrentlyFocused(currentRecord.panelID, state: store.state) else {
+            return
+        }
         guard store.state.workspacesByID[currentRecord.workspaceID]?.unreadPanelIDs.contains(currentRecord.panelID) == true else {
             return
         }
