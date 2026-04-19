@@ -495,7 +495,7 @@ struct WorkspaceView: View {
     }
 
     private var topBarTrailingControls: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 2) {
             if agentTopBarModel.showsAddAgentsButton {
                 topBarFlashTextButton(title: WorkspaceAgentTopBarModel.addAgentsTitle) {
                     showAgentGetStartedFlow()
