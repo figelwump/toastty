@@ -117,7 +117,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-smoke-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/shortcut-hints-smoke.sh`
@@ -131,7 +131,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-hints-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/workspace-tabs-smoke.sh`
@@ -146,7 +146,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `/tmp/tt-<run-suffix>.sock` | Socket path passed through to the app. The default short path keeps the run under Unix socket path-length limits. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-tabs-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/shortcut-trace.sh`
@@ -159,7 +159,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-trace-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 | `CLICK_X` | `760` | Screen-space click X coordinate used to focus a panel before driving shortcuts. |
 | `CLICK_Y` | `420` | Screen-space click Y coordinate used to focus a panel before driving shortcuts. |
