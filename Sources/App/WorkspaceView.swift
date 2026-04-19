@@ -2520,8 +2520,18 @@ struct SidebarToggleIconView: View {
         .frame(width: 14, height: 14)
         .overlay(alignment: .topTrailing) {
             if hasUnread {
-                SessionStatusIndicator(state: .dot, size: 6, lineWidth: 1.2)
-                    .offset(x: 1.5, y: -1.5)
+                // Badge sits at the icon's top-right corner with a background-colored
+                // cutout ring so the dot reads clearly against the orange icon stroke.
+                ZStack {
+                    Circle()
+                        .fill(ToastyTheme.chromeBackground)
+                        .frame(width: 11, height: 11)
+                    Circle()
+                        .fill(ToastyTheme.badgeBlue)
+                        .frame(width: 8, height: 8)
+                        .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3)
+                }
+                .offset(x: 2.5, y: -2.5)
             }
         }
     }
