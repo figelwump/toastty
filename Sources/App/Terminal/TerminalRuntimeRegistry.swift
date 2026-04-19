@@ -1383,7 +1383,10 @@ extension TerminalRuntimeRegistry {
         ) ?? false
         return metadataHandled
     }
+}
+#endif
 
+extension TerminalRuntimeRegistry {
     static func normalizedMetadataValue(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1500,4 +1503,3 @@ extension TerminalRuntimeRegistry {
         return normalizedPath
     }
 }
-#endif
