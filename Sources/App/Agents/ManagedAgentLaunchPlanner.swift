@@ -196,7 +196,8 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
         let managedArtifacts = ManagedLaunchArtifacts(
             directoryURL: preparedArtifacts.directoryURL,
-            codexSessionLogWatcher: watcher
+            codexSessionLogWatcher: watcher,
+            cleanupPolicy: preparedArtifacts.cleanupPolicy
         )
         watcher?.start()
         managedArtifactsBySessionID[sessionID] = managedArtifacts
@@ -272,6 +273,12 @@ final class ManagedAgentLaunchPlanner: ManagedAgentLaunchPlanning {
 
     private func cleanup(_ managedArtifacts: ManagedLaunchArtifacts) async {
         await managedArtifacts.codexSessionLogWatcher?.stop()
+        // Claude hook files need to outlive session bookkeeping so late stop
+        // hooks turn into no-op telemetry delivery instead of missing-file
+        // shell errors.
+        guard managedArtifacts.cleanupPolicy == .deleteImmediately else {
+            return
+        }
         try? fileManager.removeItem(at: managedArtifacts.directoryURL)
     }
 
@@ -301,6 +308,7 @@ private struct ManagedLaunchTarget {
 private struct ManagedLaunchArtifacts {
     let directoryURL: URL
     let codexSessionLogWatcher: CodexSessionLogWatcher?
+    let cleanupPolicy: LaunchArtifactsCleanupPolicy
 }
 
 private func normalizedNonEmpty(_ value: String?) -> String? {
