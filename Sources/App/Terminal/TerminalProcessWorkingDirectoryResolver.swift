@@ -153,79 +153,17 @@ final class TerminalProcessWorkingDirectoryResolver {
     // MARK: - CWD Resolution
 
     func resolveWorkingDirectory(for panelID: UUID) -> String? {
-        // Attempt deferred registration if this panel was never registered.
-        if pendingDeferredRegistrationOrdinalByPanelID[panelID] != nil {
-            attemptDeferredRegistration(panelID: panelID)
-        }
-
-        // Try to resolve pending login → shell walk.
-        if let loginPID = pendingLoginPIDByPanelID[panelID] {
-            let requiresResolvedShellWorkingDirectory = restoredLaunchPanelIDs.contains(panelID)
-            if let shellPID = resolvedShellPID(forLoginPID: loginPID),
-               let signature = processStartSignature(pid: shellPID) {
-                let resolvedWorkingDirectory = processWorkingDirectory(pid: shellPID)
-                    .flatMap(Self.canonicalWorkingDirectory)
-                if requiresResolvedShellWorkingDirectory {
-                    guard let resolvedWorkingDirectory else {
-                        return nil
-                    }
-                    if let expectedWorkingDirectory = expectedWorkingDirectoryByPanelID[panelID],
-                       resolvedWorkingDirectory != expectedWorkingDirectory {
-                        pendingLoginPIDByPanelID.removeValue(forKey: panelID)
-                        markPendingDeferredRegistration(panelID: panelID)
-                        ToasttyLog.info(
-                            "Rejected resolved terminal shell because cwd mismatched restored launch seed",
-                            category: .terminal,
-                            metadata: [
-                                "panel_id": panelID.uuidString,
-                                "login_pid": String(loginPID),
-                                "shell_pid": String(shellPID),
-                                "expected_cwd_sample": Self.truncatedWorkingDirectorySample(expectedWorkingDirectory),
-                                "resolved_cwd_sample": Self.truncatedWorkingDirectorySample(resolvedWorkingDirectory),
-                            ]
-                        )
-                        return nil
-                    }
-                }
-                pendingLoginPIDByPanelID.removeValue(forKey: panelID)
-                cachedProcessByPanelID[panelID] = CachedProcessEntry(
-                    pid: shellPID,
-                    startSignature: signature
-                )
-                expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
-                restoredLaunchPanelIDs.remove(panelID)
-                ToasttyLog.debug(
-                    "Resolved deferred login→shell for panel",
-                    category: .terminal,
-                    metadata: [
-                        "panel_id": panelID.uuidString,
-                        "login_pid": String(loginPID),
-                        "shell_pid": String(shellPID),
-                    ]
-                )
-            }
-        }
-
-        guard let entry = cachedProcessByPanelID[panelID] else {
+        guard let entry = resolvedCachedProcessEntry(for: panelID) else {
             return nil
         }
-
-        // Validate the cached PID is still the same process (not recycled).
-        guard let currentSignature = processStartSignature(pid: entry.pid),
-              currentSignature == entry.startSignature else {
-            cachedProcessByPanelID.removeValue(forKey: panelID)
-            ToasttyLog.debug(
-                "Invalidated cached terminal process (PID recycled or exited)",
-                category: .terminal,
-                metadata: [
-                    "panel_id": panelID.uuidString,
-                    "pid": String(entry.pid),
-                ]
-            )
-            return nil
-        }
-
         return processWorkingDirectory(pid: entry.pid)
+    }
+
+    func resolveShellExecutablePath(for panelID: UUID) -> String? {
+        guard let entry = resolvedCachedProcessEntry(for: panelID) else {
+            return nil
+        }
+        return processExecutablePath(pid: entry.pid)
     }
 
     func invalidate(panelID: UUID) {
@@ -763,6 +701,24 @@ final class TerminalProcessWorkingDirectoryResolver {
         )
     }
 
+    private func processExecutablePath(pid: pid_t) -> String? {
+        // `proc_pidpath` writes up to 4 * `MAXPATHLEN` bytes on Darwin and
+        // returns the path byte count excluding the trailing NUL.
+        var pathBuffer = Array(repeating: CChar(0), count: Int(MAXPATHLEN) * 4)
+        let result = pathBuffer.withUnsafeMutableBufferPointer { buffer in
+            guard let baseAddress = buffer.baseAddress else {
+                return 0
+            }
+            return Int(proc_pidpath(pid, baseAddress, UInt32(buffer.count)))
+        }
+
+        guard result > 0 else {
+            return nil
+        }
+
+        return Self.decodedProcessExecutablePath(from: pathBuffer, byteCount: result)
+    }
+
     private func processWorkingDirectory(pid: pid_t) -> String? {
         var vnodePathInfo = proc_vnodepathinfo()
         let result = withUnsafeMutablePointer(to: &vnodePathInfo) { infoPointer in
@@ -790,6 +746,98 @@ final class TerminalProcessWorkingDirectoryResolver {
         let normalized = workingDirectory.trimmingCharacters(in: .whitespacesAndNewlines)
         guard normalized.isEmpty == false else { return nil }
         return normalized
+    }
+
+    private func resolvedCachedProcessEntry(for panelID: UUID) -> CachedProcessEntry? {
+        // Attempt deferred registration if this panel was never registered.
+        if pendingDeferredRegistrationOrdinalByPanelID[panelID] != nil {
+            attemptDeferredRegistration(panelID: panelID)
+        }
+
+        // Try to resolve pending login → shell walk.
+        if let loginPID = pendingLoginPIDByPanelID[panelID] {
+            let requiresResolvedShellWorkingDirectory = restoredLaunchPanelIDs.contains(panelID)
+            if let shellPID = resolvedShellPID(forLoginPID: loginPID),
+               let signature = processStartSignature(pid: shellPID) {
+                let resolvedWorkingDirectory = processWorkingDirectory(pid: shellPID)
+                    .flatMap(Self.canonicalWorkingDirectory)
+                if requiresResolvedShellWorkingDirectory {
+                    guard let resolvedWorkingDirectory else {
+                        return nil
+                    }
+                    if let expectedWorkingDirectory = expectedWorkingDirectoryByPanelID[panelID],
+                       resolvedWorkingDirectory != expectedWorkingDirectory {
+                        pendingLoginPIDByPanelID.removeValue(forKey: panelID)
+                        markPendingDeferredRegistration(panelID: panelID)
+                        ToasttyLog.info(
+                            "Rejected resolved terminal shell because cwd mismatched restored launch seed",
+                            category: .terminal,
+                            metadata: [
+                                "panel_id": panelID.uuidString,
+                                "login_pid": String(loginPID),
+                                "shell_pid": String(shellPID),
+                                "expected_cwd_sample": Self.truncatedWorkingDirectorySample(expectedWorkingDirectory),
+                                "resolved_cwd_sample": Self.truncatedWorkingDirectorySample(resolvedWorkingDirectory),
+                            ]
+                        )
+                        return nil
+                    }
+                }
+                pendingLoginPIDByPanelID.removeValue(forKey: panelID)
+                cachedProcessByPanelID[panelID] = CachedProcessEntry(
+                    pid: shellPID,
+                    startSignature: signature
+                )
+                expectedWorkingDirectoryByPanelID.removeValue(forKey: panelID)
+                restoredLaunchPanelIDs.remove(panelID)
+                ToasttyLog.debug(
+                    "Resolved deferred login→shell for panel",
+                    category: .terminal,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "login_pid": String(loginPID),
+                        "shell_pid": String(shellPID),
+                    ]
+                )
+            }
+        }
+
+        guard let entry = cachedProcessByPanelID[panelID] else {
+            return nil
+        }
+
+        // Validate the cached PID is still the same process (not recycled).
+        guard let currentSignature = processStartSignature(pid: entry.pid),
+              currentSignature == entry.startSignature else {
+            cachedProcessByPanelID.removeValue(forKey: panelID)
+            ToasttyLog.debug(
+                "Invalidated cached terminal process (PID recycled or exited)",
+                category: .terminal,
+                metadata: [
+                    "panel_id": panelID.uuidString,
+                    "pid": String(entry.pid),
+                ]
+            )
+            return nil
+        }
+
+        return entry
+    }
+
+    static func decodedProcessExecutablePath(from pathBuffer: [CChar], byteCount: Int) -> String? {
+        guard byteCount > 0 else {
+            return nil
+        }
+
+        let path = String(
+            decoding: pathBuffer.prefix(byteCount).map { UInt8(bitPattern: $0) },
+            as: UTF8.self
+        )
+        let normalizedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard normalizedPath.isEmpty == false else {
+            return nil
+        }
+        return normalizedPath
     }
 }
 #endif

@@ -968,6 +968,37 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         )
     }
 
+    func resolveShellIntegrationShellPath(preferredWindowID: UUID?) -> String? {
+        #if TOASTTY_HAS_GHOSTTY_KIT
+        guard let store, let metadataService else {
+            return nil
+        }
+        guard let selection = store.commandSelection(preferredWindowID: preferredWindowID) else {
+            return nil
+        }
+
+        let candidateWorkspaces = [selection.workspace] + selection.window.workspaceIDs.compactMap { workspaceID in
+            guard workspaceID != selection.workspace.id else {
+                return nil
+            }
+            return store.state.workspacesByID[workspaceID]
+        }
+
+        for workspace in candidateWorkspaces {
+            for panelID in Self.shellIntegrationCandidatePanelIDs(in: workspace) {
+                if let shellPath = metadataService.resolveShellExecutablePath(panelID: panelID) {
+                    return shellPath
+                }
+            }
+        }
+
+        return nil
+        #else
+        _ = preferredWindowID
+        return nil
+        #endif
+    }
+
     private func terminalPanelState(
         for panelID: UUID,
         state: AppState
@@ -1159,6 +1190,29 @@ private extension TerminalRuntimeRegistry {
         }
 
         return nil
+    }
+
+    static func shellIntegrationCandidatePanelIDs(in workspace: WorkspaceState) -> [UUID] {
+        var candidatePanelIDs: [UUID] = []
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           case .terminal = workspace.panelState(for: focusedPanelID),
+           workspace.slotID(containingPanelID: focusedPanelID) != nil {
+            candidatePanelIDs.append(focusedPanelID)
+        }
+
+        for tab in workspace.orderedTabs {
+            for leaf in tab.layoutTree.allSlotInfos {
+                let panelID = leaf.panelID
+                guard candidatePanelIDs.contains(panelID) == false,
+                      case .terminal = tab.panels[panelID] else {
+                    continue
+                }
+                candidatePanelIDs.append(panelID)
+            }
+        }
+
+        return candidatePanelIDs
     }
 
     func isValidDropTargetPanel(_ panelID: UUID, state: AppState) -> Bool {

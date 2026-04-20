@@ -81,7 +81,7 @@ These shortcuts point at the same profile-specific actions exposed in the `Termi
 
 ## Shell integration, history, and live titles
 
-Profile startup commands are good for bootstrapping a session, but long-lived multiplexers such as `tmux` or `zmx` take over the shell after launch. For Toastty to keep seeing live pane titles from inside those sessions, and for restored `zsh`, `bash`, or `fish` panes to re-import pane-local command journals while preserving shared shell history, install Toastty's shell integration from `Toastty > Install Shell Integration…` or follow the manual setup instructions in the README. Existing multiplexer sessions may only need a re-source for title updates, but restored-pane command recall only applies to shells launched after Toastty injects the launch context environment, so older sessions usually need a restart.
+Profile startup commands are good for bootstrapping a session, but long-lived multiplexers such as `tmux` or `zmx` take over the shell after launch. For Toastty to keep seeing live pane titles from inside those sessions, and for restored `zsh`, `bash`, or `fish` panes to re-import pane-local command journals while preserving shared shell history, install Toastty's shell integration from `Toastty > Install Shell Integration…` or follow the manual setup instructions in [Shell Integration](shell-integration.md). Existing multiplexer sessions may only need a re-source for title updates, but restored-pane command recall only applies to shells launched after Toastty injects the launch context environment, so older sessions usually need a restart.
 
 Without shell integration:
 

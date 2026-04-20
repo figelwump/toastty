@@ -88,6 +88,30 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
     }
 
+    func testResolvedShellPathPrefersSupportedPreferredShellPathOverEnvironmentAndLoginShell() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: ["SHELL": "/bin/bash"],
+                loginShellPath: "/bin/zsh",
+                preferredShellPath: "/opt/homebrew/bin/fish",
+                preferredShellSource: .liveTerminalShell
+            ),
+            "/opt/homebrew/bin/fish"
+        )
+    }
+
+    func testResolvedShellPathFallsBackToEnvironmentShellWhenPreferredShellPathIsUnsupported() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: ["SHELL": "/bin/bash"],
+                loginShellPath: "/bin/zsh",
+                preferredShellPath: "/usr/bin/python3",
+                preferredShellSource: .liveTerminalShell
+            ),
+            "/bin/bash"
+        )
+    }
+
     func testInstallationPlanAcceptsLoginShellPrefixedZshName() throws {
         let homeDirectoryURL = try makeTemporaryHomeDirectory()
         let installer = ProfileShellIntegrationInstaller(
@@ -134,6 +158,24 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                     loginShellPath: "/bin/zsh"
                 )
             }
+        )
+
+        let plan = try installer.installationPlan()
+
+        XCTAssertEqual(plan.shell, .fish)
+        XCTAssertEqual(
+            plan.initFileURL.path,
+            homeDirectoryURL.appendingPathComponent(".config/fish/config.fish").path
+        )
+    }
+
+    func testInstallationPlanPrefersSupportedLiveShellPathOverEnvironmentAndLoginShell() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: ["SHELL": "/bin/zsh"],
+            preferredShellPath: "/opt/homebrew/bin/fish",
+            preferredShellSource: .liveTerminalShell
         )
 
         let plan = try installer.installationPlan()

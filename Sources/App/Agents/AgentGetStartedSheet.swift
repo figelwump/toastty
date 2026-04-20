@@ -72,6 +72,7 @@ enum AgentGetStartedSheetBehavior {
 struct AgentGetStartedSheet: View {
     let openAgentProfilesConfiguration: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReference: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let resolveShellIntegrationPreferredShellPath: @MainActor () -> String?
 
     @Environment(\.dismiss) private var dismiss
     @State private var step: AgentGetStartedStep = .chooser
@@ -79,6 +80,16 @@ struct AgentGetStartedSheet: View {
     @State private var openAgentProfilesErrorMessage: String?
     @State private var openKeyboardShortcutsReferenceErrorMessage: String?
     @State private var shellIntegrationTask: Task<Void, Never>?
+
+    init(
+        openAgentProfilesConfiguration: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
+        openKeyboardShortcutsReference: @escaping @MainActor () -> Result<Void, AgentGetStartedActionError>,
+        resolveShellIntegrationPreferredShellPath: @escaping @MainActor () -> String? = { nil }
+    ) {
+        self.openAgentProfilesConfiguration = openAgentProfilesConfiguration
+        self.openKeyboardShortcutsReference = openKeyboardShortcutsReference
+        self.resolveShellIntegrationPreferredShellPath = resolveShellIntegrationPreferredShellPath
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -559,7 +570,13 @@ struct AgentGetStartedSheet: View {
             }
             let result: Result<ProfileShellIntegrationInstallStatus, AgentGetStartedActionError>
             do {
-                let status = try ProfileShellIntegrationInstaller().installationStatus()
+                let preferredShellPath = await MainActor.run {
+                    resolveShellIntegrationPreferredShellPath()
+                }
+                let status = try ProfileShellIntegrationInstaller(
+                    preferredShellPath: preferredShellPath,
+                    preferredShellSource: .liveTerminalShell
+                ).installationStatus()
                 result = .success(status)
             } catch {
                 result = .failure(AgentGetStartedActionError(message: error.localizedDescription))
@@ -589,7 +606,13 @@ struct AgentGetStartedSheet: View {
             }
             let result: Result<ProfileShellIntegrationInstallResult, AgentGetStartedActionError>
             do {
-                let installResult = try ProfileShellIntegrationInstaller().install(plan: status.plan)
+                let preferredShellPath = await MainActor.run {
+                    resolveShellIntegrationPreferredShellPath()
+                }
+                let installResult = try ProfileShellIntegrationInstaller(
+                    preferredShellPath: preferredShellPath,
+                    preferredShellSource: .liveTerminalShell
+                ).install(plan: status.plan)
                 result = .success(installResult)
             } catch {
                 result = .failure(AgentGetStartedActionError(message: error.localizedDescription))
