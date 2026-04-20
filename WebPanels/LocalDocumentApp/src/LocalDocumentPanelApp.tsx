@@ -1,13 +1,8 @@
 import hljs from "highlight.js/lib/core";
 import ini from "highlight.js/lib/languages/ini";
+import markdown from "highlight.js/lib/languages/markdown";
 import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
-import ReactMarkdown from "react-markdown";
-import rehypeHighlight from "rehype-highlight";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
-import remarkBreaks from "remark-breaks";
-import remarkFrontmatter from "remark-frontmatter";
-import remarkGfm from "remark-gfm";
 import { LocalDocumentFormat, LocalDocumentPanelBootstrap } from "./bootstrap";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
@@ -18,30 +13,18 @@ if (!hljs.getLanguage("toml")) {
   // The installed highlight.js bundle exposes TOML through the INI grammar.
   hljs.registerLanguage("toml", ini);
 }
-
-const sanitizeSchema = {
-  ...defaultSchema,
-  attributes: {
-    ...defaultSchema.attributes,
-    span: [
-      ...(defaultSchema.attributes?.span ?? []),
-      ["className", /^hljs-/],
-    ],
-  },
-};
-
-function isMarkdownFormat(format: LocalDocumentFormat): boolean {
-  return format === "markdown";
+if (!hljs.getLanguage("markdown")) {
+  hljs.registerLanguage("markdown", markdown);
 }
 
-function syntaxLanguage(format: LocalDocumentFormat): "yaml" | "toml" | null {
+function syntaxLanguage(format: LocalDocumentFormat): "yaml" | "toml" | "markdown" {
   switch (format) {
     case "yaml":
       return "yaml";
     case "toml":
       return "toml";
     case "markdown":
-      return null;
+      return "markdown";
   }
 }
 
@@ -54,31 +37,6 @@ function formatLabel(format: LocalDocumentFormat): string {
     case "toml":
       return "TOML";
   }
-}
-
-function slugifyHeading(text: string): string {
-  const collapsed = text
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-
-  return collapsed.length > 0 ? collapsed : "section";
-}
-
-function plainText(node: React.ReactNode): string {
-  if (typeof node === "string" || typeof node === "number") {
-    return String(node);
-  }
-  if (Array.isArray(node)) {
-    return node.map(plainText).join("");
-  }
-  if (React.isValidElement(node)) {
-    return plainText(node.props.children);
-  }
-  return "";
 }
 
 function normalizeLineEndings(content: string): string {
@@ -111,90 +69,8 @@ function shortenPath(filePath: string | null, displayName: string): string {
   return "\u2026/" + segments.slice(-2).join("/");
 }
 
-function computeWordCount(content: string): string {
-  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
-  const cleaned = body
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/`[^`]+`/g, "")
-    .replace(/!?\[.*?\]\(.*?\)/g, "")
-    .replace(/#+\s/g, "")
-    .replace(/[*_~`>|-]/g, "");
-  const words = cleaned.split(/\s+/).filter((w) => w.length > 0);
-  return words.length.toLocaleString();
-}
-
 function computeLineCount(content: string): string {
   return contentLines(content).length.toLocaleString();
-}
-
-interface TocEntry {
-  level: number;
-  text: string;
-  id: string;
-}
-
-function stripMarkdownInline(text: string): string {
-  return text
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/[*_~`]/g, "");
-}
-
-function parseToc(content: string): TocEntry[] {
-  const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "");
-
-  const entries: TocEntry[] = [];
-  let fenceChar = "";
-  let fenceLen = 0;
-
-  for (const line of body.split("\n")) {
-    const fenceMatch = line.match(/^(`{3,}|~{3,})/);
-    if (fenceMatch) {
-      const char = fenceMatch[1][0];
-      const len = fenceMatch[1].length;
-      if (fenceLen === 0) {
-        fenceChar = char;
-        fenceLen = len;
-      } else if (char === fenceChar && len >= fenceLen) {
-        fenceChar = "";
-        fenceLen = 0;
-      }
-      continue;
-    }
-    if (fenceLen > 0) continue;
-
-    const match = line.match(/^(#{1,6})\s+(.+)$/);
-    if (match) {
-      const level = match[1].length;
-      const raw = match[2].replace(/\s*#+\s*$/, "").trim();
-      const text = stripMarkdownInline(raw);
-      const id = slugifyHeading(text);
-      entries.push({ level, text, id });
-    }
-  }
-  return entries;
-}
-
-function extractFrontmatter(content: string): Record<string, string> | null {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return null;
-
-  const meta: Record<string, string> = {};
-  for (const line of match[1].split("\n")) {
-    const colon = line.indexOf(":");
-    if (colon > 0) {
-      const key = line.slice(0, colon).trim();
-      const value = line.slice(colon + 1).trim();
-      if (key && value) meta[key] = value;
-    }
-  }
-  return Object.keys(meta).length > 0 ? meta : null;
-}
-
-function scrollToHeading(id: string) {
-  const el = document.getElementById("user-content-" + id) ?? document.getElementById(id);
-  if (el) {
-    el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
 }
 
 function useBootstrap(): LocalDocumentPanelBootstrap | null {
@@ -306,59 +182,6 @@ function useLocalDocumentPanelState(): {
   };
 }
 
-const FRONTMATTER_DISPLAY_KEYS = ["date", "author", "tags", "category", "status", "description"];
-
-function FrontmatterBar(props: { meta: Record<string, string> }) {
-  const entries = Object.entries(props.meta).filter(
-    ([key]) => FRONTMATTER_DISPLAY_KEYS.includes(key.toLowerCase())
-  );
-  if (entries.length === 0) return null;
-
-  return (
-    <div className="markdown-frontmatter">
-      {entries.map(([key, value]) => (
-        <span key={key} className="markdown-frontmatter-item">
-          <span className="markdown-frontmatter-key">{key}</span>
-          <span className="markdown-frontmatter-value">{value}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function TableOfContents(props: { entries: TocEntry[]; onNavigate: () => void }) {
-  const { entries, onNavigate } = props;
-  if (entries.length === 0) return null;
-
-  const minLevel = Math.min(...entries.map((e) => e.level));
-
-  return (
-    <nav className="markdown-toc" aria-label="Table of contents">
-      <ul className="markdown-toc-list">
-        {entries.map((entry, i) => (
-          <li
-            key={`${entry.id}-${i}`}
-            className="markdown-toc-item"
-            style={{ paddingLeft: `${(entry.level - minLevel) * 16}px` }}
-          >
-            <a
-              href={`#${entry.id}`}
-              className="markdown-toc-link"
-              onClick={(e) => {
-                e.preventDefault();
-                scrollToHeading(entry.id);
-                onNavigate();
-              }}
-            >
-              {entry.text}
-            </a>
-          </li>
-        ))}
-      </ul>
-    </nav>
-  );
-}
-
 function Header(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   content: string;
@@ -381,36 +204,11 @@ function Header(props: {
     overwriteAfterConflict,
     cancelEdit
   } = props;
-  const [tocOpen, setTocOpen] = React.useState(false);
   const shortPath = shortenPath(bootstrap.filePath, bootstrap.displayName);
-  const tocEntries = React.useMemo(
-    () => (bootstrap.isEditing || !isMarkdownFormat(bootstrap.format) ? [] : parseToc(content)),
-    [bootstrap.isEditing, bootstrap.format, content]
-  );
   const statsLabel = React.useMemo(
-    () => isMarkdownFormat(bootstrap.format)
-      ? `${computeWordCount(content)} words`
-      : `${computeLineCount(content)} lines`,
-    [bootstrap.format, content]
+    () => `${computeLineCount(content)} lines`,
+    [content]
   );
-
-  React.useEffect(() => {
-    if (!tocOpen) return;
-    function handleClick(e: MouseEvent) {
-      const target = e.target as HTMLElement;
-      if (!target.closest(".markdown-toc") && !target.closest(".markdown-toc-toggle")) {
-        setTocOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [tocOpen]);
-
-  React.useEffect(() => {
-    if (!isMarkdownFormat(bootstrap.format) && tocOpen) {
-      setTocOpen(false);
-    }
-  }, [bootstrap.format, tocOpen]);
 
   return (
     <header className="local-document-panel-header">
@@ -445,31 +243,13 @@ function Header(props: {
             </button>
           </>
         ) : (
-          <>
-            {tocEntries.length > 0 && (
-              <button
-                className={`markdown-toc-toggle${tocOpen ? " markdown-toc-toggle-open" : ""}`}
-                onClick={() => setTocOpen((prev) => !prev)}
-                aria-expanded={tocOpen}
-                aria-label="Table of contents"
-                title="Table of contents"
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path d="M2 4h12M2 8h8M2 12h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-              </button>
-            )}
-            <button
-              className="local-document-action-button"
-              onClick={enterEdit}
-              disabled={!bootstrap.filePath}
-            >
-              Edit
-            </button>
-          </>
-        )}
-        {tocOpen && (
-          <TableOfContents entries={tocEntries} onNavigate={() => setTocOpen(false)} />
+          <button
+            className="local-document-action-button"
+            onClick={enterEdit}
+            disabled={!bootstrap.filePath}
+          >
+            Edit
+          </button>
         )}
       </div>
     </header>
@@ -481,11 +261,6 @@ function LocalDocumentEditor(props: {
   draftContent: string;
   updateDraftContent: (nextContent: string) => void;
 }) {
-  const wrapsMarkdown = isMarkdownFormat(props.bootstrap.format);
-  const editorClassName = wrapsMarkdown
-    ? "local-document-editor local-document-editor-markdown"
-    : "local-document-editor";
-
   return (
     <section className="local-document-editor-shell">
       {(props.bootstrap.hasExternalConflict || props.bootstrap.saveErrorMessage) && (
@@ -503,70 +278,16 @@ function LocalDocumentEditor(props: {
         </div>
       )}
       <textarea
-        className={editorClassName}
+        className="local-document-editor"
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
         spellCheck={false}
         autoCorrect="off"
         autoCapitalize="off"
-        wrap={wrapsMarkdown ? "soft" : "off"}
+        wrap="off"
         readOnly={props.bootstrap.isSaving}
       />
     </section>
-  );
-}
-
-function MarkdownDocumentView(props: { content: string }) {
-  const frontmatter = React.useMemo(
-    () => extractFrontmatter(props.content),
-    [props.content]
-  );
-
-  return (
-    <article className="markdown-prose">
-      {frontmatter && <FrontmatterBar meta={frontmatter} />}
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkFrontmatter, remarkBreaks]}
-        rehypePlugins={[rehypeHighlight, [rehypeSanitize, sanitizeSchema]]}
-        components={{
-          a({ href, children }) {
-            if (href?.startsWith("#")) {
-              return <a href={href}>{children}</a>;
-            }
-            return <span className="markdown-link-blocked">{children}</span>;
-          },
-          img({ alt }) {
-            return <span className="markdown-image-blocked">Image blocked{alt ? `: ${alt}` : ""}</span>;
-          },
-          h1({ children }) {
-            const id = slugifyHeading(plainText(children));
-            return <h1 id={id}>{children}</h1>;
-          },
-          h2({ children }) {
-            const id = slugifyHeading(plainText(children));
-            return <h2 id={id}>{children}</h2>;
-          },
-          h3({ children }) {
-            const id = slugifyHeading(plainText(children));
-            return <h3 id={id}>{children}</h3>;
-          },
-          h4({ children }) {
-            const id = slugifyHeading(plainText(children));
-            return <h4 id={id}>{children}</h4>;
-          },
-          h5({ children }) {
-            const id = slugifyHeading(plainText(children));
-            return <h5 id={id}>{children}</h5>;
-          },
-          h6({ children }) {
-            const id = slugifyHeading(plainText(children));
-            return <h6 id={id}>{children}</h6>;
-          }
-        }}
-      >
-        {props.content}
-      </ReactMarkdown>
-    </article>
   );
 }
 
@@ -576,7 +297,7 @@ function highlightedCodeHTML(
   shouldHighlight: boolean
 ): string | null {
   const language = syntaxLanguage(format);
-  if (!shouldHighlight || !language || !hljs.getLanguage(language)) {
+  if (!shouldHighlight || !hljs.getLanguage(language)) {
     return null;
   }
 
@@ -594,7 +315,7 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     [props.bootstrap.format, props.bootstrap.shouldHighlight, props.content]
   );
   const language = syntaxLanguage(props.bootstrap.format);
-  const codeClassName = language ? `hljs language-${language}` : "hljs";
+  const codeClassName = `hljs language-${language}`;
 
   return (
     <section className="local-document-code-shell">
@@ -667,8 +388,6 @@ export function LocalDocumentPanelApp() {
           draftContent={draftContent}
           updateDraftContent={updateDraftContent}
         />
-      ) : isMarkdownFormat(bootstrap.format) ? (
-        <MarkdownDocumentView content={renderedContent} />
       ) : (
         <CodeDocumentView bootstrap={bootstrap} content={renderedContent} />
       )}

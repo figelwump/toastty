@@ -1074,13 +1074,12 @@ private extension LocalDocumentPanelRuntime {
     }
 
     nonisolated static func shouldHighlight(
-        format: LocalDocumentFormat,
+        format _: LocalDocumentFormat,
         content: String,
         diskRevision: LocalDocumentPanelDiskRevision?
     ) -> Bool {
-        guard format != .markdown else {
-            return true
-        }
+        // Experiment: markdown is rendered as code, so it now follows the same
+        // size threshold as yaml/toml instead of always highlighting.
         guard diskRevision != nil else {
             return false
         }
@@ -1088,42 +1087,11 @@ private extension LocalDocumentPanelRuntime {
     }
 
     nonisolated static func missingFileDocument(
-        format: LocalDocumentFormat,
+        format _: LocalDocumentFormat,
         filePath: String?,
         message: String
     ) -> String {
-        switch format {
-        case .markdown:
-            return markdownMissingFileDocument(filePath: filePath, message: message)
-        case .yaml, .toml:
-            return codeMissingFileDocument(filePath: filePath, message: message)
-        }
-    }
-
-    nonisolated static func markdownMissingFileDocument(filePath: String?, message: String) -> String {
-        var lines = [
-            "# Document unavailable",
-            "",
-            "Toastty could not load this document.",
-        ]
-
-        if let filePath, filePath.isEmpty == false {
-            lines += [
-                "",
-                "**Path**",
-                "",
-                "`\(filePath)`",
-            ]
-        }
-
-        lines += [
-            "",
-            "**Reason**",
-            "",
-            message,
-        ]
-
-        return lines.joined(separator: "\n")
+        codeMissingFileDocument(filePath: filePath, message: message)
     }
 
     nonisolated static func codeMissingFileDocument(filePath: String?, message: String) -> String {
