@@ -625,18 +625,38 @@ final class TerminalHostView: NSView {
         syncGhosttyCursorOwner()
     }
 
-    func setGhosttyMouseOverLink(_ url: String?) {
+    func setGhosttyMouseOverLink(_ url: String?, rawByteLength: Int? = nil) {
         assert(Thread.isMainThread)
         let normalizedURL = url?.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextURL = normalizedURL?.isEmpty == false ? normalizedURL : nil
         if nextURL == nil,
            ghosttyMouseOverLinkURL != nil,
            syntheticLinkHoverRefreshSuppressionCount > 0 {
+            ToasttyLog.debug(
+                "Suppressed Ghostty hovered-link clear during synthetic refresh",
+                category: .ghostty,
+                metadata: [
+                    "raw_byte_length": rawByteLength.map(String.init) ?? "unknown",
+                    "incoming_url": url ?? "nil",
+                    "previous_url": ghosttyMouseOverLinkURL ?? "nil",
+                ]
+            )
             return
         }
         guard nextURL != ghosttyMouseOverLinkURL else {
             return
         }
+        ToasttyLog.debug(
+            "Updated Ghostty hovered-link state",
+            category: .ghostty,
+            metadata: [
+                "raw_byte_length": rawByteLength.map(String.init) ?? "unknown",
+                "incoming_url": url ?? "nil",
+                "normalized_url": nextURL ?? "nil",
+                "previous_url": ghosttyMouseOverLinkURL ?? "nil",
+                "trimmed": normalizedURL != url ? "true" : "false",
+            ]
+        )
         ghosttyMouseOverLinkURL = nextURL
         syncGhosttyCursorOwner()
     }

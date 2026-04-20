@@ -82,7 +82,7 @@ private final class WeakTerminalHostViewBox {
 private enum GhosttyDirectHostViewAction: Sendable {
     case mouseShape(surfaceHandle: UInt, shape: ghostty_action_mouse_shape_e)
     case mouseVisibility(surfaceHandle: UInt, visibility: ghostty_action_mouse_visibility_e)
-    case mouseOverLink(surfaceHandle: UInt, url: String?)
+    case mouseOverLink(surfaceHandle: UInt, url: String?, rawByteLength: Int)
     case scrollbar(surfaceHandle: UInt, totalRows: Int, offsetRows: Int, visibleRows: Int)
 
     var logIntentName: String {
@@ -293,9 +293,11 @@ private func makeGhosttyDirectHostViewAction(
             return nil
         }
         let hoverLink = action.action.mouse_over_link
+        let rawByteLength = Int(hoverLink.len)
         return .mouseOverLink(
             surfaceHandle: UInt(bitPattern: surface),
-            url: ghosttyString(pointer: hoverLink.url, length: Int(hoverLink.len))
+            url: ghosttyString(pointer: hoverLink.url, length: rawByteLength),
+            rawByteLength: rawByteLength
         )
     case GHOSTTY_ACTION_SCROLLBAR:
         guard target.tag == GHOSTTY_TARGET_SURFACE,
@@ -1074,11 +1076,21 @@ final class GhosttyRuntimeManager {
             }
             hostView.setGhosttyMouseVisibility(visibility)
             return true
-        case .mouseOverLink(let surfaceHandle, let url):
+        case .mouseOverLink(let surfaceHandle, let url, let rawByteLength):
             guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
                 return false
             }
-            hostView.setGhosttyMouseOverLink(url)
+            ToasttyLog.debug(
+                "Received Ghostty mouse-over-link payload",
+                category: .ghostty,
+                metadata: [
+                    "surface_handle": String(surfaceHandle),
+                    "raw_byte_length": String(rawByteLength),
+                    "decoded_utf8": url == nil ? "false" : "true",
+                    "raw_url": url ?? "nil",
+                ]
+            )
+            hostView.setGhosttyMouseOverLink(url, rawByteLength: rawByteLength)
             return true
         case .scrollbar(let surfaceHandle, let totalRows, let offsetRows, let visibleRows):
             guard let hostView = hostView(forSurfaceHandle: surfaceHandle) else {
