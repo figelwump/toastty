@@ -31,7 +31,9 @@ final class CommandPalettePanel: NSPanel {
     func position(relativeTo originWindow: NSWindow) {
         let targetRect = resolvedTargetRect(for: originWindow)
         let frame = Self.positionedFrame(
-            panelSize: self.frame.size,
+            // The SwiftUI palette view is pinned to defaultFrame, so use that stable
+            // size instead of the panel's transient AppKit frame during first layout.
+            panelSize: Self.defaultFrame.size,
             relativeTo: targetRect,
             visibleFrames: NSScreen.screens.map(\.visibleFrame)
         )
@@ -43,27 +45,26 @@ final class CommandPalettePanel: NSPanel {
         relativeTo originFrame: CGRect,
         visibleFrames: [CGRect]
     ) -> CGRect {
-        var frame = CGRect(
-            x: originFrame.midX - (panelSize.width / 2),
-            y: originFrame.midY - (panelSize.height / 2),
-            width: panelSize.width,
-            height: panelSize.height
-        )
+        let validVisibleFrames = visibleFrames.filter(Self.isUsableFrame(_:))
+        let visibleFrame = resolvedVisibleFrame(for: originFrame, visibleFrames: validVisibleFrames)
+        let sourceFrame = isUsableFrame(originFrame) ? originFrame : (visibleFrame ?? originFrame)
+        var frame = anchoredFrame(panelSize: panelSize, relativeTo: sourceFrame)
 
-        let validVisibleFrames = visibleFrames.filter { $0.isEmpty == false && $0.isNull == false }
-        guard let visibleFrame = bestVisibleFrame(for: originFrame, visibleFrames: validVisibleFrames) else {
-            return frame.integral
+        guard let visibleFrame else {
+            return roundedOriginFrame(frame)
         }
 
-        frame.origin.x = min(
-            max(frame.origin.x, visibleFrame.minX),
-            visibleFrame.maxX - frame.width
+        frame.origin.x = clampedOrigin(
+            frame.origin.x,
+            minimum: visibleFrame.minX,
+            maximum: visibleFrame.maxX - frame.width
         )
-        frame.origin.y = min(
-            max(frame.origin.y, visibleFrame.minY),
-            visibleFrame.maxY - frame.height
+        frame.origin.y = clampedOrigin(
+            frame.origin.y,
+            minimum: visibleFrame.minY,
+            maximum: visibleFrame.maxY - frame.height
         )
-        return frame.integral
+        return roundedOriginFrame(frame)
     }
 
     private func resolvedTargetRect(for originWindow: NSWindow) -> CGRect {
@@ -96,6 +97,12 @@ final class CommandPalettePanel: NSPanel {
         }
     }
 
+    private static func largestVisibleFrame(from visibleFrames: [CGRect]) -> CGRect? {
+        visibleFrames.max { lhs, rhs in
+            (lhs.width * lhs.height) < (rhs.width * rhs.height)
+        }
+    }
+
     private static func intersectionArea(between lhs: CGRect, and rhs: CGRect) -> Double {
         let intersection = lhs.intersection(rhs)
         guard intersection.isNull == false, intersection.isEmpty == false else {
@@ -110,5 +117,46 @@ final class CommandPalettePanel: NSPanel {
         let deltaX = point.x - closestX
         let deltaY = point.y - closestY
         return deltaX * deltaX + deltaY * deltaY
+    }
+
+    private static func anchoredFrame(panelSize: CGSize, relativeTo originFrame: CGRect) -> CGRect {
+        // Anchor the palette's midpoint one-third down from the top edge of the
+        // origin content rect so it opens above the visual center of the window.
+        let centerY = originFrame.maxY - (originFrame.height / 3)
+        return CGRect(
+            x: originFrame.midX - (panelSize.width / 2),
+            y: centerY - (panelSize.height / 2),
+            width: panelSize.width,
+            height: panelSize.height
+        )
+    }
+
+    private static func roundedOriginFrame(_ frame: CGRect) -> CGRect {
+        CGRect(
+            x: frame.origin.x.rounded(),
+            y: frame.origin.y.rounded(),
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
+    private static func clampedOrigin(_ value: CGFloat, minimum: CGFloat, maximum: CGFloat) -> CGFloat {
+        minimum <= maximum ? min(max(value, minimum), maximum) : minimum
+    }
+
+    private static func isUsableFrame(_ frame: CGRect) -> Bool {
+        frame.isNull == false && frame.width > 0 && frame.height > 0
+    }
+
+    private static func resolvedVisibleFrame(for frame: CGRect, visibleFrames: [CGRect]) -> CGRect? {
+        guard visibleFrames.isEmpty == false else {
+            return nil
+        }
+
+        guard isUsableFrame(frame) else {
+            return largestVisibleFrame(from: visibleFrames)
+        }
+
+        return bestVisibleFrame(for: frame, visibleFrames: visibleFrames)
     }
 }

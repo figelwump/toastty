@@ -328,7 +328,7 @@ final class CommandPalettePanelTests: XCTestCase {
         )
 
         XCTAssertEqual(frame.origin.x, 280)
-        XCTAssertEqual(frame.origin.y, 374)
+        XCTAssertEqual(frame.midY, expectedTopThirdCenterY(for: originFrame), accuracy: 0.5)
         XCTAssertEqual(frame.size, CommandPalettePanel.defaultFrame.size)
     }
 
@@ -360,7 +360,89 @@ final class CommandPalettePanelTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(frame.minY, laptopVisibleFrame.minY)
         XCTAssertLessThanOrEqual(frame.maxY, laptopVisibleFrame.maxY)
         XCTAssertEqual(frame.origin.x, -1190)
-        XCTAssertEqual(frame.origin.y, 384)
+        XCTAssertEqual(frame.midY, expectedTopThirdCenterY(for: originFrame), accuracy: 0.5)
+    }
+
+    func testPositionedFramePinsToVisibleFrameOriginWhenPaletteExceedsVisibleBounds() {
+        let originFrame = CGRect(x: 100, y: 100, width: 800, height: 600)
+        let visibleFrame = CGRect(x: 40, y: 60, width: 240, height: 120)
+
+        let frame = CommandPalettePanel.positionedFrame(
+            relativeTo: originFrame,
+            visibleFrames: [visibleFrame]
+        )
+
+        XCTAssertEqual(frame.origin.x, visibleFrame.minX)
+        XCTAssertEqual(frame.origin.y, visibleFrame.minY)
+        XCTAssertEqual(frame.size, CommandPalettePanel.defaultFrame.size)
+    }
+
+    func testPositionedFramePreservesPanelSizeForFractionalOrigins() {
+        let originFrame = CGRect(x: 10, y: 10, width: 581, height: 641)
+
+        let frame = CommandPalettePanel.positionedFrame(
+            relativeTo: originFrame,
+            visibleFrames: []
+        )
+
+        XCTAssertEqual(frame.origin.x, 11)
+        XCTAssertEqual(frame.size, CommandPalettePanel.defaultFrame.size)
+    }
+
+    func testPositionedFrameFallsBackToLargestVisibleFrameWhenOriginFrameIsDegenerate() {
+        let smallVisibleFrame = CGRect(x: -400, y: 0, width: 400, height: 300)
+        let largeVisibleFrame = CGRect(x: 0, y: 0, width: 1_200, height: 800)
+
+        let frame = CommandPalettePanel.positionedFrame(
+            relativeTo: .zero,
+            visibleFrames: [smallVisibleFrame, largeVisibleFrame]
+        )
+
+        XCTAssertEqual(frame.origin.x, 310)
+        XCTAssertEqual(frame.midY, expectedTopThirdCenterY(for: largeVisibleFrame), accuracy: 0.5)
+        XCTAssertEqual(frame.size, CommandPalettePanel.defaultFrame.size)
+    }
+
+    func testPositionedFrameReturnsUnclampedFrameWhenNoValidVisibleFramesExist() {
+        let originFrame = CGRect(x: 120, y: 180, width: 900, height: 640)
+        let invalidVisibleFrames: [CGRect] = [.null, .zero]
+
+        let frame = CommandPalettePanel.positionedFrame(
+            relativeTo: originFrame,
+            visibleFrames: invalidVisibleFrames
+        )
+
+        XCTAssertEqual(frame.origin.x, 280)
+        XCTAssertEqual(frame.midY, expectedTopThirdCenterY(for: originFrame), accuracy: 0.5)
+        XCTAssertEqual(frame.size, CommandPalettePanel.defaultFrame.size)
+    }
+
+    func testPositionUsesDefaultFrameSizeBeforePanelHasBeenSized() {
+        let originWindow = NSWindow(
+            contentRect: NSRect(x: 100, y: 100, width: 500, height: 320),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        let panel = CommandPalettePanel()
+        panel.setFrame(.zero, display: false)
+
+        let contentRectInWindow = originWindow.contentView?.convert(originWindow.contentView?.bounds ?? .zero, to: nil) ?? .zero
+        let targetRect = originWindow.convertToScreen(contentRectInWindow)
+        let expectedFrame = CommandPalettePanel.positionedFrame(
+            panelSize: CommandPalettePanel.defaultFrame.size,
+            relativeTo: targetRect,
+            visibleFrames: NSScreen.screens.map(\.visibleFrame)
+        )
+
+        panel.position(relativeTo: originWindow)
+
+        XCTAssertEqual(panel.frame, expectedFrame)
+        XCTAssertEqual(panel.frame.size, CommandPalettePanel.defaultFrame.size)
+    }
+
+    private func expectedTopThirdCenterY(for frame: CGRect) -> CGFloat {
+        frame.maxY - (frame.height / 3)
     }
 }
 
