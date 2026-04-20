@@ -1543,6 +1543,7 @@ struct ToasttyApp: App {
     private let runtimePaths: ToasttyRuntimePaths
     private let agentLaunchSocketPath: String
     private let agentLaunchCLIExecutablePath: String?
+    private let agentLaunchShimExecutablePath: String?
     private let workspaceLayoutPersistenceCoordinator: WorkspaceLayoutPersistenceCoordinator?
     private let workspaceLayoutPersistenceObserverToken: UUID?
     private let appTerminationObserver: AppTerminationObserver?
@@ -1632,13 +1633,35 @@ struct ToasttyApp: App {
         Self.logProfileShortcutWarnings(initialProfileShortcutRegistry.warningMessages)
         let terminalRuntimeRegistry = TerminalRuntimeRegistry()
         let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
-        let cliExecutablePath = AgentLaunchService.defaultCLIExecutablePath()
+        let resolvedManagedHelperPaths: ManagedAgentHelperPaths
+        do {
+            resolvedManagedHelperPaths = try ManagedAgentHelperInstaller(
+                runtimePaths: runtimePaths
+            ).resolvePaths()
+        } catch {
+            resolvedManagedHelperPaths = ManagedAgentHelperPaths(
+                cliExecutablePath: AgentLaunchService.defaultCLIExecutablePath(),
+                agentShimExecutablePath: ToasttyBundledExecutableLocator.defaultAgentShimExecutablePath()
+            )
+            ToasttyLog.warning(
+                "Failed to stage managed agent helpers",
+                category: .bootstrap,
+                metadata: [
+                    "runtime_home": runtimePaths.runtimeHomeURL?.path ?? "none",
+                    "runtime_home_enabled": runtimePaths.isRuntimeHomeEnabled ? "true" : "false",
+                    "error": error.localizedDescription,
+                ]
+            )
+        }
+        let cliExecutablePath = resolvedManagedHelperPaths.cliExecutablePath
+        let agentShimExecutablePath = resolvedManagedHelperPaths.agentShimExecutablePath
         let shimDirectoryPath: String?
         do {
             shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: initialToasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
-                agentProfiles: agentCatalogStore.catalog
+                agentProfiles: agentCatalogStore.catalog,
+                helperExecutablePath: agentShimExecutablePath
             )
         } catch {
             shimDirectoryPath = nil
@@ -1648,6 +1671,7 @@ struct ToasttyApp: App {
                 metadata: [
                     "directory": runtimePaths.agentShimDirectoryURL.path,
                     "enabled": initialToasttyConfig.enableAgentCommandShims ? "true" : "false",
+                    "helper_path": agentShimExecutablePath ?? "none",
                     "error": error.localizedDescription,
                 ]
             )
@@ -1727,6 +1751,7 @@ struct ToasttyApp: App {
             terminalCommandRouter: terminalRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
             agentCatalogProvider: agentCatalogStore,
+            cliExecutablePathProvider: { cliExecutablePath },
             socketPathProvider: { socketPath }
         )
         let commandPaletteActionHandler = CommandPaletteActionHandler(
@@ -1746,6 +1771,7 @@ struct ToasttyApp: App {
                     runtimePaths: runtimePaths,
                     agentLaunchSocketPath: socketPath,
                     agentLaunchCLIExecutablePath: cliExecutablePath,
+                    agentLaunchShimExecutablePath: agentShimExecutablePath,
                     terminalRuntimeRegistry: terminalRuntimeRegistry
                 )
             },
@@ -1859,6 +1885,7 @@ struct ToasttyApp: App {
         self.runtimePaths = runtimePaths
         agentLaunchSocketPath = socketPath
         agentLaunchCLIExecutablePath = cliExecutablePath
+        agentLaunchShimExecutablePath = agentShimExecutablePath
 
         if let layoutPersistenceContext = bootstrap.layoutPersistenceContext {
             let coordinator = WorkspaceLayoutPersistenceCoordinator(context: layoutPersistenceContext)
@@ -1910,6 +1937,7 @@ struct ToasttyApp: App {
                         runtimePaths: runtimePaths,
                         agentLaunchSocketPath: socketPath,
                         agentLaunchCLIExecutablePath: cliExecutablePath,
+                        agentLaunchShimExecutablePath: agentShimExecutablePath,
                         terminalRuntimeRegistry: terminalRuntimeRegistry
                     )
                 }
@@ -1957,11 +1985,13 @@ struct ToasttyApp: App {
     private static func synchronizeManagedAgentCommandShims(
         enabled: Bool,
         runtimePaths: ToasttyRuntimePaths,
-        agentProfiles: AgentCatalog
+        agentProfiles: AgentCatalog,
+        helperExecutablePath: String?
     ) throws -> String? {
         try AgentCommandShimInstaller(
             runtimePaths: runtimePaths,
-            managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles)
+            managedCommandNames: ManagedAgentCommandResolver.shimCommandNames(for: agentProfiles),
+            helperExecutablePathProvider: { helperExecutablePath }
         )
             .syncInstallation(enabled: enabled)?
             .directoryURL
@@ -2143,6 +2173,7 @@ struct ToasttyApp: App {
             runtimePaths: runtimePaths,
             agentLaunchSocketPath: agentLaunchSocketPath,
             agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
+            agentLaunchShimExecutablePath: agentLaunchShimExecutablePath,
             terminalRuntimeRegistry: terminalRuntimeRegistry
         )
     }
@@ -2155,6 +2186,7 @@ struct ToasttyApp: App {
         runtimePaths: ToasttyRuntimePaths,
         agentLaunchSocketPath: String,
         agentLaunchCLIExecutablePath: String?,
+        agentLaunchShimExecutablePath: String?,
         terminalRuntimeRegistry: TerminalRuntimeRegistry
     ) {
         var failureMessages: [String] = []
@@ -2180,7 +2212,8 @@ struct ToasttyApp: App {
             let shimDirectoryPath = try Self.synchronizeManagedAgentCommandShims(
                 enabled: toasttyConfig.enableAgentCommandShims,
                 runtimePaths: runtimePaths,
-                agentProfiles: agentCatalogStore.catalog
+                agentProfiles: agentCatalogStore.catalog,
+                helperExecutablePath: agentLaunchShimExecutablePath
             )
             Self.configureBaseLaunchEnvironmentProvider(
                 terminalRuntimeRegistry: terminalRuntimeRegistry,
