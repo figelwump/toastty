@@ -101,6 +101,27 @@ verify_system_events_access() {
   return 78
 }
 
+run_osascript_with_retry() {
+  local attempts="${1:-3}"
+  shift
+
+  local exit_code=1
+  local attempt=1
+  while [[ "$attempt" -le "$attempts" ]]; do
+    if osascript "$@"; then
+      return 0
+    fi
+
+    exit_code=$?
+    if [[ "$attempt" -lt "$attempts" ]]; then
+      sleep 0.3
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return "$exit_code"
+}
+
 should_skip_menu_close_equivalence() {
   if [[ "${TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE:-0}" == "1" ]]; then
     return 0
@@ -202,52 +223,49 @@ count_applied_store_action_logs() {
 }
 
 focus_app_terminal() {
-  osascript <<OSA
-tell application "Toastty" to activate
-delay 0.5
-tell application "System Events"
-  click at {${CLICK_X}, ${CLICK_Y}}
-  delay 0.2
-end tell
-OSA
+  run_osascript_with_retry 3 \
+    -e 'tell application "Toastty" to activate' \
+    -e 'delay 0.5' \
+    -e "tell application \"System Events\" to click at {${CLICK_X}, ${CLICK_Y}}" \
+    -e 'delay 0.2'
 }
 
 send_split_right_shortcut() {
-  osascript -e "tell application \"System Events\" to key code ${SPLIT_KEY_CODE} using {command down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to key code ${SPLIT_KEY_CODE} using {command down}"
 }
 
 send_split_down_shortcut() {
-  osascript -e "tell application \"System Events\" to key code ${SPLIT_KEY_CODE} using {command down, shift down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to key code ${SPLIT_KEY_CODE} using {command down, shift down}"
 }
 
 send_focus_next_shortcut() {
-  osascript -e "tell application \"System Events\" to key code ${FOCUS_NEXT_KEY_CODE} using {command down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to key code ${FOCUS_NEXT_KEY_CODE} using {command down}"
 }
 
 send_focus_previous_shortcut() {
-  osascript -e "tell application \"System Events\" to key code ${FOCUS_PREVIOUS_KEY_CODE} using {command down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to key code ${FOCUS_PREVIOUS_KEY_CODE} using {command down}"
 }
 
 send_resize_shortcut() {
-  osascript -e "tell application \"System Events\" to key code ${RESIZE_KEY_CODE} using {command down, control down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to key code ${RESIZE_KEY_CODE} using {command down, control down}"
 }
 
 send_equalize_shortcut() {
-  osascript -e "tell application \"System Events\" to key code ${EQUALIZE_KEY_CODE} using {command down, control down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to key code ${EQUALIZE_KEY_CODE} using {command down, control down}"
 }
 
 send_workspace_shortcut() {
   local index="$1"
-  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {option down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to keystroke \"${index}\" using {option down}"
 }
 
 send_panel_focus_shortcut() {
   local index="$1"
-  osascript -e "tell application \"System Events\" to keystroke \"${index}\" using {option down, shift down}"
+  run_osascript_with_retry 3 -e "tell application \"System Events\" to keystroke \"${index}\" using {option down, shift down}"
 }
 
 send_close_shortcut() {
-  osascript -e 'tell application "System Events" to keystroke "w" using {command down}'
+  run_osascript_with_retry 3 -e 'tell application "System Events" to keystroke "w" using {command down}'
 }
 
 send_workspace_close_menu() {
