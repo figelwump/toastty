@@ -13,8 +13,8 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 test("markdown source highlighting colors inline emphasis and code spans", async () => {
   const html = await highlightMarkdownSourceToHtml("**bold** *italic* `inline`");
 
-  assert.match(html, /class="pl-s">\*\*<\/span>bold<span class="pl-s">\*\*<\/span>/);
-  assert.match(html, /class="pl-s">\*<\/span>italic<span class="pl-s">\*<\/span>/);
+  assert.match(html, /class="pl-s">\*\*<\/span><span class="pl-mb">bold<\/span><span class="pl-s">\*\*<\/span>/);
+  assert.match(html, /class="pl-s">\*<\/span><span class="pl-mi">italic<\/span><span class="pl-s">\*<\/span>/);
   assert.match(html, /class="pl-s">`<\/span><span class="pl-c1">inline<\/span><span class="pl-s">`<\/span>/);
 });
 
@@ -24,6 +24,35 @@ test("markdown source highlighting colors fenced code using the declared languag
   assert.match(html, /class="pl-s">```<\/span><span class="pl-en">js<\/span>/);
   assert.match(html, /class="pl-k">const<\/span>/);
   assert.match(html, /class="pl-c1">42<\/span>/);
+});
+
+test("ordered list markers render as a single markdown list token", async () => {
+  const html = await highlightMarkdownSourceToHtml("1. Confirm\n2. Require");
+
+  assert.match(html, /class="pl-ml">1\.<\/span> Confirm/);
+  assert.match(html, /class="pl-ml">2\.<\/span> Require/);
+  assert.doesNotMatch(html, /class="pl-s">1<\/span><span class="pl-v">\.<\/span>/);
+});
+
+test("ordered list normalization also covers multi-digit markers", async () => {
+  const html = await highlightMarkdownSourceToHtml("10. Confirm\n100. Require");
+
+  assert.match(html, /class="pl-ml">10\.<\/span> Confirm/);
+  assert.match(html, /class="pl-ml">100\.<\/span> Require/);
+});
+
+test("escaped emphasis markers stay literal", async () => {
+  const html = await highlightMarkdownSourceToHtml("\\*escaped\\*");
+
+  assert.match(html, /class="pl-c1">\\\*<\/span>escaped<span class="pl-c1">\\\*<\/span>/);
+  assert.doesNotMatch(html, /class="pl-mi">escaped<\/span>/);
+});
+
+test("ordered list normalization does not rewrite code-fence contents", async () => {
+  const html = await highlightMarkdownSourceToHtml("```\n10. not a list\n```");
+
+  assert.match(html, /class="pl-c1">10\. not a list<\/span>/);
+  assert.doesNotMatch(html, /class="pl-ml">10\.<\/span>/);
 });
 
 test("browser wasm URL resolution prefers the bundled data URL", () => {

@@ -83,6 +83,129 @@ function loadMarkdownHighlighter() {
   return highlighterPromise;
 }
 
+function classList(node) {
+  const className = node?.properties?.className;
+  if (Array.isArray(className)) {
+    return className;
+  }
+
+  return typeof className === "string" ? [className] : [];
+}
+
+function hasClass(node, className) {
+  return node?.type === "element" && classList(node).includes(className);
+}
+
+function textValue(node) {
+  if (node?.type === "text") {
+    return node.value;
+  }
+
+  if (node?.type !== "element" || !Array.isArray(node.children) || node.children.length !== 1) {
+    return null;
+  }
+
+  return node.children[0]?.type === "text" ? node.children[0].value : null;
+}
+
+function createSpan(className, valueOrChildren) {
+  return {
+    type: "element",
+    tagName: "span",
+    properties: { className: [className] },
+    children: Array.isArray(valueOrChildren)
+      ? valueOrChildren
+      : [{ type: "text", value: valueOrChildren }]
+  };
+}
+
+function isLineBoundary(children, index) {
+  if (index === 0) {
+    return true;
+  }
+
+  const previous = children[index - 1];
+  return previous?.type === "text" && previous.value.includes("\n");
+}
+
+function findClosingMarker(children, startIndex, marker) {
+  for (let index = startIndex + 1; index < children.length; index += 1) {
+    const candidate = children[index];
+    if (candidate?.type === "text" && candidate.value.includes("\n")) {
+      return -1;
+    }
+    if (hasClass(candidate, "pl-s") && textValue(candidate) === marker) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function normalizeMarkdownChildren(children) {
+  const normalized = [];
+
+  for (let index = 0; index < children.length; index += 1) {
+    const current = children[index];
+    const currentText = textValue(current);
+    const next = children[index + 1];
+    const nextText = textValue(next);
+
+    if (
+      isLineBoundary(children, index) &&
+      hasClass(current, "pl-s") &&
+      /^\d+$/.test(currentText ?? "") &&
+      hasClass(next, "pl-v") &&
+      nextText === "."
+    ) {
+      normalized.push(createSpan("pl-ml", `${currentText}.`));
+      index += 1;
+      continue;
+    }
+
+    if (
+      isLineBoundary(children, index) &&
+      hasClass(current, "pl-v") &&
+      /^[-+*]$/.test(currentText ?? "")
+    ) {
+      normalized.push(createSpan("pl-ml", currentText));
+      continue;
+    }
+
+    if (
+      hasClass(current, "pl-s") &&
+      (currentText === "**" || currentText === "__" || currentText === "*" || currentText === "_")
+    ) {
+      const closingIndex = findClosingMarker(children, index, currentText);
+      if (closingIndex > index + 1) {
+        const emphasisClass = currentText.length === 2 ? "pl-mb" : "pl-mi";
+        normalized.push(current);
+        normalized.push(
+          createSpan(emphasisClass, children.slice(index + 1, closingIndex))
+        );
+        normalized.push(children[closingIndex]);
+        index = closingIndex;
+        continue;
+      }
+    }
+
+    normalized.push(current);
+  }
+
+  return normalized;
+}
+
+function normalizeMarkdownTree(node) {
+  if (!node || !Array.isArray(node.children)) {
+    return node;
+  }
+
+  node.children = normalizeMarkdownChildren(
+    node.children.map((child) => normalizeMarkdownTree(child))
+  );
+  return node;
+}
+
 export async function highlightMarkdownSourceToHtml(content) {
   const starryNight = await loadMarkdownHighlighter();
   const scope = starryNight.flagToScope("markdown");
@@ -91,5 +214,5 @@ export async function highlightMarkdownSourceToHtml(content) {
     return null;
   }
 
-  return toHtml(starryNight.highlight(String(content), scope));
+  return toHtml(normalizeMarkdownTree(starryNight.highlight(String(content), scope)));
 }
