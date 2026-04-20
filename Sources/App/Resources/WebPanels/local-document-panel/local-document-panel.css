@@ -577,12 +577,12 @@ body {
 }
 
 .pl-mi {
-  color: var(--color-prettylights-syntax-markup-italic);
+  color: var(--color-prettylights-syntax-string);
   font-style: italic;
 }
 
 .pl-mb {
-  color: var(--color-prettylights-syntax-markup-bold);
+  color: var(--color-prettylights-syntax-string);
   font-weight: 700;
 }
 

@@ -77,7 +77,9 @@ test("styles include starry-night token classes for markdown punctuation and emp
   const styles = await readFile(resolve(packageRoot, "src/styles.css"), "utf8");
 
   assert.match(styles, /\.pl-s[\s\S]*color: var\(--color-prettylights-syntax-string\)/);
+  assert.match(styles, /\.pl-mi[\s\S]*color: var\(--color-prettylights-syntax-string\)/);
   assert.match(styles, /\.pl-mi[\s\S]*font-style: italic/);
+  assert.match(styles, /\.pl-mb[\s\S]*color: var\(--color-prettylights-syntax-string\)/);
   assert.match(styles, /\.pl-mb[\s\S]*font-weight: 700/);
   assert.match(styles, /\.pl-k[\s\S]*color: var\(--color-prettylights-syntax-keyword\)/);
 });
