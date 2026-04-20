@@ -1680,6 +1680,11 @@ struct ToasttyApp: App {
             sessionRuntimeStore: sessionRuntimeStore,
             preferredWindowIDProvider: preferredWorkspaceCommandWindowID
         )
+        let workspaceClosePanelCommandController = WindowCommandController(
+            store: store,
+            focusedPanelCommandController: focusedPanelCommandController,
+            preferredWindowIDProvider: preferredWorkspaceCommandWindowID
+        )
         fileSplitMenuBridge = FileSplitMenuBridge(
             splitLayoutCommandController: splitLayoutCommandController
         )
@@ -1696,6 +1701,7 @@ struct ToasttyApp: App {
             preferredWindowIDProvider: { currentToasttyAppOwnedWindowID(in: store) }
         )
         workspaceMenuBridge = WorkspaceMenuBridge(
+            windowCommandController: workspaceClosePanelCommandController,
             createWorkspaceCommandController: createWorkspaceCommandController,
             renameWorkspaceCommandController: renameWorkspaceCommandController,
             closeWorkspaceCommandController: closeWorkspaceCommandController,

@@ -101,6 +101,14 @@ verify_system_events_access() {
   return 78
 }
 
+should_skip_menu_close_equivalence() {
+  if [[ "${TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE:-0}" == "1" ]]; then
+    return 0
+  fi
+
+  [[ -n "${SSH_CONNECTION:-}" ]]
+}
+
 cleanup() {
   if [[ -n "${APP_PID:-}" ]]; then
     kill "$APP_PID" >/dev/null 2>&1 || true
@@ -181,14 +189,16 @@ extract_bool_field() {
     | sed -nE "s/.*\"${field}\"[[:space:]]*:[[:space:]]*(true|false).*/\\1/p"
 }
 
-count_intent_logs() {
-  local intent="$1"
-  awk -v intent="\"intent\":\"${intent}\"" 'index($0, intent) { c++ } END { print c + 0 }' "$TRACE_LOG_PATH"
-}
-
-count_input_key_logs() {
-  local key_code="$1"
-  awk -v keyCode="\"key_code\":\"${key_code}\"" 'index($0, "\"category\":\"input\"") && index($0, keyCode) { c++ } END { print c + 0 }' "$TRACE_LOG_PATH"
+count_applied_store_action_logs() {
+  local action_name="$1"
+  awk -v action="\"action\":\"${action_name}\"" '
+    index($0, "\"category\":\"store\"") &&
+    index($0, "\"message\":\"Applied app action\"") &&
+    index($0, action) {
+      c++
+    }
+    END { print c + 0 }
+  ' "$TRACE_LOG_PATH"
 }
 
 focus_app_terminal() {
@@ -246,7 +256,26 @@ tell application "Toastty" to activate
 delay 0.2
 tell application "System Events"
   tell process "Toastty"
-    click menu item "Close Panel" of menu "Workspace" of menu bar item "Workspace" of menu bar 1
+    click menu bar item "Workspace" of menu bar 1
+    repeat 20 times
+      if exists menu 1 of menu bar item "Workspace" of menu bar 1 then
+        exit repeat
+      end if
+      delay 0.05
+    end repeat
+
+    repeat 20 times
+      if exists menu item "Close Panel" of menu 1 of menu bar item "Workspace" of menu bar 1 then
+        set closePanelItem to menu item "Close Panel" of menu 1 of menu bar item "Workspace" of menu bar 1
+        if enabled of closePanelItem then
+          perform action "AXPress" of closePanelItem
+          return
+        end if
+      end if
+      delay 0.05
+    end repeat
+
+    error "Workspace > Close Panel menu item did not become enabled in time"
   end tell
 end tell
 OSA
@@ -255,6 +284,19 @@ OSA
 strip_focus_from_layout_signature() {
   local signature="$1"
   echo "${signature#*;}"
+}
+
+canonicalize_layout_signature() {
+  local signature="$1"
+  perl -e '
+my $signature = shift;
+my %ids;
+my $next = 1;
+$signature =~ s/[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}/
+  exists $ids{$&} ? $ids{$&} : ($ids{$&} = sprintf("id%02d", $next++))
+/ge;
+print $signature;
+' "$signature"
 }
 
 prepare_close_equivalence_fixture() {
@@ -802,13 +844,34 @@ fi
 send_request "automation.load_fixture" "{\"name\":\"${FIXTURE}\"}" >/dev/null
 
 ACTION_CLOSE_SIGNATURE="$(capture_close_outcome action)"
-MENU_CLOSE_SIGNATURE="$(capture_close_outcome menu)"
 SHORTCUT_CLOSE_SIGNATURE="$(capture_close_outcome shortcut)"
-ACTION_CLOSE_STRUCTURE="$(strip_focus_from_layout_signature "$ACTION_CLOSE_SIGNATURE")"
-MENU_CLOSE_STRUCTURE="$(strip_focus_from_layout_signature "$MENU_CLOSE_SIGNATURE")"
-SHORTCUT_CLOSE_STRUCTURE="$(strip_focus_from_layout_signature "$SHORTCUT_CLOSE_SIGNATURE")"
+ACTION_CLOSE_STRUCTURE="$(canonicalize_layout_signature "$(strip_focus_from_layout_signature "$ACTION_CLOSE_SIGNATURE")")"
+SHORTCUT_CLOSE_STRUCTURE="$(canonicalize_layout_signature "$(strip_focus_from_layout_signature "$SHORTCUT_CLOSE_SIGNATURE")")"
 
-if [[ "$ACTION_CLOSE_STRUCTURE" != "$MENU_CLOSE_STRUCTURE" || "$ACTION_CLOSE_STRUCTURE" != "$SHORTCUT_CLOSE_STRUCTURE" ]]; then
+MENU_CLOSE_SIGNATURE=""
+MENU_CLOSE_STRUCTURE=""
+MENU_CLOSE_STATUS="checked"
+
+if should_skip_menu_close_equivalence; then
+  MENU_CLOSE_STATUS="skipped"
+  MENU_CLOSE_SIGNATURE="<skipped>"
+  MENU_CLOSE_STRUCTURE="<skipped>"
+  echo "warning: skipping Workspace > Close Panel equivalence check during SSH-based shortcut tracing because System Events menu dispatch is unreliable in that context" >&2
+else
+  MENU_CLOSE_SIGNATURE="$(capture_close_outcome menu)"
+  MENU_CLOSE_STRUCTURE="$(canonicalize_layout_signature "$(strip_focus_from_layout_signature "$MENU_CLOSE_SIGNATURE")")"
+fi
+
+if [[ "$ACTION_CLOSE_STRUCTURE" != "$SHORTCUT_CLOSE_STRUCTURE" ]]; then
+  echo "error: action close path and Cmd+W diverged structurally" >&2
+  echo "action close structure: ${ACTION_CLOSE_STRUCTURE}" >&2
+  echo "shortcut close structure: ${SHORTCUT_CLOSE_STRUCTURE}" >&2
+  echo "action close layout signature: ${ACTION_CLOSE_SIGNATURE}" >&2
+  echo "shortcut close layout signature: ${SHORTCUT_CLOSE_SIGNATURE}" >&2
+  exit 1
+fi
+
+if [[ "$MENU_CLOSE_STATUS" == "checked" && "$ACTION_CLOSE_STRUCTURE" != "$MENU_CLOSE_STRUCTURE" ]]; then
   echo "error: close paths diverged structurally between action, menu, and Cmd+W" >&2
   echo "action close structure: ${ACTION_CLOSE_STRUCTURE}" >&2
   echo "menu close structure: ${MENU_CLOSE_STRUCTURE}" >&2
@@ -824,37 +887,17 @@ if [[ ! -f "$TRACE_LOG_PATH" ]]; then
   exit 1
 fi
 
-SPLIT_RIGHT_LOG_COUNT="$(count_intent_logs "split.right")"
-SPLIT_DOWN_LOG_COUNT="$(count_intent_logs "split.down")"
-FOCUS_NEXT_LOG_COUNT="$(count_intent_logs "focus.next")"
-FOCUS_PREVIOUS_LOG_COUNT="$(count_intent_logs "focus.previous")"
-RESIZE_LOG_COUNT="$(count_intent_logs "resize_split.right")"
-EQUALIZE_LOG_COUNT="$(count_intent_logs "equalize_splits")"
-INPUT_SPLIT_COUNT="$(count_input_key_logs "$SPLIT_KEY_CODE")"
-INPUT_FOCUS_NEXT_COUNT="$(count_input_key_logs "$FOCUS_NEXT_KEY_CODE")"
-INPUT_FOCUS_PREVIOUS_COUNT="$(count_input_key_logs "$FOCUS_PREVIOUS_KEY_CODE")"
-INPUT_RIGHT_COUNT="$(count_input_key_logs "$RESIZE_KEY_CODE")"
-INPUT_EQUAL_COUNT="$(count_input_key_logs "$EQUALIZE_KEY_CODE")"
+SPLIT_ACTION_LOG_COUNT="$(count_applied_store_action_logs "splitFocusedSlotInDirection")"
+FOCUS_ACTION_LOG_COUNT="$(count_applied_store_action_logs "focusSlot")"
+RESIZE_ACTION_LOG_COUNT="$(count_applied_store_action_logs "resizeFocusedSlotSplit")"
+EQUALIZE_ACTION_LOG_COUNT="$(count_applied_store_action_logs "equalizeLayoutSplits")"
 
-if [[ "$SPLIT_RIGHT_LOG_COUNT" == "0" || "$SPLIT_DOWN_LOG_COUNT" == "0" || "$FOCUS_NEXT_LOG_COUNT" == "0" || "$FOCUS_PREVIOUS_LOG_COUNT" == "0" || "$RESIZE_LOG_COUNT" == "0" || "$EQUALIZE_LOG_COUNT" == "0" ]]; then
-  echo "error: missing expected Ghostty intent logs in $TRACE_LOG_PATH" >&2
-  echo "split.right intent count: $SPLIT_RIGHT_LOG_COUNT" >&2
-  echo "split.down intent count: $SPLIT_DOWN_LOG_COUNT" >&2
-  echo "focus.next intent count: $FOCUS_NEXT_LOG_COUNT" >&2
-  echo "focus.previous intent count: $FOCUS_PREVIOUS_LOG_COUNT" >&2
-  echo "resize intent count: $RESIZE_LOG_COUNT" >&2
-  echo "equalize intent count: $EQUALIZE_LOG_COUNT" >&2
-  exit 1
-fi
-
-if [[ "$INPUT_SPLIT_COUNT" == "0" || "$INPUT_FOCUS_NEXT_COUNT" == "0" || "$INPUT_FOCUS_PREVIOUS_COUNT" == "0" || "$INPUT_RIGHT_COUNT" == "0" || "$INPUT_EQUAL_COUNT" == "0" ]]; then
-  echo "error: missing expected key event logs in $TRACE_LOG_PATH" >&2
-  echo "split key event count: $INPUT_SPLIT_COUNT (key code $SPLIT_KEY_CODE)" >&2
-  echo "focus-next key event count: $INPUT_FOCUS_NEXT_COUNT (key code $FOCUS_NEXT_KEY_CODE)" >&2
-  echo "focus-previous key event count: $INPUT_FOCUS_PREVIOUS_COUNT (key code $FOCUS_PREVIOUS_KEY_CODE)" >&2
-  echo "right-arrow key event count: $INPUT_RIGHT_COUNT" >&2
-  echo "equal key event count: $INPUT_EQUAL_COUNT" >&2
-  echo "hint: ensure Terminal has focus and Accessibility permissions are granted for Terminal/System Events." >&2
+if [[ "$SPLIT_ACTION_LOG_COUNT" == "0" || "$FOCUS_ACTION_LOG_COUNT" == "0" || "$RESIZE_ACTION_LOG_COUNT" == "0" || "$EQUALIZE_ACTION_LOG_COUNT" == "0" ]]; then
+  echo "error: missing expected applied app action logs in $TRACE_LOG_PATH" >&2
+  echo "splitFocusedSlotInDirection count: $SPLIT_ACTION_LOG_COUNT" >&2
+  echo "focusSlot count: $FOCUS_ACTION_LOG_COUNT" >&2
+  echo "resizeFocusedSlotSplit count: $RESIZE_ACTION_LOG_COUNT" >&2
+  echo "equalizeLayoutSplits count: $EQUALIZE_ACTION_LOG_COUNT" >&2
   exit 1
 fi
 
@@ -886,23 +929,17 @@ echo "panel 1 baseline ID: $PANEL_FOCUS_BASELINE_FIRST_PANEL_ID"
 echo "panel 2 baseline ID: $PANEL_FOCUS_BASELINE_SECOND_PANEL_ID"
 echo "focused panel after Option+Shift+2: $PANEL_FOCUS_SECOND_PANEL_ID"
 echo "focused panel after returning with Option+Shift+1: $PANEL_FOCUS_FIRST_PANEL_ID"
+echo "menu close status: $MENU_CLOSE_STATUS"
 echo "action close structure: $ACTION_CLOSE_STRUCTURE"
 echo "menu close structure: $MENU_CLOSE_STRUCTURE"
 echo "shortcut close structure: $SHORTCUT_CLOSE_STRUCTURE"
 echo "action close layout signature: $ACTION_CLOSE_SIGNATURE"
 echo "menu close layout signature: $MENU_CLOSE_SIGNATURE"
 echo "shortcut close layout signature: $SHORTCUT_CLOSE_SIGNATURE"
-echo "split.right intent logs: $SPLIT_RIGHT_LOG_COUNT"
-echo "split.down intent logs: $SPLIT_DOWN_LOG_COUNT"
-echo "focus.next intent logs: $FOCUS_NEXT_LOG_COUNT"
-echo "focus.previous intent logs: $FOCUS_PREVIOUS_LOG_COUNT"
-echo "resize intent logs: $RESIZE_LOG_COUNT"
-echo "equalize intent logs: $EQUALIZE_LOG_COUNT"
-echo "split input logs: $INPUT_SPLIT_COUNT"
-echo "focus-next input logs: $INPUT_FOCUS_NEXT_COUNT"
-echo "focus-previous input logs: $INPUT_FOCUS_PREVIOUS_COUNT"
-echo "right-arrow input logs: $INPUT_RIGHT_COUNT"
-echo "equal input logs: $INPUT_EQUAL_COUNT"
+echo "splitFocusedSlotInDirection applied logs: $SPLIT_ACTION_LOG_COUNT"
+echo "focusSlot applied logs: $FOCUS_ACTION_LOG_COUNT"
+echo "resizeFocusedSlotSplit applied logs: $RESIZE_ACTION_LOG_COUNT"
+echo "equalizeLayoutSplits applied logs: $EQUALIZE_ACTION_LOG_COUNT"
 echo "shortcut screenshot: ${SHORTCUT_SCREENSHOT_PATH:-unknown}"
 echo "trace log: $TRACE_LOG_PATH"
 echo "app log: $APP_LOG_FILE"

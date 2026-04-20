@@ -79,11 +79,12 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - **`shortcut-trace.sh`** — drives real keyboard shortcuts via AppKit and verifies split/focus/resize workflows.
   - Requires: Accessibility + Automation permissions, Ghostty-enabled build, `nc`, `osascript`, `uuidgen`.
   - Performs a timed `System Events` preflight and fails fast when those permissions are missing instead of hanging mid-trace.
+  - SSH-based remote runs skip the `Workspace > Close Panel` menu-equivalence subcheck because `System Events` menu-item dispatch is not reliable in that context; local trace runs still keep that assertion.
   - Default focus coordinates: `CLICK_X=760`, `CLICK_Y=420` (override for your display layout).
 - **`validate.sh`** — runs remote smoke validation on a macOS host over SSH, or a foreground-capable remote validation command when needed, then copies the remote artifacts back locally. Supported remote smoke tests are `smoke-ui`, `workspace-tabs`, `shortcut-hints`, and `shortcut-trace`. Smoke runs fall back to local execution if remote preflight fails unless `--require-remote` is set.
 - **Smoke env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`
 - **Shortcut-hints env:** `RUN_ID`, `FIXTURE`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `ARCH`, `TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP`
-- **Shortcut-trace env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`
+- **Shortcut-trace env:** `RUN_ID`, `DEV_RUN_ROOT`, `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, `SOCKET_PATH`, `CLICK_X`, `CLICK_Y`, `SPLIT_KEY_CODE`, `FOCUS_NEXT_KEY_CODE`, `FOCUS_PREVIOUS_KEY_CODE`, `RESIZE_KEY_CODE`, `EQUALIZE_KEY_CODE`, `TRACE_LOG_PATH`, `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE`
 - **Remote GUI env:** `TOASTTY_REMOTE_GUI_HOST`, `TOASTTY_REMOTE_GUI_REPO_ROOT`, `TOASTTY_REMOTE_GUI_ROOT`
 - **Manual/Xcode env:** `TOASTTY_RUNTIME_HOME` or `TOASTTY_DEV_WORKTREE_ROOT`, plus `TOASTTY_SOCKET_PATH` if you need a specific socket path
 

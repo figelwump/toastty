@@ -169,11 +169,13 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `FOCUS_PREVIOUS_KEY_CODE` | `33` | Key code used for previous-pane focus tracing. |
 | `RESIZE_KEY_CODE` | `124` | Key code used for split resize tracing. |
 | `EQUALIZE_KEY_CODE` | `24` | Key code used for equalize tracing. |
+| `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE` | `0` locally, auto-skipped on SSH sessions | Set to `1` to skip the `Workspace > Close Panel` menu-equivalence subcheck when `System Events` menu dispatch is not reliable. |
 
 Shortcut-trace permissions note:
 
 - `scripts/automation/shortcut-trace.sh` requires Automation access to `System Events` plus Accessibility permission in the active GUI session because it drives real keyboard shortcuts with `osascript`.
 - The script now performs a timed `System Events` preflight and fails fast instead of hanging if that access is missing.
+- SSH-based runs skip the `Workspace > Close Panel` menu-equivalence subcheck automatically because `System Events` menu-item dispatch is not reliable in that context. Set `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE=1` explicitly if you need the same skip behavior in another environment.
 - `peekaboo` workflows also require local Accessibility for interaction. Run `peekaboo permissions --json` first, and if Accessibility is missing, stop and ask the user to grant it before continuing locally.
 
 ### `scripts/remote/validate.sh`
@@ -197,6 +199,7 @@ CLI notes:
 - Pass `--require-remote` to fail instead of falling back when the remote path itself matters.
 - For remote smoke runs, the wrapper forwards supported behavior overrides such as `FIXTURE`, the relevant `TOASTTY_*_RESTORE_FRONT_APP` flag, `UNREAD_FIXTURE`, and shortcut-trace input overrides like `CLICK_X`, `CLICK_Y`, and the key-code env vars. Path-shaped env vars such as `SOCKET_PATH`, `DEV_RUN_ROOT`, `DERIVED_PATH`, and `TRACE_LOG_PATH` remain remote-owned.
 - Ghostty-required smoke tests such as `shortcut-trace` also sync the local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree before the run. Make sure the local worktree has those artifacts installed first.
+- Remote SSH `shortcut-trace` runs skip the `Workspace > Close Panel` menu-equivalence subcheck because `System Events` menu dispatch is not reliable in that context; the trace still validates the action path and `Cmd+W` path.
 - `--validation-command` remains available as a debug escape hatch for foreground-capable remote validation. It runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
 - The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions for any custom remote validation command.
 

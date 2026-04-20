@@ -119,6 +119,7 @@ Notes:
 - For `--scope head` or `--scope ref`, that local fallback uses a temporary local worktree at the requested ref so the validated snapshot stays aligned with the requested scope.
 - Remote smoke runs forward supported behavior overrides such as `FIXTURE`, the relevant `TOASTTY_*_RESTORE_FRONT_APP` flag, `UNREAD_FIXTURE`, and shortcut-trace input overrides like `CLICK_X`, `CLICK_Y`, and the key-code env vars. Remote-owned paths such as `DEV_RUN_ROOT`, `SOCKET_PATH`, and `TRACE_LOG_PATH` are not forwarded.
 - Ghostty-required smoke tests such as `shortcut-trace` also copy the local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree before the run. Bootstrap the local worktree first so those artifacts exist.
+- SSH-based remote `shortcut-trace` runs skip the `Workspace > Close Panel` menu-equivalence subcheck because `System Events` menu-item dispatch is not reliable in that context. Local trace runs still keep that assertion.
 - `--validation-command` remains available for foreground-capable remote validation after Toastty launches on the remote host.
 - The remote Mac must be awake, unlocked, logged into the target GUI session, and have Peekaboo permissions granted there for custom remote validation commands.
 

@@ -116,6 +116,11 @@ CLICK_X=760 CLICK_Y=420 \
   --scope head \
   --require-remote
 
+# Note: SSH-based remote shortcut tracing skips the Workspace > Close Panel
+# menu-equivalence subcheck because System Events menu-item dispatch is not
+# reliable in that context. The remote trace still validates the action path
+# and Cmd+W path.
+
 # Foreground-capable remote validation escape hatch
 TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
 ./scripts/remote/validate.sh \

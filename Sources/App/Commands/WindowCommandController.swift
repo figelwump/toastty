@@ -298,23 +298,27 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         static let newWorkspace = "New Workspace"
         static let renameWorkspace = "Rename Workspace"
         static let closeWorkspace = "Close Workspace"
+        static let closePanel = "Close Panel"
         static let renameTab = "Rename Tab"
         static let selectPreviousTab = "Select Previous Tab"
         static let selectNextTab = "Select Next Tab"
         static let jumpToNextUnreadOrActive = "Jump to Next Unread or Active"
     }
 
+    private let windowCommandController: WindowCommandController
     private let createWorkspaceCommandController: CreateWorkspaceCommandController
     private let renameWorkspaceCommandController: RenameWorkspaceCommandController
     private let closeWorkspaceCommandController: CloseWorkspaceCommandController
     private let workspaceTabCommandController: WorkspaceTabCommandController
 
     init(
+        windowCommandController: WindowCommandController,
         createWorkspaceCommandController: CreateWorkspaceCommandController,
         renameWorkspaceCommandController: RenameWorkspaceCommandController,
         closeWorkspaceCommandController: CloseWorkspaceCommandController,
         workspaceTabCommandController: WorkspaceTabCommandController
     ) {
+        self.windowCommandController = windowCommandController
         self.createWorkspaceCommandController = createWorkspaceCommandController
         self.renameWorkspaceCommandController = renameWorkspaceCommandController
         self.closeWorkspaceCommandController = closeWorkspaceCommandController
@@ -340,6 +344,11 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
         configureItem(
             titled: ItemTitle.closeWorkspace,
             action: #selector(closeWorkspace(_:)),
+            in: workspaceMenu
+        )
+        configureItem(
+            titled: ItemTitle.closePanel,
+            action: #selector(closePanel(_:)),
             in: workspaceMenu
         )
         configureItem(
@@ -380,6 +389,17 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     @objc
+    func closePanel(_: Any?) {
+        guard windowCommandController.closeWindow() == true else {
+            ToasttyLog.warning(
+                "Workspace Close Panel menu action could not resolve a focused panel",
+                category: .store
+            )
+            return
+        }
+    }
+
+    @objc
     func renameSelectedTab(_: Any?) {
         _ = workspaceTabCommandController.renameSelectedTab()
     }
@@ -409,6 +429,9 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
 
         case #selector(closeWorkspace(_:)):
             return closeWorkspaceCommandController.canCloseWorkspace()
+
+        case #selector(closePanel(_:)):
+            return windowCommandController.canCloseWindow()
 
         case #selector(renameSelectedTab(_:)):
             return workspaceTabCommandController.canRenameSelectedTab()
