@@ -1298,6 +1298,28 @@ final class TerminalHostView: NSView {
         pendingCommandClickLinkUsesAlternatePlacement = false
     }
 
+    private func refreshedHoveredGhosttyLinkURLForCommandClick(with event: NSEvent) -> URL? {
+        if let url = hoveredGhosttyLinkURL() {
+            return url
+        }
+
+        guard let ghosttySurface else {
+            return nil
+        }
+
+        // Cmd-click should resolve the link under the pointer right now, not
+        // depend on some earlier hover callback having populated state. Force
+        // Ghostty to leave and re-enter the current hover target so stationary
+        // pointers get a fresh mouse_over_link evaluation before we give up.
+        // This path relies on Ghostty surfacing mouse_over_link updates
+        // synchronously while the mouse position callback is in flight.
+        let hoverModifierFlags = Self.ghosttyLinkHoverModifierFlags(for: event.modifierFlags)
+        let mods = Self.ghosttyModifierFlags(for: hoverModifierFlags)
+        ghosttySurfaceHooks.sendMousePosition(ghosttySurface, -1, -1, mods)
+        forwardMousePosition(event, surface: ghosttySurface, modifierFlags: hoverModifierFlags)
+        return hoveredGhosttyLinkURL()
+    }
+
     private func preparePendingCommandClickLinkOpen(with event: NSEvent) -> Bool {
         guard openCommandClickLink != nil else {
             clearPendingCommandClickLinkOpen()
@@ -1309,7 +1331,7 @@ final class TerminalHostView: NSView {
             return false
         }
 
-        guard let url = hoveredGhosttyLinkURL() else {
+        guard let url = refreshedHoveredGhosttyLinkURLForCommandClick(with: event) else {
             ToasttyLog.warning(
                 "Terminal command-click had no hovered link URL",
                 category: .input,
