@@ -6,9 +6,12 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
+    "@wooorm/starry-night": "^3.9.0",
+    "hast-util-to-html": "^9.0.5",
     "highlight.js": "^11.11.1",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "vscode-oniguruma": "2.0.1"
   },
   "devDependencies": {
     "esbuild": "^0.25.11"

@@ -39,3 +39,13 @@ test("jsonc files opt out of json highlighting and keep a JSONC label", async ()
   assert.match(source, /filePath\?\.toLowerCase\(\)\.endsWith\("\.jsonc"\)/);
   assert.match(source, /return "JSONC"/);
 });
+
+test("build script copies onig.wasm into the panel output bundle", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "scripts/build.mjs"),
+    "utf8"
+  );
+
+  assert.match(source, /vscode-oniguruma\/release\/onig\.wasm/);
+  assert.match(source, /copyFileSync\(onigurumaWasmPath, join\(outputDir, "onig\.wasm"\)\)/);
+});

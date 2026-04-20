@@ -9,11 +9,13 @@ const outputDir = resolve(packageRoot, "../../Sources/App/Resources/WebPanels/lo
 const require = createRequire(import.meta.url);
 const reactRoot = dirname(require.resolve("react/package.json", { paths: [packageRoot] }));
 const reactDomRoot = dirname(require.resolve("react-dom/package.json", { paths: [packageRoot] }));
+const onigurumaWasmPath = require.resolve("vscode-oniguruma/release/onig.wasm", { paths: [packageRoot] });
 
 mkdirSync(outputDir, { recursive: true });
 
 copyFileSync(join(packageRoot, "index.html"), join(outputDir, "index.html"));
 copyFileSync(join(packageRoot, "src", "styles.css"), join(outputDir, "local-document-panel.css"));
+copyFileSync(onigurumaWasmPath, join(outputDir, "onig.wasm"));
 
 await build({
   entryPoints: [join(packageRoot, "src", "main.tsx")],
