@@ -316,6 +316,26 @@ final class AppStore: ObservableObject {
         createWorkspaceCommandTarget(preferredWindowID: preferredWindowID) != nil
     }
 
+    func preferredLocalDocumentOpenDirectoryURL(preferredWindowID: UUID?) -> URL? {
+        guard let selection = commandSelection(preferredWindowID: preferredWindowID),
+              let focusedPanelID = selection.workspace.focusedPanelID,
+              selection.workspace.slotID(containingPanelID: focusedPanelID) != nil,
+              case .terminal(let terminalState)? = selection.workspace.panels[focusedPanelID],
+              let cwd = terminalState.expectedProcessWorkingDirectory else {
+            return nil
+        }
+
+        var isDirectory = ObjCBool(false)
+        guard FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return nil
+        }
+
+        // The picker should follow the terminal's live cwd, not a restored
+        // launch seed that may no longer reflect the shell's current location.
+        return URL(fileURLWithPath: cwd, isDirectory: true)
+    }
+
     func focusedBrowserPanelSelection(
         preferredWindowID: UUID?
     ) -> FocusedBrowserPanelCommandSelection? {

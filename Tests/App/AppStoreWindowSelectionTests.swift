@@ -5,6 +5,24 @@ import XCTest
 
 @MainActor
 final class AppStoreWindowSelectionTests: XCTestCase {
+    private func makeSingleWindowState(initialTerminalCWD: String) -> (state: AppState, windowID: UUID, workspaceID: UUID) {
+        let workspace = WorkspaceState.bootstrap(initialTerminalCWD: initialTerminalCWD)
+        let windowID = UUID()
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: windowID,
+                    frame: CGRectCodable(x: 120, y: 120, width: 1280, height: 760),
+                    workspaceIDs: [workspace.id],
+                    selectedWorkspaceID: workspace.id
+                )
+            ],
+            workspacesByID: [workspace.id: workspace],
+            selectedWindowID: windowID
+        )
+        return (state, windowID, workspace.id)
+    }
+
     private func makeMarkdownFixture() throws -> (canonicalPath: String, alternatePath: String) {
         let fileManager = FileManager.default
         let rootURL = fileManager.temporaryDirectory
@@ -228,6 +246,56 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         XCTAssertNil(store.commandSelection(preferredWindowID: UUID()))
         XCTAssertNil(store.commandSelection(preferredWindowID: nil))
+    }
+
+    func testPreferredLocalDocumentOpenDirectoryUsesFocusedTerminalLiveCWD() throws {
+        let fileManager = FileManager.default
+        let cwdURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-picker-cwd-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: cwdURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: cwdURL)
+        }
+
+        let fixture = makeSingleWindowState(initialTerminalCWD: cwdURL.path)
+        let store = AppStore(state: fixture.state, persistTerminalFontPreference: false)
+
+        XCTAssertEqual(
+            store.preferredLocalDocumentOpenDirectoryURL(preferredWindowID: fixture.windowID)?.path,
+            cwdURL.path
+        )
+    }
+
+    func testPreferredLocalDocumentOpenDirectoryIgnoresNonTerminalFocusedPanel() throws {
+        let fileManager = FileManager.default
+        let cwdURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-picker-browser-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: cwdURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: cwdURL)
+        }
+
+        let fixture = makeSingleWindowState(initialTerminalCWD: cwdURL.path)
+        let store = AppStore(state: fixture.state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createBrowserPanelFromCommand(
+                preferredWindowID: fixture.windowID,
+                request: BrowserPanelCreateRequest(initialURL: "https://example.com")
+            )
+        )
+
+        XCTAssertNil(store.preferredLocalDocumentOpenDirectoryURL(preferredWindowID: fixture.windowID))
+    }
+
+    func testPreferredLocalDocumentOpenDirectoryIgnoresMissingFocusedTerminalCWD() {
+        let missingCWD = FileManager.default.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-picker-missing-\(UUID().uuidString)", isDirectory: true)
+            .path
+        let fixture = makeSingleWindowState(initialTerminalCWD: missingCWD)
+        let store = AppStore(state: fixture.state, persistTerminalFontPreference: false)
+
+        XCTAssertNil(store.preferredLocalDocumentOpenDirectoryURL(preferredWindowID: fixture.windowID))
     }
 
     func testSelectedWorkspaceInWindowReturnsNilWhenWindowHasNoWorkspaces() {

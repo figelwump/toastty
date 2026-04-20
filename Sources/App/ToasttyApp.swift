@@ -2361,8 +2361,12 @@ struct ToasttyApp: App {
         preferredWindowID: UUID?,
         placement: WebPanelPlacement
     ) -> Bool {
+        let preferredDirectoryURL = store.preferredLocalDocumentOpenDirectoryURL(
+            preferredWindowID: preferredWindowID
+        )
         guard let fileURL = LocalDocumentOpenPanel.chooseFile(
-            title: localDocumentOpenTitle(for: placement)
+            title: localDocumentOpenTitle(for: placement),
+            directoryURL: preferredDirectoryURL
         ) else {
             return false
         }
