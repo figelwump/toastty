@@ -123,7 +123,7 @@ Query selectors and `key=value` argument handling follow the same rules as `acti
 Prefer `query list --json` to discover the current canonical IDs. Common queries include:
 
 - `workspace.snapshot`
-- `terminal.state`
+- `terminal.state` (returns `windowID`, `workspaceID`, `panelID`, and terminal metadata)
 - `terminal.visible-text`
 - `panel.local-document.state`
 - `panel.browser.state`
@@ -275,6 +275,20 @@ When Toastty launches an agent, these variables are injected into the agent's en
 | `TOASTTY_REPO_ROOT` | Git repository root (if available) |
 
 Most CLI flags fall back to their corresponding environment variable when not provided explicitly, so agents launched by Toastty can often omit flags like `--session` and `--panel`.
+
+To recover the owning Toastty window for the current thread, query the current panel:
+
+```bash
+window_id="$("$TOASTTY_CLI_PATH" --json query run terminal.state --panel "$TOASTTY_PANEL_ID" \
+  | python3 -c '
+import json, sys
+data = json.load(sys.stdin)
+value = data["result"].get("windowID")
+if not value:
+    raise SystemExit("missing windowID in terminal.state result")
+print(value)
+')"
+```
 
 ## Exit codes
 

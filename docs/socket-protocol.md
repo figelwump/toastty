@@ -547,6 +547,7 @@ Request payload:
 
 Result:
 
+- `windowID: UUID string`
 - `workspaceID: UUID string`
 - `panelID: UUID string`
 - `title: String`
@@ -557,6 +558,7 @@ Result:
 Behavior:
 
 - Compatibility shim over `app_control.run_query` with `id: "terminal.state"`.
+- The resolved terminal always reports its owning `windowID`, whether you target it by `panelID`, `workspaceID`, or `windowID`.
 
 ### `automation.local_document_panel_state`
 

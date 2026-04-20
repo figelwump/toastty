@@ -118,16 +118,52 @@ run_cli_json() {
   "$TOASTTY_CLI_PATH" --json "$@"
 }
 
-retry_python_json_field() {
+extract_json_result_field() {
+  local field_name="$1"
+  python3 -c '
+import json
+import sys
+
+field_name = sys.argv[1]
+data = json.load(sys.stdin)
+value = data.get("result", {}).get(field_name)
+if not isinstance(value, str) or value == "":
+    raise SystemExit(f"missing {field_name}")
+print(value)
+' "$field_name"
+}
+
+resolve_current_window_id() {
+  if [[ -z "${TOASTTY_PANEL_ID:-}" ]]; then
+    echo "error: TOASTTY_PANEL_ID is required when --window-id is omitted" >&2
+    exit 1
+  fi
+
+  local output resolved_window_id
+  if ! output="$(run_cli_json query run terminal.state --panel "$TOASTTY_PANEL_ID" 2>&1)"; then
+    echo "error: failed to resolve current window from panel ${TOASTTY_PANEL_ID}" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+  if ! resolved_window_id="$(extract_json_result_field "windowID" <<<"$output" 2>/dev/null)"; then
+    echo "error: Toastty returned an invalid terminal.state payload for panel ${TOASTTY_PANEL_ID}" >&2
+    printf '%s\n' "$output" >&2
+    exit 1
+  fi
+
+  printf '%s\n' "$resolved_window_id"
+}
+
+retry_json_result_field() {
   local attempts="$1"
   local delay_seconds="$2"
-  local field_script="$3"
+  local field_name="$3"
   shift 3
 
   local attempt output extracted
   for attempt in $(seq 1 "$attempts"); do
     if output="$("$@" 2>/dev/null)"; then
-      if extracted="$(python3 -c "$field_script" <<<"$output" 2>/dev/null)"; then
+      if extracted="$(extract_json_result_field "$field_name" <<<"$output" 2>/dev/null)"; then
         printf '%s\n' "$extracted"
         return 0
       fi
@@ -146,30 +182,24 @@ if [[ -z "$startup_command" ]]; then
   startup_command="$(build_default_startup_command)"
 fi
 
+if [[ -z "$window_id" ]]; then
+  window_id="$(resolve_current_window_id)"
+fi
+
 create_output=""
-if [[ -n "$window_id" ]]; then
-  if ! create_output="$("$TOASTTY_CLI_PATH" action run workspace.create --window "$window_id" "title=$workspace_name" 2>&1)"; then
-    echo "error: failed to create workspace: $create_output" >&2
-    exit 1
-  fi
-else
-  if ! create_output="$("$TOASTTY_CLI_PATH" action run workspace.create "title=$workspace_name" 2>&1)"; then
-    echo "error: failed to create workspace: $create_output" >&2
-    echo "hint: pass --window-id when multiple Toastty windows are open" >&2
-    exit 1
-  fi
+if ! create_output="$("$TOASTTY_CLI_PATH" action run workspace.create --window "$window_id" "title=$workspace_name" 2>&1)"; then
+  echo "error: failed to create workspace: $create_output" >&2
+  exit 1
 fi
 
 snapshot_args=(query run workspace.snapshot)
-if [[ -n "$window_id" ]]; then
-  snapshot_args+=(--window "$window_id")
-fi
+snapshot_args+=(--window "$window_id")
 
 workspace_id="$(
-  retry_python_json_field \
+  retry_json_result_field \
     30 \
     0.2 \
-    'import json, sys; data=json.load(sys.stdin); value=data["result"]["workspaceID"]; assert value; print(value)' \
+    workspaceID \
     run_cli_json "${snapshot_args[@]}"
 )"
 
@@ -179,10 +209,10 @@ if [[ -z "$workspace_id" ]]; then
 fi
 
 panel_id="$(
-  retry_python_json_field \
+  retry_json_result_field \
     40 \
     0.25 \
-    'import json, sys; data=json.load(sys.stdin); value=data["result"]["panelID"]; assert value; print(value)' \
+    panelID \
     run_cli_json query run terminal.state --workspace "$workspace_id"
 )"
 

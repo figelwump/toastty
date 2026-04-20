@@ -431,7 +431,11 @@ final class AppControlExecutor {
 
         case .terminalState:
             let resolved = try resolveTerminalTarget(payload: args)
-            return try terminalStateSnapshot(workspaceID: resolved.workspaceID, panelID: resolved.panelID)
+            return try terminalStateSnapshot(
+                windowID: resolved.windowID,
+                workspaceID: resolved.workspaceID,
+                panelID: resolved.panelID
+            )
 
         case .terminalVisibleText:
             let resolved = try resolveTerminalTarget(payload: args)
@@ -684,7 +688,7 @@ private extension AppControlExecutor {
         throw AutomationSocketError.invalidPayload("windowID is required when multiple windows exist")
     }
 
-    func resolveTerminalTarget(payload: [String: AutomationJSONValue]) throws -> (workspaceID: UUID, panelID: UUID) {
+    func resolveTerminalTarget(payload: [String: AutomationJSONValue]) throws -> (windowID: UUID, workspaceID: UUID, panelID: UUID) {
         let store = try requiredStore()
         if let rawPanelID = payload.stringValue("panelID") {
             guard let panelID = UUID(uuidString: rawPanelID) else {
@@ -698,22 +702,21 @@ private extension AppControlExecutor {
                   case .terminal = panelState else {
                 throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
             }
-            return (location.workspaceID, panelID)
+            return (location.windowID, location.workspaceID, panelID)
         }
 
-        let workspaceID = try resolveWorkspaceID(args: payload)
-        guard let workspace = store.state.workspacesByID[workspaceID] else {
-            throw AutomationSocketError.invalidPayload("workspaceID does not exist")
-        }
+        let selection = try resolveWorkspaceSelection(args: payload)
+        let workspaceID = selection.workspaceID
+        let workspace = selection.workspace
         if let focusedPanelID = workspace.focusedPanelID,
            let panelState = workspace.panels[focusedPanelID],
            case .terminal = panelState {
-            return (workspaceID, focusedPanelID)
+            return (selection.windowID, workspaceID, focusedPanelID)
         }
         for leaf in workspace.layoutTree.allSlotInfos {
             let panelID = leaf.panelID
             if let panelState = workspace.panels[panelID], case .terminal = panelState {
-                return (workspaceID, panelID)
+                return (selection.windowID, workspaceID, panelID)
             }
         }
         throw AutomationSocketError.invalidPayload("workspace has no terminal panel to target")
@@ -804,6 +807,7 @@ private extension AppControlExecutor {
     }
 
     func terminalStateSnapshot(
+        windowID: UUID,
         workspaceID: UUID,
         panelID: UUID
     ) throws -> [String: AutomationJSONValue] {
@@ -816,6 +820,7 @@ private extension AppControlExecutor {
             throw AutomationSocketError.invalidPayload("panelID is not a terminal panel")
         }
         return [
+            "windowID": .string(windowID.uuidString),
             "workspaceID": .string(workspaceID.uuidString),
             "panelID": .string(panelID.uuidString),
             "title": .string(terminalState.title),

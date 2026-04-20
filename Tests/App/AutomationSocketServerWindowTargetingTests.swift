@@ -1022,7 +1022,30 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             )
 
             XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, fixture.windowID.uuidString)
+            XCTAssertEqual(response.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, panelID.uuidString)
             XCTAssertEqual(response.result["profileID"] as? String, "smoke-profile")
+        }
+    }
+
+    func testTerminalStateIncludesWindowIDWhenResolvedByWorkspaceID() async throws {
+        let fixture = makeSingleWindowFixture()
+        let expectedPanelID = try XCTUnwrap(fixture.state.workspacesByID[fixture.workspaceID]?.focusedPanelID)
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "workspaceID": fixture.workspaceID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, fixture.windowID.uuidString)
+            XCTAssertEqual(response.result["workspaceID"] as? String, fixture.workspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, expectedPanelID.uuidString)
         }
     }
 
@@ -1072,10 +1095,67 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
             )
 
             XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, windowID.uuidString)
             XCTAssertEqual(response.result["workspaceID"] as? String, workspaceID.uuidString)
             XCTAssertEqual(response.result["panelID"] as? String, panelID.uuidString)
             XCTAssertEqual(response.result["title"] as? String, "Background Agent")
             XCTAssertEqual(response.result["profileID"] as? String, "background-profile")
+        }
+    }
+
+    func testTerminalStateReturnsOwningWindowForPanelInAnotherWindow() async throws {
+        let firstFixture = makeSingleWindowFixture()
+        var secondTab = WorkspaceTabState.bootstrap(terminalTitle: "Second Window Terminal")
+        guard let secondPanelID = secondTab.focusedPanelID else {
+            XCTFail("expected second window fixture to include a focused terminal")
+            return
+        }
+
+        let secondWorkspaceID = UUID()
+        let secondWindowID = UUID()
+        let secondWorkspace = WorkspaceState(
+            id: secondWorkspaceID,
+            title: "Second",
+            selectedTabID: secondTab.id,
+            tabIDs: [secondTab.id],
+            tabsByID: [secondTab.id: secondTab]
+        )
+        let state = AppState(
+            windows: [
+                WindowState(
+                    id: firstFixture.windowID,
+                    frame: CGRectCodable(x: 0, y: 0, width: 800, height: 600),
+                    workspaceIDs: [firstFixture.workspaceID],
+                    selectedWorkspaceID: firstFixture.workspaceID
+                ),
+                WindowState(
+                    id: secondWindowID,
+                    frame: CGRectCodable(x: 820, y: 0, width: 800, height: 600),
+                    workspaceIDs: [secondWorkspaceID],
+                    selectedWorkspaceID: secondWorkspaceID
+                ),
+            ],
+            workspacesByID: [
+                firstFixture.workspaceID: try XCTUnwrap(firstFixture.state.workspacesByID[firstFixture.workspaceID]),
+                secondWorkspaceID: secondWorkspace,
+            ],
+            selectedWindowID: firstFixture.windowID
+        )
+
+        try await withAutomationHarness(state: state) { harness in
+            let response = try sendRequest(
+                command: "automation.terminal_state",
+                payload: [
+                    "panelID": secondPanelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+
+            XCTAssertTrue(response.ok)
+            XCTAssertEqual(response.result["windowID"] as? String, secondWindowID.uuidString)
+            XCTAssertEqual(response.result["workspaceID"] as? String, secondWorkspaceID.uuidString)
+            XCTAssertEqual(response.result["panelID"] as? String, secondPanelID.uuidString)
+            XCTAssertEqual(response.result["title"] as? String, "Second Window Terminal")
         }
     }
 

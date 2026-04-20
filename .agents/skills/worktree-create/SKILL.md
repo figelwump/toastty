@@ -14,6 +14,7 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
    - Otherwise derive a hyphen-case slug from the task, such as `browser-link-routing`.
 2. Confirm the Toastty-managed environment is present before using the launch helper.
    - `TOASTTY_CLI_PATH` must be set.
+   - `TOASTTY_PANEL_ID` should be set unless you are explicitly overriding `--window-id`.
    - The skill is designed for a Toastty-managed agent session, not an arbitrary shell.
 3. Create and bootstrap the new worktree with the bundled helper:
 
@@ -58,11 +59,12 @@ Keep `WORKTREE_HANDOFF.md` concise and task-specific. Include:
 - The default startup command should `cd` into the new worktree, export `TOASTTY_DEV_WORKTREE_ROOT`, and start `cdx` with a short prompt that points at `WORKTREE_HANDOFF.md`.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
-## Window targeting caveat
+## Window targeting
 
 - `open-toastty-worktree-session.sh` accepts `--window-id` when you know the target Toastty window.
-- If `--window-id` is omitted, Toastty must be able to resolve the target window implicitly. Today that means this helper works best in single-window sessions.
-- If workspace creation fails because multiple windows are open, stop and tell the user instead of guessing.
+- If `--window-id` is omitted, the helper resolves the current window by querying `terminal.state` for `TOASTTY_PANEL_ID`, then creates the new workspace in that window.
+- Use the explicit override only when you intentionally want to create the worktree workspace in a different Toastty window from the current thread.
+- For non-Toastty-managed shells, keep passing `--window-id` explicitly instead of relying on `TOASTTY_PANEL_ID`.
 
 ## Validation
 
