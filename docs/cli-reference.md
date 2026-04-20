@@ -14,6 +14,16 @@ When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environmen
 
 **Socket resolution order:** `--socket-path` flag > `TOASTTY_SOCKET_PATH` env var > app-resolved default socket path. For runtime-isolated launches, that default starts from the stable runtime-home-derived socket path and can resolve to a per-process sibling such as `events-v1-<pid>.sock` if the stable path is already owned by a live listener.
 
+## Smoke test
+
+For a one-command local validation of the CLI's default live-control surface against a normal Toastty launch, run:
+
+```bash
+./scripts/automation/smoke-cli-live-control.sh
+```
+
+This smoke builds the app, launches a runtime-isolated non-automation instance, reads that run's `instance.json`, and validates the CLI against the matching live socket. It also strips inherited `TOASTTY_*` launch context first so an existing managed-agent shell session does not accidentally target some other running Toastty instance.
+
 ## Commands
 
 ### `action list`
