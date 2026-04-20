@@ -212,6 +212,7 @@ sv exec -- ./scripts/release/release.sh
 | `TOASTTY_SPARKLE_PRIVATE_KEY` | none | Required Sparkle EdDSA private key used to sign the final stapled DMG. Store it in `sv` and inject it with `sv exec --`. |
 Additional release behavior:
 
+- run automated validation before the build; prefer `./scripts/automation/check.sh` on the release candidate checkout
 - the git working tree must be clean before the build starts
 - `Dependencies/GhosttyKit.Release.metadata.env` must exist and record:
   - `GHOSTTY_COMMIT`

@@ -14,6 +14,8 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - Small UI-managed settings such as the post-agent-launch sidebar default latch, plus any one-time legacy migration state.
 - `~/.toastty/terminal-profiles.toml`
   - Named terminal profile definitions loaded at startup and on config reload.
+- `~/.toastty/command-palette-usage.json`
+  - Local per-command usage counts used only to rank command-palette results.
 - `~/.toastty/workspace-layout-profiles.json`
   - Saved workspace and window layout snapshots, including window-local terminal font overrides, window-local local-document text-size overrides, and per-browser page zoom overrides.
 - `~/.toastty/shell/` (created by `Toastty > Install Shell Integration…`)
@@ -28,6 +30,7 @@ Toastty is designed to run locally on your machine. The app itself does not send
   - `<runtime-home>/config`
   - `<runtime-home>/config-reference`
   - `<runtime-home>/terminal-profiles.toml`
+  - `<runtime-home>/command-palette-usage.json`
   - `<runtime-home>/workspace-layout-profiles.json`
   - `<runtime-home>/history/pane-journals/`
   - `<runtime-home>/logs/toastty.log`
