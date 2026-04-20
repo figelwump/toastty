@@ -21,8 +21,9 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 5. The palette does not introduce a second command system. It is a thin
    projection over existing command helpers, command controllers, menu titles,
    and shortcut definitions.
-6. Default mode shows commands. `@` is a file-open mode in v1, routing local
-   documents to local-document panels and HTML files to browser panels.
+6. Default mode shows commands. `@` is a file-open mode in v1, routing
+   supported local-document formats to local-document panels and HTML files to
+   browser panels.
 7. Search uses fuzzy scoring with contiguity and word-boundary bonuses, boosted
    by persisted usage frequency within the active result family.
 8. v1 only needs two internal palette modes: commands and `@` file-open.
@@ -51,6 +52,8 @@ window/panel targeting, `@` file-open mode, and future extensibility.
 - The local-document implementation is now the reference shape for file-backed
   editable documents. That work includes:
   - `LocalDocumentPanelCreateRequest`
+  - `LocalDocumentClassifier` as the source of truth for supported extensions,
+    including non-markdown structured text/code formats
   - path normalization and same-workspace reuse by file path
   - `Open Local File…`, `Open Local File in Tab…`, and `Open Local File in Split…`
 - The command palette plan should align with that local-document shape rather
@@ -119,8 +122,9 @@ That means:
 - Make panel-local actions behave intuitively: split, close, detach, and
   similar actions should apply to the origin workspace's current focused-panel
   state.
-- Provide a contextual file-open mode in v1 for local documents and HTML files,
-  with the active file-search scope visible in the shell.
+- Provide a contextual file-open mode in v1 for supported local-document
+  formats and HTML files, with the active file-search scope visible in the
+  shell.
 - Rank results by relevance and usage frequency within the active mode so the
   palette gets faster the more it is used.
 - Keep the palette keyboard-native: open, type, navigate with arrows or
@@ -670,8 +674,10 @@ This keeps the UX honest: `@` is "open a supported local file from here", not
 
 #### v1 supported file types
 
-- Local documents:
+- Supported local-document formats:
   - use `LocalDocumentClassifier.supportedFilenameExtensions`
+  - this automatically picks up newly added local-document formats instead of
+    freezing the palette to a markdown-era subset
 - HTML:
   - `.html`
   - `.htm`
@@ -745,7 +751,7 @@ enum FileOpenDestination {
 
 Execution must go through the existing app-owned openers:
 
-- Local documents:
+- Supported local-document formats:
   - call `createLocalDocumentPanelFromCommand(...)`
   - preserve the local-document implementation's path normalization and
     same-workspace reuse by file path
@@ -865,7 +871,8 @@ app-owned command paths; it does not add new reducer-owned core state.
 - add `FileOpenProvider`
 - scan contextual roots
 - support local-document formats and HTML in v1
-- route local documents to local-document panels and HTML to browser panels
+- route supported local-document formats to local-document panels and HTML to
+  browser panels
 - keep `#` reserved
 
 ### step 6: polish and validation
@@ -935,7 +942,8 @@ app-owned command paths; it does not add new reducer-owned core state.
 - palette open/dismiss lifecycle from the shortcut
 - command execution through existing helper/controller paths
 - command availability in the origin window
-- `@` mode returning local-document and HTML results from a fixture tree
+- `@` mode returning markdown, non-markdown local-document, and HTML results
+  from a fixture tree
 - local-document result executing through `createLocalDocumentPanelFromCommand(...)`
 - HTML result executing through `createBrowserPanelFromCommand(...)`
 
@@ -1282,8 +1290,8 @@ Changes:
 
 ### wave 7: `@` file-open mode
 
-Goal: `@` opens local documents and HTML files from a contextual tree, routing each
-result to the right destination.
+Goal: `@` opens supported local-document formats and HTML files from a
+contextual tree, routing each result to the right destination.
 
 Prerequisite: the local-document command path must stay the single source of
 truth for supported document formats and panel reuse behavior.
@@ -1322,6 +1330,8 @@ directly.
 **7c. Wave-7 validation**
 
 - provider tests for extension support and skip lists
+- provider tests that at least one newly supported non-markdown local-document
+  extension is returned through `@` mode
 - scope-resolution tests for focused terminal cwd vs fallback terminal cwd
 - mode-transition tests for leading `@`, bare `@`, and deleting back into
   command mode
