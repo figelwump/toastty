@@ -89,9 +89,41 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
 
-# Foreground-capable remote GUI validation
+# Remote smoke validation
 TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
-./scripts/remote/gui-validate.sh \
+./scripts/remote/validate.sh \
+  --smoke-test smoke-ui \
+  --scope working-tree
+
+# Require the remote host instead of falling back locally
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
+  --smoke-test workspace-tabs \
+  --scope head \
+  --require-remote
+
+# Remote shortcut-hints screenshot smoke
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
+  --smoke-test shortcut-hints \
+  --scope working-tree
+
+# Remote keyboard shortcut tracing
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+CLICK_X=760 CLICK_Y=420 \
+./scripts/remote/validate.sh \
+  --smoke-test shortcut-trace \
+  --scope head \
+  --require-remote
+
+# Note: SSH-based remote shortcut tracing skips the Workspace > Close Panel
+# menu-equivalence subcheck because System Events menu-item dispatch is not
+# reliable in that context. The remote trace still validates the action path
+# and Cmd+W path.
+
+# Foreground-capable remote validation escape hatch
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
   --scope working-tree \
   --validation-command 'peekaboo menu list --pid "$TOASTTY_PID" --json | tee "$TOASTTY_ARTIFACTS_DIR/peekaboo-menu.json"'
 ```

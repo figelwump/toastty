@@ -117,7 +117,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-smoke-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/shortcut-hints-smoke.sh`
@@ -131,7 +131,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-hints-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/workspace-tabs-smoke.sh`
@@ -146,7 +146,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `/tmp/tt-<run-suffix>.sock` | Socket path passed through to the app. The default short path keeps the run under Unix socket path-length limits. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-tabs-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 
 ### `scripts/automation/shortcut-trace.sh`
@@ -159,7 +159,7 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `TOASTTY_RUNTIME_HOME` | `<DEV_RUN_ROOT>/runtime-home` | Runtime sandbox passed through to the app. |
 | `DERIVED_PATH` | `<DEV_RUN_ROOT>/Derived` | DerivedData output path for the build. |
 | `ARTIFACTS_DIR` | `<DEV_RUN_ROOT>/artifacts` | Destination directory for automation outputs. |
-| `SOCKET_PATH` | `${TMPDIR:-/tmp}/toastty-<RUN_ID>.sock` | Socket path passed through to the app. |
+| `SOCKET_PATH` | `${TMPDIR:-/tmp}/tt-trace-<run-hash>.sock` | Socket path passed through to the app. The default short path is derived from `RUN_ID` and stays under Unix socket path-length limits. |
 | `ARCH` | current machine arch | Build destination architecture. |
 | `CLICK_X` | `760` | Screen-space click X coordinate used to focus a panel before driving shortcuts. |
 | `CLICK_Y` | `420` | Screen-space click Y coordinate used to focus a panel before driving shortcuts. |
@@ -169,29 +169,39 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `FOCUS_PREVIOUS_KEY_CODE` | `33` | Key code used for previous-pane focus tracing. |
 | `RESIZE_KEY_CODE` | `124` | Key code used for split resize tracing. |
 | `EQUALIZE_KEY_CODE` | `24` | Key code used for equalize tracing. |
+| `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE` | `0` locally, auto-skipped on SSH sessions | Set to `1` to skip the `Workspace > Close Panel` menu-equivalence subcheck when `System Events` menu dispatch is not reliable. |
 
-Local permissions note:
+Shortcut-trace permissions note:
 
-- `scripts/automation/shortcut-trace.sh` requires local Accessibility permission because it drives real keyboard shortcuts with `osascript`.
+- `scripts/automation/shortcut-trace.sh` requires Automation access to `System Events` plus Accessibility permission in the active GUI session because it drives real keyboard shortcuts with `osascript`.
+- The script now performs a timed `System Events` preflight and fails fast instead of hanging if that access is missing.
+- SSH-based runs skip the `Workspace > Close Panel` menu-equivalence subcheck automatically because `System Events` menu-item dispatch is not reliable in that context. Set `TOASTTY_SHORTCUT_TRACE_SKIP_MENU_CLOSE=1` explicitly if you need the same skip behavior in another environment.
 - `peekaboo` workflows also require local Accessibility for interaction. Run `peekaboo permissions --json` first, and if Accessibility is missing, stop and ask the user to grant it before continuing locally.
 
-### `scripts/remote/gui-validate.sh`
+### `scripts/remote/validate.sh`
 
 | Variable | Default | Effect |
 |---|---|---|
-| `TOASTTY_REMOTE_GUI_HOST` | unset | Required SSH host for the dedicated remote GUI validation machine. |
+| `TOASTTY_REMOTE_GUI_HOST` | unset | SSH host for the dedicated remote GUI validation machine. Required when the run must execute remotely. |
 | `TOASTTY_REMOTE_GUI_REPO_ROOT` | local Toastty repo path | Absolute Toastty repo path on the remote host. The wrapper creates disposable remote git worktrees from this repo. |
 | `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and run outputs. |
-| `RUN_LABEL` | timestamped `gui-validate-*` value | Optional stable label for the remote validation run. Prefer `--run-label` for explicit CLI usage. |
+| `RUN_LABEL` | timestamped `validate-*` value | Optional stable label for the remote validation run. Prefer `--run-label` for explicit CLI usage. |
 
 CLI notes:
 
+- `--smoke-test smoke-ui|workspace-tabs|shortcut-hints|shortcut-trace` is the primary supported mode. It runs that smoke test on the remote host after syncing the requested scope.
 - `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
 - `--scope head` exports the current checked-out commit without uncommitted changes.
 - `--scope ref --ref <rev>` exports an explicit local git ref.
-- `--validation-command` runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
-- If `--validation-command` is omitted, the wrapper defaults to `peekaboo menu list --pid "$TOASTTY_PID" --json`.
-- The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions.
+- Remote smoke preflight checks SSH reachability, the remote repo root, and remote run-root writability once up front.
+- If remote preflight fails for a smoke run, the wrapper falls back to a local smoke run by default and records that in `artifacts/remote-gui/<run-label>/result.json`.
+- For `--scope head` or `--scope ref`, that local fallback runs from a temporary local worktree at the requested ref instead of the current working tree.
+- Pass `--require-remote` to fail instead of falling back when the remote path itself matters.
+- For remote smoke runs, the wrapper forwards supported behavior overrides such as `FIXTURE`, the relevant `TOASTTY_*_RESTORE_FRONT_APP` flag, `UNREAD_FIXTURE`, and shortcut-trace input overrides like `CLICK_X`, `CLICK_Y`, and the key-code env vars. Path-shaped env vars such as `SOCKET_PATH`, `DEV_RUN_ROOT`, `DERIVED_PATH`, and `TRACE_LOG_PATH` remain remote-owned.
+- Ghostty-required smoke tests such as `shortcut-trace` also sync the local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree before the run. Make sure the local worktree has those artifacts installed first.
+- Remote SSH `shortcut-trace` runs skip the `Workspace > Close Panel` menu-equivalence subcheck because `System Events` menu dispatch is not reliable in that context; the trace still validates the action path and `Cmd+W` path.
+- `--validation-command` remains available as a debug escape hatch for foreground-capable remote validation. It runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
+- The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions for any custom remote validation command.
 
 ### `scripts/release/release.sh`
 

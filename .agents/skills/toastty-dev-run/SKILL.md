@@ -52,7 +52,7 @@ Use the least disruptive path that still covers the change:
 - Local smoke: use `scripts/automation/smoke-ui.sh` first when socket automation covers the change. This is the default local path because it restores the previously frontmost app after Toastty reaches automation readiness.
 - Shortcut-hints smoke: use `scripts/automation/shortcut-hints-smoke.sh` when the change only needs a visual artifact for always-visible shortcut badges or hint text.
 - Local foreground: use a local isolated dev run plus Peekaboo only when you need direct inspection but the focus impact is acceptable.
-- Remote foreground: use `scripts/remote/gui-validate.sh` when the validation needs Peekaboo, real menus, real shortcuts, or any other foreground-capable UI interaction that would disrupt the current desktop.
+- Remote validation: use `scripts/remote/validate.sh` when the validation should run on the dedicated remote Mac. Prefer `--smoke-test` for remote smoke runs; keep `--validation-command` for foreground-capable Peekaboo checks or other custom remote validation.
 
 ## Typical terminal flow
 
@@ -88,15 +88,23 @@ kill -0 "$PID"
 peekaboo menu list --pid "$PID" --json
 ```
 
-## Remote GUI flow
+## Remote Validation Flow
+
+For remote smoke on a dedicated remote Mac:
+
+```bash
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
+  --smoke-test smoke-ui \
+  --scope working-tree
+```
 
 For foreground-capable validation on a dedicated remote Mac:
 
 ```bash
 TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
-./scripts/remote/gui-validate.sh \
+./scripts/remote/validate.sh \
   --scope working-tree \
-  --test-case "Verify the Window menu reflects the new command state" \
   --validation-command 'peekaboo menu list --pid "$TOASTTY_PID" --json | tee "$TOASTTY_ARTIFACTS_DIR/window-menu.json"'
 ```
 
@@ -105,10 +113,15 @@ Notes:
 - `--scope working-tree` validates the current uncommitted local worktree by syncing it into a disposable remote worktree.
 - `--scope head` validates the current checked-out commit without uncommitted changes.
 - `--scope ref --ref <rev>` validates an explicit ref.
-- `--test-case` notes are copied into the local and remote artifacts so another agent or human can see what was intended.
+- `--smoke-test smoke-ui|workspace-tabs|shortcut-hints|shortcut-trace` is the primary supported remote path for automated validation.
 - The remote artifacts come back under `artifacts/remote-gui/<run-label>/remote/`.
-- If no `--validation-command` is given, the wrapper defaults to `peekaboo menu list --pid "$TOASTTY_PID" --json`.
-- The remote Mac must be awake, unlocked, logged into the target GUI session, and have Peekaboo permissions granted there.
+- Smoke runs fall back to a local smoke run if remote preflight fails; pass `--require-remote` when the remote path itself matters.
+- For `--scope head` or `--scope ref`, that local fallback uses a temporary local worktree at the requested ref so the validated snapshot stays aligned with the requested scope.
+- Remote smoke runs forward supported behavior overrides such as `FIXTURE`, the relevant `TOASTTY_*_RESTORE_FRONT_APP` flag, `UNREAD_FIXTURE`, and shortcut-trace input overrides like `CLICK_X`, `CLICK_Y`, and the key-code env vars. Remote-owned paths such as `DEV_RUN_ROOT`, `SOCKET_PATH`, and `TRACE_LOG_PATH` are not forwarded.
+- Ghostty-required smoke tests such as `shortcut-trace` also copy the local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree before the run. Bootstrap the local worktree first so those artifacts exist.
+- SSH-based remote `shortcut-trace` runs skip the `Workspace > Close Panel` menu-equivalence subcheck because `System Events` menu-item dispatch is not reliable in that context. Local trace runs still keep that assertion.
+- `--validation-command` remains available for foreground-capable remote validation after Toastty launches on the remote host.
+- The remote Mac must be awake, unlocked, logged into the target GUI session, and have Peekaboo permissions granted there for custom remote validation commands.
 
 ## Runtime-home conventions
 
@@ -126,8 +139,8 @@ Notes:
 
 - Use `scripts/automation/smoke-ui.sh` first when it covers the change.
 - Use `scripts/automation/shortcut-hints-smoke.sh` for visible shortcut-badge validation before considering `peekaboo`.
-- Use `scripts/automation/shortcut-trace.sh` only when you specifically need local real-shortcut tracing and the focus impact is acceptable.
-- Use `scripts/remote/gui-validate.sh` for remote Peekaboo-driven validation when focus stealing would be disruptive locally.
+- Use `scripts/remote/validate.sh --smoke-test shortcut-trace ...` when you need real-shortcut tracing without stealing focus locally.
+- Use `scripts/remote/validate.sh` for remote validation when focus stealing would be disruptive locally.
 - Use `peekaboo menu list --pid <pid> --json` for menu checks.
 - Use `peekaboo image`, `peekaboo see`, window commands, and keyboard commands against that same PID for live UI validation.
 - Tail `logs/toastty.log` under the runtime home for isolated runs.
