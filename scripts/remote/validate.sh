@@ -14,9 +14,9 @@ KEEP_REMOTE=0
 REQUIRE_REMOTE=0
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
-DEFAULT_REMOTE_GUI_ROOT="$(cd "$(dirname "$ROOT_DIR")" && pwd -P)/toastty-remote-gui"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
 REMOTE_REPO_ROOT="${TOASTTY_REMOTE_GUI_REPO_ROOT:-$DEFAULT_REMOTE_REPO_ROOT}"
+DEFAULT_REMOTE_GUI_ROOT="$(dirname "$REMOTE_REPO_ROOT")/toastty-remote-gui"
 REMOTE_GUI_ROOT="${TOASTTY_REMOTE_GUI_ROOT:-$DEFAULT_REMOTE_GUI_ROOT}"
 
 LOCAL_ARTIFACTS_DIR=""
@@ -229,7 +229,7 @@ sync_worktree_to_remote() {
 
 remote_shell() {
   local script="$1"
-  ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -s -- <<EOF
+  ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- <<EOF
 set -euo pipefail
 $script
 EOF
@@ -238,7 +238,7 @@ EOF
 run_remote_preflight() {
   local output
   if ! output="$(
-    ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -s -- \
+    ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$REMOTE_REPO_ROOT" \
       "$REMOTE_GUI_ROOT" <<'EOF' 2>&1
 set -euo pipefail
@@ -368,18 +368,20 @@ wait_for_remote_completion() {
   local remote_run_root="$2"
   local smoke_test="$3"
   local validation_command_b64="$4"
+  local smoke_test_arg="${smoke_test:-__TOASTTY_EMPTY__}"
+  local validation_command_arg="${validation_command_b64:-__TOASTTY_EMPTY__}"
 
   local remote_stdout="$LOCAL_ARTIFACTS_DIR/remote-stdout.log"
   local remote_stderr="$LOCAL_ARTIFACTS_DIR/remote-stderr.log"
   local ssh_exit_code=0
 
-  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -s -- \
+  if ssh -o BatchMode=yes -o ConnectTimeout=5 "$REMOTE_HOST" /bin/bash -l -s -- \
       "$RUN_LABEL" \
       "$remote_run_root" \
       "$remote_worktree_dir" \
       "$SCRIPT_PATH" \
-      "$smoke_test" \
-      "$validation_command_b64" \
+      "$smoke_test_arg" \
+      "$validation_command_arg" \
       > >(tee "$remote_stdout") \
       2> >(tee "$remote_stderr" >&2) <<'EOF'; then
 set -euo pipefail
@@ -389,6 +391,12 @@ remote_worktree_dir="$3"
 script_path="$4"
 smoke_test="$5"
 validation_command_b64="$6"
+if [[ "$smoke_test" == "__TOASTTY_EMPTY__" ]]; then
+  smoke_test=""
+fi
+if [[ "$validation_command_b64" == "__TOASTTY_EMPTY__" ]]; then
+  validation_command_b64=""
+fi
 export TOASTTY_REMOTE_VALIDATE_RUN_LABEL="$run_label"
 export TOASTTY_REMOTE_VALIDATE_REMOTE_RUN_ROOT="$remote_run_root"
 export TOASTTY_REMOTE_VALIDATE_REMOTE_WORKTREE_DIR="$remote_worktree_dir"
