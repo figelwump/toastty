@@ -8,6 +8,15 @@ validation thread that led into the `codex/computer-use-e2e` worktree. The
 goal is to preserve the architecture discussion in-repo so the next
 implementation pass does not depend on chat history.
 
+Implementation note, 2026-04-20:
+
+- `scripts/remote/computer-use-run.sh` now proves that a Codex `app-server`
+  turn can be started on the Mini, observed remotely over an SSH tunnel, and
+  harvested into a copied-back result bundle without a human at the keyboard.
+- The current blocker is Toastty-specific Computer Use approval on the Mini.
+  Approve `com.GiantThings.toastty` in Codex there; until then the default
+  prompt exits `setup_error` with `failureReason.kind = "approval_denied"`.
+
 ## summary
 
 1. The goal of this project is to replace Peekaboo-driven GUI validation for
