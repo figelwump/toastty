@@ -56,6 +56,35 @@ function buildFailureReason(kind, message) {
   return { kind, message };
 }
 
+function defaultApprovalPolicy() {
+  return {
+    granular: {
+      sandbox_approval: false,
+      rules: false,
+      skill_approval: false,
+      request_permissions: false,
+      mcp_elicitations: true,
+    },
+  };
+}
+
+function parseApprovalPolicy(rawValue) {
+  if (!rawValue) {
+    return defaultApprovalPolicy();
+  }
+
+  const trimmed = rawValue.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      throw new Error(`Invalid --approval-policy JSON: ${String(error)}`);
+    }
+  }
+
+  return trimmed;
+}
+
 function extractToolText(item) {
   const parts = [];
 
@@ -94,6 +123,21 @@ function classifyComputerUseFailure(message, toolName) {
     };
   }
 
+  if (
+    normalized.includes("sender process is not authenticated") ||
+    normalized.includes("apple event error -10000") ||
+    normalized.includes("not authorized to send apple events")
+  ) {
+    return {
+      priority: 90,
+      status: "setup_error",
+      failureReason: buildFailureReason(
+        "apple_event_not_authenticated",
+        message,
+      ),
+    };
+  }
+
   return {
     priority: 10,
     status: "agent_error",
@@ -119,7 +163,7 @@ const promptPath = args.get("prompt-file");
 const transcriptPath = args.get("transcript-path");
 const summaryPath = args.get("summary-path");
 const timeoutSeconds = Number(args.get("timeout-seconds") ?? "300");
-const approvalPolicy = args.get("approval-policy") ?? "never";
+const approvalPolicy = parseApprovalPolicy(args.get("approval-policy"));
 const sandbox = args.get("sandbox") ?? "read-only";
 
 if (!wsUrl || !cwd || !promptPath || !transcriptPath || !summaryPath) {
@@ -151,6 +195,8 @@ let latestComputerUseFailure = null;
 let hasTokenUsageUpdate = false;
 let turnCompletedObserved = false;
 let pendingCompletion = null;
+let mcpElicitationsAccepted = 0;
+let mcpElicitationsDeclined = 0;
 const startedAt = isoNow();
 
 const socket = new WebSocket(wsUrl);
@@ -206,6 +252,8 @@ async function finish(status, options = {}) {
     sandbox,
     appListCount,
     computerUseReady,
+    mcpElicitationsAccepted,
+    mcpElicitationsDeclined,
     computerUseToolCallsStarted,
     computerUseToolCallsSucceeded,
     tokensUsed,
@@ -275,9 +323,309 @@ function sendRequest(method, params) {
   });
 }
 
+function sendNotification(method, params = undefined) {
+  const payload = {
+    jsonrpc: "2.0",
+    method,
+  };
+
+  if (params !== undefined) {
+    payload.params = params;
+  }
+
+  socket.send(JSON.stringify(payload));
+  void writeTranscript({
+    ts: isoNow(),
+    direction: "client",
+    type: "notification",
+    method,
+    params,
+  });
+}
+
+function sendServerResult(id, result) {
+  const payload = {
+    jsonrpc: "2.0",
+    id,
+    result,
+  };
+
+  socket.send(JSON.stringify(payload));
+  void writeTranscript({
+    ts: isoNow(),
+    direction: "client",
+    type: "response",
+    id,
+    result,
+  });
+}
+
 function isResponseMessage(message) {
   return Object.prototype.hasOwnProperty.call(message, "result") ||
     Object.prototype.hasOwnProperty.call(message, "error");
+}
+
+function isServerRequestMessage(message) {
+  return (
+    Object.prototype.hasOwnProperty.call(message, "id") &&
+    !isResponseMessage(message) &&
+    typeof message.method === "string"
+  );
+}
+
+function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function preferredPersistChoice(meta) {
+  const persist = meta?.persist;
+
+  if (persist === "always" || persist === "session") {
+    return persist;
+  }
+
+  if (Array.isArray(persist)) {
+    if (persist.includes("session")) {
+      return "session";
+    }
+    if (persist.includes("always")) {
+      return "always";
+    }
+  }
+
+  return null;
+}
+
+function enumOptions(schema) {
+  if (!isRecord(schema)) {
+    return [];
+  }
+
+  if (Array.isArray(schema.enum)) {
+    return schema.enum.filter((value) => typeof value === "string");
+  }
+
+  if (Array.isArray(schema.oneOf)) {
+    return schema.oneOf
+      .map((entry) => entry?.const)
+      .filter((value) => typeof value === "string");
+  }
+
+  if (isRecord(schema.items) && Array.isArray(schema.items.enum)) {
+    return schema.items.enum.filter((value) => typeof value === "string");
+  }
+
+  if (isRecord(schema.items) && Array.isArray(schema.items.oneOf)) {
+    return schema.items.oneOf
+      .map((entry) => entry?.const)
+      .filter((value) => typeof value === "string");
+  }
+
+  return [];
+}
+
+function chooseEnumOption(fieldName, schema, meta) {
+  const options = enumOptions(schema);
+  if (options.length === 0) {
+    return null;
+  }
+
+  const persistChoice = preferredPersistChoice(meta);
+  if (
+    persistChoice &&
+    /(persist|scope|remember|save)/i.test(fieldName) &&
+    options.includes(persistChoice)
+  ) {
+    return persistChoice;
+  }
+
+  const preferredValues = [
+    "session",
+    "always",
+    "accept",
+    "approve",
+    "allow",
+    "yes",
+    "true",
+    "continue",
+    "ok",
+  ];
+
+  for (const preferredValue of preferredValues) {
+    if (options.includes(preferredValue)) {
+      return preferredValue;
+    }
+  }
+
+  return options[0];
+}
+
+function chooseBooleanValue(fieldName, schema) {
+  if (typeof schema.default === "boolean") {
+    return schema.default;
+  }
+
+  if (/(deny|decline|reject|block|cancel|abort)/i.test(fieldName)) {
+    return false;
+  }
+
+  return true;
+}
+
+function chooseStringValue(fieldName, schema, meta) {
+  if (typeof schema.default === "string") {
+    return schema.default;
+  }
+
+  const enumChoice = chooseEnumOption(fieldName, schema, meta);
+  if (enumChoice !== null) {
+    return enumChoice;
+  }
+
+  if (/(persist|scope|remember|save)/i.test(fieldName)) {
+    return preferredPersistChoice(meta) ?? "session";
+  }
+
+  if (/(decision|action|approval|allow|accept|confirm)/i.test(fieldName)) {
+    return "accept";
+  }
+
+  const minLength = Number(schema.minLength ?? 0);
+  if (minLength > 0) {
+    return "approved";
+  }
+
+  return "";
+}
+
+function chooseNumberValue(schema) {
+  if (typeof schema.default === "number") {
+    return schema.default;
+  }
+
+  if (typeof schema.minimum === "number") {
+    return schema.minimum;
+  }
+
+  return 0;
+}
+
+function chooseArrayValue(fieldName, schema, meta) {
+  if (Array.isArray(schema.default)) {
+    return schema.default;
+  }
+
+  const enumChoice = chooseEnumOption(fieldName, schema, meta);
+  if (enumChoice !== null) {
+    return [enumChoice];
+  }
+
+  return [];
+}
+
+function buildMcpElicitationContent(request) {
+  if (request.mode !== "form") {
+    return null;
+  }
+
+  const schema = request.requestedSchema;
+  if (!isRecord(schema) || !isRecord(schema.properties)) {
+    return {};
+  }
+
+  const meta = isRecord(request._meta) ? request._meta : {};
+  const content = {};
+  const required = new Set(
+    Array.isArray(schema.required)
+      ? schema.required.filter((value) => typeof value === "string")
+      : [],
+  );
+
+  for (const [fieldName, fieldSchema] of Object.entries(schema.properties)) {
+    if (!isRecord(fieldSchema)) {
+      continue;
+    }
+
+    let value;
+    switch (fieldSchema.type) {
+      case "string":
+        value = chooseStringValue(fieldName, fieldSchema, meta);
+        break;
+      case "boolean":
+        value = chooseBooleanValue(fieldName, fieldSchema);
+        break;
+      case "number":
+      case "integer":
+        value = chooseNumberValue(fieldSchema);
+        break;
+      case "array":
+        value = chooseArrayValue(fieldName, fieldSchema, meta);
+        break;
+      default:
+        value = undefined;
+    }
+
+    if (value !== undefined && (required.has(fieldName) || value !== "")) {
+      content[fieldName] = value;
+    }
+  }
+
+  return content;
+}
+
+function shouldAutoAcceptMcpElicitation(params) {
+  if (params?.serverName !== "computer-use" || params?.mode !== "form") {
+    return false;
+  }
+
+  // Keep unattended approvals narrow: only accept the known app-access prompt
+  // shape, or an explicit MCP tool-call approval marker from the server.
+  const properties = isRecord(params?.requestedSchema?.properties)
+    ? params.requestedSchema.properties
+    : {};
+  if (
+    Object.keys(properties).length === 0 &&
+    typeof params?.message === "string" &&
+    /^Allow Codex to use /i.test(params.message)
+  ) {
+    return true;
+  }
+
+  const meta = isRecord(params?._meta) ? params._meta : {};
+  return meta.codex_approval_kind === "mcp_tool_call";
+}
+
+async function handleServerRequest(message) {
+  const { id, method, params = {} } = message;
+
+  if (method === "mcpServer/elicitation/request") {
+    if (shouldAutoAcceptMcpElicitation(params)) {
+      const content = buildMcpElicitationContent(params);
+
+      mcpElicitationsAccepted += 1;
+      sendServerResult(id, {
+        action: "accept",
+        content,
+        _meta: null,
+      });
+      return;
+    }
+
+    mcpElicitationsDeclined += 1;
+    sendServerResult(id, {
+      action: "decline",
+      content: null,
+      _meta: null,
+    });
+    return;
+  }
+
+  await finish("setup_error", {
+    failureReason: buildFailureReason(
+      "user_input_required",
+      `Server requested interactive input via ${method}`,
+    ),
+  });
 }
 
 socket.onopen = () => {
@@ -301,6 +649,8 @@ socket.onopen = () => {
         },
       });
       initialized = true;
+      // app-server expects an explicit follow-up notification after initialize.
+      sendNotification("initialized");
 
       const threadResponse = await sendRequest("thread/start", {
         cwd,
@@ -356,7 +706,11 @@ socket.onmessage = (event) => {
     await writeTranscript({
       ts: isoNow(),
       direction: "server",
-      type: isResponseMessage(message) ? "response" : "notification",
+      type: isResponseMessage(message)
+        ? "response"
+        : isServerRequestMessage(message)
+        ? "server_request"
+        : "notification",
       payload: message,
     });
 
@@ -375,17 +729,8 @@ socket.onmessage = (event) => {
       return;
     }
 
-    if (
-      Object.prototype.hasOwnProperty.call(message, "id") &&
-      !isResponseMessage(message) &&
-      typeof message.method === "string"
-    ) {
-      await finish("setup_error", {
-        failureReason: buildFailureReason(
-          "user_input_required",
-          `Server requested interactive input via ${message.method}`,
-        ),
-      });
+    if (isServerRequestMessage(message)) {
+      await handleServerRequest(message);
       return;
     }
 
