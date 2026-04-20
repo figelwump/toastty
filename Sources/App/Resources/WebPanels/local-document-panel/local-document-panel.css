@@ -19,6 +19,36 @@
   --pre-bg: #21160f;
   --pre-text: #f9ede1;
   --shadow: 0 20px 70px rgba(74, 46, 19, 0.08);
+  --color-prettylights-syntax-brackethighlighter-angle: #a89280;
+  --color-prettylights-syntax-brackethighlighter-unmatched: #f08c63;
+  --color-prettylights-syntax-carriage-return-bg: #7f2618;
+  --color-prettylights-syntax-carriage-return-text: #fff2e8;
+  --color-prettylights-syntax-comment: #8a7566;
+  --color-prettylights-syntax-constant: #e8845c;
+  --color-prettylights-syntax-constant-other-reference-link: #f0c96d;
+  --color-prettylights-syntax-entity: #d4977a;
+  --color-prettylights-syntax-entity-tag: #e8b87a;
+  --color-prettylights-syntax-invalid-illegal-bg: #82071e;
+  --color-prettylights-syntax-invalid-illegal-text: #fff2e8;
+  --color-prettylights-syntax-keyword: #f0a25e;
+  --color-prettylights-syntax-markup-bold: #fff1e1;
+  --color-prettylights-syntax-markup-changed-bg: rgba(232, 184, 122, 0.18);
+  --color-prettylights-syntax-markup-changed-text: #ffd9b0;
+  --color-prettylights-syntax-markup-deleted-bg: rgba(199, 95, 95, 0.22);
+  --color-prettylights-syntax-markup-deleted-text: #ffd7d7;
+  --color-prettylights-syntax-markup-heading: #e6c46a;
+  --color-prettylights-syntax-markup-ignored-bg: #d4977a;
+  --color-prettylights-syntax-markup-ignored-text: #21160f;
+  --color-prettylights-syntax-markup-inserted-bg: rgba(168, 199, 123, 0.18);
+  --color-prettylights-syntax-markup-inserted-text: #dff0bc;
+  --color-prettylights-syntax-markup-italic: #f9ede1;
+  --color-prettylights-syntax-markup-list: #e8845c;
+  --color-prettylights-syntax-meta-diff-range: #e6c46a;
+  --color-prettylights-syntax-storage-modifier-import: #f9ede1;
+  --color-prettylights-syntax-string: #a8c77b;
+  --color-prettylights-syntax-string-regexp: #b6dd7d;
+  --color-prettylights-syntax-sublimelinter-gutter-mark: #8a7566;
+  --color-prettylights-syntax-variable: #d4977a;
 }
 
 :root[data-theme="dark"] {
@@ -42,6 +72,36 @@
   --pre-bg: #100b08;
   --pre-text: #f6ebdf;
   --shadow: 0 24px 80px rgba(0, 0, 0, 0.42);
+  --color-prettylights-syntax-brackethighlighter-angle: #b8a08e;
+  --color-prettylights-syntax-brackethighlighter-unmatched: #ff8f7a;
+  --color-prettylights-syntax-carriage-return-bg: #8e1519;
+  --color-prettylights-syntax-carriage-return-text: #fff4ea;
+  --color-prettylights-syntax-comment: #9f8775;
+  --color-prettylights-syntax-constant: #f08c63;
+  --color-prettylights-syntax-constant-other-reference-link: #f2cc60;
+  --color-prettylights-syntax-entity: #efb895;
+  --color-prettylights-syntax-entity-tag: #f1c286;
+  --color-prettylights-syntax-invalid-illegal-bg: #9d1c24;
+  --color-prettylights-syntax-invalid-illegal-text: #fff4ea;
+  --color-prettylights-syntax-keyword: #ffb87d;
+  --color-prettylights-syntax-markup-bold: #fff4ea;
+  --color-prettylights-syntax-markup-changed-bg: rgba(240, 162, 94, 0.2);
+  --color-prettylights-syntax-markup-changed-text: #ffe0b8;
+  --color-prettylights-syntax-markup-deleted-bg: rgba(199, 95, 95, 0.22);
+  --color-prettylights-syntax-markup-deleted-text: #ffd8d8;
+  --color-prettylights-syntax-markup-heading: #f2cc60;
+  --color-prettylights-syntax-markup-ignored-bg: #f0a25e;
+  --color-prettylights-syntax-markup-ignored-text: #100b08;
+  --color-prettylights-syntax-markup-inserted-bg: rgba(168, 199, 123, 0.2);
+  --color-prettylights-syntax-markup-inserted-text: #e3f4c2;
+  --color-prettylights-syntax-markup-italic: #f6ebdf;
+  --color-prettylights-syntax-markup-list: #f0a25e;
+  --color-prettylights-syntax-meta-diff-range: #f2cc60;
+  --color-prettylights-syntax-storage-modifier-import: #f6ebdf;
+  --color-prettylights-syntax-string: #b5d889;
+  --color-prettylights-syntax-string-regexp: #c4e890;
+  --color-prettylights-syntax-sublimelinter-gutter-mark: #9f8775;
+  --color-prettylights-syntax-variable: #efb895;
 }
 
 * {
@@ -411,7 +471,12 @@ body {
 }
 
 /* Syntax highlighting — warm palette */
-.hljs { color: var(--pre-text); background: var(--pre-bg); }
+.hljs,
+.starry-night {
+  color: var(--pre-text);
+  background: var(--pre-bg);
+}
+
 .hljs-keyword,
 .hljs-selector-tag,
 .hljs-built_in,
@@ -437,6 +502,127 @@ body {
 .hljs-emphasis { font-style: italic; }
 .hljs-strong { font-weight: 700; }
 .hljs-link { color: var(--accent); text-decoration: underline; }
+
+/* Starry Night theme adapted from the package's GitHub-like palette. */
+.pl-c {
+  color: var(--color-prettylights-syntax-comment);
+}
+
+.pl-c1,
+.pl-s .pl-v {
+  color: var(--color-prettylights-syntax-constant);
+}
+
+.pl-e,
+.pl-en {
+  color: var(--color-prettylights-syntax-entity);
+}
+
+.pl-smi,
+.pl-s .pl-s1 {
+  color: var(--color-prettylights-syntax-storage-modifier-import);
+}
+
+.pl-ent {
+  color: var(--color-prettylights-syntax-entity-tag);
+}
+
+.pl-k {
+  color: var(--color-prettylights-syntax-keyword);
+}
+
+.pl-s,
+.pl-pds,
+.pl-s .pl-pse .pl-s1,
+.pl-sr,
+.pl-sr .pl-cce,
+.pl-sr .pl-sre,
+.pl-sr .pl-sra {
+  color: var(--color-prettylights-syntax-string);
+}
+
+.pl-v,
+.pl-smw {
+  color: var(--color-prettylights-syntax-variable);
+}
+
+.pl-bu {
+  color: var(--color-prettylights-syntax-brackethighlighter-unmatched);
+}
+
+.pl-ii {
+  color: var(--color-prettylights-syntax-invalid-illegal-text);
+  background-color: var(--color-prettylights-syntax-invalid-illegal-bg);
+}
+
+.pl-c2 {
+  color: var(--color-prettylights-syntax-carriage-return-text);
+  background-color: var(--color-prettylights-syntax-carriage-return-bg);
+}
+
+.pl-sr .pl-cce {
+  color: var(--color-prettylights-syntax-string-regexp);
+  font-weight: 700;
+}
+
+.pl-ml {
+  color: var(--color-prettylights-syntax-markup-list);
+}
+
+.pl-mh,
+.pl-mh .pl-en,
+.pl-ms {
+  color: var(--color-prettylights-syntax-markup-heading);
+  font-weight: 700;
+}
+
+.pl-mi {
+  color: var(--color-prettylights-syntax-string);
+  font-style: italic;
+}
+
+.pl-mb {
+  color: var(--color-prettylights-syntax-string);
+  font-weight: 700;
+}
+
+.pl-md {
+  color: var(--color-prettylights-syntax-markup-deleted-text);
+  background-color: var(--color-prettylights-syntax-markup-deleted-bg);
+}
+
+.pl-mi1 {
+  color: var(--color-prettylights-syntax-markup-inserted-text);
+  background-color: var(--color-prettylights-syntax-markup-inserted-bg);
+}
+
+.pl-mc {
+  color: var(--color-prettylights-syntax-markup-changed-text);
+  background-color: var(--color-prettylights-syntax-markup-changed-bg);
+}
+
+.pl-mi2 {
+  color: var(--color-prettylights-syntax-markup-ignored-text);
+  background-color: var(--color-prettylights-syntax-markup-ignored-bg);
+}
+
+.pl-mdr {
+  color: var(--color-prettylights-syntax-meta-diff-range);
+  font-weight: 700;
+}
+
+.pl-ba {
+  color: var(--color-prettylights-syntax-brackethighlighter-angle);
+}
+
+.pl-sg {
+  color: var(--color-prettylights-syntax-sublimelinter-gutter-mark);
+}
+
+.pl-corl {
+  color: var(--color-prettylights-syntax-constant-other-reference-link);
+  text-decoration: underline;
+}
 
 /* Header stats (replaces badge) */
 .local-document-panel-stats {

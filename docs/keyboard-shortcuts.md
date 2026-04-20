@@ -94,7 +94,7 @@ These shortcuts are available when the focused panel is a browser panel:
 
 ## Local documents
 
-These shortcuts are available when the focused panel is a local document in edit mode. Supported local documents currently include Markdown, YAML, and TOML files.
+These shortcuts are available when the focused panel is a local document in edit mode. Supported local documents currently include Markdown, YAML, TOML, JSON, JSON Lines, config/property files, CSV/TSV, XML, and shell scripts.
 
 | Shortcut | Action |
 |---|---|

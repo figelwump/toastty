@@ -69,6 +69,46 @@ struct WebPanelStateCodableTests {
     }
 
     @Test
+    func localDocumentStateRoundTripsJsonFormat() throws {
+        let state = WebPanelState(
+            definition: .localDocument,
+            title: "package.json",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/project/package.json",
+                format: .json
+            )
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(decoded == state)
+        #expect(decoded.localDocument?.format == .json)
+    }
+
+    @Test
+    func localDocumentFormatRawValuesRoundTripThroughCodable() throws {
+        let formats: [LocalDocumentFormat] = [
+            .markdown,
+            .yaml,
+            .toml,
+            .json,
+            .jsonl,
+            .config,
+            .csv,
+            .tsv,
+            .xml,
+            .shell,
+        ]
+
+        for format in formats {
+            let data = try JSONEncoder().encode(format)
+            let decoded = try JSONDecoder().decode(LocalDocumentFormat.self, from: data)
+            #expect(decoded == format)
+        }
+    }
+
+    @Test
     func decodingTypedLocalDocumentPayloadWithoutFormatDefaultsToMarkdown() throws {
         let data = try JSONSerialization.data(
             withJSONObject: [

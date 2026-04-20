@@ -371,7 +371,7 @@ Supported action IDs:
   - When `args.placement` is omitted, the default is now `rootRight` rather than `newTab`
   - `args.url` is optional
 - `panel.create.localDocument`
-  - opens a supported local document: `md`, `markdown`, `mdown`, `mkd`, `yaml`, `yml`, or `toml`
+  - opens a supported local document: `md`, `markdown`, `mdown`, `mkd`, `yaml`, `yml`, `toml`, `json`, `jsonc`, `jsonl`, `ini`, `conf`, `cfg`, `properties`, `csv`, `tsv`, `xml`, `sh`, `bash`, or `zsh`
   - requires `args.filePath`
   - `args.placement` is optional: `rootRight`, `newTab`, or `splitRight`
   - when `args.placement` is omitted, the default is `rootRight`
@@ -574,7 +574,7 @@ Result:
 - `panelID: UUID string`
 - `stateTitle: String`
 - `stateFilePath: String | null`
-- `stateFormat: "markdown" | "yaml" | "toml" | null`
+- `stateFormat: "markdown" | "yaml" | "toml" | "json" | "jsonl" | "config" | "csv" | "tsv" | "xml" | "shell" | null`
 - `hostLifecycleState: String`
 - `hostAttachmentID: UUID string | null`
 - `currentTheme: String`
@@ -584,7 +584,7 @@ Result:
 - `bootstrapContractVersion: Int | null`
 - `bootstrapFilePath: String | null`
 - `bootstrapDisplayName: String | null`
-- `bootstrapFormat: "markdown" | "yaml" | "toml" | null`
+- `bootstrapFormat: "markdown" | "yaml" | "toml" | "json" | "jsonl" | "config" | "csv" | "tsv" | "xml" | "shell" | null`
 - `bootstrapShouldHighlight: Bool | null`
 - `bootstrapContentRevision: Int | null`
 - `bootstrapIsEditing: Bool | null`

@@ -91,6 +91,36 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    func testResolveTreatsJsonFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "package.json")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
+    func testResolveTreatsShellScriptAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "bootstrap.zsh")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
     func testResolveFallsBackForUnsupportedLocalFileExtension() throws {
         let fixture = try makeFixture(fileName: "config.txt")
 

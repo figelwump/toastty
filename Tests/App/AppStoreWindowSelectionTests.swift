@@ -747,6 +747,44 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         )
     }
 
+    func testCreateJsonPanelFromCommandCreatesTypedLocalDocument() throws {
+        let fixturePath = try makeLocalDocumentFixture(
+            fileName: "package.json",
+            content: "{\n  \"name\": \"toastty\"\n}\n"
+        )
+        let state = AppState.bootstrap()
+        let sourceWindowID = try XCTUnwrap(state.windows.first?.id)
+        let sourceWorkspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: sourceWindowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fixturePath,
+                    placementOverride: .newTab
+                )
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[sourceWorkspaceID])
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be local document")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixturePath)
+        XCTAssertEqual(webState.title, "package.json")
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fixturePath, format: .json)
+        )
+    }
+
     func testCreateExtensionlessPanelFromCommandUsesExplicitFormatOverride() throws {
         let fixturePath = try makeLocalDocumentFixture(
             fileName: "config",

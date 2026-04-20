@@ -68,6 +68,20 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
             return "key: value\n"
         case "toml":
             return "key = \"value\"\n"
+        case "json", "jsonc":
+            return "{\n  \"key\": \"value\"\n}\n"
+        case "jsonl":
+            return "{\"event\":\"open\"}\n{\"event\":\"save\"}\n"
+        case "ini", "conf", "cfg", "properties":
+            return "key=value\n"
+        case "csv":
+            return "name,value\nToastty,1\n"
+        case "tsv":
+            return "name\tvalue\nToastty\t1\n"
+        case "xml":
+            return "<root><item>Toastty</item></root>\n"
+        case "sh", "bash", "zsh":
+            return "#!/usr/bin/env bash\necho toastty\n"
         default:
             return "# Sample\n"
         }

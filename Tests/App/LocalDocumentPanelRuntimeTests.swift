@@ -743,6 +743,71 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.textScale, AppState.defaultMarkdownTextScale)
     }
 
+    func testBootstrapReadsJSONFileContents() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("package.json")
+        let content = """
+        {
+          "name": "toastty",
+          "private": true
+        }
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "package.json",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .json
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "package.json")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .json)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsShellFileContents() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("bootstrap.sh")
+        let content = """
+        #!/usr/bin/env bash
+        set -euo pipefail
+        echo "toastty"
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "bootstrap.sh",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .shell
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "bootstrap.sh")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .shell)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
     func testBootstrapFallsBackToErrorDocumentWhenFileIsMissing() async {
         let filePath = "/tmp/toastty/missing.md"
 
@@ -843,28 +908,54 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.content, largeContent)
     }
 
+    func testBootstrapDisablesHighlightingForLargeJSONLinesFiles() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("events.jsonl")
+        let largeContent = String(repeating: "{\"event\":\"toastty\"}\n", count: 40_500)
+        try largeContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "events.jsonl",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .jsonl
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .jsonl)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
     func testBootstrapKeepsHighlightingAtExactCodeThreshold() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
 
-        let fileURL = tempDirectoryURL.appendingPathComponent("boundary.yaml")
+        let fileURL = tempDirectoryURL.appendingPathComponent("boundary.xml")
         let thresholdContent = String(repeating: "a", count: 524_288)
         try thresholdContent.write(to: fileURL, atomically: true, encoding: .utf8)
 
         let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
             for: WebPanelState(
                 definition: .localDocument,
-                title: "boundary.yaml",
+                title: "boundary.xml",
                 localDocument: LocalDocumentState(
                     filePath: fileURL.path,
-                    format: .yaml
+                    format: .xml
                 )
             )
         )
 
-        XCTAssertEqual(bootstrap.format, .yaml)
+        XCTAssertEqual(bootstrap.format, .xml)
         XCTAssertTrue(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.content.utf8.count, 524_288)
     }

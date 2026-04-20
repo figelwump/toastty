@@ -415,6 +415,71 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testJsonPanelAutomationCreatesSelectedTabAndExposesBootstrapState() async throws {
+        let fixture = makeSingleWindowFixture()
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-json-automation-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let jsonURL = tempDirectory.appendingPathComponent("package.json", isDirectory: false)
+        let jsonContent = """
+        {
+          "name": "toastty",
+          "private": true,
+          "version": "0.1.0"
+        }
+        """
+        try jsonContent.write(to: jsonURL, atomically: true, encoding: .utf8)
+        let expectedHash = SHA256.hash(data: Data(jsonContent.utf8)).map { String(format: "%02x", $0) }.joined()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.localDocument",
+                    "args": [
+                        "placement": "newTab",
+                        "filePath": jsonURL.path,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let panelID = try XCTUnwrap(workspace.focusedPanelID)
+
+            var snapshotResponse: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                snapshotResponse = response
+                if response.result["bootstrapContentSHA256"] as? String == expectedHash {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            let finalSnapshot = try XCTUnwrap(snapshotResponse)
+            XCTAssertEqual(finalSnapshot.result["stateFilePath"] as? String, jsonURL.path)
+            XCTAssertEqual(finalSnapshot.result["stateFormat"] as? String, "json")
+            XCTAssertEqual(finalSnapshot.result["bootstrapDisplayName"] as? String, "package.json")
+            XCTAssertEqual(finalSnapshot.result["bootstrapFormat"] as? String, "json")
+            XCTAssertEqual(finalSnapshot.result["bootstrapShouldHighlight"] as? Bool, true)
+            XCTAssertEqual(finalSnapshot.result["bootstrapContentSHA256"] as? String, expectedHash)
+        }
+    }
+
     func testFocusNextUnreadActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
         let fixture = makeSingleWindowUnreadFixture()
 

@@ -1,46 +1,13 @@
 import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
 import ini from "highlight.js/lib/languages/ini";
-import markdown from "highlight.js/lib/languages/markdown";
+import json from "highlight.js/lib/languages/json";
+import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
 import { LocalDocumentFormat, LocalDocumentPanelBootstrap } from "./bootstrap";
+import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
-
-// highlight.js' markdown grammar lets `**bold**` and `*italic*` span newlines,
-// so an unbalanced asterisk swallows everything up to the next match — which
-// also breaks the top-level LIST rule and leaves later `1.` markers uncolored.
-// Walk the strong/emphasis modes and tighten their `begin` patterns to require
-// a same-line closing marker, the way a real markdown parser would.
-const SAME_LINE_INLINE_BEGINS: Record<string, RegExp> = {
-  // Bold opener (`**` or `__`) only matches if a matching closer appears on the
-  // same line. The "no whitespace after opener" rule from the original grammar
-  // is preserved.
-  "\\*{2}(?!\\s)": /\*\*(?!\s)(?=[^\n]*\*\*)/,
-  "_{2}(?!\\s)": /__(?!\s)(?=[^\n]*__)/,
-  // Italic opener (`*` or `_`).
-  "\\*(?![*\\s])": /\*(?![*\s])(?=[^\n]*\*)/,
-  "_(?![_\\s])": /_(?![_\s])(?=[^\n]*_)/
-};
-
-function constrainMarkdownInlineToOneLine(language: unknown): unknown {
-  const seen = new WeakSet<object>();
-  function visit(node: unknown) {
-    if (!node || typeof node !== "object" || seen.has(node as object)) return;
-    seen.add(node as object);
-    const mode = node as { begin?: RegExp | string; variants?: unknown[]; contains?: unknown[] };
-    if (mode.begin) {
-      const key = mode.begin instanceof RegExp ? mode.begin.source : mode.begin;
-      const replacement = SAME_LINE_INLINE_BEGINS[key];
-      if (replacement) {
-        mode.begin = replacement;
-      }
-    }
-    if (Array.isArray(mode.variants)) mode.variants.forEach(visit);
-    if (Array.isArray(mode.contains)) mode.contains.forEach(visit);
-  }
-  visit(language);
-  return language;
-}
 
 if (!hljs.getLanguage("yaml")) {
   hljs.registerLanguage("yaml", yaml);
@@ -49,24 +16,47 @@ if (!hljs.getLanguage("toml")) {
   // The installed highlight.js bundle exposes TOML through the INI grammar.
   hljs.registerLanguage("toml", ini);
 }
-if (!hljs.getLanguage("markdown")) {
-  hljs.registerLanguage("markdown", (hljsApi) => {
-    return constrainMarkdownInlineToOneLine(markdown(hljsApi)) as ReturnType<typeof markdown>;
-  });
+if (!hljs.getLanguage("json")) {
+  hljs.registerLanguage("json", json);
+}
+if (!hljs.getLanguage("xml")) {
+  hljs.registerLanguage("xml", xml);
+}
+if (!hljs.getLanguage("bash")) {
+  hljs.registerLanguage("bash", bash);
 }
 
-function syntaxLanguage(format: LocalDocumentFormat): "yaml" | "toml" | "markdown" {
+type HighlightLanguage = "yaml" | "toml" | "json" | "xml" | "bash";
+
+function syntaxLanguage(
+  format: LocalDocumentFormat,
+  filePath: string | null = null
+): HighlightLanguage | null {
   switch (format) {
     case "yaml":
       return "yaml";
     case "toml":
       return "toml";
     case "markdown":
-      return "markdown";
+      return null;
+    case "json":
+      if (filePath?.toLowerCase().endsWith(".jsonc")) {
+        return null;
+      }
+      return "json";
+    case "xml":
+      return "xml";
+    case "shell":
+      return "bash";
+    case "jsonl":
+    case "config":
+    case "csv":
+    case "tsv":
+      return null;
   }
 }
 
-function formatLabel(format: LocalDocumentFormat): string {
+function formatLabel(format: LocalDocumentFormat, filePath: string | null = null): string {
   switch (format) {
     case "markdown":
       return "Markdown";
@@ -74,6 +64,23 @@ function formatLabel(format: LocalDocumentFormat): string {
       return "YAML";
     case "toml":
       return "TOML";
+    case "json":
+      if (filePath?.toLowerCase().endsWith(".jsonc")) {
+        return "JSONC";
+      }
+      return "JSON";
+    case "jsonl":
+      return "JSON Lines";
+    case "config":
+      return "Config";
+    case "csv":
+      return "CSV";
+    case "tsv":
+      return "TSV";
+    case "xml":
+      return "XML";
+    case "shell":
+      return "Shell Script";
   }
 }
 
@@ -253,7 +260,7 @@ function Header(props: {
       <div className="local-document-panel-stats">
         <span className="local-document-panel-stat">{statsLabel}</span>
         <span className="local-document-panel-stat-divider" />
-        <span className="local-document-panel-stat">{formatLabel(bootstrap.format)}</span>
+        <span className="local-document-panel-stat">{formatLabel(bootstrap.format, bootstrap.filePath)}</span>
       </div>
       <div className="local-document-panel-title-wrap">
         <div className="local-document-panel-title">{bootstrap.displayName}</div>
@@ -331,11 +338,12 @@ function LocalDocumentEditor(props: {
 
 function highlightedCodeHTML(
   format: LocalDocumentFormat,
+  filePath: string | null,
   content: string,
   shouldHighlight: boolean
 ): string | null {
-  const language = syntaxLanguage(format);
-  if (!shouldHighlight || !hljs.getLanguage(language)) {
+  const language = syntaxLanguage(format, filePath);
+  if (!shouldHighlight || language === null || !hljs.getLanguage(language)) {
     return null;
   }
 
@@ -346,14 +354,63 @@ function highlightedCodeHTML(
   }
 }
 
+function useDocumentHighlightHTML(
+  bootstrap: LocalDocumentPanelBootstrap,
+  content: string
+): string | null {
+  const syncHighlight = React.useMemo(() => {
+    if (bootstrap.format === "markdown") {
+      return null;
+    }
+
+    return highlightedCodeHTML(
+      bootstrap.format,
+      bootstrap.filePath,
+      content,
+      bootstrap.shouldHighlight
+    );
+  }, [bootstrap.filePath, bootstrap.format, bootstrap.shouldHighlight, content]);
+  const [markdownHighlight, setMarkdownHighlight] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    if (bootstrap.format !== "markdown" || !bootstrap.shouldHighlight) {
+      setMarkdownHighlight(null);
+      return;
+    }
+
+    let isCurrent = true;
+    setMarkdownHighlight(null);
+
+    highlightMarkdownSourceToHtml(content)
+      .then((highlightedHTML) => {
+        if (isCurrent) {
+          setMarkdownHighlight(highlightedHTML);
+        }
+      })
+      .catch((error) => {
+        console.warn("[ToasttyLocalDocumentPanel] Markdown highlighting failed.", error);
+        if (isCurrent) {
+          setMarkdownHighlight(null);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [bootstrap.format, bootstrap.shouldHighlight, content]);
+
+  return bootstrap.format === "markdown" ? markdownHighlight : syncHighlight;
+}
+
 function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
-  const highlightedHTML = React.useMemo(
-    () => highlightedCodeHTML(props.bootstrap.format, props.content, props.bootstrap.shouldHighlight),
-    [props.bootstrap.format, props.bootstrap.shouldHighlight, props.content]
-  );
-  const language = syntaxLanguage(props.bootstrap.format);
-  const codeClassName = `hljs language-${language}`;
+  const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
+  const language = syntaxLanguage(props.bootstrap.format, props.bootstrap.filePath);
+  const codeClassName = props.bootstrap.format === "markdown"
+    ? "starry-night"
+    : language
+      ? `hljs language-${language}`
+      : "hljs";
 
   return (
     <section className="local-document-code-shell">

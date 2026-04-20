@@ -316,11 +316,11 @@ enum ToasttyBuiltInCommand: Equatable, Sendable {
         case .newBrowserSplit:
             return ["browser", "split", "new", "create", "web"]
         case .openLocalFile:
-            return ["open", "local", "file", "document", "markdown", "yaml", "toml"]
+            return ["open", "local", "file", "document", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .openLocalFileInTab:
-            return ["open", "local", "file", "document", "tab", "markdown", "yaml", "toml"]
+            return ["open", "local", "file", "document", "tab", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .openLocalFileInSplit:
-            return ["open", "local", "file", "document", "split", "markdown", "yaml", "toml"]
+            return ["open", "local", "file", "document", "split", "code", "markdown", "yaml", "toml", "json", "xml", "shell", "config", "csv", "tsv"]
         case .toggleSidebar:
             return ["sidebar", "toggle", "show", "hide"]
         case .toggleFocusedPanelMode:

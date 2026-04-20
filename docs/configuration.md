@@ -62,7 +62,7 @@ url-opening-alternate-browser-placement = rootRight
 
 ## Related behavior
 
-- Toastty handles Ghostty-highlighted supported local file links separately from the web URL routing settings above. `Cmd`-click opens supported local documents (`md`, `markdown`, `mdown`, `mkd`, `yaml`, `yml`, `toml`) in a tab, and `Cmd`-`Shift`-click opens them in a root-right split. Supported local documents open in the local-document code view.
+- Toastty handles Ghostty-highlighted supported local file links separately from the web URL routing settings above. `Cmd`-click opens supported local documents (`md`, `markdown`, `mdown`, `mkd`, `yaml`, `yml`, `toml`, `json`, `jsonc`, `jsonl`, `ini`, `conf`, `cfg`, `properties`, `csv`, `tsv`, `xml`, `sh`, `bash`, `zsh`) in a tab, and `Cmd`-`Shift`-click opens them in a root-right split. Supported local documents open in the local-document code view. JSONC files currently use plain code rendering rather than comment-aware syntax highlighting.
 - `Cmd`-clicking a local directory path in a terminal opens a right split rooted at that directory. `Cmd`-`Shift`-click opens a down split rooted at that directory.
 - `View` uses contextual labels for the shared shortcut family: focused terminals and local documents show `Increase Text Size`, `Decrease Text Size`, and `Reset Text Size`, while focused browsers show `Zoom In`, `Zoom Out`, and `Actual Size`
 - focused terminals and focused local documents keep separate window-local overrides; local-document text size resets to its own `100%` baseline, is not driven by `terminal-font-size`, and does not currently have its own config key
