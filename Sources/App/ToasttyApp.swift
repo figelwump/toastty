@@ -481,7 +481,7 @@ private final class AppLifecycleDelegate: NSObject, NSApplicationDelegate {
     ) -> Bool {
         let confirmationAlert = NSAlert()
         if assessment?.allowsDestructiveConfirmation == false {
-            confirmationAlert.messageText = "Markdown save in progress"
+            confirmationAlert.messageText = "Document save in progress"
         } else {
             confirmationAlert.messageText = "Quit Toastty?"
         }

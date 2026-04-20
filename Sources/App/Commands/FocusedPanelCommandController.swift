@@ -236,7 +236,7 @@ final class FocusedPanelCommandController {
 
     private func confirmDiscardLocalDocumentDraft(displayName: String) -> Bool {
         let confirmationAlert = NSAlert()
-        confirmationAlert.messageText = "Discard markdown draft?"
+        confirmationAlert.messageText = "Discard document draft?"
         confirmationAlert.informativeText = "\"\(displayName)\" has unsaved changes. Closing the panel will discard them."
         confirmationAlert.alertStyle = .warning
         confirmationAlert.addConfiguredButton(withTitle: "Cancel", behavior: .cancelAction)
@@ -251,7 +251,7 @@ final class FocusedPanelCommandController {
 
     private func presentLocalDocumentSaveInProgressAlert(displayName: String) {
         let confirmationAlert = NSAlert()
-        confirmationAlert.messageText = "Markdown save in progress"
+        confirmationAlert.messageText = "Document save in progress"
         confirmationAlert.informativeText =
             "\"\(displayName)\" is still saving. Wait for the save to finish before closing this panel."
         confirmationAlert.alertStyle = .warning

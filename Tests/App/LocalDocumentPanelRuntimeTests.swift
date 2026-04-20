@@ -759,8 +759,13 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.displayName, "missing.md")
         XCTAssertEqual(bootstrap.filePath, filePath)
+        XCTAssertFalse(bootstrap.shouldHighlight)
         XCTAssertTrue(bootstrap.content.contains("Toastty could not load this document."))
         XCTAssertTrue(bootstrap.content.contains(filePath))
+        XCTAssertTrue(bootstrap.content.contains("Path:\n\(filePath)"))
+        XCTAssertTrue(bootstrap.content.contains("\n\nReason:\n"))
+        XCTAssertFalse(bootstrap.content.contains("**Path**"))
+        XCTAssertFalse(bootstrap.content.contains("# "))
     }
 
     func testBootstrapForMissingYamlFallsBackToPlainTextCodeDocument() async {
@@ -808,6 +813,32 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         XCTAssertEqual(bootstrap.format, .toml)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
+    func testBootstrapDisablesHighlightingForLargeMarkdownFiles() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        let largeContent = String(repeating: "# Toastty markdown-as-code\n", count: 40_500)
+        try largeContent.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "README.md",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .markdown
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .markdown)
         XCTAssertFalse(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.content, largeContent)
     }

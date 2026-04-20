@@ -43,10 +43,10 @@ struct WorkspaceTabCloseConfirmationAssessment: Equatable, Sendable {
 
         if unsavedLocalDocumentDraftCount == 1,
            let firstUnsavedLocalDocumentDisplayName {
-            return "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved markdown changes. Closing the tab will discard them."
+            return "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved document changes. Closing the tab will discard them."
         }
 
-        return "This tab has unsaved markdown changes. Closing the tab will discard them."
+        return "This tab has unsaved document changes. Closing the tab will discard them."
     }
 
     private var localDocumentSaveInProgressMessage: String? {
@@ -59,7 +59,7 @@ struct WorkspaceTabCloseConfirmationAssessment: Equatable, Sendable {
             return "\"\(firstLocalDocumentSaveInProgressDisplayName)\" is still saving. Wait for the save to finish before closing this tab."
         }
 
-        return "This tab still has markdown saves in progress. Wait for them to finish before closing the tab."
+        return "This tab still has document saves in progress. Wait for them to finish before closing the tab."
     }
 
     private var terminalConfirmationMessage: String? {
