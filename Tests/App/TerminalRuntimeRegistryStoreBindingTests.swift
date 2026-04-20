@@ -583,6 +583,43 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         try StateValidator.validate(store.state)
     }
 
+    func testOpenCommandClickMalformedAbsoluteDirectoryPathRecoversLocalDirectory() throws {
+        let fixture = try makeDirectoryFixture()
+        var state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let sourcePanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        guard case .terminal(var terminalState) = workspace.panels[sourcePanelID] else {
+            XCTFail("expected bootstrap focused panel to be terminal")
+            return
+        }
+        terminalState.cwd = fixture.rootPath
+        workspace.panels[sourcePanelID] = .terminal(terminalState)
+        state.workspacesByID[workspaceID] = workspace
+
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "\(fixture.directoryPath) on branch experiment/markdown-as-code.")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
+        guard case .terminal(let newTerminalState) = workspaceAfter.panels[focusedPanelID] else {
+            XCTFail("expected focused split panel to be terminal")
+            return
+        }
+        XCTAssertEqual(newTerminalState.cwd, fixture.directoryPath)
+        try StateValidator.validate(store.state)
+    }
+
     func testAlternateOpenCommandClickDirectoryRelativePathCreatesDownSplitTerminal() throws {
         let fixture = try makeDirectoryFixture()
         var state = AppState.bootstrap()
@@ -687,6 +724,73 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
         let focusedPanelID = try XCTUnwrap(workspaceAfter.focusedPanelID)
         guard case .web(let webState) = workspaceAfter.panels[focusedPanelID] else {
             XCTFail("expected root-right local document panel in source workspace")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(webState.filePath, fixture.markdownPath)
+        try StateValidator.validate(store.state)
+    }
+
+    func testOpenCommandClickMalformedAbsoluteMarkdownPathRecoversLocalDocument() throws {
+        let fixture = try makeMarkdownFixture(fileName: "toastty-markdown-as-code.md")
+        let workspace = WorkspaceState(
+            id: UUID(),
+            title: "One",
+            layoutTree: .slot(slotID: UUID(), panelID: UUID()),
+            panels: [:],
+            focusedPanelID: nil
+        )
+        let sourcePanelID = try XCTUnwrap(workspace.layoutTree.allSlotInfos.first?.panelID)
+        let workspaceWithTerminal = WorkspaceState(
+            id: workspace.id,
+            title: workspace.title,
+            layoutTree: workspace.layoutTree,
+            panels: [
+                sourcePanelID: .terminal(
+                    TerminalPanelState(
+                        title: "Terminal 1",
+                        shell: "zsh",
+                        cwd: fixture.rootPath
+                    )
+                ),
+            ],
+            focusedPanelID: sourcePanelID
+        )
+        let windowID = UUID()
+        let store = AppStore(
+            state: AppState(
+                windows: [
+                    WindowState(
+                        id: windowID,
+                        frame: CGRectCodable(x: 20, y: 20, width: 1200, height: 800),
+                        workspaceIDs: [workspaceWithTerminal.id],
+                        selectedWorkspaceID: workspaceWithTerminal.id
+                    ),
+                ],
+                workspacesByID: [workspaceWithTerminal.id: workspaceWithTerminal],
+                selectedWindowID: windowID
+            ),
+            persistTerminalFontPreference: false
+        )
+        let registry = TerminalRuntimeRegistry()
+        registry.bind(store: store)
+
+        XCTAssertTrue(
+            registry.openCommandClickLink(
+                try XCTUnwrap(URL(string: "\(fixture.markdownPath) on branch experiment/markdown-as-code.")),
+                useAlternatePlacement: false,
+                from: sourcePanelID
+            )
+        )
+
+        let workspaceAfter = try XCTUnwrap(store.state.workspacesByID[workspaceWithTerminal.id])
+        XCTAssertEqual(workspaceAfter.tabIDs.count, workspaceWithTerminal.tabIDs.count + 1)
+        let selectedTabID = try XCTUnwrap(workspaceAfter.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspaceAfter.tabsByID[selectedTabID])
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected local document panel in source workspace")
             return
         }
 

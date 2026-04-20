@@ -205,6 +205,24 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    func testResolveRecoversMalformedAbsoluteMarkdownPathWithAppendedProse() throws {
+        let fixture = try makeFixture(fileName: "toastty-markdown-as-code.md")
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.markdownPath) on branch experiment/markdown-as-code.")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
     func testResolveIgnoresFragmentsForRelativeMarkdownPaths() throws {
         let fixture = try makeFixture()
 
@@ -218,6 +236,78 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
             target,
             .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
         )
+    }
+
+    func testResolveRecoversMalformedAbsoluteDirectoryPathWithAppendedProse() throws {
+        let fixture = try makeDirectoryFixture()
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.directoryPath) on branch experiment/markdown-as-code.")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDirectory(path: fixture.directoryPath)
+        )
+    }
+
+    func testResolveDoesNotRecoverMalformedAbsolutePathToExistingAncestor() throws {
+        let fixture = try makeDirectoryFixture()
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.rootPath)/missing-worktree on branch experiment/markdown-as-code.")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(malformedURL))
+    }
+
+    func testResolveDoesNotRecoverMalformedAbsolutePathThroughExistingFile() throws {
+        let fixture = try makeFixture(fileName: "toastty-markdown-as-code.md")
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(fixture.markdownPath)/extra on branch experiment")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(malformedURL))
+    }
+
+    func testResolveDoesNotRecoverShortMalformedAbsoluteComponent() throws {
+        let fileManager = FileManager.default
+        let rootURL = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-terminal-short-link-tests-\(UUID().uuidString)", isDirectory: true)
+        let shortDirectoryURL = rootURL.appendingPathComponent("a", isDirectory: true)
+
+        try fileManager.createDirectory(at: shortDirectoryURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? fileManager.removeItem(at: rootURL)
+        }
+
+        let malformedURL = try XCTUnwrap(
+            URL(string: "\(shortDirectoryURL.standardizedFileURL.path) on branch experiment")
+        )
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: malformedURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(malformedURL))
     }
 
     func testResolveFallsBackWhenResolvedSymlinkTargetIsNotMarkdown() throws {

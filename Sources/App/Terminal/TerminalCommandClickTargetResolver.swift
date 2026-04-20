@@ -8,6 +8,7 @@ enum TerminalCommandClickTarget: Equatable, Sendable {
 }
 
 enum TerminalCommandClickTargetResolver {
+    private static let minimumRecoveredMalformedComponentLength = 3
     private static let trailingSentencePunctuation: Set<Character> = [
         ",",
         ".",
@@ -179,6 +180,12 @@ enum TerminalCommandClickTargetResolver {
             }
         }
 
+        for recoveredPath in malformedAbsolutePathRecoveryCandidates(for: path, fileManager: fileManager) {
+            if let recoveredMatch = exactMatcher(recoveredPath, fileManager) {
+                return recoveredMatch
+            }
+        }
+
         return nil
     }
 
@@ -193,5 +200,79 @@ enum TerminalCommandClickTargetResolver {
         }
 
         return recoveredPaths
+    }
+
+    private static func malformedAbsolutePathRecoveryCandidates(
+        for path: String,
+        fileManager: FileManager
+    ) -> [String] {
+        guard path.hasPrefix("/") else {
+            return []
+        }
+
+        let pathComponents = (path as NSString).pathComponents
+        guard pathComponents.count > 1 else {
+            return []
+        }
+
+        var existingParentPath = "/"
+        let components = Array(pathComponents.dropFirst())
+        for (index, component) in components.enumerated() {
+            let candidateURL = URL(fileURLWithPath: existingParentPath, isDirectory: true)
+                .appendingPathComponent(component, isDirectory: false)
+                .standardizedFileURL
+            var isDirectory = ObjCBool(false)
+            guard fileManager.fileExists(atPath: candidateURL.path, isDirectory: &isDirectory) else {
+                return malformedAbsoluteChildRecoveryCandidates(
+                    under: existingParentPath,
+                    malformedComponent: component
+                )
+            }
+
+            if isDirectory.boolValue {
+                existingParentPath = candidateURL.path
+                continue
+            }
+
+            // Exact file targets are handled before recovery. If a regular file
+            // appears before the end of the malformed path, do not guess.
+            if index < components.index(before: components.endIndex) {
+                return []
+            }
+        }
+
+        return []
+    }
+
+    private static func malformedAbsoluteChildRecoveryCandidates(
+        under parentPath: String,
+        malformedComponent: String
+    ) -> [String] {
+        guard malformedComponent.isEmpty == false else {
+            return []
+        }
+
+        let parentURL = URL(fileURLWithPath: parentPath, isDirectory: true)
+        var trimmedComponent = malformedComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates: [String] = []
+
+        while let whitespaceIndex = trimmedComponent.lastIndex(where: \.isWhitespace) {
+            let candidateComponent = String(trimmedComponent[..<whitespaceIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard candidateComponent.count >= minimumRecoveredMalformedComponentLength else {
+                break
+            }
+
+            let candidatePath = parentURL
+                .appendingPathComponent(candidateComponent, isDirectory: false)
+                .standardizedFileURL
+                .path
+            if candidates.contains(candidatePath) == false {
+                candidates.append(candidatePath)
+            }
+            trimmedComponent = candidateComponent
+        }
+
+        return candidates
     }
 }
