@@ -170,9 +170,10 @@ These variables are convenience inputs for the repo's helper scripts. They are n
 | `RESIZE_KEY_CODE` | `124` | Key code used for split resize tracing. |
 | `EQUALIZE_KEY_CODE` | `24` | Key code used for equalize tracing. |
 
-Local permissions note:
+Shortcut-trace permissions note:
 
-- `scripts/automation/shortcut-trace.sh` requires local Accessibility permission because it drives real keyboard shortcuts with `osascript`.
+- `scripts/automation/shortcut-trace.sh` requires Automation access to `System Events` plus Accessibility permission in the active GUI session because it drives real keyboard shortcuts with `osascript`.
+- The script now performs a timed `System Events` preflight and fails fast instead of hanging if that access is missing.
 - `peekaboo` workflows also require local Accessibility for interaction. Run `peekaboo permissions --json` first, and if Accessibility is missing, stop and ask the user to grant it before continuing locally.
 
 ### `scripts/remote/validate.sh`
@@ -186,7 +187,7 @@ Local permissions note:
 
 CLI notes:
 
-- `--smoke-test smoke-ui|workspace-tabs` is the primary supported mode. It runs that smoke test on the remote host after syncing the requested scope.
+- `--smoke-test smoke-ui|workspace-tabs|shortcut-hints|shortcut-trace` is the primary supported mode. It runs that smoke test on the remote host after syncing the requested scope.
 - `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
 - `--scope head` exports the current checked-out commit without uncommitted changes.
 - `--scope ref --ref <rev>` exports an explicit local git ref.
@@ -194,6 +195,8 @@ CLI notes:
 - If remote preflight fails for a smoke run, the wrapper falls back to a local smoke run by default and records that in `artifacts/remote-gui/<run-label>/result.json`.
 - For `--scope head` or `--scope ref`, that local fallback runs from a temporary local worktree at the requested ref instead of the current working tree.
 - Pass `--require-remote` to fail instead of falling back when the remote path itself matters.
+- For remote smoke runs, the wrapper forwards supported behavior overrides such as `FIXTURE`, the relevant `TOASTTY_*_RESTORE_FRONT_APP` flag, `UNREAD_FIXTURE`, and shortcut-trace input overrides like `CLICK_X`, `CLICK_Y`, and the key-code env vars. Path-shaped env vars such as `SOCKET_PATH`, `DEV_RUN_ROOT`, `DERIVED_PATH`, and `TRACE_LOG_PATH` remain remote-owned.
+- Ghostty-required smoke tests such as `shortcut-trace` also sync the local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree before the run. Make sure the local worktree has those artifacts installed first.
 - `--validation-command` remains available as a debug escape hatch for foreground-capable remote validation. It runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
 - The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions for any custom remote validation command.
 

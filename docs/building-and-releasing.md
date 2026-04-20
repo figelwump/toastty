@@ -102,6 +102,20 @@ TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
   --scope head \
   --require-remote
 
+# Remote shortcut-hints screenshot smoke
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/validate.sh \
+  --smoke-test shortcut-hints \
+  --scope working-tree
+
+# Remote keyboard shortcut tracing
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+CLICK_X=760 CLICK_Y=420 \
+./scripts/remote/validate.sh \
+  --smoke-test shortcut-trace \
+  --scope head \
+  --require-remote
+
 # Foreground-capable remote validation escape hatch
 TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
 ./scripts/remote/validate.sh \

@@ -37,23 +37,69 @@ rm -f "$TRACE_LOG_PATH"
 
 if [[ "${TUIST_DISABLE_GHOSTTY:-0}" == "1" || "${TOASTTY_DISABLE_GHOSTTY:-0}" == "1" ]]; then
   echo "error: shortcut trace requires Ghostty-enabled build (disable flags are set)" >&2
-  exit 1
+  exit 78
 fi
 
 if ! command -v nc >/dev/null 2>&1; then
   echo "error: nc is required for socket requests" >&2
-  exit 1
+  exit 78
 fi
 
 if ! command -v uuidgen >/dev/null 2>&1; then
   echo "error: uuidgen is required for request ids" >&2
-  exit 1
+  exit 78
 fi
 
 if ! command -v osascript >/dev/null 2>&1; then
   echo "error: osascript is required for shortcut tracing" >&2
-  exit 1
+  exit 78
 fi
+
+if ! command -v perl >/dev/null 2>&1; then
+  echo "error: perl is required for shortcut tracing permission preflight" >&2
+  exit 78
+fi
+
+run_with_timeout() {
+  local timeout_seconds="$1"
+  shift
+
+  perl -e '
+my $timeout = shift @ARGV;
+my $pid = fork();
+die "fork failed\n" unless defined $pid;
+if ($pid == 0) {
+  exec @ARGV or exit 127;
+}
+local $SIG{ALRM} = sub {
+  kill "TERM", $pid;
+  select undef, undef, undef, 0.2;
+  kill "KILL", $pid;
+  exit 124;
+};
+alarm $timeout;
+waitpid($pid, 0);
+alarm 0;
+exit($? >> 8);
+' "$timeout_seconds" "$@"
+}
+
+verify_system_events_access() {
+  if run_with_timeout 5 osascript -e 'tell application "System Events" to count processes' >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local exit_code=$?
+  case "$exit_code" in
+    124)
+      echo "error: System Events automation check timed out. Grant Automation and Accessibility permissions in the active GUI session before running shortcut-trace" >&2
+      ;;
+    *)
+      echo "error: System Events automation check failed. Grant Automation and Accessibility permissions in the active GUI session before running shortcut-trace" >&2
+      ;;
+  esac
+  return 78
+}
 
 cleanup() {
   if [[ -n "${APP_PID:-}" ]]; then
@@ -69,8 +115,10 @@ fi
 
 if [[ ! -f "$GHOSTTY_DEBUG_XCFRAMEWORK_PATH/Info.plist" && ! -f "$GHOSTTY_RELEASE_XCFRAMEWORK_PATH/Info.plist" ]]; then
   echo "error: Ghostty xcframework missing or invalid after bootstrap: expected $GHOSTTY_DEBUG_XCFRAMEWORK_PATH or $GHOSTTY_RELEASE_XCFRAMEWORK_PATH" >&2
-  exit 1
+  exit 78
 fi
+
+verify_system_events_access
 
 send_request() {
   local command="$1"

@@ -12,6 +12,7 @@ SMOKE_TEST=""
 VALIDATION_COMMAND=""
 KEEP_REMOTE=0
 REQUIRE_REMOTE=0
+SETUP_ERROR_EXIT_CODE=78
 
 DEFAULT_REMOTE_REPO_ROOT="$ROOT_DIR"
 REMOTE_HOST="${TOASTTY_REMOTE_GUI_HOST:-}"
@@ -32,7 +33,8 @@ disposable remote worktree, syncs the requested change scope into it, runs the
 selected validation flow, and copies the artifacts back locally.
 
 Options:
-  --smoke-test smoke-ui|workspace-tabs  Remote smoke test to run
+  --smoke-test smoke-ui|workspace-tabs|shortcut-hints|shortcut-trace
+                                      Remote smoke test to run
   --scope working-tree|head|ref         Local change scope to validate (default: working-tree)
   --ref <git-ref>                       Git ref to export when --scope ref is used
   --run-label <label>                   Stable run label used for local and remote artifacts
@@ -113,6 +115,12 @@ smoke_script_path() {
     workspace-tabs)
       printf 'scripts/automation/workspace-tabs-smoke.sh\n'
       ;;
+    shortcut-hints)
+      printf 'scripts/automation/shortcut-hints-smoke.sh\n'
+      ;;
+    shortcut-trace)
+      printf 'scripts/automation/shortcut-trace.sh\n'
+      ;;
     *)
       return 1
       ;;
@@ -129,10 +137,75 @@ smoke_run_id() {
     workspace-tabs)
       printf 'workspace-tabs-smoke-%s\n' "$run_label"
       ;;
+    shortcut-hints)
+      printf 'shortcut-hints-smoke-%s\n' "$run_label"
+      ;;
+    shortcut-trace)
+      printf 'shortcut-trace-%s\n' "$run_label"
+      ;;
     *)
       return 1
       ;;
   esac
+}
+
+smoke_env_names() {
+  case "$1" in
+    smoke-ui)
+      cat <<'EOF'
+FIXTURE
+TOASTTY_SMOKE_RESTORE_FRONT_APP
+TUIST_DISABLE_GHOSTTY
+TOASTTY_DISABLE_GHOSTTY
+EOF
+      ;;
+    workspace-tabs)
+      cat <<'EOF'
+FIXTURE
+UNREAD_FIXTURE
+TOASTTY_WORKSPACE_TABS_RESTORE_FRONT_APP
+TUIST_DISABLE_GHOSTTY
+TOASTTY_DISABLE_GHOSTTY
+EOF
+      ;;
+    shortcut-hints)
+      cat <<'EOF'
+FIXTURE
+TOASTTY_SHORTCUT_HINTS_RESTORE_FRONT_APP
+TUIST_DISABLE_GHOSTTY
+TOASTTY_DISABLE_GHOSTTY
+EOF
+      ;;
+    shortcut-trace)
+      cat <<'EOF'
+FIXTURE
+CLICK_X
+CLICK_Y
+SPLIT_KEY_CODE
+FOCUS_NEXT_KEY_CODE
+FOCUS_PREVIOUS_KEY_CODE
+RESIZE_KEY_CODE
+EQUALIZE_KEY_CODE
+TUIST_DISABLE_GHOSTTY
+TOASTTY_DISABLE_GHOSTTY
+EOF
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+build_smoke_env_script() {
+  local smoke_test="$1"
+  local env_name
+
+  while IFS= read -r env_name; do
+    [[ -n "$env_name" ]] || continue
+    if [[ "${!env_name+x}" == "x" ]]; then
+      printf 'export %s=%q\n' "$env_name" "${!env_name}"
+    fi
+  done < <(smoke_env_names "$smoke_test")
 }
 
 write_request_env() {
@@ -225,6 +298,42 @@ sync_worktree_to_remote() {
     --exclude 'Dependencies/GhosttyKit.Release.metadata.env' \
     "$source_root/" \
     "$REMOTE_HOST:$remote_worktree_dir/"
+}
+
+smoke_test_requires_ghostty() {
+  case "$1" in
+    shortcut-trace)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+sync_local_ghostty_artifacts_to_remote() {
+  local remote_worktree_dir="$1"
+  local dependencies_dir="$ROOT_DIR/Dependencies"
+  local candidate=""
+  local synced_any=0
+
+  for candidate in \
+    GhosttyKit.Debug.xcframework \
+    GhosttyKit.Release.xcframework \
+    GhosttyKit.Debug.metadata.env \
+    GhosttyKit.Release.metadata.env; do
+    if [[ -e "$dependencies_dir/$candidate" ]]; then
+      rsync -aL \
+        -e 'ssh -o BatchMode=yes -o ConnectTimeout=5' \
+        "$dependencies_dir/$candidate" \
+        "$REMOTE_HOST:$remote_worktree_dir/Dependencies/" || return 1
+      synced_any=1
+    fi
+  done
+
+  if [[ "$synced_any" != "1" ]]; then
+    fail "Smoke test $SMOKE_TEST requires local Ghostty artifacts under Dependencies/"
+  fi
 }
 
 remote_shell() {
@@ -338,8 +447,13 @@ run_smoke_locally() {
     :
   else
     script_exit_code=$?
-    status="fail"
-    failure_summary="Local fallback ${smoke_test} exited with status ${script_exit_code}"
+    if [[ "$script_exit_code" == "$SETUP_ERROR_EXIT_CODE" ]]; then
+      status="setup_error"
+      failure_summary="Local fallback ${smoke_test} failed setup checks"
+    else
+      status="fail"
+      failure_summary="Local fallback ${smoke_test} exited with status ${script_exit_code}"
+    fi
   fi
 
   local ended_at
@@ -368,8 +482,10 @@ wait_for_remote_completion() {
   local remote_run_root="$2"
   local smoke_test="$3"
   local validation_command_b64="$4"
+  local smoke_env_b64="$5"
   local smoke_test_arg="${smoke_test:-__TOASTTY_EMPTY__}"
   local validation_command_arg="${validation_command_b64:-__TOASTTY_EMPTY__}"
+  local smoke_env_arg="${smoke_env_b64:-__TOASTTY_EMPTY__}"
 
   local remote_stdout="$LOCAL_ARTIFACTS_DIR/remote-stdout.log"
   local remote_stderr="$LOCAL_ARTIFACTS_DIR/remote-stderr.log"
@@ -382,6 +498,7 @@ wait_for_remote_completion() {
       "$SCRIPT_PATH" \
       "$smoke_test_arg" \
       "$validation_command_arg" \
+      "$smoke_env_arg" \
       > >(tee "$remote_stdout") \
       2> >(tee "$remote_stderr" >&2) <<'EOF'; then
 set -euo pipefail
@@ -391,17 +508,22 @@ remote_worktree_dir="$3"
 script_path="$4"
 smoke_test="$5"
 validation_command_b64="$6"
+smoke_env_b64="$7"
 if [[ "$smoke_test" == "__TOASTTY_EMPTY__" ]]; then
   smoke_test=""
 fi
 if [[ "$validation_command_b64" == "__TOASTTY_EMPTY__" ]]; then
   validation_command_b64=""
 fi
+if [[ "$smoke_env_b64" == "__TOASTTY_EMPTY__" ]]; then
+  smoke_env_b64=""
+fi
 export TOASTTY_REMOTE_VALIDATE_RUN_LABEL="$run_label"
 export TOASTTY_REMOTE_VALIDATE_REMOTE_RUN_ROOT="$remote_run_root"
 export TOASTTY_REMOTE_VALIDATE_REMOTE_WORKTREE_DIR="$remote_worktree_dir"
 export TOASTTY_REMOTE_VALIDATE_SMOKE_TEST="$smoke_test"
 export TOASTTY_REMOTE_VALIDATE_VALIDATION_COMMAND_B64="$validation_command_b64"
+export TOASTTY_REMOTE_VALIDATE_SMOKE_ENV_B64="$smoke_env_b64"
 cd "$remote_worktree_dir"
 /bin/bash "$script_path" --remote-exec
 EOF
@@ -526,14 +648,27 @@ mkdir -p \"\$REMOTE_RUN_ROOT\"
     rm -rf "$export_root"
   fi
 
+  if [[ -n "$SMOKE_TEST" ]] && smoke_test_requires_ghostty "$SMOKE_TEST"; then
+    log "Syncing local Ghostty artifacts to remote worktree"
+    sync_local_ghostty_artifacts_to_remote "$remote_worktree_dir"
+  fi
+
   local validation_command_b64=""
   if [[ -n "$VALIDATION_COMMAND" ]]; then
     validation_command_b64="$(encode_base64 "$VALIDATION_COMMAND")"
   fi
+  local smoke_env_b64=""
+  if [[ -n "$SMOKE_TEST" ]]; then
+    local smoke_env_script
+    smoke_env_script="$(build_smoke_env_script "$SMOKE_TEST")"
+    if [[ -n "$smoke_env_script" ]]; then
+      smoke_env_b64="$(encode_base64 "$smoke_env_script")"
+    fi
+  fi
 
   log "Running remote validation"
   local remote_validation_exit_code=0
-  if wait_for_remote_completion "$remote_worktree_dir" "$remote_run_root" "$SMOKE_TEST" "$validation_command_b64"; then
+  if wait_for_remote_completion "$remote_worktree_dir" "$remote_run_root" "$SMOKE_TEST" "$validation_command_b64" "$smoke_env_b64"; then
     :
   else
     remote_validation_exit_code=$?
@@ -601,11 +736,20 @@ run_remote_smoke_mode() {
   local script_exit_code=0
   local status="pass"
   local failure_summary=""
+  local smoke_env_b64="${TOASTTY_REMOTE_VALIDATE_SMOKE_ENV_B64:-}"
+  local smoke_env_script=""
+
+  if [[ -n "$smoke_env_b64" ]]; then
+    smoke_env_script="$(decode_base64 "$smoke_env_b64")"
+  fi
 
   mkdir -p "$remote_run_root"
 
   if (
     cd "$remote_worktree_dir"
+    if [[ -n "$smoke_env_script" ]]; then
+      eval "$smoke_env_script"
+    fi
     RUN_ID="$run_id" \
     DEV_RUN_ROOT="$run_root" \
     /bin/bash "$script_relative_path"
@@ -613,8 +757,13 @@ run_remote_smoke_mode() {
     :
   else
     script_exit_code=$?
-    status="fail"
-    failure_summary="${smoke_test} exited with status ${script_exit_code}"
+    if [[ "$script_exit_code" == "$SETUP_ERROR_EXIT_CODE" ]]; then
+      status="setup_error"
+      failure_summary="${smoke_test} failed setup checks"
+    else
+      status="fail"
+      failure_summary="${smoke_test} exited with status ${script_exit_code}"
+    fi
   fi
 
   local ended_at
