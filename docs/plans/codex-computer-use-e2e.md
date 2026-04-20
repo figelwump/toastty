@@ -20,11 +20,12 @@ implementation pass does not depend on chat history.
 4. The existing remote transport and provisioning layer should be reused:
    disposable remote worktree, remote build/launch, artifact copy-back, and a
    stable result bundle contract.
-5. Assume one active GUI Computer Use job per logged-in Mac mini session until
-   proven otherwise. Do not design v1 around concurrent GUI runs on the same
-   desktop.
-6. The first slice should prove one realistic end-to-end Computer Use flow on
-   the Mac mini before building a large orchestration layer.
+5. Parallel Computer Use on one Mac mini session is an explicit hypothesis to
+   test, not a baked-in constraint. The design should not hard-code
+   single-job-only behavior before that experiment is run.
+6. The first slice should prove one realistic end-to-end Computer Use flow and
+   then pressure-test parallel execution on the Mac mini before building a
+   large orchestration layer.
 
 ## current baseline on main
 
@@ -64,8 +65,9 @@ Known Mini-specific issue at handoff time:
 - The user is not using PRs for this project; merges happen locally.
 - The user wants the ability to validate changes, validate release candidates,
   and run requested checks on demand.
-- The user is interested in parallelism overall, but the current working
-  assumption is still one active Computer Use job per Mini session.
+- The user wants to test whether multiple Computer Use jobs can run in
+  parallel on the Mini and does not want a single-job assumption baked into
+  the design prematurely.
 
 ## working architecture
 
@@ -197,7 +199,8 @@ understand the full remote session.
 ## non-goals for v1
 
 - Do not build a multi-tenant queue.
-- Do not assume parallel Computer Use runs on one Mini session.
+- Do not hard-code either serialized-only or fully parallel execution before
+  running the Mini experiment that establishes what actually works.
 - Do not replace the existing smoke automation entry points.
 - Do not overfit the first version to `app-server` unless a real need appears.
 - Do not invent a large test DSL before one or two narrow specs prove useful.
