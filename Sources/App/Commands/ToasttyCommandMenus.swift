@@ -6,17 +6,20 @@ import SwiftUI
 final class TerminalProfilesMenuController {
     private let store: AppStore
     private let terminalRuntimeRegistry: TerminalRuntimeRegistry
+    private let terminalProfileProvider: any TerminalProfileProviding
     private let installShellIntegrationAction: @MainActor () -> Void
     private let openProfilesConfigurationAction: @MainActor () -> Void
 
     init(
         store: AppStore,
         terminalRuntimeRegistry: TerminalRuntimeRegistry,
+        terminalProfileProvider: any TerminalProfileProviding,
         installShellIntegrationAction: @escaping @MainActor () -> Void,
         openProfilesConfigurationAction: @escaping @MainActor () -> Void
     ) {
         self.store = store
         self.terminalRuntimeRegistry = terminalRuntimeRegistry
+        self.terminalProfileProvider = terminalProfileProvider
         self.installShellIntegrationAction = installShellIntegrationAction
         self.openProfilesConfigurationAction = openProfilesConfigurationAction
     }
@@ -31,6 +34,12 @@ final class TerminalProfilesMenuController {
         direction: SlotSplitDirection,
         preferredWindowID: UUID?
     ) -> Bool {
+        // Profile catalogs can reload while the palette or menus are open, so
+        // revalidate the profile ID at submission time instead of silently
+        // falling back to an unprofiled split when the entry has gone stale.
+        guard terminalProfileProvider.catalog.profile(id: profileID) != nil else {
+            return false
+        }
         guard let workspaceID = store.commandSelection(preferredWindowID: preferredWindowID)?.workspace.id else {
             return false
         }
@@ -77,7 +86,7 @@ struct TerminalProfileMenuModel: Equatable {
                 profileID: profile.id,
                 actions: [
                     Section.Action(
-                        title: "Split Right",
+                        title: ToasttyBuiltInCommand.splitRight.title,
                         direction: .right,
                         shortcut: registry.chord(
                             for: .terminalProfileSplit(
@@ -87,7 +96,7 @@ struct TerminalProfileMenuModel: Equatable {
                         )
                     ),
                     Section.Action(
-                        title: "Split Down",
+                        title: ToasttyBuiltInCommand.splitDown.title,
                         direction: .down,
                         shortcut: registry.chord(
                             for: .terminalProfileSplit(
@@ -243,21 +252,21 @@ struct ToasttyCommandMenus: Commands {
         let scaleCommandTarget = focusedScaleCommandTarget
 
         CommandGroup(replacing: .newItem) {
-            Button("New Tab") {
+            Button(ToasttyBuiltInCommand.newTab.title) {
                 store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.newTab.key,
-                modifiers: ToasttyKeyboardShortcuts.newTab.modifiers
+                ToasttyBuiltInCommand.newTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newTab.requiredShortcut.modifiers
             )
             .disabled(commandWorkspace == nil)
 
-            Button("New Window") {
+            Button(ToasttyBuiltInCommand.newWindow.title) {
                 store.createWindowFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.newWindow.key,
-                modifiers: ToasttyKeyboardShortcuts.newWindow.modifiers
+                ToasttyBuiltInCommand.newWindow.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newWindow.requiredShortcut.modifiers
             )
         }
 
@@ -285,7 +294,7 @@ struct ToasttyCommandMenus: Commands {
             Divider()
 
             Button(action: reloadConfiguration) {
-                Label("Reload Configuration", systemImage: "arrow.clockwise")
+                Label(ToasttyBuiltInCommand.reloadConfiguration.title, systemImage: "arrow.clockwise")
             }
             .disabled(!supportsConfigurationReload)
 
@@ -393,41 +402,41 @@ struct ToasttyCommandMenus: Commands {
         }
 
         CommandGroup(replacing: .sidebar) {
-            Button(sidebarVisibleForCommand ? "Hide Sidebar" : "Show Sidebar") {
+            Button(ToasttyBuiltInCommand.toggleSidebarTitle(sidebarVisible: sidebarVisibleForCommand)) {
                 toggleSidebarFromCommandSelection()
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.toggleSidebar.key,
-                modifiers: ToasttyKeyboardShortcuts.toggleSidebar.modifiers
+                ToasttyBuiltInCommand.toggleSidebar.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.toggleSidebar.requiredShortcut.modifiers
             )
             .disabled(commandSelection == nil)
         }
 
         CommandMenu("Workspace") {
-            Button("New Workspace") {
+            Button(ToasttyBuiltInCommand.newWorkspace.title) {
                 store.createWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.newWorkspace.key,
-                modifiers: ToasttyKeyboardShortcuts.newWorkspace.modifiers
+                ToasttyBuiltInCommand.newWorkspace.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.newWorkspace.requiredShortcut.modifiers
             )
             .disabled(store.canCreateWorkspaceFromCommand(preferredWindowID: preferredWindowID) == false)
 
-            Button("Rename Workspace") {
+            Button(ToasttyBuiltInCommand.renameWorkspace.title) {
                 store.renameSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.renameWorkspace.key,
-                modifiers: ToasttyKeyboardShortcuts.renameWorkspace.modifiers
+                ToasttyBuiltInCommand.renameWorkspace.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.renameWorkspace.requiredShortcut.modifiers
             )
             .disabled(commandWorkspace == nil)
 
-            Button("Close Workspace") {
+            Button(ToasttyBuiltInCommand.closeWorkspace.title) {
                 store.closeSelectedWorkspaceFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.closeWorkspace.key,
-                modifiers: ToasttyKeyboardShortcuts.closeWorkspace.modifiers
+                ToasttyBuiltInCommand.closeWorkspace.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.closeWorkspace.requiredShortcut.modifiers
             )
             .disabled(commandWorkspace == nil)
 
@@ -490,7 +499,7 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Button("Close Panel") {
+            Button(ToasttyBuiltInCommand.closePanel.title) {
                 closeFocusedPanelFromCommandSelection()
             }
             .disabled(commandWorkspace?.focusedPanelID == nil)
@@ -522,47 +531,53 @@ struct ToasttyCommandMenus: Commands {
 
             Divider()
 
-            Button("New Tab") {
+            Button(ToasttyBuiltInCommand.newTab.title) {
                 store.createWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
             }
             .disabled(commandWorkspace == nil)
 
-            Button("Rename Tab") {
+            Button(ToasttyBuiltInCommand.renameTab.title) {
                 store.renameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID)
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.renameTab.key,
-                modifiers: ToasttyKeyboardShortcuts.renameTab.modifiers
+                ToasttyBuiltInCommand.renameTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.renameTab.requiredShortcut.modifiers
             )
             .disabled(store.canRenameSelectedWorkspaceTabFromCommand(preferredWindowID: preferredWindowID) == false)
 
-            Button("Select Previous Tab") {
+            Button(ToasttyBuiltInCommand.selectPreviousTab.title) {
                 store.selectAdjacentWorkspaceTab(
                     preferredWindowID: preferredWindowID,
                     direction: .previous
                 )
             }
-            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectPreviousTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectPreviousTab.requiredShortcut.modifiers
+            )
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
-            Button("Select Next Tab") {
+            Button(ToasttyBuiltInCommand.selectNextTab.title) {
                 store.selectAdjacentWorkspaceTab(
                     preferredWindowID: preferredWindowID,
                     direction: .next
                 )
             }
-            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .keyboardShortcut(
+                ToasttyBuiltInCommand.selectNextTab.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.selectNextTab.requiredShortcut.modifiers
+            )
             .disabled(commandWorkspace.map { $0.orderedTabs.count > 1 } != true)
 
-            Button("Jump to Next Active") {
+            Button(ToasttyBuiltInCommand.jumpToNextActive.title) {
                 store.focusNextUnreadOrActivePanelFromCommand(
                     preferredWindowID: commandSelection?.windowID ?? preferredWindowID,
                     sessionRuntimeStore: sessionRuntimeStore
                 )
             }
             .keyboardShortcut(
-                ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.key,
-                modifiers: ToasttyKeyboardShortcuts.focusNextUnreadOrActivePanel.modifiers
+                ToasttyBuiltInCommand.jumpToNextActive.requiredShortcut.key,
+                modifiers: ToasttyBuiltInCommand.jumpToNextActive.requiredShortcut.modifiers
             )
             .disabled(canFocusNextUnreadOrActivePanel == false)
         }

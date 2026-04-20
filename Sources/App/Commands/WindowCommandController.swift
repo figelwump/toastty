@@ -295,14 +295,14 @@ final class SplitLayoutCommandController {
 @MainActor
 final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
     private enum ItemTitle {
-        static let newWorkspace = "New Workspace"
-        static let renameWorkspace = "Rename Workspace"
-        static let closeWorkspace = "Close Workspace"
-        static let closePanel = "Close Panel"
-        static let renameTab = "Rename Tab"
-        static let selectPreviousTab = "Select Previous Tab"
-        static let selectNextTab = "Select Next Tab"
-        static let jumpToNextUnreadOrActive = "Jump to Next Unread or Active"
+        static let newWorkspace = ToasttyBuiltInCommand.newWorkspace.title
+        static let renameWorkspace = ToasttyBuiltInCommand.renameWorkspace.title
+        static let closeWorkspace = ToasttyBuiltInCommand.closeWorkspace.title
+        static let closePanel = ToasttyBuiltInCommand.closePanel.title
+        static let renameTab = ToasttyBuiltInCommand.renameTab.title
+        static let selectPreviousTab = ToasttyBuiltInCommand.selectPreviousTab.title
+        static let selectNextTab = ToasttyBuiltInCommand.selectNextTab.title
+        static let jumpToNextUnreadOrActive = ToasttyBuiltInCommand.jumpToNextActive.title
     }
 
     private let windowCommandController: WindowCommandController
@@ -466,7 +466,10 @@ final class WorkspaceMenuBridge: NSObject, NSMenuItemValidation {
 final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     private let windowCommandController: WindowCommandController
     private let closeWorkspaceCommandController: CloseWorkspaceCommandController
-    private lazy var closePanelItem = makeManagedItem(title: "Close Panel", action: #selector(performCloseWindow(_:)))
+    private lazy var closePanelItem = makeManagedItem(
+        title: ToasttyBuiltInCommand.closePanel.title,
+        action: #selector(performCloseWindow(_:))
+    )
     private lazy var closeWorkspaceItem = makeManagedItem(
         title: "Close Workspace",
         action: #selector(performCloseWorkspace(_:))
@@ -526,7 +529,11 @@ final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     private func restoreOwnedItems() {
-        configureManagedItem(closePanelItem, title: "Close Panel", action: #selector(performCloseWindow(_:)))
+        configureManagedItem(
+            closePanelItem,
+            title: ToasttyBuiltInCommand.closePanel.title,
+            action: #selector(performCloseWindow(_:))
+        )
         configureManagedItem(
             closeWorkspaceItem,
             title: "Close Workspace",
@@ -638,7 +645,7 @@ final class FileCloseMenuBridge: NSObject, NSMenuItemValidation {
     }
 
     private static func isRetargetedCloseItem(_ item: NSMenuItem) -> Bool {
-        item.title == "Close Panel" || item.title == "Close Workspace"
+        item.title == ToasttyBuiltInCommand.closePanel.title || item.title == "Close Workspace"
     }
 
     private static func findFileMenu(in items: [NSMenuItem]) -> NSMenu? {
@@ -728,9 +735,9 @@ final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
     private func restoreOwnedItems() {
         configureMenuItem(
             splitRightItem,
-            title: "Split Right",
+            title: ToasttyBuiltInCommand.splitRight.title,
             action: #selector(splitRight(_:)),
-            shortcut: ToasttyKeyboardShortcuts.splitHorizontal
+            shortcut: ToasttyBuiltInCommand.splitRight.requiredShortcut
         )
         configureMenuItem(
             splitLeftItem,
@@ -739,9 +746,9 @@ final class FileSplitMenuBridge: NSObject, NSMenuItemValidation {
         )
         configureMenuItem(
             splitDownItem,
-            title: "Split Down",
+            title: ToasttyBuiltInCommand.splitDown.title,
             action: #selector(splitDown(_:)),
-            shortcut: ToasttyKeyboardShortcuts.splitVertical
+            shortcut: ToasttyBuiltInCommand.splitDown.requiredShortcut
         )
         configureMenuItem(
             splitUpItem,
@@ -989,15 +996,15 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
         separatorItem.representedObject = ManagedMenuSectionMarker.windowSplit.rawValue
         configureMenuItem(
             selectPreviousItem,
-            title: "Select Previous Split",
+            title: ToasttyBuiltInCommand.selectPreviousSplit.title,
             action: #selector(selectPreviousSplit(_:)),
-            shortcut: ToasttyKeyboardShortcuts.focusPreviousPane
+            shortcut: ToasttyBuiltInCommand.selectPreviousSplit.requiredShortcut
         )
         configureMenuItem(
             selectNextItem,
-            title: "Select Next Split",
+            title: ToasttyBuiltInCommand.selectNextSplit.title,
             action: #selector(selectNextSplit(_:)),
-            shortcut: ToasttyKeyboardShortcuts.focusNextPane
+            shortcut: ToasttyBuiltInCommand.selectNextSplit.requiredShortcut
         )
 
         navigateMenu.title = Self.navigateSplitsMenuTitle
@@ -1007,35 +1014,35 @@ final class WindowSplitMenuBridge: NSObject, NSMenuItemValidation {
 
         configureMenuItem(
             navigateUpItem,
-            title: "Navigate Up",
+            title: ToasttyBuiltInCommand.navigateSplitUp.title,
             action: #selector(navigateUp(_:)),
-            shortcut: ToasttyKeyboardShortcuts.focusPaneUp
+            shortcut: ToasttyBuiltInCommand.navigateSplitUp.requiredShortcut
         )
         configureMenuItem(
             navigateDownItem,
-            title: "Navigate Down",
+            title: ToasttyBuiltInCommand.navigateSplitDown.title,
             action: #selector(navigateDown(_:)),
-            shortcut: ToasttyKeyboardShortcuts.focusPaneDown
+            shortcut: ToasttyBuiltInCommand.navigateSplitDown.requiredShortcut
         )
         configureMenuItem(
             navigateLeftItem,
-            title: "Navigate Left",
+            title: ToasttyBuiltInCommand.navigateSplitLeft.title,
             action: #selector(navigateLeft(_:)),
-            shortcut: ToasttyKeyboardShortcuts.focusPaneLeft
+            shortcut: ToasttyBuiltInCommand.navigateSplitLeft.requiredShortcut
         )
         configureMenuItem(
             navigateRightItem,
-            title: "Navigate Right",
+            title: ToasttyBuiltInCommand.navigateSplitRight.title,
             action: #selector(navigateRight(_:)),
-            shortcut: ToasttyKeyboardShortcuts.focusPaneRight
+            shortcut: ToasttyBuiltInCommand.navigateSplitRight.requiredShortcut
         )
         ensureOwnedSubmenuItemsAttached(ownedNavigateItems, to: navigateMenu)
 
         configureMenuItem(
             equalizeItem,
-            title: "Equalize Splits",
+            title: ToasttyBuiltInCommand.equalizeSplits.title,
             action: #selector(equalizeSplits(_:)),
-            shortcut: ToasttyKeyboardShortcuts.equalizeSplits
+            shortcut: ToasttyBuiltInCommand.equalizeSplits.requiredShortcut
         )
         resizeSeparatorItem.representedObject = ManagedMenuSectionMarker.windowSplit.rawValue
         configureMenuItem(

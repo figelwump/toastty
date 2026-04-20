@@ -11,6 +11,7 @@ final class WorkspaceViewTests: XCTestCase {
         let workspaceID: UUID
         let panelID: UUID
         let store: AppStore
+        let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
         let hostingView: NSView
         let window: NSWindow
     }
@@ -299,6 +300,72 @@ final class WorkspaceViewTests: XCTestCase {
     func testWorkspaceUnreadSummaryTextUsesSingularAndPluralForms() {
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 1), "1 unread")
         XCTAssertEqual(WorkspaceView.workspaceUnreadSummaryText(unreadPanelCount: 2), "2 unreads")
+    }
+
+    func testFocusedUnreadClearCandidateRequiresActiveApp() throws {
+        let workspace = try makeFocusedUnreadWorkspace()
+
+        XCTAssertNil(
+            WorkspaceView.focusedUnreadClearCandidate(
+                workspace: workspace,
+                appIsActive: false
+            )
+        )
+        XCTAssertEqual(
+            WorkspaceView.focusedUnreadClearCandidate(
+                workspace: workspace,
+                appIsActive: true
+            ),
+            WorkspaceView.FocusedUnreadClearCandidate(
+                workspaceID: workspace.id,
+                panelID: try XCTUnwrap(workspace.focusedPanelID)
+            )
+        )
+    }
+
+    func testShouldClearFocusedUnreadRequiresMatchingFocusedUnreadPanelInActiveApp() throws {
+        var workspace = try makeFocusedUnreadWorkspace()
+        let candidate = try XCTUnwrap(
+            WorkspaceView.focusedUnreadClearCandidate(
+                workspace: workspace,
+                appIsActive: true
+            )
+        )
+
+        XCTAssertTrue(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: true
+            )
+        )
+
+        XCTAssertFalse(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: false
+            )
+        )
+
+        workspace.unreadPanelIDs = []
+        XCTAssertFalse(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: true
+            )
+        )
+
+        workspace = try makeFocusedUnreadWorkspace()
+        workspace.focusedPanelID = UUID()
+        XCTAssertFalse(
+            WorkspaceView.shouldClearFocusedUnread(
+                currentWorkspace: workspace,
+                candidate: candidate,
+                appIsActive: true
+            )
+        )
     }
 
     func testWorkspaceTabFocusIndicatorStyleKeepsFullLabelAtIdealWidth() {
@@ -657,6 +724,33 @@ final class WorkspaceViewTests: XCTestCase {
         harness.window.orderOut(nil)
     }
 
+    @MainActor
+    func testBlankBrowserCreationConsumesPendingLocationFocusRequestWhenBrowserBecomesVisible() throws {
+        let harness = try makeWorkspaceHarness()
+
+        XCTAssertTrue(
+            harness.store.createBrowserPanelFromCommand(
+                preferredWindowID: harness.windowID,
+                request: BrowserPanelCreateRequest(placementOverride: .splitRight)
+            )
+        )
+
+        let workspace = try XCTUnwrap(harness.store.state.workspacesByID[harness.workspaceID])
+        let browserPanelID = try XCTUnwrap(workspace.focusedPanelID)
+
+        pumpMainRunLoop(duration: 0.1)
+        harness.hostingView.layoutSubtreeIfNeeded()
+
+        XCTAssertNil(harness.store.pendingBrowserLocationFocusRequest)
+        XCTAssertNotNil(
+            harness.webPanelRuntimeRegistry
+                .browserRuntime(for: browserPanelID)
+                .locationFieldFocusRequestID
+        )
+
+        harness.window.orderOut(nil)
+    }
+
     private func assertColor(
         _ actual: Color,
         equals expected: Color,
@@ -681,6 +775,15 @@ final class WorkspaceViewTests: XCTestCase {
             agentProfiles: agentProfiles,
             agentProfilesFilePath: "/tmp/agents.toml"
         )
+    }
+
+    private func makeFocusedUnreadWorkspace() throws -> WorkspaceState {
+        let state = AppState.bootstrap()
+        let workspaceID = try XCTUnwrap(state.windows.first?.selectedWorkspaceID)
+        var workspace = try XCTUnwrap(state.workspacesByID[workspaceID])
+        let focusedPanelID = try XCTUnwrap(workspace.focusedPanelID)
+        workspace.unreadPanelIDs = [focusedPanelID]
+        return workspace
     }
 
     @MainActor
@@ -734,6 +837,7 @@ final class WorkspaceViewTests: XCTestCase {
             focusedPanelCommandController: focusedPanelCommandController,
             agentLaunchService: agentLaunchService,
             showAgentGetStartedFlow: {},
+            toggleCommandPalette: { _ in },
             terminalRuntimeContext: TerminalWindowRuntimeContext(
                 windowID: windowID,
                 runtimeRegistry: registry
@@ -756,6 +860,7 @@ final class WorkspaceViewTests: XCTestCase {
             workspaceID: workspaceID,
             panelID: panelID,
             store: store,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             hostingView: hostingView,
             window: window
         )

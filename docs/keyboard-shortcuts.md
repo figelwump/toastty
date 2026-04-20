@@ -53,6 +53,12 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 | `Option+Shift+]` | Next tab (wrapping, terminal-proof) |
 | `Option+Shift+1`–`Option+Shift+0` | Focus pane by position |
 
+## Command palette
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+Shift+P` | Open the command palette |
+
 ## Search
 
 | Shortcut | Action |
@@ -104,5 +110,7 @@ These shortcuts depend on configured profiles:
 | `Cmd+Opt+<key>` | Launch agent profile when the profile defines `shortcutKey` |
 | `Cmd+Opt+<key>` | Split right with a terminal profile when the profile defines `shortcutKey` |
 | `Cmd+Opt+Shift+<key>` | Split down with a terminal profile when the profile defines `shortcutKey` |
+
+Configured agent profiles also appear in the command palette as `Run Agent: <Display Name>`. Configured terminal profiles appear there as `Split Right With <Display Name>` and `Split Down With <Display Name>` when the focused pane can split.
 
 For agent setup details, see [running-agents.md](running-agents.md). For terminal profile setup details, see [terminal-profiles.md](terminal-profiles.md).

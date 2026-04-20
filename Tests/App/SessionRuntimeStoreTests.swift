@@ -705,7 +705,7 @@ struct SessionRuntimeStoreTests {
     func updateStatusClearsUnreadWhenManagedSessionReturnsToWorking() throws {
         let appState = makeTwoPanelAppState()
         let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
-        let sessionStore = SessionRuntimeStore()
+        let sessionStore = SessionRuntimeStore(isApplicationActive: { true })
         sessionStore.bind(store: appStore)
         let selection = try #require(appStore.state.selectedWorkspaceSelection())
         let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
@@ -735,6 +735,90 @@ struct SessionRuntimeStoreTests {
 
         sessionStore.updateStatus(
             sessionID: "sess-managed-working",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Continuing"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        let workspaceAfterWorking = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterWorking.unreadPanelIDs.isEmpty)
+        #expect(workspaceAfterWorking.unreadNotificationCount == 0)
+    }
+
+    @Test
+    func updateStatusKeepsUnreadWhenFocusedManagedSessionReturnsToWorkingInInactiveApp() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore(isApplicationActive: { false })
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let focusedPanelID = try #require(selection.workspace.focusedPanelID)
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-focused-managed-working-inactive",
+            agent: .codex,
+            panelID: focusedPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-focused-managed-working-inactive",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Subagent finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let workspaceAfterReady = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterReady.unreadPanelIDs == [focusedPanelID])
+
+        sessionStore.updateStatus(
+            sessionID: "sess-focused-managed-working-inactive",
+            status: SessionStatus(kind: .working, summary: "Working", detail: "Continuing"),
+            at: startedAt.addingTimeInterval(2)
+        )
+
+        let workspaceAfterWorking = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterWorking.unreadPanelIDs == [focusedPanelID])
+        #expect(workspaceAfterWorking.unreadNotificationCount == 1)
+    }
+
+    @Test
+    func updateStatusClearsUnreadWhenBackgroundManagedSessionReturnsToWorkingInInactiveApp() throws {
+        let appState = makeTwoPanelAppState()
+        let appStore = AppStore(state: appState, persistTerminalFontPreference: false)
+        let sessionStore = SessionRuntimeStore(isApplicationActive: { false })
+        sessionStore.bind(store: appStore)
+        let selection = try #require(appStore.state.selectedWorkspaceSelection())
+        let backgroundPanelID = try #require(selection.workspace.layoutTree.allSlotInfos.map(\.panelID).first {
+            $0 != selection.workspace.focusedPanelID
+        })
+        let startedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        sessionStore.startSession(
+            sessionID: "sess-background-managed-working-inactive",
+            agent: .codex,
+            panelID: backgroundPanelID,
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            usesSessionStatusNotifications: true,
+            cwd: "/repo",
+            repoRoot: "/repo",
+            at: startedAt
+        )
+        sessionStore.updateStatus(
+            sessionID: "sess-background-managed-working-inactive",
+            status: SessionStatus(kind: .ready, summary: "Ready", detail: "Subagent finished"),
+            at: startedAt.addingTimeInterval(1)
+        )
+
+        let workspaceAfterReady = try #require(appStore.state.workspacesByID[selection.workspaceID])
+        #expect(workspaceAfterReady.unreadPanelIDs == [backgroundPanelID])
+
+        sessionStore.updateStatus(
+            sessionID: "sess-background-managed-working-inactive",
             status: SessionStatus(kind: .working, summary: "Working", detail: "Continuing"),
             at: startedAt.addingTimeInterval(2)
         )

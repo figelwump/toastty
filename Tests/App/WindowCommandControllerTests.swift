@@ -469,13 +469,21 @@ final class WindowCommandControllerTests: XCTestCase {
         let mainMenu = NSMenu(title: "Main")
         let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
         let workspaceMenu = NSMenu(title: "Workspace")
-        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
+        let renameTabItem = NSMenuItem(title: ToasttyBuiltInCommand.renameTab.title, action: nil, keyEquivalent: "e")
         renameTabItem.keyEquivalentModifierMask = [.option, .shift]
-        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
+        let previousItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectPreviousTab.title,
+            action: nil,
+            keyEquivalent: "["
+        )
         previousItem.keyEquivalentModifierMask = [.command, .shift]
-        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
+        let nextItem = NSMenuItem(title: ToasttyBuiltInCommand.selectNextTab.title, action: nil, keyEquivalent: "]")
         nextItem.keyEquivalentModifierMask = [.command, .shift]
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
+        let unreadItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.jumpToNextActive.title,
+            action: nil,
+            keyEquivalent: "a"
+        )
         unreadItem.keyEquivalentModifierMask = [.command, .shift]
         workspaceMenu.addItem(renameTabItem)
         workspaceMenu.addItem(previousItem)
@@ -725,14 +733,30 @@ final class WindowCommandControllerTests: XCTestCase {
         let mainMenu = NSMenu(title: "Main")
         let workspaceItem = NSMenuItem(title: "Workspace", action: nil, keyEquivalent: "")
         let workspaceMenu = NSMenu(title: "Workspace")
-        let newWorkspaceItem = NSMenuItem(title: "New Workspace", action: nil, keyEquivalent: "n")
-        let renameWorkspaceItem = NSMenuItem(title: "Rename Workspace", action: nil, keyEquivalent: "e")
-        let closePanelItem = NSMenuItem(title: "Close Panel", action: nil, keyEquivalent: "w")
-        let renameTabItem = NSMenuItem(title: "Rename Tab", action: nil, keyEquivalent: "e")
-        let closeWorkspaceItem = NSMenuItem(title: "Close Workspace", action: nil, keyEquivalent: "w")
-        let previousItem = NSMenuItem(title: "Select Previous Tab", action: nil, keyEquivalent: "[")
-        let nextItem = NSMenuItem(title: "Select Next Tab", action: nil, keyEquivalent: "]")
-        let unreadItem = NSMenuItem(title: "Jump to Next Unread or Active", action: nil, keyEquivalent: "a")
+        let newWorkspaceItem = NSMenuItem(title: ToasttyBuiltInCommand.newWorkspace.title, action: nil, keyEquivalent: "n")
+        let renameWorkspaceItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.renameWorkspace.title,
+            action: nil,
+            keyEquivalent: "e"
+        )
+        let closePanelItem = NSMenuItem(title: ToasttyBuiltInCommand.closePanel.title, action: nil, keyEquivalent: "w")
+        let renameTabItem = NSMenuItem(title: ToasttyBuiltInCommand.renameTab.title, action: nil, keyEquivalent: "e")
+        let closeWorkspaceItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.closeWorkspace.title,
+            action: nil,
+            keyEquivalent: "w"
+        )
+        let previousItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.selectPreviousTab.title,
+            action: nil,
+            keyEquivalent: "["
+        )
+        let nextItem = NSMenuItem(title: ToasttyBuiltInCommand.selectNextTab.title, action: nil, keyEquivalent: "]")
+        let unreadItem = NSMenuItem(
+            title: ToasttyBuiltInCommand.jumpToNextActive.title,
+            action: nil,
+            keyEquivalent: "a"
+        )
         workspaceMenu.addItem(newWorkspaceItem)
         workspaceMenu.addItem(renameWorkspaceItem)
         workspaceMenu.addItem(closePanelItem)
@@ -1094,8 +1118,8 @@ final class WindowCommandControllerTests: XCTestCase {
                 "Minimize",
                 "Arrange in Front",
                 "<separator>",
-                "Select Previous Split",
-                "Select Next Split",
+                ToasttyBuiltInCommand.selectPreviousSplit.title,
+                ToasttyBuiltInCommand.selectNextSplit.title,
                 "Navigate Splits",
                 "Resize Splits",
                 "<separator>",
@@ -1104,12 +1128,20 @@ final class WindowCommandControllerTests: XCTestCase {
         )
 
         let navigateMenu = try XCTUnwrap(rebuiltWindowMenu.items[5].submenu)
-        XCTAssertEqual(menuItemTitles(in: navigateMenu), ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"])
+        XCTAssertEqual(
+            menuItemTitles(in: navigateMenu),
+            [
+                ToasttyBuiltInCommand.navigateSplitUp.title,
+                ToasttyBuiltInCommand.navigateSplitDown.title,
+                ToasttyBuiltInCommand.navigateSplitLeft.title,
+                ToasttyBuiltInCommand.navigateSplitRight.title,
+            ]
+        )
 
         let resizeMenu = try XCTUnwrap(rebuiltWindowMenu.items[6].submenu)
         XCTAssertEqual(
             menuItemTitles(in: resizeMenu),
-            ["Equalize Splits", "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
+            [ToasttyBuiltInCommand.equalizeSplits.title, "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
         )
     }
 
@@ -1204,18 +1236,38 @@ final class WindowCommandControllerTests: XCTestCase {
 
         XCTAssertEqual(
             menuItemTitles(in: fileMenu),
-            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+            [
+                ToasttyBuiltInCommand.splitRight.title,
+                "Split Left",
+                ToasttyBuiltInCommand.splitDown.title,
+                "Split Up",
+                "<separator>",
+                ToasttyBuiltInCommand.closePanel.title,
+                "Close Workspace",
+            ]
         )
-        XCTAssertEqual(fileMenu.items[0].keyEquivalent, "d")
-        XCTAssertEqual(fileMenu.items[0].keyEquivalentModifierMask, [.command])
-        XCTAssertEqual(fileMenu.items[2].keyEquivalent, "d")
-        XCTAssertEqual(fileMenu.items[2].keyEquivalentModifierMask, [.command, .shift])
+        XCTAssertEqual(
+            menuShortcutLabel(for: fileMenu.items[0]),
+            ToasttyBuiltInCommand.splitRight.requiredShortcut.symbolLabel
+        )
+        XCTAssertEqual(
+            menuShortcutLabel(for: fileMenu.items[2]),
+            ToasttyBuiltInCommand.splitDown.requiredShortcut.symbolLabel
+        )
         XCTAssertTrue(bridge.validateMenuItem(fileMenu.items[0]))
 
         bridge.installIfNeeded()
         XCTAssertEqual(
             menuItemTitles(in: fileMenu),
-            ["Split Right", "Split Left", "Split Down", "Split Up", "<separator>", "Close Panel", "Close Workspace"]
+            [
+                ToasttyBuiltInCommand.splitRight.title,
+                "Split Left",
+                ToasttyBuiltInCommand.splitDown.title,
+                "Split Up",
+                "<separator>",
+                ToasttyBuiltInCommand.closePanel.title,
+                "Close Workspace",
+            ]
         )
     }
 
@@ -1330,8 +1382,8 @@ final class WindowCommandControllerTests: XCTestCase {
                 "Minimize",
                 "Arrange in Front",
                 "<separator>",
-                "Select Previous Split",
-                "Select Next Split",
+                ToasttyBuiltInCommand.selectPreviousSplit.title,
+                ToasttyBuiltInCommand.selectNextSplit.title,
                 "Navigate Splits",
                 "Resize Splits",
                 "<separator>",
@@ -1340,44 +1392,61 @@ final class WindowCommandControllerTests: XCTestCase {
         )
 
         let previousItem = windowMenu.items[3]
-        XCTAssertEqual(previousItem.keyEquivalent, "[")
-        XCTAssertEqual(previousItem.keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(
+            previousItem.keyEquivalent,
+            String(ToasttyBuiltInCommand.selectPreviousSplit.requiredShortcut.key.character)
+        )
+        XCTAssertEqual(menuShortcutLabel(for: previousItem), ToasttyBuiltInCommand.selectPreviousSplit.requiredShortcut.symbolLabel)
         XCTAssertTrue(bridge.validateMenuItem(previousItem))
 
         let nextItem = windowMenu.items[4]
-        XCTAssertEqual(nextItem.keyEquivalent, "]")
-        XCTAssertEqual(nextItem.keyEquivalentModifierMask, [.command])
+        XCTAssertEqual(
+            nextItem.keyEquivalent,
+            String(ToasttyBuiltInCommand.selectNextSplit.requiredShortcut.key.character)
+        )
+        XCTAssertEqual(menuShortcutLabel(for: nextItem), ToasttyBuiltInCommand.selectNextSplit.requiredShortcut.symbolLabel)
 
         let navigateMenu = try XCTUnwrap(windowMenu.items[5].submenu)
-        XCTAssertEqual(menuItemTitles(in: navigateMenu), ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"])
+        XCTAssertEqual(
+            menuItemTitles(in: navigateMenu),
+            [
+                ToasttyBuiltInCommand.navigateSplitUp.title,
+                ToasttyBuiltInCommand.navigateSplitDown.title,
+                ToasttyBuiltInCommand.navigateSplitLeft.title,
+                ToasttyBuiltInCommand.navigateSplitRight.title,
+            ]
+        )
         XCTAssertEqual(
             navigateMenu.items[0].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneUp.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitUp.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[0].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[0]), ToasttyBuiltInCommand.navigateSplitUp.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             navigateMenu.items[1].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneDown.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitDown.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[1].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[1]), ToasttyBuiltInCommand.navigateSplitDown.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             navigateMenu.items[2].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneLeft.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitLeft.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[2].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[2]), ToasttyBuiltInCommand.navigateSplitLeft.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             navigateMenu.items[3].keyEquivalent,
-            String(ToasttyKeyboardShortcuts.focusPaneRight.key.character)
+            String(ToasttyBuiltInCommand.navigateSplitRight.requiredShortcut.key.character)
         )
-        XCTAssertEqual(navigateMenu.items[3].keyEquivalentModifierMask, [.command, .option])
+        XCTAssertEqual(menuShortcutLabel(for: navigateMenu.items[3]), ToasttyBuiltInCommand.navigateSplitRight.requiredShortcut.symbolLabel)
 
         let resizeMenu = try XCTUnwrap(windowMenu.items[6].submenu)
         XCTAssertEqual(
             menuItemTitles(in: resizeMenu),
-            ["Equalize Splits", "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
+            [ToasttyBuiltInCommand.equalizeSplits.title, "<separator>", "Resize Left", "Resize Right", "Resize Up", "Resize Down"]
         )
-        XCTAssertEqual(resizeMenu.items[0].keyEquivalent, "=")
-        XCTAssertEqual(resizeMenu.items[0].keyEquivalentModifierMask, [.command, .control])
+        XCTAssertEqual(
+            resizeMenu.items[0].keyEquivalent,
+            String(ToasttyBuiltInCommand.equalizeSplits.requiredShortcut.key.character)
+        )
+        XCTAssertEqual(menuShortcutLabel(for: resizeMenu.items[0]), ToasttyBuiltInCommand.equalizeSplits.requiredShortcut.symbolLabel)
         XCTAssertEqual(
             resizeMenu.items[2].keyEquivalent,
             String(ToasttyKeyboardShortcuts.resizeSplitLeft.key.character)
@@ -1403,8 +1472,8 @@ final class WindowCommandControllerTests: XCTestCase {
                 "Minimize",
                 "Arrange in Front",
                 "<separator>",
-                "Select Previous Split",
-                "Select Next Split",
+                ToasttyBuiltInCommand.selectPreviousSplit.title,
+                ToasttyBuiltInCommand.selectNextSplit.title,
                 "Navigate Splits",
                 "Resize Splits",
                 "<separator>",
@@ -1474,7 +1543,12 @@ final class WindowCommandControllerTests: XCTestCase {
         let repairedNavigateMenu = try XCTUnwrap(windowMenu.items[5].submenu)
         XCTAssertEqual(
             menuItemTitles(in: repairedNavigateMenu),
-            ["Navigate Up", "Navigate Down", "Navigate Left", "Navigate Right"]
+            [
+                ToasttyBuiltInCommand.navigateSplitUp.title,
+                ToasttyBuiltInCommand.navigateSplitDown.title,
+                ToasttyBuiltInCommand.navigateSplitLeft.title,
+                ToasttyBuiltInCommand.navigateSplitRight.title,
+            ]
         )
     }
 
@@ -1543,6 +1617,18 @@ final class WindowCommandControllerTests: XCTestCase {
         let controller = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(
+                catalog: TerminalProfileCatalog(
+                    profiles: [
+                        TerminalProfile(
+                            id: "zmx",
+                            displayName: "ZMX",
+                            badgeLabel: "ZMX",
+                            startupCommand: "zmx attach"
+                        ),
+                    ]
+                )
+            ),
             installShellIntegrationAction: {},
             openProfilesConfigurationAction: {}
         )
@@ -1565,6 +1651,33 @@ final class WindowCommandControllerTests: XCTestCase {
         XCTAssertEqual(profiledPanels.count, 1)
     }
 
+    func testTerminalProfilesMenuControllerDoesNotSplitWhenProfileIsUnavailable() {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        let workspaceID = store.selectedWorkspace?.id
+        let initialPanelCount = workspaceID.flatMap { store.state.workspacesByID[$0]?.panels.count }
+        let controller = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(catalog: .empty),
+            installShellIntegrationAction: {},
+            openProfilesConfigurationAction: {}
+        )
+
+        XCTAssertFalse(
+            controller.splitFocusedSlot(
+                profileID: "zmx",
+                direction: .right,
+                preferredWindowID: nil
+            )
+        )
+        XCTAssertEqual(
+            workspaceID.flatMap { store.state.workspacesByID[$0]?.panels.count },
+            initialPanelCount
+        )
+    }
+
     func testTerminalProfilesMenuControllerRunsShellIntegrationAction() {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let runtimeRegistry = TerminalRuntimeRegistry()
@@ -1573,6 +1686,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let controller = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(catalog: .empty),
             installShellIntegrationAction: {
                 didInstallShellIntegration = true
             },
@@ -1591,6 +1705,7 @@ final class WindowCommandControllerTests: XCTestCase {
         let controller = TerminalProfilesMenuController(
             store: store,
             terminalRuntimeRegistry: runtimeRegistry,
+            terminalProfileProvider: StaticTerminalProfileProvider(catalog: .empty),
             installShellIntegrationAction: {},
             openProfilesConfigurationAction: {
                 didOpenProfilesConfiguration = true
@@ -1709,6 +1824,33 @@ final class WindowCommandControllerTests: XCTestCase {
         menu.items.map { item in
             item.isSeparatorItem ? "<separator>" : item.title
         }
+    }
+
+    private func menuShortcutLabel(for item: NSMenuItem) -> String {
+        var label = ""
+        let modifiers = item.keyEquivalentModifierMask.intersection(.deviceIndependentFlagsMask)
+        if modifiers.contains(.control) {
+            label += "⌃"
+        }
+        if modifiers.contains(.option) {
+            label += "⌥"
+        }
+        if modifiers.contains(.shift) {
+            label += "⇧"
+        }
+        if modifiers.contains(.command) {
+            label += "⌘"
+        }
+        return label + item.keyEquivalent.uppercased()
+    }
+}
+
+@MainActor
+private final class StaticTerminalProfileProvider: TerminalProfileProviding {
+    let catalog: TerminalProfileCatalog
+
+    init(catalog: TerminalProfileCatalog) {
+        self.catalog = catalog
     }
 }
 

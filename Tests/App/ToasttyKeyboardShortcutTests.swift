@@ -25,17 +25,28 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
             "Rename Tab\t⌥⇧E"
         )
         XCTAssertEqual(
+            ToasttyKeyboardShortcuts.selectPreviousTab.menuTitle("Select Previous Tab"),
+            "Select Previous Tab\t⇧⌘["
+        )
+        XCTAssertEqual(
+            ToasttyKeyboardShortcuts.selectNextTab.menuTitle("Select Next Tab"),
+            "Select Next Tab\t⇧⌘]"
+        )
+        XCTAssertEqual(
             ToasttyKeyboardShortcuts.closeWorkspace.menuTitle("Close workspace"),
             "Close workspace\t⇧⌘W"
         )
     }
 
     func testShortcutDefinitionsMatchExpectedGlyphs() {
+        XCTAssertEqual(ToasttyKeyboardShortcuts.commandPalette.symbolLabel, "⇧⌘P")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWindow.symbolLabel, "⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.toggleSidebar.symbolLabel, "⌘B")
         XCTAssertEqual(ToasttyKeyboardShortcuts.newWorkspace.symbolLabel, "⇧⌘N")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameWorkspace.symbolLabel, "⇧⌘E")
         XCTAssertEqual(ToasttyKeyboardShortcuts.renameTab.symbolLabel, "⌥⇧E")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.selectPreviousTab.symbolLabel, "⇧⌘[")
+        XCTAssertEqual(ToasttyKeyboardShortcuts.selectNextTab.symbolLabel, "⇧⌘]")
         XCTAssertEqual(ToasttyKeyboardShortcuts.closeWorkspace.symbolLabel, "⇧⌘W")
         XCTAssertEqual(ToasttyKeyboardShortcuts.find.symbolLabel, "⌘F")
         XCTAssertEqual(ToasttyKeyboardShortcuts.findNext.symbolLabel, "⌘G")
@@ -48,11 +59,14 @@ final class ToasttyKeyboardShortcutTests: XCTestCase {
 
     func testShortcutDefinitionsRemainUnique() {
         let shortcuts = [
+            ToasttyKeyboardShortcuts.commandPalette,
             ToasttyKeyboardShortcuts.newWindow,
             ToasttyKeyboardShortcuts.toggleSidebar,
             ToasttyKeyboardShortcuts.newWorkspace,
             ToasttyKeyboardShortcuts.renameWorkspace,
             ToasttyKeyboardShortcuts.renameTab,
+            ToasttyKeyboardShortcuts.selectPreviousTab,
+            ToasttyKeyboardShortcuts.selectNextTab,
             ToasttyKeyboardShortcuts.closeWorkspace,
             ToasttyKeyboardShortcuts.toggleFocusedPanel,
             ToasttyKeyboardShortcuts.find,

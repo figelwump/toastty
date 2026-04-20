@@ -31,7 +31,8 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Automatic agent status** — For Claude and Codex, you get automatic real-time agent status in the sidebar for built-in agent launches, with optional manual command shims for typed launches
 - **Multi-window** — Open a new Toastty window with `Cmd+N`; each window gets its own sidebar and workspace list
 - **Horizontal tabs** — Horizontal tabs per workspace, create with `Cmd+T`
-- **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu or top bar, with live sidebar status and notifications
+- **Running agents** — Launch coding agents directly into terminal panels from the `Agent` menu, top bar, or command palette, with live sidebar status and notifications
+- **Command palette** — Open a keyboard-first palette with `Cmd+Shift+P` to run built-in commands, switch workspaces, launch configured agents, and split with terminal profiles
 - **Unread badges** — See at a glance when a workspace has a coding agent that is ready for your review or response
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
@@ -54,6 +55,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+Shift+E` | Rename workspace |
 | `Option+Shift+E` | Rename tab |
 | `Cmd+Shift+W` | Close workspace |
+| `Cmd+Shift+P` | Open the command palette |
 | `Cmd+D` | Split horizontally |
 | `Cmd+Shift+D` | Split vertically |
 | `Cmd+]` | Focus next pane |
@@ -87,7 +89,7 @@ For the full shortcut reference grouped by task, see [docs/keyboard-shortcuts.md
 
 ## Running Agents
 
-Toastty can launch coding agents directly into terminal panels from the `Agent` menu or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
+Toastty can launch coding agents directly into terminal panels from the `Agent` menu, the top bar, the command palette, or via keyboard shortcuts. Built-in session telemetry drives sidebar status, unread badges, and desktop notifications automatically — no separate agent skill or manual wiring needed.
 
 For full details see [docs/running-agents.md](docs/running-agents.md).
 
@@ -108,7 +110,7 @@ displayName = "Claude Code"
 argv = ["claude"]
 ```
 
-Configured profiles appear in the `Agent` menu and as top-bar buttons. `shortcutKey` is optional; when set, Toastty binds `Cmd+Opt+<key>` to launch that profile.
+Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`. `shortcutKey` is optional; when set, Toastty binds `Cmd+Opt+<key>` to launch that profile.
 
 ### Profile IDs and special behavior
 

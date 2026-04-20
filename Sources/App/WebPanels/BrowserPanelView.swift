@@ -148,14 +148,27 @@ struct BrowserPanelView: View {
     }
 
     private func handleAddressEditingChanged(_ isEditing: Bool) {
-        if isEditing {
+        if Self.shouldActivatePanelWhenAddressEditingChanges(
+            isEditing: isEditing,
+            isActivePanel: isActivePanel
+        ) {
             activatePanel()
+        }
+
+        if isEditing {
             addressDraft = displayedAddressString
         }
         isEditingAddressField = isEditing
         if isEditing == false {
             syncAddressDraft()
         }
+    }
+
+    nonisolated static func shouldActivatePanelWhenAddressEditingChanges(
+        isEditing: Bool,
+        isActivePanel: Bool
+    ) -> Bool {
+        isEditing && isActivePanel == false
     }
 
     private func submitAddressDraft() {

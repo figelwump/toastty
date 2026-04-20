@@ -5,10 +5,10 @@ Toastty can launch coding agents directly into terminal panels, with built-in se
 ## Quick start
 
 1. If you want to type `codex`, `claude`, or supported wrappers directly into Toastty terminals, click the top-bar `Get Started…` button and choose `Set Up Typed Commands`
-2. If you want dedicated header buttons, Agent menu entries, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
+2. If you want dedicated header buttons, Agent menu entries, command palette results, and optional keyboard shortcuts, open `Agent > Manage Agents...` inside Toastty or choose `Open agents.toml` from `Get Started…`
 3. Uncomment or add a profile in `~/.toastty/agents.toml`
 4. Use `Toastty > Reload Configuration` to load the updated profiles without relaunching
-5. Click the agent name in the `Agent` menu or press its keyboard shortcut
+5. Click the agent name in the `Agent` menu, top bar, or command palette, or press its keyboard shortcut
 
 Toastty sends the configured command into the focused terminal panel and starts tracking the session automatically.
 
@@ -31,7 +31,7 @@ argv = ["claude"]
 
 | Field | Required | Description |
 |---|---|---|
-| `displayName` | yes | Label shown in the Agent menu and toolbar buttons |
+| `displayName` | yes | Label shown in the Agent menu, top-bar buttons, and command palette |
 | `argv` | yes | The exact command Toastty executes, as a JSON-style string array |
 | `manualCommandNames` | no | For built-in `[codex]` / `[claude]` profiles only, the extra executable basenames Toastty should shim for manual typed wrapper launches. Entries must be basenames with no paths or spaces. |
 | `shortcutKey` | no | Single ASCII letter or digit; registers `Cmd+Opt+<key>` |
@@ -66,6 +66,8 @@ argv = ["codex"]
 ```
 
 The profile ID is stored as an `AgentKind` internally. When a launch resolves to `AgentKind.codex` or `AgentKind.claude`, Toastty activates the corresponding instrumentation path. When the ID is anything else, the command runs as-is with only the base session context injected.
+
+Configured profiles appear in the `Agent` menu, as top-bar buttons, and in the command palette as `Run Agent: <Display Name>`.
 
 ### Wrapper-compatible launch commands
 
@@ -147,11 +149,11 @@ When the profile ID is `claude`, Toastty:
 4. **Writes a temporary settings file** and passes `--settings <path>` to Claude
 
 These hooks report state changes that Toastty translates into sidebar status (working, needs approval, ready). Non-actionable notifications such as `auth_success` are ignored.
-When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory while the session is active, but still exits successfully so Claude keeps running.
+When the helper script cannot deliver a hook event back to Toastty, it appends the CLI error to `telemetry-failures.log` inside the temporary launch artifacts directory, but still exits successfully so Claude keeps running. Claude can retain those hook artifacts briefly after session stop so late hook invocations turn into no-op delivery instead of missing-file shell errors.
 
 ## Launch flow
 
-When you trigger an agent launch (menu click, keyboard shortcut, or socket command):
+When you trigger an agent launch (menu click, top-bar button, command palette submission, keyboard shortcut, or socket command):
 
 1. **Resolve target** — Toastty picks the focused terminal panel in the selected workspace, or falls back to the first terminal panel in the workspace
 2. **Check panel state** — The panel must be at an interactive prompt; Toastty asks Ghostty for the surface prompt state and refuses to launch into a panel that appears busy
@@ -161,7 +163,7 @@ When you trigger an agent launch (menu click, keyboard shortcut, or socket comma
 6. **Send to terminal** — The rendered command line is sent to the target terminal panel and submitted
 7. **Begin monitoring** — For Codex, the log watcher starts polling; for Claude, hooks report events back through the CLI
 
-When the agent process exits and the session is stopped, Toastty cleans up the temporary artifacts directory automatically.
+When the agent process exits and the session is stopped, Toastty cleans up Codex launch artifacts immediately. Claude hook artifacts can remain after session stop so late hook invocations do not fail at the shell layer before they turn into no-op telemetry delivery.
 
 ## Manual command shims
 
@@ -344,4 +346,4 @@ If the user confirms, you can create or update `~/.toastty/agents.toml` with the
 
 **Claude settings conflict** — If your Claude profile includes `--settings` pointing to a file, Toastty merges its hooks into those settings. If the settings argument is malformed or the file cannot be read, Toastty logs a warning and launches without instrumentation.
 
-**Telemetry helper failures** — While a managed `claude` or `codex` session is still active, inspect `telemetry-failures.log` inside that session's temporary launch artifacts directory if the sidebar stops updating. The helper scripts keep the agent process running, but they now preserve socket and CLI stderr there instead of discarding it.
+**Telemetry helper failures** — Inspect `telemetry-failures.log` inside the managed session's temporary launch artifacts directory if the sidebar stops updating. For Codex, do that while the session is still active. Claude can retain its hook artifacts briefly after session stop, so the same log may still be available for late-hook failures. The helper scripts keep the agent process running, but they now preserve socket and CLI stderr there instead of discarding it.

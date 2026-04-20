@@ -7,9 +7,15 @@ struct PreparedAgentLaunchCommand {
     let artifacts: PreparedAgentLaunchArtifacts?
 }
 
+enum LaunchArtifactsCleanupPolicy {
+    case deleteImmediately
+    case retainAfterSessionStop
+}
+
 struct PreparedAgentLaunchArtifacts {
     let directoryURL: URL
     let codexSessionLogURL: URL?
+    let cleanupPolicy: LaunchArtifactsCleanupPolicy
 }
 
 enum AgentLaunchInstrumentationError: LocalizedError {
@@ -111,7 +117,10 @@ enum AgentLaunchInstrumentation {
                 environment: [:],
                 artifacts: PreparedAgentLaunchArtifacts(
                     directoryURL: artifactsDirectoryURL,
-                    codexSessionLogURL: nil
+                    codexSessionLogURL: nil,
+                    // Claude can still invoke hooks after Toastty has already
+                    // stopped tracking the managed session.
+                    cleanupPolicy: .retainAfterSessionStop
                 )
             )
         } catch {
@@ -163,7 +172,8 @@ enum AgentLaunchInstrumentation {
                 ],
                 artifacts: PreparedAgentLaunchArtifacts(
                     directoryURL: artifactsDirectoryURL,
-                    codexSessionLogURL: logURL
+                    codexSessionLogURL: logURL,
+                    cleanupPolicy: .deleteImmediately
                 )
             )
         } catch {

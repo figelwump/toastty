@@ -597,9 +597,12 @@ final class DisplayShortcutInterceptor {
     private let webPanelRuntimeRegistry: WebPanelRuntimeRegistry
     private let sessionRuntimeStore: SessionRuntimeStore
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let isCommandPalettePresented: @MainActor () -> Bool
+    private let toggleCommandPalette: @MainActor (UUID?) -> Bool
     nonisolated(unsafe) private var eventMonitor: Any?
 
     enum ShortcutAction: Equatable {
+        case commandPalette
         case closePanel
         case createBrowser
         case createBrowserTab
@@ -632,6 +635,8 @@ final class DisplayShortcutInterceptor {
         webPanelRuntimeRegistry: WebPanelRuntimeRegistry,
         sessionRuntimeStore: SessionRuntimeStore,
         focusedPanelCommandController: FocusedPanelCommandController,
+        isCommandPalettePresented: @escaping @MainActor () -> Bool = { false },
+        toggleCommandPalette: @escaping @MainActor (UUID?) -> Bool = { _ in false },
         installEventMonitor: Bool = true
     ) {
         self.store = store
@@ -639,6 +644,8 @@ final class DisplayShortcutInterceptor {
         self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
         self.sessionRuntimeStore = sessionRuntimeStore
         self.focusedPanelCommandController = focusedPanelCommandController
+        self.isCommandPalettePresented = isCommandPalettePresented
+        self.toggleCommandPalette = toggleCommandPalette
         if installEventMonitor {
             eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
                 guard let self else { return event }
@@ -664,7 +671,15 @@ final class DisplayShortcutInterceptor {
     }
 
     func shortcutAction(for event: NSEvent, appOwnedWindowID: UUID?) -> ShortcutAction? {
+        if Self.isCommandPaletteShortcut(event),
+           isCommandPalettePresented() {
+            return .commandPalette
+        }
 
+        if Self.isCommandPaletteShortcut(event),
+           appOwnedWindowID != nil {
+            return .commandPalette
+        }
         if let shortcutNumber = Self.tabSelectionShortcutNumber(for: event),
            appOwnedWindowID != nil {
             return .selectWorkspaceTab(shortcutNumber)
@@ -782,6 +797,8 @@ final class DisplayShortcutInterceptor {
 
     func handle(_ action: ShortcutAction, appOwnedWindowID: UUID?) -> Bool {
         switch action {
+        case .commandPalette:
+            toggleCommandPalette(appOwnedWindowID)
         case .closePanel:
             closeFocusedPanel()
         case .createBrowser:
@@ -831,6 +848,16 @@ final class DisplayShortcutInterceptor {
         case .cycleWorkspacePrevious:
             cycleWorkspace(direction: -1)
         }
+    }
+
+    static func isCommandPaletteShortcut(_ event: NSEvent) -> Bool {
+        guard event.type == .keyDown,
+              event.isARepeat == false,
+              event.charactersIgnoringModifiers?.lowercased() == "p" else {
+            return false
+        }
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        return modifiers == [.command, .shift]
     }
 
     static func isNewTabShortcut(_ event: NSEvent) -> Bool {
@@ -1529,6 +1556,7 @@ struct ToasttyApp: App {
     private let hiddenSystemMenuItemsBridge: HiddenSystemMenuItemsBridge
     private let terminalProfilesMenuController: TerminalProfilesMenuController
     private let focusedPanelCommandController: FocusedPanelCommandController
+    private let commandPaletteController: CommandPaletteController
     private let displayShortcutInterceptor: DisplayShortcutInterceptor
 
     private var profileShortcutRegistry: ProfileShortcutRegistry {
@@ -1670,6 +1698,83 @@ struct ToasttyApp: App {
         )
         self.focusedPanelCommandController = focusedPanelCommandController
         let splitLayoutCommandController = SplitLayoutCommandController(store: store)
+        terminalProfilesMenuController = TerminalProfilesMenuController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            terminalProfileProvider: terminalProfileStore,
+            installShellIntegrationAction: { [store, terminalRuntimeRegistry] in
+                ToasttyMenuActions.installShellIntegration(
+                    preferredShellPath: terminalRuntimeRegistry.resolveShellIntegrationShellPath(
+                        preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                    )
+                )
+            },
+            openProfilesConfigurationAction: { [store] in
+                ToasttyMenuActions.openTerminalProfilesConfiguration(
+                    openManagedLocalDocument: { fileURL, format in
+                        openManagedLocalDocumentInToastty(
+                            store: store,
+                            fileURL: fileURL,
+                            format: format,
+                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
+                        )
+                    }
+                )
+            }
+        )
+        agentLaunchService = AgentLaunchService(
+            store: store,
+            terminalCommandRouter: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentCatalogProvider: agentCatalogStore,
+            socketPathProvider: { socketPath }
+        )
+        let commandPaletteActionHandler = CommandPaletteActionHandler(
+            store: store,
+            splitLayoutCommandController: splitLayoutCommandController,
+            focusedPanelCommandController: focusedPanelCommandController,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            agentLaunchService: agentLaunchService,
+            terminalProfilesMenuController: terminalProfilesMenuController,
+            supportsConfigurationReload: { true },
+            reloadConfigurationAction: {
+                Self.reloadConfiguration(
+                    store: store,
+                    agentCatalogStore: agentCatalogStore,
+                    terminalProfileStore: terminalProfileStore,
+                    runtimePaths: runtimePaths,
+                    agentLaunchSocketPath: socketPath,
+                    agentLaunchCLIExecutablePath: cliExecutablePath,
+                    terminalRuntimeRegistry: terminalRuntimeRegistry
+                )
+            },
+            openLocalDocumentAction: { preferredWindowID, placement in
+                Self.openLocalDocumentFile(
+                    store: store,
+                    preferredWindowID: preferredWindowID,
+                    placement: placement
+                )
+            }
+        )
+        let commandPaletteUsageTracker = CommandPaletteUsageTracker(runtimePaths: runtimePaths)
+        let commandPaletteController = CommandPaletteController(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            actions: commandPaletteActionHandler,
+            agentCatalogStore: agentCatalogStore,
+            terminalProfileStore: terminalProfileStore,
+            profileShortcutRegistryProvider: {
+                Self.makeProfileShortcutRegistry(
+                    terminalProfiles: terminalProfileStore.catalog,
+                    terminalProfilesFilePath: terminalProfileStore.fileURL.path,
+                    agentProfiles: agentCatalogStore.catalog,
+                    agentProfilesFilePath: agentCatalogStore.fileURL.path
+                )
+            },
+            usageTracker: commandPaletteUsageTracker
+        )
+        self.commandPaletteController = commandPaletteController
         let preferredWorkspaceCommandWindowID: () -> UUID? = {
             currentToasttyWorkspaceCommandWindowID(in: store)
         }
@@ -1726,35 +1831,18 @@ struct ToasttyApp: App {
             )
         }
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
-        terminalProfilesMenuController = TerminalProfilesMenuController(
-            store: store,
-            terminalRuntimeRegistry: terminalRuntimeRegistry,
-            installShellIntegrationAction: { [store, terminalRuntimeRegistry] in
-                ToasttyMenuActions.installShellIntegration(
-                    preferredShellPath: terminalRuntimeRegistry.resolveShellIntegrationShellPath(
-                        preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
-                    )
-                )
-            },
-            openProfilesConfigurationAction: { [store] in
-                ToasttyMenuActions.openTerminalProfilesConfiguration(
-                    openManagedLocalDocument: { fileURL, format in
-                        openManagedLocalDocumentInToastty(
-                            store: store,
-                            fileURL: fileURL,
-                            format: format,
-                            preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store)
-                        )
-                    }
-                )
-            }
-        )
         displayShortcutInterceptor = DisplayShortcutInterceptor(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry,
             webPanelRuntimeRegistry: webPanelRuntimeRegistry,
             sessionRuntimeStore: sessionRuntimeStore,
-            focusedPanelCommandController: focusedPanelCommandController
+            focusedPanelCommandController: focusedPanelCommandController,
+            isCommandPalettePresented: { [weak commandPaletteController] in
+                commandPaletteController?.isPresented ?? false
+            },
+            toggleCommandPalette: { [weak commandPaletteController] originWindowID in
+                commandPaletteController?.toggle(originWindowID: originWindowID) ?? false
+            }
         )
         _store = StateObject(wrappedValue: store)
         _agentCatalogStore = StateObject(wrappedValue: agentCatalogStore)
@@ -1803,13 +1891,6 @@ struct ToasttyApp: App {
                 ]
             )
         }
-        agentLaunchService = AgentLaunchService(
-            store: store,
-            terminalCommandRouter: terminalRuntimeRegistry,
-            sessionRuntimeStore: sessionRuntimeStore,
-            agentCatalogProvider: agentCatalogStore,
-            socketPathProvider: { socketPath }
-        )
         do {
             automationSocketServer = try AutomationSocketServer(
                 socketPath: socketPath,
@@ -1983,6 +2064,9 @@ struct ToasttyApp: App {
                 agentLaunchService: agentLaunchService,
                 openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                 openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
+                toggleCommandPalette: { [weak commandPaletteController] originWindowID in
+                    _ = commandPaletteController?.toggle(originWindowID: originWindowID)
+                },
                 sceneCoordinator: appWindowSceneCoordinator,
                 automationLifecycle: automationLifecycle,
                 automationStartupError: automationStartupError,
@@ -2041,6 +2125,27 @@ struct ToasttyApp: App {
 
     @MainActor
     private func reloadConfiguration() {
+        Self.reloadConfiguration(
+            store: store,
+            agentCatalogStore: agentCatalogStore,
+            terminalProfileStore: terminalProfileStore,
+            runtimePaths: runtimePaths,
+            agentLaunchSocketPath: agentLaunchSocketPath,
+            agentLaunchCLIExecutablePath: agentLaunchCLIExecutablePath,
+            terminalRuntimeRegistry: terminalRuntimeRegistry
+        )
+    }
+
+    @MainActor
+    private static func reloadConfiguration(
+        store: AppStore,
+        agentCatalogStore: AgentCatalogStore,
+        terminalProfileStore: TerminalProfileStore,
+        runtimePaths: ToasttyRuntimePaths,
+        agentLaunchSocketPath: String,
+        agentLaunchCLIExecutablePath: String?,
+        terminalRuntimeRegistry: TerminalRuntimeRegistry
+    ) {
         var failureMessages: [String] = []
         var warningMessages: [String] = []
 
@@ -2127,7 +2232,12 @@ struct ToasttyApp: App {
         )
         #endif
 
-        let resolvedProfileShortcutRegistry = profileShortcutRegistry
+        let resolvedProfileShortcutRegistry = Self.makeProfileShortcutRegistry(
+            terminalProfiles: terminalProfileStore.catalog,
+            terminalProfilesFilePath: terminalProfileStore.fileURL.path,
+            agentProfiles: agentCatalogStore.catalog,
+            agentProfilesFilePath: agentCatalogStore.fileURL.path
+        )
         warningMessages.append(contentsOf: resolvedProfileShortcutRegistry.warningMessages)
         Self.logProfileShortcutWarnings(warningMessages)
 
@@ -2235,11 +2345,26 @@ struct ToasttyApp: App {
     }
 
     @MainActor
-    private func openLocalDocumentFile(preferredWindowID: UUID?, placement: WebPanelPlacement) {
+    @discardableResult
+    private func openLocalDocumentFile(preferredWindowID: UUID?, placement: WebPanelPlacement) -> Bool {
+        Self.openLocalDocumentFile(
+            store: store,
+            preferredWindowID: preferredWindowID,
+            placement: placement
+        )
+    }
+
+    @MainActor
+    @discardableResult
+    private static func openLocalDocumentFile(
+        store: AppStore,
+        preferredWindowID: UUID?,
+        placement: WebPanelPlacement
+    ) -> Bool {
         guard let fileURL = LocalDocumentOpenPanel.chooseFile(
             title: localDocumentOpenTitle(for: placement)
         ) else {
-            return
+            return false
         }
 
         let normalizedFilePath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
@@ -2251,7 +2376,7 @@ struct ToasttyApp: App {
             )
         )
 
-        guard didOpen == false else { return }
+        guard didOpen == false else { return true }
 
         let alert = NSAlert()
         alert.messageText = "Unable to Open Local File"
@@ -2259,9 +2384,10 @@ struct ToasttyApp: App {
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
+        return false
     }
 
-    private func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
+    private static func localDocumentOpenTitle(for placement: WebPanelPlacement) -> String {
         switch placement {
         case .rootRight:
             return "Open Local File"

@@ -148,6 +148,12 @@ The release script expects:
 - notarization credentials injected at runtime
 - a Sparkle private key injected at runtime as `TOASTTY_SPARKLE_PRIVATE_KEY`
 
+Before building a release artifact, run the full automated gate on the release candidate:
+
+```bash
+./scripts/automation/check.sh
+```
+
 Use an explicit marketing version plus a monotonically increasing build number:
 
 ```bash

@@ -43,6 +43,13 @@ struct PendingPanelFlashRequest: Equatable {
     let panelID: UUID
 }
 
+struct PendingBrowserLocationFocusRequest: Equatable {
+    let requestID: UUID
+    let windowID: UUID
+    let workspaceID: UUID
+    let panelID: UUID
+}
+
 struct BrowserPanelCreateRequest: Equatable, Sendable {
     static let defaultPlacement: WebPanelPlacement = .rootRight
 
@@ -172,6 +179,9 @@ final class AppStore: ObservableObject {
     /// Set by explicit panel navigation so the target workspace view can briefly
     /// pulse the destination terminal panel.
     @Published var pendingPanelFlashRequest: PendingPanelFlashRequest?
+    /// Set by blank browser creation so the target panel can focus its
+    /// location field once the browser chrome is visible.
+    @Published var pendingBrowserLocationFocusRequest: PendingBrowserLocationFocusRequest?
 
     private let reducer = AppReducer()
     private let persistUserSettings: Bool
@@ -386,11 +396,14 @@ final class AppStore: ObservableObject {
         workspaceID: UUID,
         request: BrowserPanelCreateRequest
     ) -> Bool {
-        guard state.workspacesByID[workspaceID] != nil else {
+        guard let existingWorkspace = state.workspacesByID[workspaceID] else {
             return false
         }
 
-        return send(
+        let existingPanelIDs = Set(existingWorkspace.panels.keys)
+        let shouldRequestLocationFocus = request.initialURL == nil
+
+        guard send(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
@@ -399,7 +412,26 @@ final class AppStore: ObservableObject {
                 ),
                 placement: request.resolvedPlacement
             )
+        ) else {
+            return false
+        }
+
+        guard shouldRequestLocationFocus,
+              let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
+              let createdPanelID = createdBrowserPanelID(
+                  in: selection.workspace,
+                  previousPanelIDs: existingPanelIDs
+              ) else {
+            return true
+        }
+
+        pendingBrowserLocationFocusRequest = PendingBrowserLocationFocusRequest(
+            requestID: UUID(),
+            windowID: selection.windowID,
+            workspaceID: selection.workspaceID,
+            panelID: createdPanelID
         )
+        return true
     }
 
     @discardableResult
@@ -667,6 +699,15 @@ final class AppStore: ObservableObject {
         return request
     }
 
+    func consumePendingBrowserLocationFocusRequest(
+        windowID: UUID
+    ) -> PendingBrowserLocationFocusRequest? {
+        guard let request = pendingBrowserLocationFocusRequest,
+              request.windowID == windowID else { return nil }
+        pendingBrowserLocationFocusRequest = nil
+        return request
+    }
+
     @discardableResult
     func focusExplicitlyNavigatedPanel(
         windowID: UUID,
@@ -750,6 +791,11 @@ final class AppStore: ObservableObject {
            pendingPanelFlashRequestIsValid(request) == false {
             pendingPanelFlashRequest = nil
         }
+
+        if let request = pendingBrowserLocationFocusRequest,
+           pendingBrowserLocationFocusRequestIsValid(request) == false {
+            pendingBrowserLocationFocusRequest = nil
+        }
     }
 
     private func pendingRenameWorkspaceRequestIsValid(_ request: PendingWorkspaceRenameRequest) -> Bool {
@@ -787,6 +833,17 @@ final class AppStore: ObservableObject {
             return false
         }
         return workspace.panelState(for: request.panelID) != nil
+    }
+
+    private func pendingBrowserLocationFocusRequestIsValid(
+        _ request: PendingBrowserLocationFocusRequest
+    ) -> Bool {
+        guard pendingWorkspaceRequestExists(windowID: request.windowID, workspaceID: request.workspaceID),
+              let workspace = state.workspacesByID[request.workspaceID],
+              case .web(let webState)? = workspace.panelState(for: request.panelID) else {
+            return false
+        }
+        return webState.definition == .browser
     }
 
     private func pendingWorkspaceRequestExists(windowID: UUID, workspaceID: UUID) -> Bool {
@@ -959,6 +1016,27 @@ final class AppStore: ObservableObject {
             focusedPanelID: selection.workspace.focusedPanelID
         ) { _, panelID in
             matchingPanelIDs.contains(panelID)
+        }
+    }
+
+    private func createdBrowserPanelID(
+        in workspace: WorkspaceState,
+        previousPanelIDs: Set<UUID>
+    ) -> UUID? {
+        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           createdPanelIDs.contains(focusedPanelID),
+           case .web(let webState)? = workspace.panels[focusedPanelID],
+           webState.definition == .browser {
+            return focusedPanelID
+        }
+
+        return createdPanelIDs.first { panelID in
+            guard case .web(let webState)? = workspace.panels[panelID] else {
+                return false
+            }
+            return webState.definition == .browser
         }
     }
 

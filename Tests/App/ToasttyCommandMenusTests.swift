@@ -32,8 +32,8 @@ final class ToasttyCommandMenusTests: XCTestCase {
         XCTAssertEqual(
             model.sections.map { $0.actions.map(\.title) },
             [
-                ["Split Right", "Split Down"],
-                ["Split Right", "Split Down"],
+                [ToasttyBuiltInCommand.splitRight.title, ToasttyBuiltInCommand.splitDown.title],
+                [ToasttyBuiltInCommand.splitRight.title, ToasttyBuiltInCommand.splitDown.title],
             ]
         )
         XCTAssertEqual(

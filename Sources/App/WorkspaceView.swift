@@ -3,6 +3,11 @@ import CoreState
 import SwiftUI
 
 struct WorkspaceView: View {
+    struct FocusedUnreadClearCandidate: Equatable {
+        let workspaceID: UUID
+        let panelID: UUID
+    }
+
     enum WorkspaceTabTrailingAccessory: Equatable {
         case closeButton
         case badge(String)
@@ -74,6 +79,7 @@ struct WorkspaceView: View {
     let focusedPanelCommandController: FocusedPanelCommandController
     let agentLaunchService: AgentLaunchService
     let showAgentGetStartedFlow: () -> Void
+    let toggleCommandPalette: @MainActor (UUID) -> Void
     let terminalRuntimeContext: TerminalWindowRuntimeContext?
     let sidebarVisible: Bool
     @ObservedObject private var ghosttyHostStyleStore = GhosttyHostStyleStore.shared
@@ -158,6 +164,38 @@ struct WorkspaceView: View {
         spacing: CGFloat
     ) -> CGFloat {
         titleOriginY + titleHeight + spacing
+    }
+
+    nonisolated static func focusedUnreadClearCandidate(
+        workspace: WorkspaceState?,
+        appIsActive: Bool
+    ) -> FocusedUnreadClearCandidate? {
+        guard appIsActive,
+              let workspace,
+              let focusedPanelID = workspace.focusedPanelID,
+              workspace.unreadPanelIDs.contains(focusedPanelID) else {
+            return nil
+        }
+
+        return FocusedUnreadClearCandidate(
+            workspaceID: workspace.id,
+            panelID: focusedPanelID
+        )
+    }
+
+    nonisolated static func shouldClearFocusedUnread(
+        currentWorkspace: WorkspaceState?,
+        candidate: FocusedUnreadClearCandidate,
+        appIsActive: Bool
+    ) -> Bool {
+        guard appIsActive,
+              let currentWorkspace,
+              currentWorkspace.id == candidate.workspaceID,
+              currentWorkspace.focusedPanelID == candidate.panelID else {
+            return false
+        }
+
+        return currentWorkspace.unreadPanelIDs.contains(candidate.panelID)
     }
 
     private static let panelFlashPeakDuration: Double = 0.18
@@ -394,6 +432,7 @@ struct WorkspaceView: View {
             appIsActive = NSApplication.shared.isActive
             scheduleFocusedUnreadPanelClearIfNeeded()
             handlePendingPanelFlashRequest()
+            handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleFocusedUnreadPanelClearIfNeeded()
@@ -410,6 +449,9 @@ struct WorkspaceView: View {
         .onChange(of: store.pendingPanelFlashRequest) { _, _ in
             handlePendingPanelFlashRequest()
         }
+        .onChange(of: store.pendingBrowserLocationFocusRequest) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
+        }
         .onChange(of: selectedWorkspaceFocusModePresentationState) { oldValue, newValue in
             handleFocusModePresentationChange(from: oldValue, to: newValue)
         }
@@ -418,10 +460,13 @@ struct WorkspaceView: View {
             prunePendingWorkspaceTabCloseState()
             pruneTransientPanelFlashState()
             pruneTransientUnfocusHighlightState()
+            handlePendingBrowserLocationFocusRequest()
+        }
+        .onChange(of: selectedWorkspace?.focusedPanelID) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
         }
         .onDisappear {
-            focusedUnreadClearTask?.cancel()
-            focusedUnreadClearTask = nil
+            cancelFocusedUnreadClearTask()
             panelFlashClearWorkItem?.cancel()
             panelFlashResetWorkItem?.cancel()
             panelFlashClearWorkItem = nil
@@ -430,9 +475,11 @@ struct WorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
+            scheduleFocusedUnreadPanelClearIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             appIsActive = false
+            cancelFocusedUnreadClearTask()
             hoveredTabID = nil
             hoveredTabCloseButtonID = nil
         }
@@ -507,7 +554,7 @@ struct WorkspaceView: View {
     }
 
     private var topBarTrailingControls: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 0) {
             if agentTopBarModel.showsAddAgentsButton {
                 topBarFlashTextButton(title: WorkspaceAgentTopBarModel.addAgentsTitle) {
                     showAgentGetStartedFlow()
@@ -523,6 +570,15 @@ struct WorkspaceView: View {
                     .accessibilityIdentifier("topbar.agent.\(action.profileID)")
                 }
             }
+
+            topBarFlashButton(icon: { highlighted in
+                CommandPaletteIconView(color: highlighted ? ToastyTheme.accent : ToastyTheme.inactiveText)
+            }) {
+                toggleCommandPalette(windowID)
+            }
+            .help(ToasttyKeyboardShortcuts.commandPalette.helpText("Open Command Palette"))
+            .accessibilityLabel("Open Command Palette")
+            .accessibilityIdentifier("topbar.command-palette")
 
             focusedPanelToggle(identifier: "topbar.toggle.focused-panel")
 
@@ -844,27 +900,37 @@ struct WorkspaceView: View {
     }
 
     private func scheduleFocusedUnreadPanelClearIfNeeded() {
-        focusedUnreadClearTask?.cancel()
-        focusedUnreadClearTask = nil
+        cancelFocusedUnreadClearTask()
 
-        guard let workspace = selectedWorkspace,
-              let focusedPanelID = workspace.focusedPanelID,
-              workspace.unreadPanelIDs.contains(focusedPanelID) else {
+        guard let clearCandidate = Self.focusedUnreadClearCandidate(
+            workspace: selectedWorkspace,
+            appIsActive: NSApplication.shared.isActive
+        ) else {
             return
         }
 
-        let workspaceID = workspace.id
         focusedUnreadClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.focusedUnreadClearDelayNanoseconds)
             guard Task.isCancelled == false else { return }
-            guard let currentWorkspace = store.selectedWorkspace(in: windowID),
-                  currentWorkspace.id == workspaceID,
-                  currentWorkspace.focusedPanelID == focusedPanelID,
-                  currentWorkspace.unreadPanelIDs.contains(focusedPanelID) else {
+            guard Self.shouldClearFocusedUnread(
+                currentWorkspace: store.selectedWorkspace(in: windowID),
+                candidate: clearCandidate,
+                appIsActive: NSApplication.shared.isActive
+            ) else {
                 return
             }
-            _ = store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: focusedPanelID))
+            _ = store.send(
+                .markPanelNotificationsRead(
+                    workspaceID: clearCandidate.workspaceID,
+                    panelID: clearCandidate.panelID
+                )
+            )
         }
+    }
+
+    private func cancelFocusedUnreadClearTask() {
+        focusedUnreadClearTask?.cancel()
+        focusedUnreadClearTask = nil
     }
 
     @MainActor
@@ -885,6 +951,27 @@ struct WorkspaceView: View {
             }
             flashPanel(request.panelID, requestID: request.requestID)
         }
+    }
+
+    @MainActor
+    private func handlePendingBrowserLocationFocusRequest() {
+        guard let request = store.pendingBrowserLocationFocusRequest,
+              request.windowID == windowID,
+              let workspace = selectedWorkspace,
+              workspace.id == request.workspaceID,
+              workspace.focusedPanelID == request.panelID,
+              case .web(let webState)? = workspace.panelState(for: request.panelID),
+              webState.definition == .browser else {
+            return
+        }
+
+        guard let consumedRequest = store.consumePendingBrowserLocationFocusRequest(windowID: windowID) else {
+            return
+        }
+
+        webPanelRuntimeRegistry
+            .browserRuntime(for: consumedRequest.panelID)
+            .requestLocationFieldFocus()
     }
 
     @MainActor
@@ -2574,6 +2661,18 @@ struct FocusIconView: View {
             context.fill(dot, with: .color(color))
         }
         .frame(width: 14, height: 14)
+    }
+}
+
+/// macOS command glyph — mirrors the ⇧⌘P shortcut that opens the palette.
+struct CommandPaletteIconView: View {
+    let color: Color
+
+    var body: some View {
+        Image(systemName: "command")
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(color)
+            .frame(width: 14, height: 14)
     }
 }
 

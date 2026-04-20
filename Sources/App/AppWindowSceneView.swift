@@ -15,6 +15,7 @@ struct AppWindowSceneView: View {
     let agentLaunchService: AgentLaunchService
     let openAgentProfilesConfigurationResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
     let openKeyboardShortcutsReferenceResult: @MainActor () -> Result<Void, AgentGetStartedActionError>
+    let toggleCommandPalette: @MainActor (UUID) -> Void
     let onWindowCloseInitiated: @MainActor () -> Void
     let disableAnimations: Bool
 
@@ -97,6 +98,7 @@ struct AppWindowSceneView: View {
                     agentLaunchService: agentLaunchService,
                     openAgentProfilesConfigurationResult: openAgentProfilesConfigurationResult,
                     openKeyboardShortcutsReferenceResult: openKeyboardShortcutsReferenceResult,
+                    toggleCommandPalette: toggleCommandPalette,
                     terminalRuntimeContext: terminalRuntimeContext
                 )
             } else {
