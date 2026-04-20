@@ -1299,9 +1299,24 @@ final class TerminalHostView: NSView {
     }
 
     private func preparePendingCommandClickLinkOpen(with event: NSEvent) -> Bool {
-        guard openCommandClickLink != nil,
-              event.modifierFlags.contains(.command),
-              let url = hoveredGhosttyLinkURL() else {
+        guard openCommandClickLink != nil else {
+            clearPendingCommandClickLinkOpen()
+            return false
+        }
+
+        guard event.modifierFlags.contains(.command) else {
+            clearPendingCommandClickLinkOpen()
+            return false
+        }
+
+        guard let url = hoveredGhosttyLinkURL() else {
+            ToasttyLog.warning(
+                "Terminal command-click had no hovered link URL",
+                category: .input,
+                metadata: [
+                    "shift": event.modifierFlags.contains(.shift) ? "true" : "false",
+                ]
+            )
             clearPendingCommandClickLinkOpen()
             return false
         }
@@ -1310,6 +1325,14 @@ final class TerminalHostView: NSView {
         // mouse press so we do not leave its internal button state half-forwarded.
         pendingCommandClickLinkURL = url
         pendingCommandClickLinkUsesAlternatePlacement = event.modifierFlags.contains(.shift)
+        ToasttyLog.info(
+            "Armed terminal command-click link open",
+            category: .input,
+            metadata: [
+                "url": url.absoluteString,
+                "alternate_placement": pendingCommandClickLinkUsesAlternatePlacement ? "true" : "false",
+            ]
+        )
         return true
     }
 
@@ -1322,9 +1345,36 @@ final class TerminalHostView: NSView {
         // Once the press is reclaimed for app-owned Command-click handling, the
         // matching release must stay local too, even if Command is released first.
         guard event.modifierFlags.contains(.command) else {
+            ToasttyLog.warning(
+                "Dropped pending terminal command-click because Command was not pressed on mouse up",
+                category: .input,
+                metadata: [
+                    "url": url.absoluteString,
+                    "alternate_placement": useAlternatePlacement ? "true" : "false",
+                ]
+            )
             return true
         }
-        _ = openCommandClickLink?(url, useAlternatePlacement)
+        let handled = openCommandClickLink?(url, useAlternatePlacement) ?? false
+        if handled {
+            ToasttyLog.info(
+                "Opened terminal command-click link",
+                category: .input,
+                metadata: [
+                    "url": url.absoluteString,
+                    "alternate_placement": useAlternatePlacement ? "true" : "false",
+                ]
+            )
+        } else {
+            ToasttyLog.warning(
+                "Terminal command-click handler returned false",
+                category: .input,
+                metadata: [
+                    "url": url.absoluteString,
+                    "alternate_placement": useAlternatePlacement ? "true" : "false",
+                ]
+            )
+        }
         return true
     }
 

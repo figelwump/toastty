@@ -923,14 +923,16 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         let selection = state.workspaceSelection(containingPanelID: panelID)
         let preferredWindowID = selection?.windowID
         let cwd = terminalPanelState(for: panelID, state: state)?.expectedProcessWorkingDirectory
-
-        switch TerminalCommandClickTargetResolver.resolve(
+        let target = TerminalCommandClickTargetResolver.resolve(
             hoveredURL: url,
             cwd: cwd,
             useAlternatePlacement: useAlternatePlacement
-        ) {
+        )
+
+        let result: Bool
+        switch target {
         case .localDocumentFile(let path, let placement):
-            return store.createLocalDocumentPanelFromCommand(
+            result = store.createLocalDocumentPanelFromCommand(
                 preferredWindowID: preferredWindowID,
                 request: LocalDocumentPanelCreateRequest(
                     filePath: path,
@@ -939,22 +941,87 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
             )
         case .localDirectory(let path):
             guard let workspaceID = selection?.workspaceID else {
+                ToasttyLog.warning(
+                    "Terminal command-click resolved to local directory without workspace selection",
+                    category: .input,
+                    metadata: [
+                        "panel_id": panelID.uuidString,
+                        "path": path,
+                        "url": url.absoluteString,
+                        "alternate_placement": useAlternatePlacement ? "true" : "false",
+                    ]
+                )
                 return false
             }
             let direction: SlotSplitDirection = useAlternatePlacement ? .down : .right
-            return splitFocusedSlotInDirectionWithWorkingDirectory(
+            result = splitFocusedSlotInDirectionWithWorkingDirectory(
                 workspaceID: workspaceID,
                 direction: direction,
                 workingDirectory: path
             )
         case .passthrough(let passthroughURL):
-            return AppURLRouter.open(
+            result = AppURLRouter.open(
                 passthroughURL,
                 preferredWindowID: preferredWindowID,
                 appStore: store,
                 useAlternatePlacement: useAlternatePlacement
             )
         }
+
+        let targetMetadata: [String: String]
+        let targetKind: String
+        switch target {
+        case .localDocumentFile(let path, let placement):
+            targetKind = "local_document"
+            targetMetadata = [
+                "resolved_path": path,
+                "placement": placement.rawValue,
+            ]
+        case .localDirectory(let path):
+            targetKind = "local_directory"
+            targetMetadata = [
+                "resolved_path": path,
+                "split_direction": useAlternatePlacement ? SlotSplitDirection.down.rawValue : SlotSplitDirection.right.rawValue,
+            ]
+        case .passthrough(let passthroughURL):
+            targetKind = "passthrough"
+            targetMetadata = [
+                "resolved_url": passthroughURL.absoluteString,
+            ]
+        }
+
+        var metadata: [String: String] = [
+            "panel_id": panelID.uuidString,
+            "url": url.absoluteString,
+            "target_kind": targetKind,
+            "alternate_placement": useAlternatePlacement ? "true" : "false",
+            "result": result ? "true" : "false",
+        ]
+        if let preferredWindowID {
+            metadata["preferred_window_id"] = preferredWindowID.uuidString
+        }
+        if let workspaceID = selection?.workspaceID {
+            metadata["workspace_id"] = workspaceID.uuidString
+        }
+        if let cwd {
+            metadata["cwd"] = cwd
+        }
+        metadata.merge(targetMetadata) { _, new in new }
+
+        if result {
+            ToasttyLog.info(
+                "Resolved terminal command-click link",
+                category: .input,
+                metadata: metadata
+            )
+        } else {
+            ToasttyLog.warning(
+                "Failed to open resolved terminal command-click link",
+                category: .input,
+                metadata: metadata
+            )
+        }
+        return result
     }
 
     @discardableResult
