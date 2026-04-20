@@ -48,4 +48,6 @@ test("build script copies onig.wasm into the panel output bundle", async () => {
 
   assert.match(source, /vscode-oniguruma\/release\/onig\.wasm/);
   assert.match(source, /copyFileSync\(onigurumaWasmPath, join\(outputDir, "onig\.wasm"\)\)/);
+  assert.match(source, /__TOASTTY_ONIG_WASM_DATA_URL__/);
+  assert.match(source, /data:application\/wasm;base64/);
 });

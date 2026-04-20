@@ -1162,13 +1162,14 @@ tags: smoke, markdown
 ---
 # Markdown Smoke
 
-This panel should render local markdown content.
+This panel should render local markdown content with **bold**, *italic*, and `inline code`.
 
 - alpha
 - beta
 
 ```swift
-print("markdown smoke")
+let smokeMessage = "markdown smoke"
+print(smokeMessage)
 ```
 EOF
 MARKDOWN_EXPECTED_HASH="$(compute_sha256 "$MARKDOWN_SMOKE_FILE")"
@@ -1195,12 +1196,16 @@ wait_for_local_document_panel_state \
 cat > "$MARKDOWN_SMOKE_FILE" <<'EOF'
 # Markdown Smoke Reloaded
 
-This markdown content changed on disk.
+This markdown content changed on disk and still keeps **bold**, *italic*, and `inline code`.
 
 1. gamma
 2. delta
 
 > live reload should refresh the panel.
+
+```js
+const markdownSmoke = true
+```
 EOF
 MARKDOWN_RELOADED_HASH="$(compute_sha256 "$MARKDOWN_SMOKE_FILE")"
 wait_for_local_document_panel_state \

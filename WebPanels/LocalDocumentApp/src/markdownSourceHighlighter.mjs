@@ -29,8 +29,39 @@ const MARKDOWN_GRAMMARS = [
   textXml
 ];
 
+// WKWebView can load the panel from file URLs but still reject fetches for sibling
+// local assets. Embed the WASM in the browser bundle so the markdown path does not
+// depend on a file-URL fetch succeeding at runtime.
+const EMBEDDED_ONIG_WASM_DATA_URL =
+  typeof __TOASTTY_ONIG_WASM_DATA_URL__ === "string"
+    ? __TOASTTY_ONIG_WASM_DATA_URL__
+    : null;
+
 /** @type {Promise<unknown> | undefined} */
 let highlighterPromise;
+let didWarnMissingEmbeddedOnigurumaData = false;
+
+export function resolveBrowserOnigurumaUrl(
+  locationHref,
+  inlineDataUrl = EMBEDDED_ONIG_WASM_DATA_URL
+) {
+  if (typeof inlineDataUrl === "string" && inlineDataUrl.length > 0) {
+    return new URL(inlineDataUrl);
+  }
+
+  if (
+    didWarnMissingEmbeddedOnigurumaData === false &&
+    typeof console !== "undefined" &&
+    typeof console.warn === "function"
+  ) {
+    didWarnMissingEmbeddedOnigurumaData = true;
+    console.warn(
+      "[ToasttyLocalDocumentPanel] Falling back to file-based onig.wasm loading because the embedded browser WASM URL is unavailable."
+    );
+  }
+
+  return new URL("./onig.wasm", locationHref);
+}
 
 function createMarkdownHighlighter() {
   if (typeof window === "undefined") {
@@ -39,7 +70,7 @@ function createMarkdownHighlighter() {
 
   return createStarryNight(MARKDOWN_GRAMMARS, {
     getOnigurumaUrlFetch() {
-      return new URL("./onig.wasm", window.location.href);
+      return resolveBrowserOnigurumaUrl(window.location.href);
     }
   });
 }

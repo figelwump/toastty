@@ -1,4 +1,4 @@
-import { mkdirSync, copyFileSync } from "node:fs";
+import { mkdirSync, copyFileSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createRequire } from "node:module";
 import { build } from "esbuild";
@@ -10,6 +10,7 @@ const require = createRequire(import.meta.url);
 const reactRoot = dirname(require.resolve("react/package.json", { paths: [packageRoot] }));
 const reactDomRoot = dirname(require.resolve("react-dom/package.json", { paths: [packageRoot] }));
 const onigurumaWasmPath = require.resolve("vscode-oniguruma/release/onig.wasm", { paths: [packageRoot] });
+const onigurumaWasmDataUrl = `data:application/wasm;base64,${readFileSync(onigurumaWasmPath).toString("base64")}`;
 
 mkdirSync(outputDir, { recursive: true });
 
@@ -35,7 +36,8 @@ await build({
     "react-dom/client": join(reactDomRoot, "client.js")
   },
   define: {
-    "process.env.NODE_ENV": "\"production\""
+    "process.env.NODE_ENV": "\"production\"",
+    __TOASTTY_ONIG_WASM_DATA_URL__: JSON.stringify(onigurumaWasmDataUrl)
   },
   logLevel: "info"
 });
