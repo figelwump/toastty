@@ -3,6 +3,9 @@ import Foundation
 // Shared source of truth for local-document format detection and supported
 // picker/command-entry extensions.
 public enum LocalDocumentClassifier {
+    // Keep grouped text/code families intentionally small. Some extensions like
+    // `.jsonc` and `.properties` still share a broad viewer family even when we
+    // do not offer specialized syntax highlighting for them yet.
     public static let filenameExtensionToFormat: [String: LocalDocumentFormat] = [
         "md": .markdown,
         "markdown": .markdown,
@@ -11,6 +14,19 @@ public enum LocalDocumentClassifier {
         "yaml": .yaml,
         "yml": .yaml,
         "toml": .toml,
+        "json": .json,
+        "jsonc": .json,
+        "jsonl": .jsonl,
+        "ini": .config,
+        "conf": .config,
+        "cfg": .config,
+        "properties": .config,
+        "csv": .csv,
+        "tsv": .tsv,
+        "xml": .xml,
+        "sh": .shell,
+        "bash": .shell,
+        "zsh": .shell,
     ]
 
     public static let supportedFilenameExtensions: [String] = filenameExtensionToFormat.keys.sorted()

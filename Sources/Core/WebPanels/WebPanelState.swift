@@ -70,6 +70,13 @@ public enum LocalDocumentFormat: String, Codable, Equatable, Sendable {
     case markdown
     case yaml
     case toml
+    case json
+    case jsonl
+    case config
+    case csv
+    case tsv
+    case xml
+    case shell
 }
 
 public struct LocalDocumentState: Codable, Equatable, Sendable {

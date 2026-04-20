@@ -1,5 +1,15 @@
 export type LocalDocumentPanelTheme = "light" | "dark";
-export type LocalDocumentFormat = "markdown" | "yaml" | "toml";
+export type LocalDocumentFormat =
+  | "markdown"
+  | "yaml"
+  | "toml"
+  | "json"
+  | "jsonl"
+  | "config"
+  | "csv"
+  | "tsv"
+  | "xml"
+  | "shell";
 
 export interface LocalDocumentPanelBootstrap {
   contractVersion: 4;

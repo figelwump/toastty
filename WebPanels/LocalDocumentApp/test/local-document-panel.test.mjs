@@ -17,3 +17,25 @@ test("edit mode uses a non-wrapping code textarea for all supported formats", as
     /className="local-document-editor"[\s\S]*?wrap="off"/
   );
 });
+
+test("plain-code formats guard null highlight languages before touching highlight.js", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(
+    source,
+    /language === null \|\| !hljs\.getLanguage\(language\)/
+  );
+});
+
+test("jsonc files opt out of json highlighting and keep a JSONC label", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /filePath\?\.toLowerCase\(\)\.endsWith\("\.jsonc"\)/);
+  assert.match(source, /return "JSONC"/);
+});
