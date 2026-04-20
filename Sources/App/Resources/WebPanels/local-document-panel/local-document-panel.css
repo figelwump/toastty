@@ -133,38 +133,25 @@ body {
     monospace;
 }
 
-.markdown-prose {
-  width: min(820px, calc(100vw - 40px));
-  margin: 28px auto 52px;
-  padding: 34px 38px 44px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  box-shadow: var(--shadow);
-  font-size: calc(1.08rem * var(--toastty-markdown-text-scale));
-  line-height: 1.6;
-}
-
 .local-document-code-shell {
   flex: 1;
-  width: min(1080px, calc(100vw - 40px));
-  margin: 28px auto 52px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  box-shadow: var(--shadow);
-  overflow: hidden;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--pre-bg);
+  color: var(--pre-text);
 }
 
 .local-document-code-status-strip {
-  padding: 18px 22px 0;
+  padding: 14px 22px;
+  border-bottom: 1px solid rgba(255, 224, 191, 0.08);
 }
 
 .local-document-code-status {
   margin: 0;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--accent-soft);
   color: var(--text);
   font:
@@ -178,10 +165,11 @@ body {
 }
 
 .local-document-code-frame {
-  --local-document-code-line-height: calc(24.75px * var(--toastty-markdown-text-scale));
+  --local-document-code-line-height: calc(21.45px * var(--toastty-markdown-text-scale));
+  flex: 1;
+  min-height: 0;
   display: flex;
   align-items: stretch;
-  margin-top: 18px;
   background: var(--pre-bg);
   color: var(--pre-text);
 }
@@ -189,12 +177,12 @@ body {
 .local-document-code-gutter {
   flex: 0 0 auto;
   margin: 0;
-  padding: 28px 14px 34px 18px;
+  padding: 20px 14px 28px 22px;
   border-right: 1px solid rgba(255, 224, 191, 0.08);
   background: rgba(255, 224, 191, 0.03);
   color: #8a7566;
   font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
-  font-size: calc(15px * var(--toastty-markdown-text-scale));
+  font-size: calc(13px * var(--toastty-markdown-text-scale));
   font-weight: 500;
   line-height: var(--local-document-code-line-height);
   font-variant-numeric: tabular-nums;
@@ -207,7 +195,7 @@ body {
   flex: 1;
   margin: 0;
   overflow: auto;
-  padding: 28px 30px 34px;
+  padding: 20px 28px 28px;
 }
 
 .local-document-code-scroll code,
@@ -215,7 +203,7 @@ body {
   display: block;
   min-width: max-content;
   font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
-  font-size: calc(15px * var(--toastty-markdown-text-scale));
+  font-size: calc(13px * var(--toastty-markdown-text-scale));
   font-weight: 500;
   line-height: var(--local-document-code-line-height);
   white-space: pre;
@@ -228,21 +216,20 @@ body {
 
 .local-document-editor-shell {
   flex: 1;
-  width: min(980px, calc(100vw - 40px));
-  margin: 28px auto 52px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
   padding: 0;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 24px;
-  box-shadow: var(--shadow);
-  overflow: hidden;
+  background: var(--pre-bg);
+  color: var(--pre-text);
 }
 
 .local-document-editor-status-strip {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 18px 22px 0;
+  padding: 14px 22px;
+  border-bottom: 1px solid rgba(255, 224, 191, 0.08);
 }
 
 .local-document-editor-status {
@@ -272,16 +259,16 @@ body {
   color: #f6d9d2;
 }
 
-.markdown-prose,
 .local-document-editor-shell,
 .local-document-code-shell {
   cursor: text;
 }
 
 .local-document-editor {
+  flex: 1;
+  min-height: 0;
   width: 100%;
-  min-height: calc(100vh - 184px);
-  padding: 28px 30px 34px;
+  padding: 20px 28px 28px;
   border: 0;
   resize: none;
   outline: none;
@@ -289,7 +276,7 @@ body {
   color: var(--text);
   font:
     500
-    calc(15px * var(--toastty-markdown-text-scale))
+    calc(13px * var(--toastty-markdown-text-scale))
     / 1.65
     "IBM Plex Mono",
     "SFMono-Regular",
@@ -298,11 +285,6 @@ body {
   white-space: pre;
   tab-size: 2;
   cursor: text;
-}
-
-.local-document-editor-markdown {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 :root[data-theme="light"] .local-document-editor-status-error {
