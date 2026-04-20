@@ -20,12 +20,15 @@ implementation pass does not depend on chat history.
 4. The existing remote transport and provisioning layer should be reused:
    disposable remote worktree, remote build/launch, artifact copy-back, and a
    stable result bundle contract.
-5. Parallel Computer Use on one Mac mini session is an explicit hypothesis to
-   test, not a baked-in constraint. The design should not hard-code
-   single-job-only behavior before that experiment is run.
-6. The first slice should prove one realistic end-to-end Computer Use flow and
-   then pressure-test parallel execution on the Mac mini before building a
-   large orchestration layer.
+5. Parallel Computer Use on one Mac mini login session is an explicit
+   follow-up experiment, not a v1 architecture requirement. The first version
+   should avoid accidental singleton assumptions such as shared artifact paths,
+   fixed runtime homes, or global lockfiles, but it should still ship as a
+   single-run prototype.
+6. The first slice should first prove the supported Codex Computer Use
+   execution path on the Mini, then prove one realistic end-to-end UI flow,
+   then run a two-job experiment before any larger orchestration layer is
+   considered.
 
 ## current baseline on main
 
@@ -96,7 +99,8 @@ Important boundaries:
 
 ### option a: codex app computer use on the mac mini
 
-This was the most realistic first path discussed in the thread.
+This remains the leading hypothesis for the first prototype, but it is not
+locked in until a short spike proves it is usable on the Mini.
 
 - Best fit if a manual or semi-manual prototype is acceptable.
 - Matches the desire to use Codex Computer Use specifically on macOS.
@@ -107,6 +111,9 @@ Limitations captured during planning:
 - At the time of the thread, the working assumption was that Computer Use is
   primarily exposed through the Codex app workflow on macOS.
 - Fully unattended triggering was not treated as proven for the Codex app path.
+- The first implementation should not depend on this path until a short Mini
+  spike confirms a run can be started, observed, and harvested with usable
+  copied-back artifacts.
 
 ### option b: codex app-server or codex exec first
 
@@ -131,20 +138,33 @@ requirement and the Codex app path is not a clean fit.
 
 The recommended v1 slice from the thread was:
 
-1. Reuse the existing remote transport/provisioning model from
-   `scripts/remote/validate.sh`.
-2. Add a Computer Use specific runner path without overloading the current
+1. Run a short gating spike on the Mini that proves the supported Codex
+   Computer Use execution path: start a run, observe progress remotely enough
+   to know it is alive, and copy back a usable result bundle without a human
+   babysitting the keyboard.
+2. If that spike succeeds, reuse the existing remote transport/provisioning
+   model from `scripts/remote/validate.sh`.
+3. Add a Computer Use specific runner path without overloading the current
    smoke script contract too early.
-3. Prove one narrow Toastty UI flow on the Mini with Codex Computer Use.
-4. Write a stable result bundle with JSON summary, screenshots, and raw logs.
-5. Only after that prototype works, decide whether to invest in unattended
-   execution, session management, or richer orchestration.
+4. Prove one named Toastty UI flow on the Mini with Codex Computer Use.
+5. Write a stable result bundle with JSON summary, structured transcript,
+   screenshots, raw logs, and machine-checkable assertion output.
+6. Keep v1 single-run. Do not build a queue, scheduler, or session manager
+   before there is evidence that they are needed.
+7. After the first spec passes, run one explicit two-job experiment against the
+   same Mini login session to establish whether parallel runs fight each other
+   or can coexist with isolated runtime paths.
+
+If the gating spike fails, stop and revisit the execution path before building
+the runner or spec contract around the Codex app workflow.
 
 Practical implication:
 
-- The first implementation should probably be a small local runner on the Mini
-  plus a test spec and artifact contract, not a dashboard, queue, or multi-run
+- The first implementation should be a small local runner on the Mini plus a
+  test spec and artifact contract, not a dashboard, queue, or multi-run
   scheduler.
+- The first implementation is allowed to add one narrow app-side verification
+  probe if that is the cleanest way to make the chosen spec deterministic.
 
 ## suggested file layout for this project
 
@@ -159,34 +179,125 @@ artifacts/remote-gui/<run-label>/
   result.json
   remote/
     screenshots/
-    transcript.txt
+    transcript.jsonl
+    assertions.json
     app.log
     build.log
 ```
 
 The exact script names can change, but the design intent should stay:
 
-- keep specs as plain text instructions
+- keep specs as plain text instructions with a small required header
 - keep result bundles machine-readable
 - keep copied-back artifacts easy to inspect locally
 
+## first spec candidate
+
+The first spec should be named up front so the slice stays reviewable. The
+recommended first candidate is:
+
+- `agent-get-started-keyboard-shortcuts`
+
+Why this is the best v1 candidate:
+
+- It exercises a real multi-step modal sheet inside Toastty rather than a
+  shortcut-injection path that deterministic smoke automation already targets.
+- It is grounded in an existing UI flow: the top-bar `Get Started…` path and
+  the Agent onboarding sheet.
+- It avoids real shell dotfile writes and avoids secrets if the flow stops on
+  the `Keyboard Shortcuts` step instead of performing shell integration.
+
+Proposed user journey:
+
+1. Launch Toastty in an isolated runtime home on the Mini.
+2. Click the top-bar `Get Started…` entry point.
+3. Navigate to the `Keyboard Shortcuts` step in the onboarding sheet.
+4. End with the sheet still open on that step.
+
+Deterministic assertion for v1:
+
+- The run should not self-grade based only on the model's summary.
+- Add or reuse a narrow app-side probe that records whether the
+  `sheet.agent.get-started` sheet is visible and whether the active step is
+  `keyboardShortcuts`.
+- Store that probe output in `remote/assertions.json` and use it to decide
+  pass/fail.
+
+This keeps the first spec focused on a UI path that is awkward for current
+automation while still allowing a machine-checkable end state.
+
+## spec contract
+
+Specs can stay as plain-text files under `docs/computer-use-tests/<id>.md`, but
+each spec should include a small required header so the runner does not have to
+guess the contract:
+
+```text
+Test ID: agent-get-started-keyboard-shortcuts
+Intent: Navigate the Agent onboarding sheet to the Keyboard Shortcuts step.
+Launch Preconditions: Fresh isolated runtime home; no shell integration writes.
+Prompt Instructions: <plain-language Computer Use prompt>
+Expected End State: Agent Get Started sheet is visible on the Keyboard Shortcuts step.
+Assertions:
+- assertion ID + machine-check source
+Timeout Seconds: 300
+Token Budget: 20000
+Automatic Retries On Agent Error: 1
+Cleanup: Close the app or leave it running for artifact capture.
+```
+
+The important point is not YAML versus prose. The important point is that every
+spec names:
+
+- the expected end state
+- the machine-checkable assertion source
+- the timeout and token budget
+- whether automatic retry is allowed
+- whether the flow is allowed to mutate user state or secrets
+
 ## result contract
 
-The thread consistently treated a stable result contract as important. A
-minimal Computer Use result shape should look like this:
+The thread consistently treated a stable result contract as important. The
+result needs to separate product failures from agent failures instead of
+collapsing both into a single `fail`.
+
+A minimal Computer Use result shape should look like this:
 
 ```json
 {
   "schemaVersion": 1,
-  "status": "pass|fail|timeout|setup_error",
+  "status": "pass|fail|agent_error|timeout|setup_error",
   "mode": "computer_use",
-  "testID": "workspace-menu",
+  "executionPath": "codex_app",
+  "testID": "agent-get-started-keyboard-shortcuts",
   "startedAt": "2026-04-20T10:00:00-07:00",
   "endedAt": "2026-04-20T10:02:30-07:00",
+  "durationSeconds": 150,
+  "retryCount": 0,
+  "tokensUsed": {
+    "input": 12000,
+    "output": 1800,
+    "total": 13800
+  },
+  "costUSD": 0.42,
   "summary": "One-line outcome",
+  "failureReason": {
+    "kind": "assertion_failed|agent_gave_up|budget_exceeded|launch_failed|verification_failed",
+    "message": "Structured short reason"
+  },
+  "assertions": [
+    {
+      "id": "agent-get-started-step",
+      "passed": true,
+      "source": "remote/assertions.json",
+      "expected": "sheet visible on keyboardShortcuts step",
+      "actual": "sheet visible on keyboardShortcuts step"
+    }
+  ],
   "artifacts": {
     "screenshots": ["remote/screenshots/step-3.png"],
-    "transcript": "remote/transcript.txt",
+    "transcript": "remote/transcript.jsonl",
+    "assertions": "remote/assertions.json",
     "appLog": "remote/app.log",
     "buildLog": "remote/build.log"
   }
@@ -196,33 +307,75 @@ minimal Computer Use result shape should look like this:
 The local orchestrator should consume this contract rather than needing to
 understand the full remote session.
 
+## transcript contract
+
+`transcript.txt` is too vague for tooling. The transcript artifact should be
+`transcript.jsonl`, one JSON object per event, for example:
+
+```json
+{"ts":"2026-04-20T10:00:05-07:00","type":"model_message","text":"Opening Toastty and looking for Get Started"}
+{"ts":"2026-04-20T10:00:12-07:00","type":"computer_use_action","action":"click","target":"Get Started… button"}
+{"ts":"2026-04-20T10:00:20-07:00","type":"computer_use_observation","text":"Agent Get Started sheet is visible"}
+{"ts":"2026-04-20T10:02:18-07:00","type":"verification","assertionID":"agent-get-started-step","passed":true}
+```
+
+This keeps the artifact readable by humans while also making it consumable by
+future tooling.
+
+## timeouts, budgets, and flake triage
+
+- Every spec must declare `Timeout Seconds` and a token budget.
+- The runner should terminate the run when either budget is exceeded and record
+  `timeout` or `agent_error` with a structured `failureReason`.
+- The runner may automatically retry once for `agent_error` only. It should not
+  auto-retry a real assertion failure and then hide a product regression.
+- Before a spec is promoted to a real regression gate, run it multiple times on
+  a known-good baseline commit to measure its noise level. The initial target is
+  a simple repeated-run experiment, not a general flake service.
+
+## secrets and side effects
+
+- Specs must not contain literal secrets.
+- The Mini-side runner should receive secrets out of band from the execution
+  environment rather than from the spec text.
+- The first spec should avoid secrets entirely.
+- The first spec should also avoid user-dotfile mutation, which is another
+  reason to stop the onboarding flow at the `Keyboard Shortcuts` step.
+
 ## non-goals for v1
 
 - Do not build a multi-tenant queue.
-- Do not hard-code either serialized-only or fully parallel execution before
-  running the Mini experiment that establishes what actually works.
+- Do not design a queue, scheduler, or session-manager abstraction just to
+  preserve a theoretical future parallelism story.
+- Do not hard-code singleton assumptions such as shared run directories, fixed
+  runtime homes, or one global mutable result path.
+- Do not assume that parallel execution on one Mini login session works before
+  running the explicit follow-up experiment.
 - Do not replace the existing smoke automation entry points.
 - Do not overfit the first version to `app-server` unless a real need appears.
 - Do not invent a large test DSL before one or two narrow specs prove useful.
 
 ## open questions for this worktree
 
-1. What is the exact supported execution path for Codex Computer Use on the
-   Mini: manual Codex app, semi-manual local runner, or something fully
-   scriptable?
-2. What should the first Toastty Computer Use spec be?
-3. Should the first integration live alongside `scripts/remote/validate.sh` or
+1. Can the Codex app path on the Mini actually support the gating spike:
+   start, observe, and harvest artifacts without a human standing over it?
+2. Should the first integration live alongside `scripts/remote/validate.sh` or
    start as a separate runner until the interface settles?
-4. What is the cleanest way to hand prompts/specs to the Mini without relying
+3. What is the cleanest way to hand prompts/specs to the Mini without relying
    on chat state?
-5. How should test credentials or other secrets be supplied to Computer Use
-   flows without baking them into specs?
+4. Does the chosen first spec need a small app-side assertion probe, or can an
+   existing artifact expose the UI step cleanly enough?
+5. How should future secret-bearing specs receive credentials on the Mini
+   without baking them into specs?
+6. After the first spec passes, can two isolated runs coexist on one Mini
+   login session, or do they fight over focus, cursor, or keyboard state?
 
 ## starting recommendation
 
 Start by implementing the smallest real prototype:
 
-- one Computer Use spec
+- one execution-path spike
+- one named Computer Use spec
 - one Mini-side runner path
 - one copied-back result bundle
 
