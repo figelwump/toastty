@@ -6,6 +6,42 @@ import React from "react";
 import { LocalDocumentFormat, LocalDocumentPanelBootstrap } from "./bootstrap";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
+// highlight.js' markdown grammar lets `**bold**` and `*italic*` span newlines,
+// so an unbalanced asterisk swallows everything up to the next match — which
+// also breaks the top-level LIST rule and leaves later `1.` markers uncolored.
+// Walk the strong/emphasis modes and tighten their `begin` patterns to require
+// a same-line closing marker, the way a real markdown parser would.
+const SAME_LINE_INLINE_BEGINS: Record<string, RegExp> = {
+  // Bold opener (`**` or `__`) only matches if a matching closer appears on the
+  // same line. The "no whitespace after opener" rule from the original grammar
+  // is preserved.
+  "\\*{2}(?!\\s)": /\*\*(?!\s)(?=[^\n]*\*\*)/,
+  "_{2}(?!\\s)": /__(?!\s)(?=[^\n]*__)/,
+  // Italic opener (`*` or `_`).
+  "\\*(?![*\\s])": /\*(?![*\s])(?=[^\n]*\*)/,
+  "_(?![_\\s])": /_(?![_\s])(?=[^\n]*_)/
+};
+
+function constrainMarkdownInlineToOneLine(language: unknown): unknown {
+  const seen = new WeakSet<object>();
+  function visit(node: unknown) {
+    if (!node || typeof node !== "object" || seen.has(node as object)) return;
+    seen.add(node as object);
+    const mode = node as { begin?: RegExp | string; variants?: unknown[]; contains?: unknown[] };
+    if (mode.begin) {
+      const key = mode.begin instanceof RegExp ? mode.begin.source : mode.begin;
+      const replacement = SAME_LINE_INLINE_BEGINS[key];
+      if (replacement) {
+        mode.begin = replacement;
+      }
+    }
+    if (Array.isArray(mode.variants)) mode.variants.forEach(visit);
+    if (Array.isArray(mode.contains)) mode.contains.forEach(visit);
+  }
+  visit(language);
+  return language;
+}
+
 if (!hljs.getLanguage("yaml")) {
   hljs.registerLanguage("yaml", yaml);
 }
@@ -14,7 +50,9 @@ if (!hljs.getLanguage("toml")) {
   hljs.registerLanguage("toml", ini);
 }
 if (!hljs.getLanguage("markdown")) {
-  hljs.registerLanguage("markdown", markdown);
+  hljs.registerLanguage("markdown", (hljsApi) => {
+    return constrainMarkdownInlineToOneLine(markdown(hljsApi)) as ReturnType<typeof markdown>;
+  });
 }
 
 function syntaxLanguage(format: LocalDocumentFormat): "yaml" | "toml" | "markdown" {
