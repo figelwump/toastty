@@ -125,13 +125,13 @@ final class AppQuitConfirmationTests: XCTestCase {
         )
     }
 
-    func testAssessRequiresConfirmationForUnsavedMarkdownDraft() {
+    func testAssessRequiresConfirmationForUnsavedLocalDocumentDraft() {
         let state = makeLocalDocumentAppState()
 
         let assessment = AppQuitConfirmation.assess(
             state: state,
             terminalAssessment: { _ in
-                XCTFail("markdown-only quit confirmation should not request terminal assessments")
+                XCTFail("local-document quit confirmation should not request terminal assessments")
                 return nil
             },
             localDocumentCloseConfirmationState: { _ in
@@ -145,17 +145,17 @@ final class AppQuitConfirmationTests: XCTestCase {
         XCTAssertEqual(assessment.firstUnsavedLocalDocumentDisplayName, "README.md")
         XCTAssertEqual(
             assessment.informativeText,
-            "\"README.md\" has unsaved markdown changes. Quitting Toastty will discard them."
+            "\"README.md\" has unsaved document changes. Quitting Toastty will discard them."
         )
     }
 
-    func testAssessRequiresWaitingForMarkdownSaveInProgress() {
+    func testAssessRequiresWaitingForLocalDocumentSaveInProgress() {
         let state = makeLocalDocumentAppState()
 
         let assessment = AppQuitConfirmation.assess(
             state: state,
             terminalAssessment: { _ in
-                XCTFail("markdown-only quit confirmation should not request terminal assessments")
+                XCTFail("local-document quit confirmation should not request terminal assessments")
                 return nil
             },
             localDocumentCloseConfirmationState: { _ in
@@ -172,7 +172,7 @@ final class AppQuitConfirmationTests: XCTestCase {
         )
     }
 
-    func testAssessCombinesMarkdownAndTerminalWarnings() {
+    func testAssessCombinesLocalDocumentAndTerminalWarnings() {
         let workspace = WorkspaceState.bootstrap(title: "Workspace")
         let markdownState = makeLocalDocumentAppState()
         guard let busyPanelID = workspace.allTerminalPanelIDs.first else {
@@ -204,7 +204,7 @@ final class AppQuitConfirmationTests: XCTestCase {
         XCTAssertEqual(
             assessment.informativeText,
             """
-            "README.md" has unsaved markdown changes. Quitting Toastty will discard them.
+            "README.md" has unsaved document changes. Quitting Toastty will discard them.
 
             A process is still running in Toastty. Quitting will terminate it.
 

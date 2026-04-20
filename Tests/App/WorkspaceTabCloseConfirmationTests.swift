@@ -105,7 +105,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
         XCTAssertEqual(assessment, .noConfirmation)
     }
 
-    func testAssessmentRequiresConfirmationForUnsavedMarkdownDraft() {
+    func testAssessmentRequiresConfirmationForUnsavedLocalDocumentDraft() {
         let (tab, panelIDs) = makeTab(panelStates: [
             .web(
                 WebPanelState(
@@ -120,7 +120,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
             tab: tab,
             shouldBypassConfirmation: false,
             terminalAssessment: { _ in
-                XCTFail("markdown-only tab close should not request terminal assessments")
+                XCTFail("local-document tab close should not request terminal assessments")
                 return nil
             },
             localDocumentCloseConfirmationState: { panelID in
@@ -134,11 +134,11 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
         XCTAssertEqual(assessment.unsavedLocalDocumentDraftCount, 1)
         XCTAssertEqual(
             assessment.confirmationMessage,
-            "\"README.md\" has unsaved markdown changes. Closing the tab will discard them."
+            "\"README.md\" has unsaved document changes. Closing the tab will discard them."
         )
     }
 
-    func testAssessmentRequiresWaitingForMarkdownSaveInProgress() {
+    func testAssessmentRequiresWaitingForLocalDocumentSaveInProgress() {
         let (tab, panelIDs) = makeTab(panelStates: [
             .web(
                 WebPanelState(
@@ -153,7 +153,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
             tab: tab,
             shouldBypassConfirmation: false,
             terminalAssessment: { _ in
-                XCTFail("markdown-only tab close should not request terminal assessments")
+                XCTFail("local-document tab close should not request terminal assessments")
                 return nil
             },
             localDocumentCloseConfirmationState: { panelID in
@@ -171,7 +171,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
         )
     }
 
-    func testAssessmentCombinesMarkdownAndTerminalWarnings() {
+    func testAssessmentCombinesLocalDocumentAndTerminalWarnings() {
         let (tab, panelIDs) = makeTab(panelStates: [
             makeTerminalPanelState(title: "Terminal 1"),
             .web(
@@ -206,7 +206,7 @@ final class WorkspaceTabCloseConfirmationTests: XCTestCase {
         XCTAssertEqual(
             assessment.confirmationMessage,
             """
-            "README.md" has unsaved markdown changes. Closing the tab will discard them.
+            "README.md" has unsaved document changes. Closing the tab will discard them.
 
             A process is still running in this tab. Closing the tab will terminate it.
 

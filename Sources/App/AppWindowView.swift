@@ -301,17 +301,17 @@ private struct PendingWorkspaceClose: Identifiable {
             )
         } else if localDocumentSaveInProgressCount > 1 {
             paragraphs.append(
-                "This workspace still has markdown saves in progress. Wait for them to finish before closing the workspace."
+                "This workspace still has document saves in progress. Wait for them to finish before closing the workspace."
             )
         }
 
         if unsavedLocalDocumentDraftCount == 1,
            let firstUnsavedLocalDocumentDisplayName {
             paragraphs.append(
-                "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved markdown changes. Closing the workspace will discard them."
+                "\"\(firstUnsavedLocalDocumentDisplayName)\" has unsaved document changes. Closing the workspace will discard them."
             )
         } else if unsavedLocalDocumentDraftCount > 1 {
-            paragraphs.append("This workspace has unsaved markdown changes. Closing the workspace will discard them.")
+            paragraphs.append("This workspace has unsaved document changes. Closing the workspace will discard them.")
         }
 
         paragraphs.append("Closing this workspace will close all terminals and panels within it.")
