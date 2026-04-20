@@ -94,10 +94,7 @@ struct AppWindowView: View {
             Text(closeTarget.confirmationMessage)
         }
         .sheet(isPresented: $showsAgentGetStartedSheet) {
-            AgentGetStartedSheet(
-                openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
-                openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult
-            )
+            agentGetStartedSheet
         }
         .onAppear {
             scheduleWindowFocusRestore()
@@ -199,6 +196,14 @@ struct AppWindowView: View {
         .accessibilityIdentifier("titlebar.toggle.sidebar")
     }
 
+    private var agentGetStartedSheet: some View {
+        AgentGetStartedSheet(
+            openAgentProfilesConfiguration: openAgentProfilesConfigurationResult,
+            openKeyboardShortcutsReference: openKeyboardShortcutsReferenceResult,
+            resolveShellIntegrationPreferredShellPath: resolveShellIntegrationPreferredShellPath
+        )
+    }
+
     private var slotFocusSignature: WindowSlotFocusSignature? {
         guard store.window(id: windowID) != nil else { return nil }
         return WindowSlotFocusSignature(
@@ -211,6 +216,13 @@ struct AppWindowView: View {
     private var effectiveSidebarWidth: CGFloat {
         Self.effectiveSidebarWidth(
             hasEverLaunchedAgent: store.hasEverLaunchedAgent
+        )
+    }
+
+    @MainActor
+    private func resolveShellIntegrationPreferredShellPath() -> String? {
+        terminalRuntimeRegistry.resolveShellIntegrationShellPath(
+            preferredWindowID: windowID
         )
     }
 

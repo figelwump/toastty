@@ -3,10 +3,20 @@ import CoreState
 import SwiftUI
 
 struct WorkspaceView: View {
+    struct FocusedUnreadClearCandidate: Equatable {
+        let workspaceID: UUID
+        let panelID: UUID
+    }
+
     enum WorkspaceTabTrailingAccessory: Equatable {
         case closeButton
         case badge(String)
         case empty
+    }
+
+    enum WorkspaceTabFocusIndicatorStyle: Equatable {
+        case fullLabel
+        case iconOnly
     }
 
     enum PanelHeaderTrailingAccessory: Equatable {
@@ -156,10 +166,45 @@ struct WorkspaceView: View {
         titleOriginY + titleHeight + spacing
     }
 
+    nonisolated static func focusedUnreadClearCandidate(
+        workspace: WorkspaceState?,
+        appIsActive: Bool
+    ) -> FocusedUnreadClearCandidate? {
+        guard appIsActive,
+              let workspace,
+              let focusedPanelID = workspace.focusedPanelID,
+              workspace.unreadPanelIDs.contains(focusedPanelID) else {
+            return nil
+        }
+
+        return FocusedUnreadClearCandidate(
+            workspaceID: workspace.id,
+            panelID: focusedPanelID
+        )
+    }
+
+    nonisolated static func shouldClearFocusedUnread(
+        currentWorkspace: WorkspaceState?,
+        candidate: FocusedUnreadClearCandidate,
+        appIsActive: Bool
+    ) -> Bool {
+        guard appIsActive,
+              let currentWorkspace,
+              currentWorkspace.id == candidate.workspaceID,
+              currentWorkspace.focusedPanelID == candidate.panelID else {
+            return false
+        }
+
+        return currentWorkspace.unreadPanelIDs.contains(candidate.panelID)
+    }
+
     private static let panelFlashPeakDuration: Double = 0.18
     private static let panelFlashSettleDuration: Double = 0.28
     private static let transientUnfocusHighlightHoldDuration: Double = 1.0
     private static let transientUnfocusHighlightFadeDuration: Double = 0.3
+    // Once tabs compress near their minimum width, keep the focus badge
+    // single-line by switching to the icon-only variant.
+    private static let workspaceTabCompactFocusIndicatorThreshold: CGFloat = 120
 
     nonisolated static func workspaceTabTrailingAccessory(
         index: Int,
@@ -182,6 +227,11 @@ struct WorkspaceView: View {
 
     nonisolated static func workspaceTabInstallsContextMenu(tabCount: Int) -> Bool {
         tabCount > 0
+    }
+
+    nonisolated static func workspaceTabFocusIndicatorStyle(tabWidth: CGFloat) -> WorkspaceTabFocusIndicatorStyle {
+        guard tabWidth.isFinite, tabWidth > 0 else { return .fullLabel }
+        return tabWidth <= Self.workspaceTabCompactFocusIndicatorThreshold ? .iconOnly : .fullLabel
     }
 
     nonisolated static func panelHeaderTrailingAccessory(
@@ -382,6 +432,7 @@ struct WorkspaceView: View {
             appIsActive = NSApplication.shared.isActive
             scheduleFocusedUnreadPanelClearIfNeeded()
             handlePendingPanelFlashRequest()
+            handlePendingBrowserLocationFocusRequest()
         }
         .onChange(of: selectedWorkspaceUnreadSignature) { _, _ in
             scheduleFocusedUnreadPanelClearIfNeeded()
@@ -398,6 +449,9 @@ struct WorkspaceView: View {
         .onChange(of: store.pendingPanelFlashRequest) { _, _ in
             handlePendingPanelFlashRequest()
         }
+        .onChange(of: store.pendingBrowserLocationFocusRequest) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
+        }
         .onChange(of: selectedWorkspaceFocusModePresentationState) { oldValue, newValue in
             handleFocusModePresentationChange(from: oldValue, to: newValue)
         }
@@ -406,10 +460,13 @@ struct WorkspaceView: View {
             prunePendingWorkspaceTabCloseState()
             pruneTransientPanelFlashState()
             pruneTransientUnfocusHighlightState()
+            handlePendingBrowserLocationFocusRequest()
+        }
+        .onChange(of: selectedWorkspace?.focusedPanelID) { _, _ in
+            handlePendingBrowserLocationFocusRequest()
         }
         .onDisappear {
-            focusedUnreadClearTask?.cancel()
-            focusedUnreadClearTask = nil
+            cancelFocusedUnreadClearTask()
             panelFlashClearWorkItem?.cancel()
             panelFlashResetWorkItem?.cancel()
             panelFlashClearWorkItem = nil
@@ -418,9 +475,11 @@ struct WorkspaceView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             appIsActive = true
+            scheduleFocusedUnreadPanelClearIfNeeded()
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             appIsActive = false
+            cancelFocusedUnreadClearTask()
             hoveredTabID = nil
             hoveredTabCloseButtonID = nil
         }
@@ -841,27 +900,37 @@ struct WorkspaceView: View {
     }
 
     private func scheduleFocusedUnreadPanelClearIfNeeded() {
-        focusedUnreadClearTask?.cancel()
-        focusedUnreadClearTask = nil
+        cancelFocusedUnreadClearTask()
 
-        guard let workspace = selectedWorkspace,
-              let focusedPanelID = workspace.focusedPanelID,
-              workspace.unreadPanelIDs.contains(focusedPanelID) else {
+        guard let clearCandidate = Self.focusedUnreadClearCandidate(
+            workspace: selectedWorkspace,
+            appIsActive: NSApplication.shared.isActive
+        ) else {
             return
         }
 
-        let workspaceID = workspace.id
         focusedUnreadClearTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.focusedUnreadClearDelayNanoseconds)
             guard Task.isCancelled == false else { return }
-            guard let currentWorkspace = store.selectedWorkspace(in: windowID),
-                  currentWorkspace.id == workspaceID,
-                  currentWorkspace.focusedPanelID == focusedPanelID,
-                  currentWorkspace.unreadPanelIDs.contains(focusedPanelID) else {
+            guard Self.shouldClearFocusedUnread(
+                currentWorkspace: store.selectedWorkspace(in: windowID),
+                candidate: clearCandidate,
+                appIsActive: NSApplication.shared.isActive
+            ) else {
                 return
             }
-            _ = store.send(.markPanelNotificationsRead(workspaceID: workspaceID, panelID: focusedPanelID))
+            _ = store.send(
+                .markPanelNotificationsRead(
+                    workspaceID: clearCandidate.workspaceID,
+                    panelID: clearCandidate.panelID
+                )
+            )
         }
+    }
+
+    private func cancelFocusedUnreadClearTask() {
+        focusedUnreadClearTask?.cancel()
+        focusedUnreadClearTask = nil
     }
 
     @MainActor
@@ -882,6 +951,27 @@ struct WorkspaceView: View {
             }
             flashPanel(request.panelID, requestID: request.requestID)
         }
+    }
+
+    @MainActor
+    private func handlePendingBrowserLocationFocusRequest() {
+        guard let request = store.pendingBrowserLocationFocusRequest,
+              request.windowID == windowID,
+              let workspace = selectedWorkspace,
+              workspace.id == request.workspaceID,
+              workspace.focusedPanelID == request.panelID,
+              case .web(let webState)? = workspace.panelState(for: request.panelID),
+              webState.definition == .browser else {
+            return
+        }
+
+        guard let consumedRequest = store.consumePendingBrowserLocationFocusRequest(windowID: windowID) else {
+            return
+        }
+
+        webPanelRuntimeRegistry
+            .browserRuntime(for: consumedRequest.panelID)
+            .requestLocationFieldFocus()
     }
 
     @MainActor
@@ -1156,21 +1246,28 @@ struct WorkspaceView: View {
                     _ = store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: tab.id))
                 } label: {
                     workspaceTabChrome(chromeSpec: chromeSpec) {
-                        HStack(spacing: 5) {
-                            workspaceTabTitleContent(
-                                tab: tab,
-                                textColor: chromeSpec.text,
-                                hasUnread: hasUnread
+                        GeometryReader { geometry in
+                            let focusIndicatorStyle = Self.workspaceTabFocusIndicatorStyle(
+                                tabWidth: geometry.size.width
                             )
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            HStack(spacing: 5) {
+                                workspaceTabTitleContent(
+                                    tab: tab,
+                                    textColor: chromeSpec.text,
+                                    hasUnread: hasUnread,
+                                    focusIndicatorStyle: focusIndicatorStyle
+                                )
+                                .frame(maxWidth: .infinity, alignment: .leading)
 
-                            workspaceTabTrailingContent(
-                                index: index,
-                                isSelected: isSelected,
-                                isHovered: isHovered,
-                                showsCloseAffordance: allowsManagementAffordances
-                            )
-                            .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
+                                workspaceTabTrailingContent(
+                                    index: index,
+                                    isSelected: isSelected,
+                                    isHovered: isHovered,
+                                    showsCloseAffordance: allowsManagementAffordances
+                                )
+                                .frame(width: ToastyTheme.workspaceTabTrailingSlotWidth, alignment: .trailing)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                         }
                     }
                 }
@@ -1212,7 +1309,8 @@ struct WorkspaceView: View {
     private func workspaceTabTitleContent(
         tab: WorkspaceTabState,
         textColor: Color,
-        hasUnread: Bool
+        hasUnread: Bool,
+        focusIndicatorStyle: WorkspaceTabFocusIndicatorStyle
     ) -> some View {
         HStack(spacing: 5) {
             if hasUnread {
@@ -1240,16 +1338,35 @@ struct WorkspaceView: View {
                 .truncationMode(.tail)
 
             if tab.focusedPanelModeActive {
-                Text("Focused")
-                    .font(ToastyTheme.fontWorkspaceSessionChip)
-                    .foregroundStyle(ToastyTheme.focusModeAccent)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        ToastyTheme.focusModeAccent.opacity(0.14),
-                        in: RoundedRectangle(cornerRadius: 4)
-                    )
+                workspaceTabFocusIndicator(style: focusIndicatorStyle)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func workspaceTabFocusIndicator(style: WorkspaceTabFocusIndicatorStyle) -> some View {
+        switch style {
+        case .fullLabel:
+            Text("Focused")
+                .font(ToastyTheme.fontWorkspaceSessionChip)
+                .foregroundStyle(ToastyTheme.focusModeAccent)
+                .lineLimit(1)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    ToastyTheme.focusModeAccent.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
+                .fixedSize(horizontal: true, vertical: true)
+        case .iconOnly:
+            FocusIconView(color: ToastyTheme.focusModeAccent)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(
+                    ToastyTheme.focusModeAccent.opacity(0.14),
+                    in: RoundedRectangle(cornerRadius: 4)
+                )
+                .fixedSize(horizontal: true, vertical: true)
         }
     }
 
@@ -2490,8 +2607,18 @@ struct SidebarToggleIconView: View {
         .frame(width: 14, height: 14)
         .overlay(alignment: .topTrailing) {
             if hasUnread {
-                SessionStatusIndicator(state: .dot, size: 6, lineWidth: 1.2)
-                    .offset(x: 1.5, y: -1.5)
+                // Badge sits at the icon's top-right corner with a background-colored
+                // cutout ring so the dot reads clearly against the orange icon stroke.
+                ZStack {
+                    Circle()
+                        .fill(ToastyTheme.chromeBackground)
+                        .frame(width: 11, height: 11)
+                    Circle()
+                        .fill(ToastyTheme.badgeBlue)
+                        .frame(width: 8, height: 8)
+                        .shadow(color: ToastyTheme.badgeBlue.opacity(0.5), radius: 3)
+                }
+                .offset(x: 2.5, y: -2.5)
             }
         }
     }

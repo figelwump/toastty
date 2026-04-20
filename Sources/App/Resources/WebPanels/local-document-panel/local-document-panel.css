@@ -300,6 +300,11 @@ body {
   cursor: text;
 }
 
+.local-document-editor-markdown {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 :root[data-theme="light"] .local-document-editor-status-error {
   color: #7f2618;
 }

@@ -548,6 +548,10 @@ final class TerminalMetadataService {
         return processWorkingDirectoryResolver.resolveWorkingDirectory(for: panelID)
     }
 
+    func resolveShellExecutablePath(panelID: UUID) -> String? {
+        processWorkingDirectoryResolver.resolveShellExecutablePath(for: panelID)
+    }
+
     private static func defaultProcessRefreshRetryDelay(_ nanoseconds: UInt64) async {
         try? await Task.sleep(nanoseconds: nanoseconds)
     }

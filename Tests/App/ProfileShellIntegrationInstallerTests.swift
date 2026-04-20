@@ -22,13 +22,13 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
     }
 
-    func testResolvedShellPathPrefersLoginShellOverEnvironmentShell() {
+    func testResolvedShellPathPrefersSupportedEnvironmentShellOverLoginShell() {
         XCTAssertEqual(
             ProfileShellIntegrationInstaller.resolvedShellPath(
                 environment: ["SHELL": "/bin/bash"],
                 loginShellPath: "/bin/zsh"
             ),
-            "/bin/zsh"
+            "/bin/bash"
         )
     }
 
@@ -41,7 +41,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 ],
                 loginShellPath: "/bin/zsh"
             ),
-            "/bin/zsh"
+            "/bin/bash"
         )
     }
 
@@ -56,6 +56,59 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
                 loginShellPath: "/bin/zsh"
             ),
             "/opt/homebrew/bin/fish"
+        )
+    }
+
+    func testResolvedShellPathFallsBackToLoginShellWhenEnvironmentShellIsUnsupported() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: ["SHELL": "/usr/bin/python3"],
+                loginShellPath: "/bin/zsh"
+            ),
+            "/bin/zsh"
+        )
+    }
+
+    func testResolvedShellPathReturnsNilWhenLoginShellIsMissingAndEnvironmentShellIsUnsupported() {
+        XCTAssertNil(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: ["SHELL": "/usr/bin/python3"],
+                loginShellPath: nil
+            )
+        )
+    }
+
+    func testResolvedShellPathTrimsSupportedEnvironmentShellBeforeDetection() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: ["SHELL": "  /opt/homebrew/bin/fish  "],
+                loginShellPath: "/bin/zsh"
+            ),
+            "/opt/homebrew/bin/fish"
+        )
+    }
+
+    func testResolvedShellPathPrefersSupportedPreferredShellPathOverEnvironmentAndLoginShell() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: ["SHELL": "/bin/bash"],
+                loginShellPath: "/bin/zsh",
+                preferredShellPath: "/opt/homebrew/bin/fish",
+                preferredShellSource: .liveTerminalShell
+            ),
+            "/opt/homebrew/bin/fish"
+        )
+    }
+
+    func testResolvedShellPathFallsBackToEnvironmentShellWhenPreferredShellPathIsUnsupported() {
+        XCTAssertEqual(
+            ProfileShellIntegrationInstaller.resolvedShellPath(
+                environment: ["SHELL": "/bin/bash"],
+                loginShellPath: "/bin/zsh",
+                preferredShellPath: "/usr/bin/python3",
+                preferredShellSource: .liveTerminalShell
+            ),
+            "/bin/bash"
         )
     }
 
@@ -90,6 +143,47 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertEqual(
             plan.sourceLine,
             "source \"$HOME/.toastty/shell/toastty-profile-shell-integration.fish\""
+        )
+    }
+
+    func testInstallationPlanPrefersSupportedEnvironmentFishOverLoginShellZsh() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let environment = ["SHELL": "/opt/homebrew/bin/fish"]
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: environment,
+            shellPathProvider: {
+                ProfileShellIntegrationInstaller.resolvedShellPath(
+                    environment: environment,
+                    loginShellPath: "/bin/zsh"
+                )
+            }
+        )
+
+        let plan = try installer.installationPlan()
+
+        XCTAssertEqual(plan.shell, .fish)
+        XCTAssertEqual(
+            plan.initFileURL.path,
+            homeDirectoryURL.appendingPathComponent(".config/fish/config.fish").path
+        )
+    }
+
+    func testInstallationPlanPrefersSupportedLiveShellPathOverEnvironmentAndLoginShell() throws {
+        let homeDirectoryURL = try makeTemporaryHomeDirectory()
+        let installer = ProfileShellIntegrationInstaller(
+            homeDirectoryPath: homeDirectoryURL.path,
+            environment: ["SHELL": "/bin/zsh"],
+            preferredShellPath: "/opt/homebrew/bin/fish",
+            preferredShellSource: .liveTerminalShell
+        )
+
+        let plan = try installer.installationPlan()
+
+        XCTAssertEqual(plan.shell, .fish)
+        XCTAssertEqual(
+            plan.initFileURL.path,
+            homeDirectoryURL.appendingPathComponent(".config/fish/config.fish").path
         )
     }
 

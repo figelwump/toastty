@@ -912,6 +912,28 @@ final class TerminalRuntimeRegistryStoreBindingTests: XCTestCase {
 }
 
 final class TerminalProcessWorkingDirectoryResolverSelectionTests: XCTestCase {
+    func testDecodedProcessExecutablePathUsesExactReportedByteCount() {
+        let path = "/opt/homebrew/bin/fish"
+        let pathBuffer = Array(path.utf8CString)
+
+        XCTAssertEqual(
+            TerminalProcessWorkingDirectoryResolver.decodedProcessExecutablePath(
+                from: pathBuffer,
+                byteCount: path.utf8.count
+            ),
+            path
+        )
+    }
+
+    func testDecodedProcessExecutablePathReturnsNilWhenReportedByteCountIsZero() {
+        XCTAssertNil(
+            TerminalProcessWorkingDirectoryResolver.decodedProcessExecutablePath(
+                from: [0],
+                byteCount: 0
+            )
+        )
+    }
+
     func testDeferredRegistrationCandidateIndexAssignsByPendingOrderWhenCountsMatch() {
         let firstPanelID = UUID()
         let secondPanelID = UUID()

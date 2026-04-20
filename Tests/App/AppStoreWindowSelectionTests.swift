@@ -513,6 +513,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(webState.definition, .browser)
         XCTAssertEqual(webState.initialURL, "https://example.com/docs")
         XCTAssertNil(webState.currentURL)
+        XCTAssertNil(store.pendingBrowserLocationFocusRequest)
     }
 
     func testCreateBrowserPanelFromCommandCanSplitFocusedPanel() throws {
@@ -541,6 +542,10 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(webState.definition, .browser)
         XCTAssertNil(webState.initialURL)
         XCTAssertNil(webState.currentURL)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.windowID, sourceWindowID)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.workspaceID, sourceWorkspaceID)
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest?.panelID, focusedPanelID)
+        XCTAssertNotNil(store.pendingBrowserLocationFocusRequest?.requestID)
     }
 
     func testCreateBrowserPanelUsesDefaultPlacementWhenNoOverrideIsProvided() throws {
@@ -566,6 +571,7 @@ final class AppStoreWindowSelectionTests: XCTestCase {
 
         XCTAssertEqual(webState.initialURL, "https://example.com")
         XCTAssertNil(webState.currentURL)
+        XCTAssertNil(store.pendingBrowserLocationFocusRequest)
     }
 
     func testCreateMarkdownPanelFromCommandCreatesSelectedMarkdownTab() throws {
@@ -1119,6 +1125,25 @@ final class AppStoreWindowSelectionTests: XCTestCase {
         XCTAssertEqual(store.pendingRenameWorkspaceTabRequest, request)
         XCTAssertEqual(store.consumePendingWorkspaceTabRenameRequest(windowID: request.windowID), request)
         XCTAssertNil(store.pendingRenameWorkspaceTabRequest)
+    }
+
+    func testConsumePendingBrowserLocationFocusRequestOnlyReturnsMatchingWindow() {
+        let request = PendingBrowserLocationFocusRequest(
+            requestID: UUID(),
+            windowID: UUID(),
+            workspaceID: UUID(),
+            panelID: UUID()
+        )
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        store.pendingBrowserLocationFocusRequest = request
+
+        XCTAssertNil(store.consumePendingBrowserLocationFocusRequest(windowID: UUID()))
+        XCTAssertEqual(store.pendingBrowserLocationFocusRequest, request)
+        XCTAssertEqual(
+            store.consumePendingBrowserLocationFocusRequest(windowID: request.windowID),
+            request
+        )
+        XCTAssertNil(store.pendingBrowserLocationFocusRequest)
     }
 
     func testCloseSelectedWorkspaceFromCommandRequestsFocusedWorkspaceClose() throws {

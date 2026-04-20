@@ -6,6 +6,12 @@ On restore, Toastty imports that pane's journal into the shell's in-memory histo
 
 The easiest way to install is either `Toastty > Install Shell Integration…` or the top-bar `Get Started…` flow in Toastty. Both write the snippet and source it from your shell init file automatically. This page covers manual setup for users who manage their own dotfiles.
 
+For automatic installs, Toastty first prefers the live shell executable path
+for the current Toastty terminal window when it resolves to `zsh`, `bash`, or
+`fish`. If no live terminal shell is available or that path is unsupported,
+Toastty falls back to the current process `SHELL`, then the macOS account login
+shell.
+
 If you keep shell startup files in version control, the installer is still the easiest way to get the exact current snippet. Install once, keep the managed file under `~/.toastty/shell/`, and version only the `source` line in your shell init file if that matches your workflow.
 
 This is command-history restore only. It does not restore running programs, SSH sessions, REPL state, shell-local variables, or half-typed input.

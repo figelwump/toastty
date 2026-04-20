@@ -38,7 +38,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
 - **Scrollback find** — Search the active terminal's Ghostty scrollback in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
 - **Persisted terminal history** — With shell integration installed, restored `zsh`, `bash`, and `fish` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
-- **Local documents** — Open supported local files (`.md`, `.markdown`, `.mdown`, `.mkd`, `.yaml`, `.yml`, `.toml`) in tabs or splits; Markdown documents render as preview/edit panels, while YAML and TOML use code views with line numbers
+- **Local documents and directory opens** — Open supported local files (`.md`, `.markdown`, `.mdown`, `.mkd`, `.yaml`, `.yml`, `.toml`) in tabs or splits; Markdown documents render as preview/edit panels, while YAML and TOML use code views with line numbers. `Cmd`-clicking a local directory path in the terminal opens a split rooted at that directory.
 - **Text size and zoom control** — `Cmd+=`, `Cmd+-`, and `Cmd+0` adjust terminal font size for focused terminals, local-document text size for focused local documents, or page zoom for focused browser panels; terminal and local-document overrides persist per window, and browser zoom persists per browser panel
 - **Ghostty terminal rendering** — Embeds Ghostty's GPU-accelerated terminal engine, with Ghostty config compatibility
 - **Automation socket** — JSON-RPC over Unix socket for scripting and external tool integration ([protocol spec](docs/socket-protocol.md))
@@ -231,7 +231,12 @@ their current profile bindings.
 Use `Toastty > Install Shell Integration…` to set up live pane titles and restored-pane command recall for `zsh`, `bash`, and `fish` automatically while preserving shared shell history. The `Get Started…` flow is available both from the empty agent top bar and from `Toastty > Get Started with Toastty…`, where it also offers `agents.toml` setup and the keyboard shortcut reference.
 
 Toastty writes a managed snippet under `~/.toastty/shell/` and adds one
-`source` line to the shell init file it detects:
+`source` line to the detected shell init file.
+
+When Toastty can resolve the executable path for the live shell running in the
+current terminal window and that path maps to `zsh`, `bash`, or `fish`, it
+prefers that shell for installation. Otherwise it falls back to `SHELL` for the
+current Toastty app launch, then the account login shell from macOS.
 
 - `zsh` → `~/.zshrc`
 - `bash` → `~/.bash_profile` by default, or an existing `~/.profile`

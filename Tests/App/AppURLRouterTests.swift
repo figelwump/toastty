@@ -94,6 +94,50 @@ final class AppURLRouterTests: XCTestCase {
         XCTAssertEqual(externallyOpenedURL, url)
     }
 
+    func testOpenConvertsSchemelessAbsolutePathsBeforeOpeningExternally() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let url = try XCTUnwrap(URL(string: "/tmp/toastty command click"))
+        var externallyOpenedURL: URL?
+
+        XCTAssertTrue(
+            AppURLRouter.open(
+                url,
+                preferredWindowID: nil,
+                appStore: store,
+                preferences: URLRoutingPreferences(destination: .systemBrowser),
+                openExternally: { openedURL in
+                    externallyOpenedURL = openedURL
+                    return true
+                }
+            )
+        )
+
+        XCTAssertEqual(externallyOpenedURL?.scheme, "file")
+        XCTAssertEqual(externallyOpenedURL?.path, "/tmp/toastty command click")
+    }
+
+    func testOpenConvertsSchemelessTildePathsBeforeOpeningExternally() throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let url = try XCTUnwrap(URL(string: "~/Documents/toastty notes.md"))
+        var externallyOpenedURL: URL?
+
+        XCTAssertTrue(
+            AppURLRouter.open(
+                url,
+                preferredWindowID: nil,
+                appStore: store,
+                preferences: URLRoutingPreferences(destination: .systemBrowser),
+                openExternally: { openedURL in
+                    externallyOpenedURL = openedURL
+                    return true
+                }
+            )
+        )
+
+        XCTAssertEqual(externallyOpenedURL?.scheme, "file")
+        XCTAssertEqual(externallyOpenedURL?.path, "\(NSHomeDirectory())/Documents/toastty notes.md")
+    }
+
     func testOpenCreatesBrowserPanelInsideToasttyWhenConfigured() throws {
         let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
         let url = try XCTUnwrap(URL(string: "https://example.com/toastty"))
@@ -194,5 +238,33 @@ final class AppURLRouterTests: XCTestCase {
         let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
         let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
         XCTAssertEqual(workspace.orderedTabs.count, 1)
+    }
+
+    func testOpenFallbackAfterBrowserPlacementFailureUsesNormalizedExternalTarget() throws {
+        let store = AppStore(
+            state: AppState(windows: [], workspacesByID: [:], selectedWindowID: nil),
+            persistTerminalFontPreference: false
+        )
+        let url = try XCTUnwrap(URL(string: "/tmp/toastty directory"))
+        var externallyOpenedURL: URL?
+
+        XCTAssertTrue(
+            AppURLRouter.open(
+                url,
+                preferredWindowID: nil,
+                appStore: store,
+                preferences: URLRoutingPreferences(
+                    destination: .toasttyBrowser,
+                    browserPlacement: .newTab
+                ),
+                openExternally: { openedURL in
+                    externallyOpenedURL = openedURL
+                    return true
+                }
+            )
+        )
+
+        XCTAssertEqual(externallyOpenedURL?.scheme, "file")
+        XCTAssertEqual(externallyOpenedURL?.path, "/tmp/toastty directory")
     }
 }
