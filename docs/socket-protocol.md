@@ -1,6 +1,6 @@
 # toastty socket protocol (v1)
 
-Date: 2026-04-17
+Date: 2026-04-20
 
 This document describes the current socket protocol implemented by
 `Sources/App/Automation/AutomationSocketServer.swift`.
@@ -8,28 +8,29 @@ This document describes the current socket protocol implemented by
 Important scope note:
 
 - The socket server is created for normal launches as well as automation launches so session and notification events can still reach the app.
-- The same server accepts both automation requests and event-style envelopes
-  (`session.*`, `notification.emit`).
+- The same server accepts always-on app-control requests, automation-only requests, and event-style envelopes (`session.*`, `notification.emit`).
+- `app_control.*` commands are available in normal launches by default.
 - `automation.*` commands still require automation mode.
 - This is a narrow implementation doc, not an aspirational protocol design.
 
 CLI note:
 
-- The repo ships a thin `toastty` CLI wrapper for `notify` and the `session`
-  subcommands.
+- The repo ships a `toastty` CLI wrapper for app control (`action` / `query`), notifications, and the `session` subcommands.
 - Toastty-managed Claude and Codex launches primarily use
   `session ingest-agent-event` to translate provider events into `session.status`
   updates. `session ingest-agent-event` is handled locally inside the CLI; it is
   not a socket event type.
-- Manual wrappers should generally use `session start`, `session status`,
-  optional `session update-files`, and `session stop` directly.
+- Manual wrappers should generally use:
+  - `toastty action list` / `toastty query list` for discovery
+  - `toastty action run` / `toastty query run` for live app control
+  - `session start`, `session status`, optional `session update-files`, and `session stop` for agent lifecycle reporting
 
 ## 1) transport and lifecycle
 
 - Transport: Unix domain socket only.
 - The server creates the parent directory with mode `0700` and the socket file with
   mode `0600`.
-- Event-style envelopes are available whenever the app listener is running.
+- Event-style envelopes and `app_control.*` requests are available whenever the app listener is running.
 - `automation.*` commands require automation mode enabled through either:
   - `--automation`
   - a truthy `TOASTTY_AUTOMATION` environment value
@@ -151,7 +152,102 @@ Terminal target resolution rules:
 - If the resolved workspace has no terminal panels, the server returns
   `INVALID_PAYLOAD`.
 
-## 5) implemented automation commands
+## 5) implemented app-control requests
+
+These commands are available in normal launches by default and are the preferred
+API for live app control.
+
+### `app_control.list_actions`
+
+Request payload: empty
+
+Result:
+
+- `commands: [AppControlCommandDescriptor]`
+
+Each descriptor includes:
+
+- `id: String`
+- `kind: "action"`
+- `summary: String`
+- `selectors: [windowID | workspaceID | panelID]`
+- `parameters: [name, summary, valueType, required, repeatable, allowedValues?]`
+- `aliases: [String]`
+
+Use this for discovery rather than hard-coding the full catalog in external tools. Aliases are accepted for compatibility, but new integrations should prefer canonical IDs.
+
+### `app_control.run_action`
+
+Request payload:
+
+- `id: String`
+- `args?: Object`
+
+Result:
+
+- action-specific object
+- `stateVersion: Int` when the action mutates app state
+
+Selectors are passed inside `args`:
+
+- `windowID?: UUID string`
+- `workspaceID?: UUID string`
+- `panelID?: UUID string`
+
+Canonical action IDs are machine-first and parameterized. Common actions include:
+
+- `window.create`
+- `window.sidebar.toggle`
+- `workspace.create`
+- `workspace.select`
+- `workspace.rename`
+- `workspace.close`
+- `workspace.tab.create`
+- `workspace.tab.select`
+- `workspace.tab.rename`
+- `workspace.tab.close`
+- `panel.close`
+- `panel.create.browser`
+- `panel.create.local-document`
+- `panel.focus-mode.toggle`
+- `agent.launch`
+- `config.reload`
+- `terminal.send-text`
+- `terminal.drop-image-files`
+
+### `app_control.list_queries`
+
+Request payload: empty
+
+Result:
+
+- `commands: [AppControlCommandDescriptor]`
+
+The response shape matches `app_control.list_actions`, except each descriptor
+has `kind: "query"`.
+
+### `app_control.run_query`
+
+Request payload:
+
+- `id: String`
+- `args?: Object`
+
+Result:
+
+- query-specific object
+
+Selectors are passed inside `args` using the same keys as `app_control.run_action`.
+
+Common query IDs include:
+
+- `workspace.snapshot`
+- `terminal.state`
+- `terminal.visible-text`
+- `panel.local-document.state`
+- `panel.browser.state`
+
+## 6) implemented automation commands
 
 ### `automation.ping`
 
@@ -208,14 +304,30 @@ Result:
 
 - `stateVersion: Int`
 
+Behavior:
+
+- This is now a compatibility shim over the shared app-control executor.
+- Canonical IDs come from `app_control.list_actions`; legacy aliases are still accepted for compatibility.
+- New integrations should prefer `app_control.run_action`.
+
 Supported action IDs:
 
+- `window.create`
+- `window.sidebar.toggle`
 - `workspace.tab.new`
 - `workspace.tab.select`
   - requires `args.index` (1-based) or `args.tabID`
 - `workspace.tab.close`
   - accepts `args.index` (1-based) or `args.tabID`
   - if neither is provided, closes the selected tab
+- `workspace.tab.rename`
+  - requires `args.title`
+  - accepts `args.index` (1-based) or `args.tabID`
+- `workspace.select`
+  - requires `args.workspaceID` or `args.index` (1-based)
+- `workspace.rename`
+  - requires `args.title`
+- `workspace.close`
 - `workspace.split.horizontal`
 - `workspace.split.vertical`
 - `workspace.split.right`
@@ -267,6 +379,8 @@ Supported action IDs:
   - unsupported or extension-less file paths return `INVALID_PAYLOAD`
 - `panel.create.markdown`
   - legacy alias for `panel.create.localDocument`
+- `panel.create.local-document`
+  - canonical ID for `panel.create.localDocument`
 - `topbar.toggle.focused-panel`
 - `app.font.increase`
   - terminal-only window font increase
@@ -319,6 +433,7 @@ Result:
 
 Behavior:
 
+- Compatibility shim over `app_control.run_action` with `id: "terminal.send-text"`.
 - `waitForSurfaceMs` is explicitly rejected as deprecated.
 - When the terminal surface is unavailable:
   - return `available: false` if `allowUnavailable=true`
@@ -345,6 +460,7 @@ Result:
 
 Behavior:
 
+- Compatibility shim over `app_control.run_action` with `id: "terminal.drop-image-files"`.
 - Relative file paths require `cwd`.
 - Paths are normalized with Foundation path standardization.
 - If no usable image paths remain, return `INVALID_PAYLOAD`.
@@ -367,6 +483,10 @@ Result:
 - `panelID: UUID string`
 - `text: String`
 - `contains?: Bool`
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "terminal.visible-text"`.
 
 ### `automation.launch_agent`
 
@@ -411,6 +531,7 @@ Result:
 
 Validation:
 
+- Compatibility shim over `app_control.run_action` with `id: "agent.launch"`.
 - requires automation mode like other `automation.*` commands.
 - the resolved target must be a terminal panel.
 - if both `panelID` and `workspaceID` are provided, the panel must belong to that workspace.
@@ -432,6 +553,10 @@ Result:
 - `cwd: String`
 - `shell: String`
 - `profileID: String | null`
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "terminal.state"`.
 
 ### `automation.local_document_panel_state`
 
@@ -472,6 +597,7 @@ Result:
 
 Behavior:
 
+- Compatibility shim over `app_control.run_query` with `id: "panel.local-document.state"`.
 - `panelID` is optional; when omitted, Toastty resolves the local-document panel from `workspaceID` or `windowID`, then prefers the focused local-document panel in that workspace and otherwise falls back to the first local-document panel in layout order.
 - `automation.markdown_panel_state` is accepted as a legacy alias and returns the same payload.
 - All `bootstrap*` fields are `null` when the panel runtime does not currently have an active bootstrap payload.
@@ -498,6 +624,7 @@ Result:
 
 Behavior:
 
+- Compatibility shim over `app_control.run_query` with `id: "panel.browser.state"`.
 - `panelID` is optional; when omitted, Toastty resolves the browser panel from `workspaceID` or `windowID`, then prefers the focused browser panel in that workspace and otherwise falls back to the first browser panel in layout order.
 
 ### `automation.workspace_snapshot`
@@ -524,6 +651,10 @@ Result:
 - `layoutSignature: String`
 
 `selectedTabIndex` is 1-based when present.
+
+Behavior:
+
+- Compatibility shim over `app_control.run_query` with `id: "workspace.snapshot"`.
 
 ### `automation.workspace_render_snapshot`
 
@@ -591,7 +722,7 @@ Behavior:
   - `sessionRegistry`
   - `notifications`
 
-## 6) implemented event types
+## 7) implemented event types
 
 Legacy note:
 
@@ -736,7 +867,7 @@ Result:
 - `sendSystemNotification: Bool`
 - `stateVersion`
 
-## 7) error codes
+## 8) error codes
 
 Current response error codes:
 
@@ -748,7 +879,7 @@ Current response error codes:
 - `INVALID_PAYLOAD`
 - `INTERNAL_ERROR`
 
-## 8) implementation notes that are not separate protocol guarantees
+## 9) implementation notes that are not separate protocol guarantees
 
 - `session.update_files` coalescing currently uses a 0.5 second window per session.
 - The protocol does not currently expose a standalone schema version beyond

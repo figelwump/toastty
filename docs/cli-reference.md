@@ -1,6 +1,6 @@
 # Toastty CLI Reference
 
-Toastty bundles a `toastty` CLI that communicates with the running app over its automation Unix socket. The CLI is primarily used by agents and wrapper scripts to report session status, file changes, and notifications back to the sidebar.
+Toastty bundles a `toastty` CLI that communicates with the running app over its automation Unix socket. The CLI is used both for agent/session reporting and for machine-first app control of a normal running Toastty instance.
 
 When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environment, pointing at the bundled executable. All examples below assume you invoke the CLI through that path.
 
@@ -15,6 +15,108 @@ When Toastty launches an agent it injects `TOASTTY_CLI_PATH` into the environmen
 **Socket resolution order:** `--socket-path` flag > `TOASTTY_SOCKET_PATH` env var > app-resolved default socket path. For runtime-isolated launches, that default starts from the stable runtime-home-derived socket path and can resolve to a per-process sibling such as `events-v1-<pid>.sock` if the stable path is already owned by a live listener.
 
 ## Commands
+
+### `action list`
+
+List the always-on app-control actions exposed by the running app.
+
+```
+toastty action list
+```
+
+Human-readable output prints one command per line as `id<TAB>summary`. With `--json`, the CLI returns the raw socket response, including each command descriptor's `id`, `summary`, `selectors`, `parameters`, and `aliases`.
+
+```bash
+"$TOASTTY_CLI_PATH" action list
+"$TOASTTY_CLI_PATH" --json action list
+```
+
+### `action run`
+
+Run an app action against a live Toastty instance. This surface is available in normal launches by default; it does not require automation mode.
+
+```
+toastty action run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+```
+
+Selectors map directly to the socket request's `windowID`, `workspaceID`, and `panelID` arguments. Additional `key=value` arguments are passed through as action arguments. Repeating the same key produces an array, which is how repeatable arguments such as `files=... files=...` are encoded.
+
+The CLI sends `key=value` arguments as strings. The app-control executor coerces supported argument types such as booleans (`true`, `false`, `1`, `0`, `yes`, `no`), integers, UUIDs, and string arrays.
+
+```bash
+"$TOASTTY_CLI_PATH" action run window.sidebar.toggle --window "$WINDOW_ID"
+"$TOASTTY_CLI_PATH" action run workspace.rename --workspace "$WORKSPACE_ID" title="Infra"
+"$TOASTTY_CLI_PATH" action run panel.create.local-document \
+  --workspace "$WORKSPACE_ID" \
+  filePath=/tmp/README.md \
+  placement=newTab
+"$TOASTTY_CLI_PATH" action run terminal.drop-image-files \
+  --panel "$PANEL_ID" \
+  files=/tmp/a.png \
+  files=/tmp/b.png \
+  allowUnavailable=true
+```
+
+Prefer `action list --json` to discover the current canonical IDs. Common actions include:
+
+- `window.create`
+- `window.sidebar.toggle`
+- `workspace.create`
+- `workspace.select`
+- `workspace.rename`
+- `workspace.close`
+- `workspace.tab.create`
+- `workspace.tab.select`
+- `workspace.tab.rename`
+- `workspace.tab.close`
+- `panel.close`
+- `panel.create.browser`
+- `panel.create.local-document`
+- `panel.focus-mode.toggle`
+- `agent.launch`
+- `config.reload`
+- `terminal.send-text`
+- `terminal.drop-image-files`
+
+Descriptors can also advertise compatibility aliases. Those aliases are accepted by the socket executor, but canonical IDs are preferred for new integrations.
+
+### `query list`
+
+List the always-on app-control queries exposed by the running app.
+
+```
+toastty query list
+```
+
+Like `action list`, human-readable output prints `id<TAB>summary`, and `--json` returns the full descriptor payload.
+
+```bash
+"$TOASTTY_CLI_PATH" query list
+"$TOASTTY_CLI_PATH" --json query list
+```
+
+### `query run`
+
+Run a read-only app query against a live Toastty instance.
+
+```
+toastty query run <id> [--window <id>] [--workspace <id>] [--panel <id>] [key=value ...]
+```
+
+Query selectors and `key=value` argument handling follow the same rules as `action run`.
+
+```bash
+"$TOASTTY_CLI_PATH" query run workspace.snapshot --workspace "$WORKSPACE_ID"
+"$TOASTTY_CLI_PATH" query run terminal.visible-text --panel "$PANEL_ID" contains="ready"
+```
+
+Prefer `query list --json` to discover the current canonical IDs. Common queries include:
+
+- `workspace.snapshot`
+- `terminal.state`
+- `terminal.visible-text`
+- `panel.local-document.state`
+- `panel.browser.state`
 
 ### `notify`
 
@@ -191,6 +293,27 @@ When `--json` is passed, responses follow the automation protocol envelope:
 ```
 
 Error responses set `ok: false` and include an `error` object with `code` and `message` fields.
+
+For `action list` and `query list`, `result.commands` contains an array of descriptors:
+
+```json
+{
+  "id": "workspace.rename",
+  "kind": "action",
+  "summary": "Rename a workspace.",
+  "selectors": ["windowID", "workspaceID"],
+  "parameters": [
+    {
+      "name": "title",
+      "summary": "Title text.",
+      "valueType": "string",
+      "required": true,
+      "repeatable": false
+    }
+  ],
+  "aliases": []
+}
+```
 
 ## Custom agent integration example
 

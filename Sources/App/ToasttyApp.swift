@@ -1901,7 +1901,18 @@ struct ToasttyApp: App {
                 webPanelRuntimeRegistry: webPanelRuntimeRegistry,
                 sessionRuntimeStore: sessionRuntimeStore,
                 focusedPanelCommandController: focusedPanelCommandController,
-                agentLaunchService: agentLaunchService
+                agentLaunchService: agentLaunchService,
+                reloadConfigurationAction: {
+                    Self.reloadConfiguration(
+                        store: store,
+                        agentCatalogStore: agentCatalogStore,
+                        terminalProfileStore: terminalProfileStore,
+                        runtimePaths: runtimePaths,
+                        agentLaunchSocketPath: socketPath,
+                        agentLaunchCLIExecutablePath: cliExecutablePath,
+                        terminalRuntimeRegistry: terminalRuntimeRegistry
+                    )
+                }
             )
             automationStartupError = nil
         } catch {
