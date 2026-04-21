@@ -56,9 +56,13 @@ export function renderPlainMarkdownSourceHtml(content) {
   )).join("");
 }
 
-export function computeMarkdownLineBlockHeights(
+/**
+ * Normalize measured marker offsets into logical line top positions relative to
+ * the markdown code surface. Missing or invalid entries fall back to a simple
+ * line-height-based progression so the gutter still renders before remeasure.
+ */
+export function normalizeMarkdownLineTopOffsets(
   markerOffsets,
-  contentHeight,
   fallbackLineHeight,
   lineCount
 ) {
@@ -68,36 +72,27 @@ export function computeMarkdownLineBlockHeights(
   const safeFallbackLineHeight = Number.isFinite(fallbackLineHeight) && fallbackLineHeight > 0
     ? fallbackLineHeight
     : 1;
-  const heights = Array.from({ length: safeLineCount }, () => safeFallbackLineHeight);
+  const offsets = Array.from(
+    { length: safeLineCount },
+    (_, index) => index * safeFallbackLineHeight
+  );
 
   if (
     safeLineCount === 0 ||
     !Array.isArray(markerOffsets) ||
-    markerOffsets.length === 0 ||
-    !Number.isFinite(contentHeight) ||
-    contentHeight <= 0
+    markerOffsets.length === 0
   ) {
-    return heights;
+    return offsets;
   }
 
   const measuredLineCount = Math.min(safeLineCount, markerOffsets.length);
 
   for (let index = 0; index < measuredLineCount; index += 1) {
     const currentOffset = markerOffsets[index];
-    const nextOffset = index + 1 < measuredLineCount
-      ? markerOffsets[index + 1]
-      : contentHeight;
-
-    if (
-      !Number.isFinite(currentOffset) ||
-      !Number.isFinite(nextOffset) ||
-      nextOffset < currentOffset
-    ) {
-      continue;
+    if (Number.isFinite(currentOffset) && currentOffset >= 0) {
+      offsets[index] = currentOffset;
     }
-
-    heights[index] = Math.max(safeFallbackLineHeight, nextOffset - currentOffset);
   }
 
-  return heights;
+  return offsets;
 }

@@ -286,12 +286,22 @@ body {
 }
 
 .local-document-code-markdown-gutter {
+  --local-document-code-gutter-padding-left: 22px;
+  --local-document-code-gutter-padding-right: 14px;
+  min-width: calc(
+    var(--local-document-code-gutter-padding-left) +
+    var(--local-document-code-gutter-padding-right) +
+    5ch
+  );
   padding: 20px 0 28px;
   border-right: 1px solid rgba(255, 224, 191, 0.08);
   background: rgba(255, 224, 191, 0.03);
-  display: flex;
-  flex-direction: column;
   align-self: start;
+}
+
+.local-document-code-markdown-gutter-inner {
+  position: relative;
+  width: 100%;
 }
 
 .local-document-code-gutter-cell {
@@ -306,7 +316,10 @@ body {
 }
 
 .local-document-code-gutter-cell-markdown {
-  padding: 0 14px 0 22px;
+  position: absolute;
+  left: 0;
+  right: 0;
+  padding: 0 var(--local-document-code-gutter-padding-right) 0 var(--local-document-code-gutter-padding-left);
   box-sizing: border-box;
   display: block;
   white-space: pre;

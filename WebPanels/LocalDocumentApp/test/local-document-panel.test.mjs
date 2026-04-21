@@ -27,12 +27,14 @@ test("markdown read-only code view uses a dedicated wrapped source layout", asyn
   assert.match(source, /if \(props\.bootstrap\.format === "markdown"\)/);
   assert.match(source, /className="local-document-code-frame local-document-code-frame-markdown"/);
   assert.match(source, /renderPlainMarkdownSourceHtml\(props\.content\)/);
-  assert.match(source, /useMarkdownLogicalLineHeights\(/);
+  assert.match(source, /useMarkdownLogicalLineLayout\(/);
   assert.match(source, /className="local-document-code-markdown-gutter"/);
+  assert.match(source, /className="local-document-code-markdown-gutter-inner"/);
   assert.match(source, /className="local-document-code-markdown-surface"/);
   assert.match(source, /\? "starry-night local-document-code-markdown"/);
   assert.match(source, /: "local-document-code-plain local-document-code-plain-markdown"/);
   assert.match(source, /MARKDOWN_LINE_START_SELECTOR/);
+  assert.match(source, /style=\{\{\s*top: `\$\{lineLayout\.lineOffsets\[index\]/);
   assert.doesNotMatch(source, /splitHighlightedMarkdownIntoLogicalLines/);
 });
 
@@ -43,13 +45,16 @@ test("markdown gutter stays non-selectable while wrapped content stays continuou
   );
 
   assert.match(styles, /\.local-document-code-gutter-cell[\s\S]*user-select: none/);
+  assert.match(styles, /\.local-document-code-markdown-gutter\s*\{[^}]*--local-document-code-gutter-padding-left: 22px/);
+  assert.match(styles, /\.local-document-code-markdown-gutter\s*\{[^}]*min-width: calc\(/);
+  assert.match(styles, /\.local-document-code-markdown-gutter-inner\s*\{[^}]*position: relative/);
   assert.match(
     styles,
-    /\.local-document-code-gutter-cell-markdown\s*\{[^}]*display: block/
+    /\.local-document-code-gutter-cell-markdown\s*\{[^}]*position: absolute/
   );
   assert.doesNotMatch(
     styles,
-    /\.local-document-code-gutter-cell-markdown\s*\{[^}]*display: flex/
+    /\.local-document-code-markdown-gutter\s*\{[^}]*display: flex/
   );
   assert.match(styles, /\.local-document-code-markdown-surface/);
 });

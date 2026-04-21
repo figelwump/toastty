@@ -13,7 +13,7 @@ import {
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import {
   MARKDOWN_LINE_START_SELECTOR,
-  computeMarkdownLineBlockHeights,
+  normalizeMarkdownLineTopOffsets,
   renderPlainMarkdownSourceHtml,
 } from "./markdownSoftWrap.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
@@ -433,17 +433,39 @@ function useDocumentHighlightHTML(
 
 const DEFAULT_MARKDOWN_LINE_HEIGHT = 21.45;
 
-function fallbackMarkdownLineHeights(lineCount: number, lineHeight = DEFAULT_MARKDOWN_LINE_HEIGHT): number[] {
-  return Array.from({ length: lineCount }, () => lineHeight);
+type MarkdownLineLayout = {
+  contentHeight: number;
+  lineOffsets: number[];
+};
+
+function fallbackMarkdownLineOffsets(
+  lineCount: number,
+  lineHeight = DEFAULT_MARKDOWN_LINE_HEIGHT
+): number[] {
+  return Array.from({ length: lineCount }, (_, index) => index * lineHeight);
 }
 
-function sameMarkdownLineHeights(previous: number[], next: number[]): boolean {
-  if (previous.length !== next.length) {
+function fallbackMarkdownLineLayout(
+  lineCount: number,
+  lineHeight = DEFAULT_MARKDOWN_LINE_HEIGHT
+): MarkdownLineLayout {
+  return {
+    contentHeight: Math.max(lineCount * lineHeight, lineHeight),
+    lineOffsets: fallbackMarkdownLineOffsets(lineCount, lineHeight),
+  };
+}
+
+function sameMarkdownLineLayout(previous: MarkdownLineLayout, next: MarkdownLineLayout): boolean {
+  if (Math.abs(previous.contentHeight - next.contentHeight) > 0.25) {
     return false;
   }
 
-  for (let index = 0; index < previous.length; index += 1) {
-    if (Math.abs(previous[index] - next[index]) > 0.25) {
+  if (previous.lineOffsets.length !== next.lineOffsets.length) {
+    return false;
+  }
+
+  for (let index = 0; index < previous.lineOffsets.length; index += 1) {
+    if (Math.abs(previous.lineOffsets[index] - next.lineOffsets[index]) > 0.25) {
       return false;
     }
   }
@@ -451,23 +473,23 @@ function sameMarkdownLineHeights(previous: number[], next: number[]): boolean {
   return true;
 }
 
-function useMarkdownLogicalLineHeights(
+function useMarkdownLogicalLineLayout(
   lineCount: number,
   sourceHTML: string
 ): {
   contentRef: React.RefObject<HTMLElement | null>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  lineHeights: number[];
+  lineLayout: MarkdownLineLayout;
 } {
   const contentRef = React.useRef<HTMLElement | null>(null);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
-  const [lineHeights, setLineHeights] = React.useState<number[]>(
-    () => fallbackMarkdownLineHeights(lineCount)
+  const [lineLayout, setLineLayout] = React.useState<MarkdownLineLayout>(
+    () => fallbackMarkdownLineLayout(lineCount)
   );
 
   React.useEffect(() => {
-    setLineHeights((current) => (
-      current.length === lineCount ? current : fallbackMarkdownLineHeights(lineCount)
+    setLineLayout((current) => (
+      current.lineOffsets.length === lineCount ? current : fallbackMarkdownLineLayout(lineCount)
     ));
   }, [lineCount]);
 
@@ -493,15 +515,25 @@ function useMarkdownLogicalLineHeights(
       const markerOffsets = Array.from(
         currentContentNode.querySelectorAll<HTMLElement>(MARKDOWN_LINE_START_SELECTOR)
       ).map((marker) => marker.getBoundingClientRect().top - contentRect.top);
-      const nextLineHeights = computeMarkdownLineBlockHeights(
+      const nextLineOffsets = normalizeMarkdownLineTopOffsets(
         markerOffsets,
-        Math.max(contentRect.height, fallbackLineHeight),
         fallbackLineHeight,
         lineCount
       );
+      const nextContentHeight = Math.max(
+        contentRect.height,
+        fallbackLineHeight,
+        nextLineOffsets.length > 0
+          ? nextLineOffsets[nextLineOffsets.length - 1] + fallbackLineHeight
+          : fallbackLineHeight
+      );
+      const nextLineLayout = {
+        contentHeight: nextContentHeight,
+        lineOffsets: nextLineOffsets,
+      };
 
-      setLineHeights((current) => (
-        sameMarkdownLineHeights(current, nextLineHeights) ? current : nextLineHeights
+      setLineLayout((current) => (
+        sameMarkdownLineLayout(current, nextLineLayout) ? current : nextLineLayout
       ));
     };
     const scheduleMeasure = () => {
@@ -528,7 +560,7 @@ function useMarkdownLogicalLineHeights(
     };
   }, [lineCount, sourceHTML]);
 
-  return { contentRef, scrollRef, lineHeights };
+  return { contentRef, scrollRef, lineLayout };
 }
 
 function MarkdownCodeDocumentView(props: {
@@ -540,7 +572,7 @@ function MarkdownCodeDocumentView(props: {
     () => props.highlightedHTML ?? renderPlainMarkdownSourceHtml(props.content),
     [props.content, props.highlightedHTML]
   );
-  const { contentRef, scrollRef, lineHeights } = useMarkdownLogicalLineHeights(
+  const { contentRef, scrollRef, lineLayout } = useMarkdownLogicalLineLayout(
     props.lines.length,
     sourceHTML
   );
@@ -553,15 +585,22 @@ function MarkdownCodeDocumentView(props: {
       <div className="local-document-code-scroll local-document-code-scroll-markdown" ref={scrollRef}>
         <div className="local-document-code-markdown-grid">
           <div className="local-document-code-markdown-gutter" aria-hidden="true">
-            {props.lines.map((_, index) => (
-              <div
-                key={index}
-                className="local-document-code-gutter-cell local-document-code-gutter-cell-markdown"
-                style={{ height: `${lineHeights[index] ?? DEFAULT_MARKDOWN_LINE_HEIGHT}px` }}
-              >
-                {index + 1}
-              </div>
-            ))}
+            <div
+              className="local-document-code-markdown-gutter-inner"
+              style={{ height: `${lineLayout.contentHeight}px` }}
+            >
+              {props.lines.map((_, index) => (
+                <div
+                  key={index}
+                  className="local-document-code-gutter-cell local-document-code-gutter-cell-markdown"
+                  style={{
+                    top: `${lineLayout.lineOffsets[index] ?? (index * DEFAULT_MARKDOWN_LINE_HEIGHT)}px`
+                  }}
+                >
+                  {index + 1}
+                </div>
+              ))}
+            </div>
           </div>
           <pre className="local-document-code-markdown-surface">
             <code

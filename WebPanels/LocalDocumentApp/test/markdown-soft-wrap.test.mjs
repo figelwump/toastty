@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MARKDOWN_LINE_START_CLASS,
-  computeMarkdownLineBlockHeights,
   createMarkdownLineStartMarker,
+  normalizeMarkdownLineTopOffsets,
   renderPlainMarkdownSourceHtml
 } from "../src/markdownSoftWrap.mjs";
 
@@ -33,15 +33,27 @@ test("plain markdown source HTML keeps line-start markers in one continuous surf
   );
 });
 
-test("markdown soft-wrap line heights expand wrapped rows without inventing extra gaps", () => {
-  const heights = computeMarkdownLineBlockHeights([0, 42.9, 64.35, 107.25], 128.7, 21.45, 4);
+test("markdown soft-wrap offsets preserve measured tops without accumulating fallback drift", () => {
+  const offsets = normalizeMarkdownLineTopOffsets([0, 42.9, 64.35, 107.25], 21.45, 4);
 
   assert.deepEqual(
-    heights.map((value) => Number(value.toFixed(2))),
-    [42.9, 21.45, 42.9, 21.45]
+    offsets.map((value) => Number(value.toFixed(2))),
+    [0, 42.9, 64.35, 107.25]
   );
   assert.deepEqual(
-    computeMarkdownLineBlockHeights([], 0, 21.45, 3),
-    [21.45, 21.45, 21.45]
+    normalizeMarkdownLineTopOffsets([], 21.45, 3),
+    [0, 21.45, 42.9]
+  );
+  assert.deepEqual(
+    normalizeMarkdownLineTopOffsets([0, Number.NaN], 21.45, 4),
+    [0, 21.45, 42.9, 64.35]
+  );
+  assert.deepEqual(
+    normalizeMarkdownLineTopOffsets([0, -5, 42.9], 21.45, 4),
+    [0, 21.45, 42.9, 64.35]
+  );
+  assert.deepEqual(
+    normalizeMarkdownLineTopOffsets([0, 21.45], 21.45, 5),
+    [0, 21.45, 42.9, 64.35, 85.8]
   );
 });
