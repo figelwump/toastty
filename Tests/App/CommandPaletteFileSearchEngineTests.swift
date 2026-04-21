@@ -84,6 +84,35 @@ final class CommandPaletteFileSearchEngineTests: XCTestCase {
         XCTAssertEqual(results.map(\.id), [directReleasePath, nestedReleasePath])
     }
 
+    func testSearchRanksStrongerOverallMatchesAheadOfWeakTitleOnlyMatches() {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .repositoryRoot
+        )
+        let releaseNotesPath = "/tmp/toastty-worktree/artifacts/release/0.5.0-11/release-notes.md"
+        let automationPath = "/tmp/toastty-worktree/artifacts/automation/automation-ready-manualenv-20260302-131137.json"
+        let snapshot = makeSnapshot(
+            scope: scope,
+            files: [
+                makeFileResult(
+                    filePath: releaseNotesPath,
+                    relativePath: "artifacts/release/0.5.0-11/release-notes.md"
+                ),
+                makeFileResult(
+                    filePath: automationPath,
+                    relativePath: "artifacts/automation/automation-ready-manualenv-20260302-131137.json"
+                ),
+            ]
+        )
+
+        let results = CommandPaletteFileSearchEngine.search(
+            snapshot: snapshot,
+            query: "rele 0"
+        )
+
+        XCTAssertEqual(results.map(\.id), [releaseNotesPath, automationPath])
+    }
+
     func testSearchReturnsNoResultsForEmptySnapshot() {
         let snapshot = CommandPaletteFileSearchSnapshot.empty(
             scope: PaletteFileSearchScope(

@@ -176,11 +176,11 @@ enum CommandPaletteFileSearchEngine {
         _ lhs: RankedCommandPaletteFileResult,
         _ rhs: RankedCommandPaletteFileResult
     ) -> Bool {
-        if lhs.titleHitCount != rhs.titleHitCount {
-            return lhs.titleHitCount > rhs.titleHitCount
-        }
         if lhs.matchScore != rhs.matchScore {
             return lhs.matchScore > rhs.matchScore
+        }
+        if lhs.titleHitCount != rhs.titleHitCount {
+            return lhs.titleHitCount > rhs.titleHitCount
         }
         if lhs.pathDepth != rhs.pathDepth {
             return lhs.pathDepth < rhs.pathDepth
