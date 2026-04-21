@@ -72,7 +72,10 @@ final class WebPanelRuntimeRegistry: ObservableObject {
                         destination: .toasttyBrowser,
                         browserPlacement: .newTab,
                         alternateBrowserPlacement: .newTab
-                    )
+                    ),
+                    requestLocalDocumentReveal: { [weak self] panelID, lineNumber in
+                        self?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                    }
                 )
             }
         )

@@ -1890,7 +1890,10 @@ struct ToasttyApp: App {
             _ = AppURLRouter.open(
                 url,
                 preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
-                appStore: store
+                appStore: store,
+                requestLocalDocumentReveal: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
+                    webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                }
             )
         }
         hiddenSystemMenuItemsBridge = HiddenSystemMenuItemsBridge()
@@ -2371,7 +2374,10 @@ struct ToasttyApp: App {
                 AppURLRouter.open(
                     url,
                     preferredWindowID: currentToasttyWorkspaceCommandWindowID(in: store),
-                    appStore: store
+                    appStore: store,
+                    requestLocalDocumentReveal: { [weak webPanelRuntimeRegistry] panelID, lineNumber in
+                        webPanelRuntimeRegistry?.requestLocalDocumentReveal(panelID: panelID, lineNumber: lineNumber) ?? false
+                    }
                 )
             }
         )
