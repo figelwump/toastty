@@ -1,14 +1,21 @@
 import hljs from "highlight.js/lib/core";
 import bash from "highlight.js/lib/languages/bash";
+import go from "highlight.js/lib/languages/go";
 import ini from "highlight.js/lib/languages/ini";
+import javascript from "highlight.js/lib/languages/javascript";
 import json from "highlight.js/lib/languages/json";
+import python from "highlight.js/lib/languages/python";
+import rust from "highlight.js/lib/languages/rust";
+import swift from "highlight.js/lib/languages/swift";
+import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
 import {
-  LocalDocumentFormat,
+  LocalDocumentHighlightState,
   LocalDocumentLineRevealRequest,
-  LocalDocumentPanelBootstrap
+  LocalDocumentPanelBootstrap,
+  LocalDocumentSyntaxLanguage
 } from "./bootstrap";
 import {
   clampRevealLineNumber,
@@ -33,63 +40,23 @@ if (!hljs.getLanguage("xml")) {
 if (!hljs.getLanguage("bash")) {
   hljs.registerLanguage("bash", bash);
 }
-
-type HighlightLanguage = "yaml" | "toml" | "json" | "xml" | "bash";
-
-function syntaxLanguage(
-  format: LocalDocumentFormat,
-  filePath: string | null = null
-): HighlightLanguage | null {
-  switch (format) {
-    case "yaml":
-      return "yaml";
-    case "toml":
-      return "toml";
-    case "markdown":
-      return null;
-    case "json":
-      if (filePath?.toLowerCase().endsWith(".jsonc")) {
-        return null;
-      }
-      return "json";
-    case "xml":
-      return "xml";
-    case "shell":
-      return "bash";
-    case "jsonl":
-    case "config":
-    case "csv":
-    case "tsv":
-      return null;
-  }
+if (!hljs.getLanguage("swift")) {
+  hljs.registerLanguage("swift", swift);
 }
-
-function formatLabel(format: LocalDocumentFormat, filePath: string | null = null): string {
-  switch (format) {
-    case "markdown":
-      return "Markdown";
-    case "yaml":
-      return "YAML";
-    case "toml":
-      return "TOML";
-    case "json":
-      if (filePath?.toLowerCase().endsWith(".jsonc")) {
-        return "JSONC";
-      }
-      return "JSON";
-    case "jsonl":
-      return "JSON Lines";
-    case "config":
-      return "Config";
-    case "csv":
-      return "CSV";
-    case "tsv":
-      return "TSV";
-    case "xml":
-      return "XML";
-    case "shell":
-      return "Shell Script";
-  }
+if (!hljs.getLanguage("javascript")) {
+  hljs.registerLanguage("javascript", javascript);
+}
+if (!hljs.getLanguage("typescript")) {
+  hljs.registerLanguage("typescript", typescript);
+}
+if (!hljs.getLanguage("python")) {
+  hljs.registerLanguage("python", python);
+}
+if (!hljs.getLanguage("go")) {
+  hljs.registerLanguage("go", go);
+}
+if (!hljs.getLanguage("rust")) {
+  hljs.registerLanguage("rust", rust);
 }
 
 function normalizeLineEndings(content: string): string {
@@ -171,6 +138,7 @@ function useLocalDocumentPanelState(): {
   isDirty: boolean;
   canSave: boolean;
   canOverwrite: boolean;
+  openInDefaultApp: () => void;
   enterEdit: () => void;
   saveEdit: () => void;
   overwriteAfterConflict: () => void;
@@ -195,6 +163,14 @@ function useLocalDocumentPanelState(): {
     lastSyncedContentRevision.current = bootstrap.contentRevision;
     setDraftContent(bootstrap.content);
   }, [bootstrap]);
+
+  const openInDefaultApp = React.useCallback(() => {
+    if (!bootstrap?.filePath || bootstrap.isEditing) {
+      return;
+    }
+
+    localDocumentNativeBridge.openInDefaultApp();
+  }, [bootstrap?.filePath, bootstrap?.isEditing]);
 
   const enterEdit = React.useCallback(() => {
     if (!bootstrap?.filePath) {
@@ -250,6 +226,7 @@ function useLocalDocumentPanelState(): {
     isDirty,
     canSave,
     canOverwrite,
+    openInDefaultApp,
     enterEdit,
     saveEdit,
     overwriteAfterConflict,
@@ -264,6 +241,7 @@ function Header(props: {
   isDirty: boolean;
   canSave: boolean;
   canOverwrite: boolean;
+  openInDefaultApp: () => void;
   enterEdit: () => void;
   saveEdit: () => void;
   overwriteAfterConflict: () => void;
@@ -275,6 +253,7 @@ function Header(props: {
     isDirty,
     canSave,
     canOverwrite,
+    openInDefaultApp,
     enterEdit,
     saveEdit,
     overwriteAfterConflict,
@@ -291,7 +270,7 @@ function Header(props: {
       <div className="local-document-panel-stats">
         <span className="local-document-panel-stat">{statsLabel}</span>
         <span className="local-document-panel-stat-divider" />
-        <span className="local-document-panel-stat">{formatLabel(bootstrap.format, bootstrap.filePath)}</span>
+        <span className="local-document-panel-stat">{bootstrap.formatLabel}</span>
       </div>
       <div className="local-document-panel-title-wrap">
         <div className="local-document-panel-title">{bootstrap.displayName}</div>
@@ -319,16 +298,62 @@ function Header(props: {
             </button>
           </>
         ) : (
-          <button
-            className="local-document-action-button"
-            onClick={enterEdit}
-            disabled={!bootstrap.filePath}
-          >
-            Edit
-          </button>
+          <>
+            {bootstrap.filePath && (
+              <button
+                className="local-document-action-button local-document-action-button-secondary local-document-action-button-icon"
+                onClick={openInDefaultApp}
+                aria-label="Open in Default App"
+                title="Open in Default App"
+              >
+                <ExternalOpenIcon />
+              </button>
+            )}
+            <button
+              className="local-document-action-button"
+              onClick={enterEdit}
+              disabled={!bootstrap.filePath}
+            >
+              <span>Edit</span>
+              <span className="local-document-action-button-shortcut" aria-hidden="true">⌘E</span>
+            </button>
+          </>
         )}
       </div>
     </header>
+  );
+}
+
+function ExternalOpenIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="local-document-action-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+    >
+      <path
+        d="M9.5 2.5H13.5V6.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7 9L13.5 2.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13 9.5V11.5C13 12.6046 12.1046 13.5 11 13.5H4.5C3.39543 13.5 2.5 12.6046 2.5 11.5V5C2.5 3.89543 3.39543 3 4.5 3H6.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 
@@ -368,12 +393,10 @@ function LocalDocumentEditor(props: {
 }
 
 function highlightedCodeHTML(
-  format: LocalDocumentFormat,
-  filePath: string | null,
+  language: LocalDocumentSyntaxLanguage | null,
   content: string,
   shouldHighlight: boolean
 ): string | null {
-  const language = syntaxLanguage(format, filePath);
   if (!shouldHighlight || language === null || !hljs.getLanguage(language)) {
     return null;
   }
@@ -382,6 +405,24 @@ function highlightedCodeHTML(
     return hljs.highlight(String(content), { language, ignoreIllegals: true }).value;
   } catch {
     return null;
+  }
+}
+
+function highlightStatusMessage(
+  highlightState: LocalDocumentHighlightState,
+  formatLabel: string
+): string | null {
+  switch (highlightState) {
+    case "enabled":
+    case "unavailable":
+      return null;
+    case "disabledForLargeFile":
+      return "Syntax highlighting is disabled for large files. Editing remains available, but performance may still degrade on very large documents.";
+    case "unsupportedFormat":
+      if (formatLabel === "JSONC") {
+        return "Syntax highlighting is not available for JSONC files yet.";
+      }
+      return "Syntax highlighting is not available for this format yet.";
   }
 }
 
@@ -395,12 +436,11 @@ function useDocumentHighlightHTML(
     }
 
     return highlightedCodeHTML(
-      bootstrap.format,
-      bootstrap.filePath,
+      bootstrap.syntaxLanguage,
       content,
       bootstrap.shouldHighlight
     );
-  }, [bootstrap.filePath, bootstrap.format, bootstrap.shouldHighlight, content]);
+  }, [bootstrap.format, bootstrap.shouldHighlight, bootstrap.syntaxLanguage, content]);
   const [markdownHighlight, setMarkdownHighlight] = React.useState<string | null>(null);
 
   React.useEffect(() => {
@@ -452,7 +492,11 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     filePath: string | null;
     contentRevision: number;
   } | null>(null);
-  const language = syntaxLanguage(props.bootstrap.format, props.bootstrap.filePath);
+  const language = props.bootstrap.syntaxLanguage;
+  const statusMessage = highlightStatusMessage(
+    props.bootstrap.highlightState,
+    props.bootstrap.formatLabel
+  );
   const codeClassName = props.bootstrap.format === "markdown"
     ? "starry-night"
     : language
@@ -585,10 +629,10 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
 
   return (
     <section className="local-document-code-shell">
-      {!props.bootstrap.shouldHighlight && (
+      {statusMessage && (
         <div className="local-document-code-status-strip">
           <p className="local-document-code-status">
-            Syntax highlighting is disabled for large files. Editing remains available, but performance may still degrade on very large documents.
+            {statusMessage}
           </p>
         </div>
       )}
@@ -637,6 +681,7 @@ export function LocalDocumentPanelApp() {
     isDirty,
     canSave,
     canOverwrite,
+    openInDefaultApp,
     enterEdit,
     saveEdit,
     overwriteAfterConflict,
@@ -665,6 +710,7 @@ export function LocalDocumentPanelApp() {
         isDirty={isDirty}
         canSave={canSave}
         canOverwrite={canOverwrite}
+        openInDefaultApp={openInDefaultApp}
         enterEdit={enterEdit}
         saveEdit={saveEdit}
         overwriteAfterConflict={overwriteAfterConflict}

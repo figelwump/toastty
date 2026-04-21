@@ -289,6 +289,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias DocumentLoader = @Sendable (WebPanelState) async -> LocalDocumentPanelDocumentSnapshot
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
     typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
+    typealias ExternalFileOpener = @Sendable (URL) -> Bool
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
     nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
@@ -300,6 +301,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let documentLoader: DocumentLoader
     private let documentSaver: DocumentSaver
     private let savedDocumentReader: SavedDocumentReader
+    private let externalFileOpener: ExternalFileOpener
     private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -328,6 +330,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         documentLoader: @escaping DocumentLoader = { await LocalDocumentPanelRuntime.loadDocument(for: $0) },
         documentSaver: @escaping DocumentSaver = { try await LocalDocumentPanelRuntime.writeLocalDocument(at: $0, content: $1) },
         savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1, format: $2) },
+        externalFileOpener: @escaping ExternalFileOpener = { NSWorkspace.shared.open($0) },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -337,6 +340,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.documentLoader = documentLoader
         self.documentSaver = documentSaver
         self.savedDocumentReader = savedDocumentReader
+        self.externalFileOpener = externalFileOpener
         self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = Self.makeWebViewConfiguration(
@@ -396,6 +400,20 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         session?.canSaveFromCommand == true
     }
 
+    func canEnterEditFromCommand() -> Bool {
+        guard let session else { return false }
+        return session.filePath != nil && session.isEditing == false
+    }
+
+    @discardableResult
+    func enterEditFromCommand() -> Bool {
+        guard canEnterEditFromCommand() else {
+            return false
+        }
+        enterEditMode()
+        return true
+    }
+
     @discardableResult
     func saveFromCommand() -> Bool {
         guard let session else { return false }
@@ -406,7 +424,6 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         return true
     }
 
-    @discardableResult
     func canCancelEditFromCommand() -> Bool {
         guard let session else { return false }
         return session.isEditing && session.isSaving == false
@@ -461,6 +478,14 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
 
     func overwriteAfterConflict(baseContentRevision: Int) {
         startSave(baseContentRevision: baseContentRevision, allowConflictOverwrite: true)
+    }
+
+    func openInDefaultApp() {
+        guard let filePath = session?.filePath else {
+            return
+        }
+
+        _ = externalFileOpener(URL(filePath: filePath))
     }
 
     func attachHost(to container: NSView, attachment: PanelHostAttachmentToken) {
@@ -660,15 +685,23 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         theme: LocalDocumentPanelTheme,
         textScale: Double
     ) -> LocalDocumentPanelBootstrap {
-        LocalDocumentPanelBootstrap(
+        let classification = LocalDocumentClassifier.classification(
+            format: session.format,
+            filePath: session.filePath
+        )
+        let highlightState = highlightState(
+            classification: classification,
+            content: session.visibleContent,
+            diskRevision: session.diskRevision
+        )
+        return LocalDocumentPanelBootstrap(
             filePath: session.filePath,
             displayName: session.displayName,
             format: session.format,
-            shouldHighlight: shouldHighlight(
-                format: session.format,
-                content: session.visibleContent,
-                diskRevision: session.diskRevision
-            ),
+            syntaxLanguage: classification.syntaxLanguage,
+            formatLabel: classification.formatLabel,
+            highlightState: highlightState,
+            shouldHighlight: shouldHighlight(highlightState: highlightState),
             content: session.visibleContent,
             contentRevision: session.contentRevision,
             isEditing: session.isEditing,
@@ -685,6 +718,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
 private extension LocalDocumentPanelRuntime {
     enum BridgeEvent {
         case enterEdit
+        case openInDefaultApp
         case draftDidChange(content: String, baseContentRevision: Int)
         case save(baseContentRevision: Int)
         case cancelEdit(baseContentRevision: Int)
@@ -699,6 +733,8 @@ private extension LocalDocumentPanelRuntime {
             switch type {
             case "enterEdit":
                 self = .enterEdit
+            case "openInDefaultApp":
+                self = .openInDefaultApp
             case "draftDidChange":
                 guard let content = body["content"] as? String,
                       let baseContentRevision = body["baseContentRevision"] as? Int else {
@@ -730,6 +766,8 @@ private extension LocalDocumentPanelRuntime {
         switch event {
         case .enterEdit:
             enterEditMode()
+        case .openInDefaultApp:
+            openInDefaultApp()
         case .draftDidChange(let content, let baseContentRevision):
             updateDraftContent(content, baseContentRevision: baseContentRevision)
         case .save(let baseContentRevision):
@@ -1126,17 +1164,43 @@ private extension LocalDocumentPanelRuntime {
         webState.localDocument?.format ?? .markdown
     }
 
-    nonisolated static func shouldHighlight(
-        format _: LocalDocumentFormat,
+    nonisolated static func highlightState(
+        classification: LocalDocumentClassification,
         content: String,
         diskRevision: LocalDocumentPanelDiskRevision?
-    ) -> Bool {
+    ) -> LocalDocumentHighlightState {
         // Experiment: markdown is rendered as code, so it now follows the same
         // size threshold as yaml/toml instead of always highlighting.
         guard diskRevision != nil else {
-            return false
+            return .unavailable
         }
-        return content.utf8.count <= syntaxHighlightThresholdBytes
+
+        guard supportsHighlighting(classification: classification) else {
+            return .unsupportedFormat
+        }
+
+        if content.utf8.count > syntaxHighlightThresholdBytes {
+            return .disabledForLargeFile
+        }
+
+        return .enabled
+    }
+
+    nonisolated static func shouldHighlight(highlightState: LocalDocumentHighlightState) -> Bool {
+        highlightState == .enabled
+    }
+
+    nonisolated static func supportsHighlighting(
+        classification: LocalDocumentClassification
+    ) -> Bool {
+        switch classification.format {
+        case .markdown:
+            return true
+        case .yaml, .toml, .json, .jsonl, .xml, .shell, .code:
+            return classification.syntaxLanguage != nil
+        case .config, .csv, .tsv:
+            return classification.syntaxLanguage != nil
+        }
     }
 
     nonisolated static func missingFileDocument(

@@ -203,6 +203,29 @@ CLI notes:
 - `--validation-command` remains available as a debug escape hatch for foreground-capable remote validation. It runs on the remote host after Toastty launches and receives `TOASTTY_PID`, `TOASTTY_INSTANCE_JSON`, `TOASTTY_RUNTIME_HOME`, `TOASTTY_ARTIFACTS_DIR`, `TOASTTY_SOCKET_PATH`, `TOASTTY_DERIVED_PATH`, and `TOASTTY_APP_BUNDLE`.
 - The remote host must be awake, unlocked, and logged into the GUI session where Peekaboo has the needed permissions for any custom remote validation command.
 
+### `scripts/remote/test.sh`
+
+| Variable | Default | Effect |
+|---|---|---|
+| `TOASTTY_REMOTE_GUI_HOST` | unset | SSH host for the dedicated remote validation machine. Required. |
+| `TOASTTY_REMOTE_GUI_REPO_ROOT` | local Toastty repo path | Absolute Toastty repo path on the remote host. The wrapper creates disposable remote git worktrees from this repo. |
+| `TOASTTY_REMOTE_GUI_ROOT` | sibling `toastty-remote-gui` directory next to the remote repo root | Remote directory that holds disposable worktrees and remote test runs. |
+| `RUN_LABEL` | timestamped `test-*` value | Optional stable label for the remote test run. Prefer `--run-label` for explicit CLI usage. |
+| `ARCH` | remote machine arch | Used only by the script's default remote `xcodebuild` arguments when no explicit options are passed after `--`. |
+
+CLI notes:
+
+- `./scripts/remote/test.sh [options] [-- <xcodebuild-options>...]` runs `xcodebuild test` remotely and copies the remote logs plus `.xcresult` bundle back into `artifacts/remote-tests/<run-label>/`.
+- `--scope working-tree` syncs the current local working tree, including uncommitted changes, into a disposable remote worktree.
+- `--scope head` exports the current checked-out commit without uncommitted changes.
+- `--scope ref --ref <rev>` exports an explicit local git ref.
+- The wrapper always runs the `test` action and owns `-derivedDataPath` plus `-resultBundlePath`. Do not pass those after `--`.
+- If no explicit xcodebuild options are passed after `--`, the wrapper defaults to `-workspace toastty.xcworkspace -scheme ToasttyApp -configuration Debug -destination "platform=macOS,arch=<remote-arch>"`.
+- The wrapper does not fall back to a local run. If remote preflight fails, it writes a `setup_error` result locally and exits non-zero.
+- Remote test runs call `./scripts/dev/bootstrap-worktree.sh` inside the disposable remote worktree before invoking `xcodebuild test`.
+- The wrapper sets `TOASTTY_RUNTIME_HOME=<remote-run>/runtime-home` and `TOASTTY_DEV_WORKTREE_ROOT=<remote-worktree>` for the remote `xcodebuild` environment so AppKit-presenting or host-app tests stay runtime-isolated from the remote user's shared state.
+- Pass `--keep-remote` to keep the remote worktree and run directory for follow-up debugging.
+
 ### `scripts/release/release.sh`
 
 Recommended invocation:

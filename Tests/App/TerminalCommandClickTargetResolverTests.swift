@@ -133,6 +133,36 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         XCTAssertEqual(target, .passthrough(fixture.markdownURL))
     }
 
+    func testResolveTreatsSwiftFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "App.swift")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .newTab)
+        )
+    }
+
+    func testResolveTreatsTypeScriptFileAsLocalDocument() throws {
+        let fixture = try makeFixture(fileName: "panel.ts")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .newTab)
+        )
+    }
+
     func testResolveFallsBackForRemoteMarkdownURL() throws {
         let url = try XCTUnwrap(URL(string: "https://example.com/docs/readme.md"))
 

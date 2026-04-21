@@ -7,6 +7,7 @@ DerivedData
 /Derived/
 /Derived-*/
 /artifacts/
+/WORKTREE_HANDOFF.md
 /node_modules/
 /WebPanels/MarkdownApp/node_modules/
 /Dependencies/GhosttyKit*.xcframework/

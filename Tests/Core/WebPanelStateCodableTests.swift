@@ -87,6 +87,24 @@ struct WebPanelStateCodableTests {
     }
 
     @Test
+    func localDocumentStateRoundTripsCodeFormat() throws {
+        let state = WebPanelState(
+            definition: .localDocument,
+            title: "App.swift",
+            localDocument: LocalDocumentState(
+                filePath: "/tmp/project/App.swift",
+                format: .code
+            )
+        )
+
+        let data = try JSONEncoder().encode(state)
+        let decoded = try JSONDecoder().decode(WebPanelState.self, from: data)
+
+        #expect(decoded == state)
+        #expect(decoded.localDocument?.format == .code)
+    }
+
+    @Test
     func localDocumentFormatRawValuesRoundTripThroughCodable() throws {
         let formats: [LocalDocumentFormat] = [
             .markdown,
@@ -99,6 +117,7 @@ struct WebPanelStateCodableTests {
             .tsv,
             .xml,
             .shell,
+            .code,
         ]
 
         for format in formats {

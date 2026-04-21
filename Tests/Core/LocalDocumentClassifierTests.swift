@@ -20,7 +20,8 @@ struct LocalDocumentClassifierTests {
     }
 
     @Test
-    func formatForPathExtensionRecognizesYamlAndTomlVariantsCaseInsensitively() {
+    func formatForPathExtensionRecognizesExistingNonCodeFamiliesCaseInsensitively() {
+        #expect(LocalDocumentClassifier.format(forPathExtension: "") == nil)
         #expect(LocalDocumentClassifier.format(forPathExtension: "yaml") == .yaml)
         #expect(LocalDocumentClassifier.format(forPathExtension: "YML") == .yaml)
         #expect(LocalDocumentClassifier.format(forPathExtension: "toml") == .toml)
@@ -41,7 +42,45 @@ struct LocalDocumentClassifierTests {
     }
 
     @Test
-    func formatForFilePathSupportsSpacesAndRejectsUnsupportedOrExtensionlessPaths() {
+    func classificationForSourceCodeExtensionsUsesCoarseCodeFormatAndSyntaxMetadata() throws {
+        let supportedCodeExtensions: [(pathExtension: String, syntaxLanguage: LocalDocumentSyntaxLanguage, formatLabel: String)] = [
+            ("swift", .swift, "Swift"),
+            ("js", .javascript, "JavaScript"),
+            ("mjs", .javascript, "JavaScript"),
+            ("cjs", .javascript, "JavaScript"),
+            ("jsx", .javascript, "JavaScript"),
+            ("ts", .typescript, "TypeScript"),
+            ("mts", .typescript, "TypeScript"),
+            ("cts", .typescript, "TypeScript"),
+            ("tsx", .typescript, "TypeScript"),
+            ("py", .python, "Python"),
+            ("go", .go, "Go"),
+            ("rs", .rust, "Rust"),
+        ]
+
+        for expectation in supportedCodeExtensions {
+            let classification = try #require(
+                LocalDocumentClassifier.classification(forPathExtension: expectation.pathExtension)
+            )
+            #expect(classification.format == .code)
+            #expect(classification.syntaxLanguage == expectation.syntaxLanguage)
+            #expect(classification.formatLabel == expectation.formatLabel)
+        }
+    }
+
+    @Test
+    func classificationKeepsJsoncCoarseFormatButDisablesSyntaxLanguage() throws {
+        let classification = try #require(
+            LocalDocumentClassifier.classification(forPathExtension: "JSONC")
+        )
+
+        #expect(classification.format == .json)
+        #expect(classification.syntaxLanguage == nil)
+        #expect(classification.formatLabel == "JSONC")
+    }
+
+    @Test
+    func formatForFilePathSupportsSpacesSourceFilesAndRejectsUnsupportedOrExtensionlessPaths() {
         #expect(
             LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD") == .markdown
         )
@@ -50,6 +89,12 @@ struct LocalDocumentClassifierTests {
         )
         #expect(
             LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD:draft") == .markdown
+        )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD:42:extra") == .markdown
+        )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes:1/README.MD") == .markdown
         )
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/config.yaml") == .yaml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty.toml") == .toml)
@@ -60,6 +105,8 @@ struct LocalDocumentClassifierTests {
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/layout.xml") == .xml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/scripts/bootstrap.zsh") == .shell)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/config.txt:42") == nil)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty/App.swift") == .code)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/web/index.tsx") == .code)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/notes") == nil)
         #expect(LocalDocumentClassifier.format(forFilePath: "   ") == nil)
     }

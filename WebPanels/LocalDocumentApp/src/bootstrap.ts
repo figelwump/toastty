@@ -1,4 +1,21 @@
 export type LocalDocumentPanelTheme = "light" | "dark";
+export type LocalDocumentHighlightState =
+  | "enabled"
+  | "disabledForLargeFile"
+  | "unsupportedFormat"
+  | "unavailable";
+export type LocalDocumentSyntaxLanguage =
+  | "yaml"
+  | "toml"
+  | "json"
+  | "xml"
+  | "bash"
+  | "swift"
+  | "javascript"
+  | "typescript"
+  | "python"
+  | "go"
+  | "rust";
 export type LocalDocumentFormat =
   | "markdown"
   | "yaml"
@@ -9,14 +26,18 @@ export type LocalDocumentFormat =
   | "csv"
   | "tsv"
   | "xml"
-  | "shell";
+  | "shell"
+  | "code";
 
 export interface LocalDocumentPanelBootstrap {
-  contractVersion: 4;
+  contractVersion: 6;
   filePath: string | null;
   displayName: string;
   format: LocalDocumentFormat;
+  syntaxLanguage: LocalDocumentSyntaxLanguage | null;
+  formatLabel: string;
   shouldHighlight: boolean;
+  highlightState: LocalDocumentHighlightState;
   content: string;
   contentRevision: number;
   isEditing: boolean;
@@ -71,9 +92,9 @@ function applyTextScale(bootstrap: LocalDocumentPanelBootstrap | null) {
 }
 
 function warnOnContractMismatch(bootstrap: LocalDocumentPanelBootstrap) {
-  if (bootstrap.contractVersion !== 4) {
+  if (bootstrap.contractVersion !== 6) {
     console.warn(
-      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 4 but received ${bootstrap.contractVersion}.`
+      `[ToasttyLocalDocumentPanel] Expected bootstrap contractVersion 6 but received ${bootstrap.contractVersion}.`
     );
   }
 }
