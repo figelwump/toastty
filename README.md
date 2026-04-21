@@ -37,7 +37,7 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 - **Terminal profiles** — Launch named terminal setups such as `zmx`, `tmux`, or SSH from the menu or optional profile-specific shortcuts. (See [terminal profile spec](docs/terminal-profiles.md) for more details.)
 - **Desktop notifications** — Notifications from coding agents and other supported processes
 - **Split panes** — Divide your workspace horizontally (`Cmd+D`) or vertically (`Cmd+Shift+D`), resize splits (`Cmd+Ctrl+Arrow`), equalize them (`Cmd+Ctrl+Equals`), or zoom a single pane to full view (`Cmd+Shift+F`)
-- **Scrollback find** — Search the active terminal's Ghostty scrollback in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
+- **In-panel find** — Search the active terminal's Ghostty scrollback or the focused local document in place with `Cmd+F`, then move between matches with `Cmd+G` and `Cmd+Shift+G`
 - **Persisted terminal history** — With shell integration installed, restored `zsh`, `bash`, and `fish` panes keep their own command history, including multiplexer-backed panes such as `tmux` or `zmx`
 - **Local documents and directory opens** — Open supported local files in tabs or splits as editable code views with line numbers: Markdown, YAML/TOML/JSON/config files, CSV/TSV/XML, shell scripts, and common source files (`.swift`, `.js`, `.mjs`, `.cjs`, `.jsx`, `.ts`, `.mts`, `.cts`, `.tsx`, `.py`, `.go`, `.rs`). Backed local documents also expose `Open in Default App` as a header escape hatch. `Cmd`-clicking a local directory path in the terminal opens a split rooted at that directory.
 - **Text size and zoom control** — `Cmd+=`, `Cmd+-`, and `Cmd+0` adjust terminal font size for focused terminals, local-document text size for focused local documents, or page zoom for focused browser panels; terminal and local-document overrides persist per window, and browser zoom persists per browser panel
@@ -62,9 +62,9 @@ For building from source, see [Building and Releasing](docs/building-and-releasi
 | `Cmd+[` | Focus previous pane |
 | `Cmd+Shift+A` | Jump to the next unread panel, then panels needing approval or showing errors, then working panels; flash the current sidebar selection if nothing remains |
 | `Cmd+Shift+F` | Toggle focused panel (zoom) |
-| `Cmd+F` | Find in active terminal scrollback |
-| `Cmd+G` | Find next in active terminal scrollback |
-| `Cmd+Shift+G` | Find previous in active terminal scrollback |
+| `Cmd+F` | Find in the focused terminal scrollback or local document |
+| `Cmd+G` | Find next in the focused terminal scrollback or local document |
+| `Cmd+Shift+G` | Find previous in the focused terminal scrollback or local document |
 | `Cmd+=` / `Cmd+Shift+=` | Increase the focused panel's text size or zoom |
 | `Cmd+-` | Decrease the focused panel's text size or zoom |
 | `Cmd+0` | Reset the focused panel's text size or zoom |

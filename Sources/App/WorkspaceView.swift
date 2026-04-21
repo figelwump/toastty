@@ -2448,9 +2448,14 @@ private struct PanelCardView: View {
             )
         } else if state.definition == .localDocument {
             LocalDocumentPanelView(
+                panelID: panelID,
                 webState: state,
                 runtime: webPanelRuntimeRegistry.localDocumentRuntime(for: panelID),
                 isEffectivelyVisible: isWorkspaceSelected && isTabSelected,
+                isActivePanel: isFocused,
+                activatePanel: {
+                    _ = store.send(.focusPanel(workspaceID: workspaceID, panelID: panelID))
+                },
                 textScale: windowMarkdownTextScale
             )
             .frame(

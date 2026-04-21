@@ -63,7 +63,7 @@ Toastty keeps the high-frequency workspace, pane, and agent actions on the keybo
 
 | Shortcut | Action |
 |---|---|
-| `Cmd+F` | Find in active terminal scrollback |
+| `Cmd+F` | Find in the focused terminal scrollback or local document |
 | `Cmd+G` | Find next match |
 | `Cmd+Shift+G` | Find previous match |
 

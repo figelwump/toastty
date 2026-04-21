@@ -1,6 +1,7 @@
 import AppKit
 @testable import ToasttyApp
 import CoreState
+import WebKit
 import XCTest
 
 @MainActor
@@ -410,6 +411,146 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.content, "# Original")
         XCTAssertEqual(bootstrap.contentRevision, baseRevision + 1)
         XCTAssertFalse(runtime.canCancelEditFromCommand())
+    }
+
+    func testStartAndEndSearchPreserveActiveEditSession() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Original",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertEqual(
+            runtime.searchState(),
+            LocalDocumentSearchState(
+                isPresented: true,
+                query: "",
+                lastMatchFound: nil,
+                focusRequestID: try XCTUnwrap(runtime.searchState()?.focusRequestID)
+            )
+        )
+        XCTAssertTrue(runtime.endSearch())
+        XCTAssertNil(runtime.searchState())
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertTrue(bootstrap.isDirty)
+        XCTAssertEqual(bootstrap.content, "## Changed")
+        XCTAssertEqual(bootstrap.contentRevision, baseRevision)
+    }
+
+    func testSearchQueryUpdatesIgnoreStaleFindCompletions() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertTrue(runtime.startSearch())
+
+        runtime.updateSearchQuery("toast")
+        runtime.updateSearchQuery("toastty")
+
+        XCTAssertEqual(searchSpy.queries, ["toast", "toastty"])
+
+        searchSpy.completeCall(at: 0, matchFound: false)
+        XCTAssertNil(runtime.searchState()?.lastMatchFound)
+
+        searchSpy.completeCall(at: 1, matchFound: true)
+        XCTAssertEqual(runtime.searchState()?.query, "toastty")
+        XCTAssertEqual(runtime.searchState()?.lastMatchFound, true)
+    }
+
+    func testFindNextAndPreviousRequireActiveNonEmptyQuery() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertFalse(runtime.findNext())
+        XCTAssertFalse(runtime.findPrevious())
+
+        XCTAssertTrue(runtime.startSearch())
+        XCTAssertFalse(runtime.findNext())
+        XCTAssertFalse(runtime.findPrevious())
+
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        XCTAssertTrue(runtime.findNext())
+        XCTAssertTrue(runtime.findPrevious())
+        XCTAssertEqual(searchSpy.queries, ["toast", "toast"])
+        XCTAssertEqual(searchSpy.backwardsFlags, [false, true])
     }
 
     func testSaveFailureKeepsEditingDraftAndSurfacesError() async throws {
@@ -1625,6 +1766,49 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(metadataCallCount, 3)
         let bootstrapCallCount = await bootstrapRecorder.snapshot()
         XCTAssertGreaterThanOrEqual(bootstrapCallCount, 3)
+    }
+}
+
+@MainActor
+private final class LocalDocumentSearchExecutorSpy {
+    private struct Call {
+        let query: String
+        let backwards: Bool
+        let completion: (Bool) -> Void
+    }
+
+    private var calls: [Call] = []
+
+    func record(
+        _ webView: FocusAwareWKWebView,
+        query: String,
+        configuration: WKFindConfiguration,
+        completion: @escaping (Bool) -> Void
+    ) {
+        _ = webView
+        calls.append(
+            Call(
+                query: query,
+                backwards: configuration.backwards,
+                completion: completion
+            )
+        )
+    }
+
+    var queries: [String] {
+        calls.map(\.query)
+    }
+
+    var backwardsFlags: [Bool] {
+        calls.map(\.backwards)
+    }
+
+    func completeCall(at index: Int, matchFound: Bool) {
+        calls[index].completion(matchFound)
+    }
+
+    func removeAllCalls() {
+        calls.removeAll()
     }
 }
 

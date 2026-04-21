@@ -318,7 +318,8 @@ final class ToasttyCommandMenusTests: XCTestCase {
             ToasttyCommandMenus.textInputOwnsFindCommands(
                 modalWindowPresent: false,
                 firstResponderIsTextInput: true,
-                terminalSearchFieldIsFocused: false
+                terminalSearchFieldIsFocused: false,
+                localDocumentSearchFieldIsFocused: false
             )
         )
     }
@@ -328,7 +329,19 @@ final class ToasttyCommandMenusTests: XCTestCase {
             ToasttyCommandMenus.textInputOwnsFindCommands(
                 modalWindowPresent: false,
                 firstResponderIsTextInput: true,
-                terminalSearchFieldIsFocused: true
+                terminalSearchFieldIsFocused: true,
+                localDocumentSearchFieldIsFocused: false
+            )
+        )
+    }
+
+    func testFindCommandsStayAvailableWhileLocalDocumentSearchFieldOwnsFocus() {
+        XCTAssertFalse(
+            ToasttyCommandMenus.textInputOwnsFindCommands(
+                modalWindowPresent: false,
+                firstResponderIsTextInput: true,
+                terminalSearchFieldIsFocused: false,
+                localDocumentSearchFieldIsFocused: true
             )
         )
     }
@@ -338,8 +351,76 @@ final class ToasttyCommandMenusTests: XCTestCase {
             ToasttyCommandMenus.textInputOwnsFindCommands(
                 modalWindowPresent: true,
                 firstResponderIsTextInput: false,
-                terminalSearchFieldIsFocused: true
+                terminalSearchFieldIsFocused: true,
+                localDocumentSearchFieldIsFocused: true
             )
+        )
+    }
+
+    func testResolvedFindStartTargetPrefersFocusedLocalDocumentPanel() {
+        let localDocumentPanelID = UUID()
+        let terminalPanelID = UUID()
+
+        XCTAssertEqual(
+            ToasttyCommandMenus.resolvedFindStartTarget(
+                focusedLocalDocumentPanelID: localDocumentPanelID,
+                focusedTerminalPanelID: terminalPanelID
+            ),
+            .localDocument(localDocumentPanelID)
+        )
+    }
+
+    func testResolvedFindStartTargetFallsBackToFocusedTerminalPanel() {
+        let terminalPanelID = UUID()
+
+        XCTAssertEqual(
+            ToasttyCommandMenus.resolvedFindStartTarget(
+                focusedLocalDocumentPanelID: nil,
+                focusedTerminalPanelID: terminalPanelID
+            ),
+            .terminal(terminalPanelID)
+        )
+    }
+
+    func testResolvedFindNavigationTargetRequiresActiveLocalDocumentSearch() {
+        let localDocumentPanelID = UUID()
+
+        XCTAssertEqual(
+            ToasttyCommandMenus.resolvedFindNavigationTarget(
+                focusedLocalDocumentPanelID: localDocumentPanelID,
+                localDocumentSearchState: LocalDocumentSearchState(
+                    isPresented: true,
+                    query: "toast"
+                ),
+                focusedTerminalPanelID: nil,
+                terminalSearchState: nil
+            ),
+            .localDocument(localDocumentPanelID)
+        )
+        XCTAssertNil(
+            ToasttyCommandMenus.resolvedFindNavigationTarget(
+                focusedLocalDocumentPanelID: localDocumentPanelID,
+                localDocumentSearchState: nil,
+                focusedTerminalPanelID: nil,
+                terminalSearchState: nil
+            )
+        )
+    }
+
+    func testResolvedFindNavigationTargetFallsBackToTerminalSearch() {
+        let terminalPanelID = UUID()
+
+        XCTAssertEqual(
+            ToasttyCommandMenus.resolvedFindNavigationTarget(
+                focusedLocalDocumentPanelID: nil,
+                localDocumentSearchState: nil,
+                focusedTerminalPanelID: terminalPanelID,
+                terminalSearchState: TerminalSearchState(
+                    isPresented: true,
+                    needle: "toast"
+                )
+            ),
+            .terminal(terminalPanelID)
         )
     }
 }
