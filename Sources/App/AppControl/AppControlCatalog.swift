@@ -39,6 +39,11 @@ enum AppControlActionID: String, CaseIterable, Sendable {
     case workspaceEqualizeSplits = "workspace.equalize-splits"
     case panelCreateBrowser = "panel.create.browser"
     case panelCreateLocalDocument = "panel.create.local-document"
+    case panelLocalDocumentSearchStart = "panel.local-document.search.start"
+    case panelLocalDocumentSearchUpdateQuery = "panel.local-document.search.update-query"
+    case panelLocalDocumentSearchNext = "panel.local-document.search.next"
+    case panelLocalDocumentSearchPrevious = "panel.local-document.search.previous"
+    case panelLocalDocumentSearchHide = "panel.local-document.search.hide"
     case panelFocusModeToggle = "panel.focus-mode.toggle"
     case appFontIncrease = "app.font.increase"
     case appFontDecrease = "app.font.decrease"
@@ -75,6 +80,16 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return ["workspace.close-focused-panel"]
         case .panelCreateLocalDocument:
             return ["panel.create.localDocument", "panel.create.markdown"]
+        case .panelLocalDocumentSearchStart:
+            return ["panel.markdown.search.start"]
+        case .panelLocalDocumentSearchUpdateQuery:
+            return ["panel.markdown.search.update-query"]
+        case .panelLocalDocumentSearchNext:
+            return ["panel.markdown.search.next"]
+        case .panelLocalDocumentSearchPrevious:
+            return ["panel.markdown.search.previous"]
+        case .panelLocalDocumentSearchHide:
+            return ["panel.markdown.search.hide"]
         case .panelFocusModeToggle:
             return ["topbar.toggle.focused-panel"]
         case .appMarkdownTextIncrease:
@@ -207,6 +222,16 @@ enum AppControlActionID: String, CaseIterable, Sendable {
             return .init(id: rawValue, kind: .action, summary: "Create a browser panel.", selectors: [.windowID, .workspaceID], parameters: [.placement(required: false), .url(required: false)])
         case .panelCreateLocalDocument:
             return .init(id: rawValue, kind: .action, summary: "Open a local document panel.", selectors: [.windowID, .workspaceID], parameters: [.filePath(required: true), .placement(required: false)], aliases: aliases)
+        case .panelLocalDocumentSearchStart:
+            return .init(id: rawValue, kind: .action, summary: "Show find for a local-document panel.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
+        case .panelLocalDocumentSearchUpdateQuery:
+            return .init(id: rawValue, kind: .action, summary: "Update the active local-document find query.", selectors: [.windowID, .workspaceID, .panelID], parameters: [.query(required: true)], aliases: aliases)
+        case .panelLocalDocumentSearchNext:
+            return .init(id: rawValue, kind: .action, summary: "Advance to the next local-document find match.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
+        case .panelLocalDocumentSearchPrevious:
+            return .init(id: rawValue, kind: .action, summary: "Move to the previous local-document find match.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
+        case .panelLocalDocumentSearchHide:
+            return .init(id: rawValue, kind: .action, summary: "Hide find for a local-document panel.", selectors: [.windowID, .workspaceID, .panelID], aliases: aliases)
         case .panelFocusModeToggle:
             return .init(id: rawValue, kind: .action, summary: "Toggle focused panel mode.", selectors: [.windowID, .workspaceID], aliases: aliases)
         case .appFontIncrease:
@@ -317,6 +342,10 @@ private extension AppControlParameterDescriptor {
 
     static func profileID(required: Bool) -> Self {
         .init(name: "profileID", summary: "Agent or terminal profile ID.", valueType: .string, required: required)
+    }
+
+    static func query(required: Bool) -> Self {
+        .init(name: "query", summary: "Find query. Use an empty string to clear the current query while keeping find visible.", valueType: .string, required: required)
     }
 
     static func submit(required: Bool) -> Self {

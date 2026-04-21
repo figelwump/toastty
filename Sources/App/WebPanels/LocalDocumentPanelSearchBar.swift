@@ -3,15 +3,13 @@ import SwiftUI
 
 final class LocalDocumentSearchTextField: NSSearchField, NSTextViewDelegate {}
 
-struct LocalDocumentPanelSearchBar: View {
+struct LocalDocumentPanelHeaderSearchBar: View {
     let panelID: UUID
     @ObservedObject var runtime: LocalDocumentPanelRuntime
     let isActivePanel: Bool
     let activatePanel: () -> Void
 
     @State private var draftQuery = ""
-
-    private static let toolbarHeight: CGFloat = 34
 
     private var searchState: LocalDocumentSearchState? {
         runtime.searchState()
@@ -20,76 +18,82 @@ struct LocalDocumentPanelSearchBar: View {
     var body: some View {
         Group {
             if let searchState, searchState.isPresented {
-                HStack(spacing: 8) {
-                    LocalDocumentSearchField(
-                        text: searchBinding,
-                        placeholder: "Search",
-                        focusRequestID: isActivePanel ? searchState.focusRequestID : nil,
-                        accessibilityID: "local-document.search.field.\(panelID.uuidString)",
-                        onSubmit: {
-                            activatePanel()
-                            _ = runtime.findNext()
-                        },
-                        onCancel: closeSearch,
-                        onEditingChanged: handleSearchEditingChanged
+                GeometryReader { geometry in
+                    let chrome = PanelHeaderSearchLayout.resolveSearchChrome(
+                        availableWidth: geometry.size.width
                     )
-                    .frame(
-                        maxWidth: .infinity,
-                        minHeight: PanelHeaderSearchLayout.searchFieldHeight,
-                        maxHeight: PanelHeaderSearchLayout.searchFieldHeight
-                    )
-                    .layoutPriority(1)
 
-                    if searchState.query.isEmpty == false,
-                       searchState.lastMatchFound == false {
-                        Text("No Matches")
-                            .font(ToastyTheme.fontWorkspaceTabBadge)
-                            .foregroundStyle(ToastyTheme.inactiveText)
-                            .fixedSize()
+                    HStack(spacing: PanelHeaderSearchLayout.searchControlsSpacing) {
+                        LocalDocumentSearchField(
+                            text: searchBinding,
+                            placeholder: "Search",
+                            focusRequestID: isActivePanel ? searchState.focusRequestID : nil,
+                            accessibilityID: "local-document.search.field.\(panelID.uuidString)",
+                            onSubmit: {
+                                activatePanel()
+                                _ = runtime.findNext()
+                            },
+                            onCancel: closeSearch,
+                            onEditingChanged: handleSearchEditingChanged
+                        )
+                        .frame(
+                            width: chrome.fieldWidth,
+                            height: PanelHeaderSearchLayout.searchFieldHeight
+                        )
+                        .overlay(alignment: .trailing) {
+                            if chrome.showsMatchLabel,
+                               searchState.query.isEmpty == false,
+                               searchState.lastMatchFound == false {
+                                Text("No Match")
+                                    .font(ToastyTheme.fontWorkspaceTabBadge)
+                                    .foregroundStyle(ToastyTheme.inactiveText)
+                                    .padding(.trailing, 7)
+                            }
+                        }
+
+                        HStack(spacing: PanelHeaderSearchLayout.searchButtonSpacing) {
+                            if chrome.showsNavigationButtons {
+                                searchButton(
+                                    systemImage: "chevron.up",
+                                    helpText: ToasttyKeyboardShortcuts.findPrevious.helpText("Find Previous"),
+                                    accessibilityIdentifier: "local-document.search.previous.\(panelID.uuidString)",
+                                    isDisabled: searchState.query.isEmpty
+                                ) {
+                                    activatePanel()
+                                    _ = runtime.findPrevious()
+                                }
+
+                                searchButton(
+                                    systemImage: "chevron.down",
+                                    helpText: ToasttyKeyboardShortcuts.findNext.helpText("Find Next"),
+                                    accessibilityIdentifier: "local-document.search.next.\(panelID.uuidString)",
+                                    isDisabled: searchState.query.isEmpty
+                                ) {
+                                    activatePanel()
+                                    _ = runtime.findNext()
+                                }
+                            }
+
+                            searchButton(
+                                systemImage: "xmark",
+                                helpText: "Hide Find",
+                                accessibilityIdentifier: "local-document.search.close.\(panelID.uuidString)",
+                                isDisabled: false,
+                                action: closeSearch
+                            )
+                        }
                     }
-
-                    searchButton(
-                        systemImage: "chevron.up",
-                        helpText: ToasttyKeyboardShortcuts.findPrevious.helpText("Find Previous"),
-                        accessibilityIdentifier: "local-document.search.previous.\(panelID.uuidString)",
-                        isDisabled: searchState.query.isEmpty
-                    ) {
-                        activatePanel()
-                        _ = runtime.findPrevious()
-                    }
-
-                    searchButton(
-                        systemImage: "chevron.down",
-                        helpText: ToasttyKeyboardShortcuts.findNext.helpText("Find Next"),
-                        accessibilityIdentifier: "local-document.search.next.\(panelID.uuidString)",
-                        isDisabled: searchState.query.isEmpty
-                    ) {
-                        activatePanel()
-                        _ = runtime.findNext()
-                    }
-
-                    searchButton(
-                        systemImage: "xmark",
-                        helpText: "Hide Find",
-                        accessibilityIdentifier: "local-document.search.close.\(panelID.uuidString)",
-                        isDisabled: false,
-                        action: closeSearch
-                    )
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
                 .frame(
-                    maxWidth: .infinity,
-                    minHeight: Self.toolbarHeight,
-                    maxHeight: Self.toolbarHeight,
-                    alignment: .leading
+                    minWidth: PanelHeaderSearchLayout.minimumSearchBarWidth,
+                    idealWidth: PanelHeaderSearchLayout.maximumSearchBarWidth,
+                    maxWidth: PanelHeaderSearchLayout.maximumSearchBarWidth,
+                    minHeight: PanelHeaderSearchLayout.searchFieldHeight,
+                    idealHeight: PanelHeaderSearchLayout.searchFieldHeight,
+                    maxHeight: PanelHeaderSearchLayout.searchFieldHeight,
+                    alignment: .trailing
                 )
-                .background(ToastyTheme.elevatedBackground)
-                .overlay(alignment: .bottom) {
-                    Rectangle()
-                        .fill(ToastyTheme.hairline)
-                        .frame(height: 1)
-                }
                 .onAppear {
                     syncDraft(with: searchState)
                 }
@@ -101,6 +105,15 @@ struct LocalDocumentPanelSearchBar: View {
                         return
                     }
                     draftQuery = nextQuery
+                }
+                .onChange(of: searchState.focusRequestID) { _, _ in
+                    syncDraft(with: runtime.searchState())
+                }
+                .onChange(of: isActivePanel) { _, isActive in
+                    guard isActive == false else {
+                        return
+                    }
+                    runtime.setSearchFieldFocused(false)
                 }
             }
         }
@@ -122,14 +135,7 @@ struct LocalDocumentPanelSearchBar: View {
                     width: PanelHeaderSearchLayout.searchButtonSize,
                     height: PanelHeaderSearchLayout.searchButtonSize
                 )
-                .background(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(ToastyTheme.surfaceBackground.opacity(isDisabled ? 0.45 : 0.96))
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(ToastyTheme.subtleBorder, lineWidth: 1)
-                }
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
@@ -156,6 +162,10 @@ struct LocalDocumentPanelSearchBar: View {
 
     private func syncDraft(with searchState: LocalDocumentSearchState) {
         draftQuery = searchState.query
+    }
+
+    private func syncDraft(with searchState: LocalDocumentSearchState?) {
+        draftQuery = searchState?.query ?? ""
     }
 
     private func closeSearch() {

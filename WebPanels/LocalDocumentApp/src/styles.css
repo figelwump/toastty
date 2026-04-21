@@ -13,6 +13,8 @@
   --muted: #76593f;
   --accent: #b65c22;
   --accent-soft: rgba(182, 92, 34, 0.12);
+  --find-match-bg: rgba(255, 210, 120, 0.28);
+  --find-active-bg: rgba(255, 167, 84, 0.5);
   --code-bg: rgba(78, 53, 31, 0.08);
   --quote-bg: rgba(182, 92, 34, 0.06);
   --quote-text: #5f422b;
@@ -66,6 +68,8 @@
   --muted: #c0a58e;
   --accent: #f0a25e;
   --accent-soft: rgba(240, 162, 94, 0.16);
+  --find-match-bg: rgba(255, 196, 112, 0.28);
+  --find-active-bg: rgba(255, 177, 94, 0.56);
   --code-bg: rgba(255, 224, 191, 0.08);
   --quote-bg: rgba(240, 162, 94, 0.1);
   --quote-text: #e3c6af;
@@ -276,6 +280,16 @@ body {
 
 .local-document-code-plain {
   color: var(--pre-text);
+}
+
+::highlight(toastty-local-document-find-match) {
+  background: var(--find-match-bg);
+  color: inherit;
+}
+
+::highlight(toastty-local-document-find-active) {
+  background: var(--find-active-bg);
+  color: inherit;
 }
 
 .local-document-editor-shell {

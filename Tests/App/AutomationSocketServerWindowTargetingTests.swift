@@ -480,6 +480,182 @@ final class AutomationSocketServerWindowTargetingTests: XCTestCase {
         }
     }
 
+    func testLocalDocumentSearchActionsExposeSearchState() async throws {
+        let fixture = makeSingleWindowFixture()
+        let fileManager = FileManager.default
+        let tempDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("toastty-local-document-search-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: tempDirectory) }
+
+        let markdownURL = tempDirectory.appendingPathComponent("search.md", isDirectory: false)
+        let markdownContent = """
+        # Search Smoke
+
+        Toastty finds toastty in this document.
+        """
+        try markdownContent.write(to: markdownURL, atomically: true, encoding: .utf8)
+        let expectedHash = SHA256.hash(data: Data(markdownContent.utf8)).map { String(format: "%02x", $0) }.joined()
+
+        try await withAutomationHarness(state: fixture.state) { harness in
+            let createResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.create.local-document",
+                    "args": [
+                        "placement": "newTab",
+                        "filePath": markdownURL.path,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(createResponse.ok)
+
+            let workspace = try await MainActor.run {
+                try XCTUnwrap(harness.store.state.workspacesByID[fixture.workspaceID])
+            }
+            let panelID = try XCTUnwrap(workspace.focusedPanelID)
+
+            var snapshotResponse: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                snapshotResponse = response
+                if response.result["bootstrapContentSHA256"] as? String == expectedHash {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            XCTAssertEqual(snapshotResponse?.result["searchIsPresented"] as? Bool, false)
+            XCTAssertTrue(snapshotResponse?.result["searchQuery"] is NSNull)
+            XCTAssertTrue(snapshotResponse?.result["searchLastMatchFound"] is NSNull)
+            XCTAssertEqual(snapshotResponse?.result["searchFieldFocused"] as? Bool, false)
+
+            let startResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.start",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(startResponse.ok)
+
+            var startedSnapshot: AutomationSocketTestResponse?
+            for _ in 0 ..< 20 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                startedSnapshot = response
+                if response.result["searchIsPresented"] as? Bool == true {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            XCTAssertEqual(startedSnapshot?.result["searchIsPresented"] as? Bool, true)
+            XCTAssertEqual(startedSnapshot?.result["searchQuery"] as? String, "")
+            XCTAssertEqual(startedSnapshot?.result["searchFieldFocused"] as? Bool, false)
+
+            let updateResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.update-query",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                        "query": "toastty",
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(updateResponse.ok)
+
+            var searchedSnapshot: AutomationSocketTestResponse?
+            for _ in 0 ..< 40 {
+                let response = try sendRequest(
+                    command: "automation.local_document_panel_state",
+                    payload: [
+                        "panelID": panelID.uuidString,
+                    ],
+                    socketPath: harness.socketPath
+                )
+                XCTAssertTrue(response.ok)
+                searchedSnapshot = response
+                if response.result["searchQuery"] as? String == "toastty",
+                   response.result["searchLastMatchFound"] as? Bool != nil {
+                    break
+                }
+                try await Task.sleep(nanoseconds: 50_000_000)
+            }
+
+            XCTAssertEqual(searchedSnapshot?.result["searchIsPresented"] as? Bool, true)
+            XCTAssertEqual(searchedSnapshot?.result["searchQuery"] as? String, "toastty")
+            XCTAssertNotNil(searchedSnapshot?.result["searchLastMatchFound"] as? Bool)
+
+            let nextResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.next",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(nextResponse.ok)
+
+            let previousResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.previous",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(previousResponse.ok)
+
+            let hideResponse = try sendRequest(
+                command: "automation.perform_action",
+                payload: [
+                    "action": "panel.local-document.search.hide",
+                    "args": [
+                        "panelID": panelID.uuidString,
+                    ],
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(hideResponse.ok)
+
+            let hiddenSnapshot = try sendRequest(
+                command: "automation.local_document_panel_state",
+                payload: [
+                    "panelID": panelID.uuidString,
+                ],
+                socketPath: harness.socketPath
+            )
+            XCTAssertTrue(hiddenSnapshot.ok)
+            XCTAssertEqual(hiddenSnapshot.result["searchIsPresented"] as? Bool, false)
+            XCTAssertTrue(hiddenSnapshot.result["searchQuery"] is NSNull)
+            XCTAssertTrue(hiddenSnapshot.result["searchLastMatchFound"] is NSNull)
+        }
+    }
+
     func testFocusNextUnreadActionUsesSoleWindowFallbackWhenSingleWindowExists() async throws {
         let fixture = makeSingleWindowUnreadFixture()
 

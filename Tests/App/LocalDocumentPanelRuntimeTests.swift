@@ -145,6 +145,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -181,6 +182,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -218,6 +220,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -257,6 +260,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -444,6 +448,8 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
         runtime.updateDraftContent("## Changed", baseContentRevision: baseRevision)
 
+        XCTAssertNil(runtime.automationState().searchState)
+        XCTAssertFalse(runtime.automationState().isSearchFieldFocused)
         XCTAssertTrue(runtime.startSearch())
         XCTAssertEqual(
             runtime.searchState(),
@@ -454,8 +460,12 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 focusRequestID: try XCTUnwrap(runtime.searchState()?.focusRequestID)
             )
         )
+        XCTAssertEqual(runtime.automationState().searchState, runtime.searchState())
+        runtime.setSearchFieldFocused(true)
+        XCTAssertTrue(runtime.automationState().isSearchFieldFocused)
         XCTAssertTrue(runtime.endSearch())
         XCTAssertNil(runtime.searchState())
+        XCTAssertNil(runtime.automationState().searchState)
 
         let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
         XCTAssertTrue(bootstrap.isEditing)
@@ -474,6 +484,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -518,6 +529,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
                 metadataExpectation.fulfill()
             },
             interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
             documentLoader: { webState in
                 LocalDocumentPanelDocumentSnapshot(
                     filePath: webState.filePath,
@@ -551,6 +563,86 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(runtime.findPrevious())
         XCTAssertEqual(searchSpy.queries, ["toast", "toast"])
         XCTAssertEqual(searchSpy.backwardsFlags, [false, true])
+    }
+
+    func testEndSearchClearsActiveSearchHighlights() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        XCTAssertTrue(runtime.endSearch())
+
+        XCTAssertEqual(searchSpy.commands, [.clear])
+    }
+
+    func testDraftUpdatesRefreshActiveSearch() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let searchSpy = LocalDocumentSearchExecutorSpy()
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            bundle: Bundle(for: Self.self),
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Toastty",
+                    diskRevision: nil
+                )
+            },
+            searchExecutor: searchSpy.record,
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+        XCTAssertTrue(runtime.startSearch())
+        runtime.updateSearchQuery("toast")
+        searchSpy.removeAllCalls()
+
+        let baseRevision = try XCTUnwrap(runtime.automationState().currentBootstrap?.contentRevision)
+        runtime.updateDraftContent("## Toastty refreshed", baseContentRevision: baseRevision)
+
+        XCTAssertEqual(searchSpy.commands, [.setQuery("toast")])
     }
 
     func testSaveFailureKeepsEditingDraftAndSurfacesError() async throws {
@@ -1772,35 +1864,41 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 @MainActor
 private final class LocalDocumentSearchExecutorSpy {
     private struct Call {
-        let query: String
-        let backwards: Bool
-        let completion: (Bool) -> Void
+        let command: LocalDocumentSearchCommand
+        let completion: (Bool?) -> Void
     }
 
     private var calls: [Call] = []
 
     func record(
         _ webView: FocusAwareWKWebView,
-        query: String,
-        configuration: WKFindConfiguration,
-        completion: @escaping (Bool) -> Void
+        command: LocalDocumentSearchCommand,
+        completion: @escaping (Bool?) -> Void
     ) {
         _ = webView
         calls.append(
             Call(
-                query: query,
-                backwards: configuration.backwards,
+                command: command,
                 completion: completion
             )
         )
     }
 
     var queries: [String] {
-        calls.map(\.query)
+        calls.compactMap(\.command.query)
     }
 
     var backwardsFlags: [Bool] {
-        calls.map(\.backwards)
+        calls.map { call in
+            if case .findPrevious = call.command {
+                return true
+            }
+            return false
+        }
+    }
+
+    var commands: [LocalDocumentSearchCommand] {
+        calls.map(\.command)
     }
 
     func completeCall(at index: Int, matchFound: Bool) {

@@ -23,6 +23,8 @@ struct LocalDocumentPanelRuntimeAutomationState: Equatable, Sendable {
     let hasPendingBootstrapScript: Bool
     let currentAssetPath: String?
     let currentBootstrap: LocalDocumentPanelBootstrap?
+    let searchState: LocalDocumentSearchState?
+    let isSearchFieldFocused: Bool
 }
 
 struct LocalDocumentPanelDiskRevision: Equatable, Sendable {
@@ -283,13 +285,29 @@ struct LocalDocumentEditingSession: Equatable, Sendable {
     }
 }
 
+enum LocalDocumentSearchCommand: Equatable, Sendable {
+    case setQuery(String)
+    case findNext(String)
+    case findPrevious(String)
+    case clear
+
+    var query: String? {
+        switch self {
+        case .setQuery(let query), .findNext(let query), .findPrevious(let query):
+            query
+        case .clear:
+            nil
+        }
+    }
+}
+
 @MainActor
 final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLifecycleControlling {
     typealias DocumentLoader = @Sendable (WebPanelState) async -> LocalDocumentPanelDocumentSnapshot
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
     typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
     typealias ExternalFileOpener = @Sendable (URL) -> Bool
-    typealias SearchExecutor = @MainActor (FocusAwareWKWebView, String, WKFindConfiguration, @escaping (Bool) -> Void) -> Void
+    typealias SearchExecutor = @MainActor (FocusAwareWKWebView, LocalDocumentSearchCommand, @escaping (Bool?) -> Void) -> Void
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
     nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
@@ -324,6 +342,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private var searchFieldFocused = false
     private var activeSearchRequestGeneration: UInt64 = 0
     private var shouldRefreshSearchAfterBootstrap = false
+    private var isPanelBridgeReady = false
+    private var isSearchControllerReady = false
 
     init(
         panelID: UUID,
@@ -335,9 +355,18 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         documentSaver: @escaping DocumentSaver = { try await LocalDocumentPanelRuntime.writeLocalDocument(at: $0, content: $1) },
         savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1, format: $2) },
         externalFileOpener: @escaping ExternalFileOpener = { NSWorkspace.shared.open($0) },
-        searchExecutor: @escaping SearchExecutor = { webView, query, configuration, completion in
-            webView.find(query, configuration: configuration) { result in
-                completion(result.matchFound)
+        searchExecutor: @escaping SearchExecutor = { webView, command, completion in
+            guard let script = LocalDocumentPanelRuntime.searchJavaScript(for: command) else {
+                completion(nil)
+                return
+            }
+
+            webView.evaluateJavaScript(script) { result, error in
+                guard error == nil else {
+                    completion(nil)
+                    return
+                }
+                completion(LocalDocumentPanelRuntime.searchExecutionResult(from: result))
             }
         },
         reloadDebounceNanoseconds: UInt64 = 150_000_000
@@ -401,7 +430,9 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             currentTheme: currentTheme,
             hasPendingBootstrapScript: pendingBootstrapScript != nil,
             currentAssetPath: currentAssetURL?.path,
-            currentBootstrap: currentBootstrap
+            currentBootstrap: currentBootstrap,
+            searchState: searchStateValue,
+            isSearchFieldFocused: searchFieldFocused
         )
     }
 
@@ -496,6 +527,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         if query.isEmpty {
             cancelPendingSearchResult()
             shouldRefreshSearchAfterBootstrap = false
+            clearSearchHighlights()
             return
         }
 
@@ -503,7 +535,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             shouldRefreshSearchAfterBootstrap = true
         }
         ensurePanelAppLoaded()
-        _ = performFind(query: query, backwards: false)
+        _ = performSearch(.setQuery(query))
     }
 
     @discardableResult
@@ -516,7 +548,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         if shouldRefreshSearchForCurrentWebContent() {
             shouldRefreshSearchAfterBootstrap = true
         }
-        return performFind(query: query, backwards: false)
+        return performSearch(.findNext(query))
     }
 
     @discardableResult
@@ -529,7 +561,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         if shouldRefreshSearchForCurrentWebContent() {
             shouldRefreshSearchAfterBootstrap = true
         }
-        return performFind(query: query, backwards: true)
+        return performSearch(.findPrevious(query))
     }
 
     @discardableResult
@@ -540,6 +572,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
 
         cancelPendingSearchResult()
         shouldRefreshSearchAfterBootstrap = false
+        clearSearchHighlights()
         publishSearchState(nil)
         setSearchFieldFocused(false)
         return true
@@ -563,6 +596,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.session = session
         // Keep runtime inspection current without forcing a full bootstrap round-trip on each debounce tick.
         updateCurrentBootstrap()
+        refreshSearchForCurrentVisibleContentIfNeeded()
     }
 
     func cancelEditMode(baseContentRevision: Int) {
@@ -810,6 +844,53 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             textScale: textScale
         )
     }
+
+    nonisolated static func searchJavaScript(for command: LocalDocumentSearchCommand) -> String? {
+        let payload: [String: Any]
+        switch command {
+        case .setQuery(let query):
+            payload = ["type": "setQuery", "query": query]
+        case .findNext(let query):
+            payload = ["type": "next", "query": query]
+        case .findPrevious(let query):
+            payload = ["type": "previous", "query": query]
+        case .clear:
+            payload = ["type": "clear"]
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let json = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        return """
+        (() => {
+          const panel = window.ToasttyLocalDocumentPanel;
+          if (!panel?.performSearchCommand) {
+            return null;
+          }
+          return panel.performSearchCommand(\(json));
+        })();
+        """
+    }
+
+    nonisolated static func searchExecutionResult(from result: Any?) -> Bool? {
+        if result == nil || result is NSNull {
+            return nil
+        }
+        if let dictionary = result as? [String: Any],
+           let matchFound = dictionary["matchFound"] as? Bool {
+            return matchFound
+        }
+        if let dictionary = result as? [AnyHashable: Any],
+           let matchFound = dictionary["matchFound"] as? Bool {
+            return matchFound
+        }
+        if let matchFound = result as? Bool {
+            return matchFound
+        }
+        return nil
+    }
 }
 
 private extension LocalDocumentPanelRuntime {
@@ -820,6 +901,9 @@ private extension LocalDocumentPanelRuntime {
         case save(baseContentRevision: Int)
         case cancelEdit(baseContentRevision: Int)
         case overwriteAfterConflict(baseContentRevision: Int)
+        case bridgeReady
+        case searchControllerReady
+        case searchControllerUnavailable
 
         init?(messageBody: Any) {
             guard let body = messageBody as? [String: Any],
@@ -853,6 +937,12 @@ private extension LocalDocumentPanelRuntime {
                     return nil
                 }
                 self = .overwriteAfterConflict(baseContentRevision: baseContentRevision)
+            case "bridgeReady":
+                self = .bridgeReady
+            case "searchControllerReady":
+                self = .searchControllerReady
+            case "searchControllerUnavailable":
+                self = .searchControllerUnavailable
             default:
                 return nil
             }
@@ -873,6 +963,14 @@ private extension LocalDocumentPanelRuntime {
             cancelEditMode(baseContentRevision: baseContentRevision)
         case .overwriteAfterConflict(let baseContentRevision):
             overwriteAfterConflict(baseContentRevision: baseContentRevision)
+        case .bridgeReady:
+            isPanelBridgeReady = true
+            pushPendingBootstrapIfPossible()
+        case .searchControllerReady:
+            isSearchControllerReady = true
+            refreshSearchAfterBootstrapIfNeeded()
+        case .searchControllerUnavailable:
+            isSearchControllerReady = false
         }
     }
 
@@ -1063,6 +1161,8 @@ private extension LocalDocumentPanelRuntime {
                 title: "Local document assets unavailable",
                 detail: "Toastty could not load the bundled local document panel resources."
             )
+            isPanelBridgeReady = false
+            isSearchControllerReady = false
             webView.loadHTMLString(fallbackHTML, baseURL: nil)
             currentAssetURL = nil
             return
@@ -1073,6 +1173,8 @@ private extension LocalDocumentPanelRuntime {
             return
         }
 
+        isPanelBridgeReady = false
+        isSearchControllerReady = false
         currentAssetURL = entryURL
         webView.loadFileURL(entryURL, allowingReadAccessTo: assetDirectoryURL)
     }
@@ -1085,6 +1187,10 @@ private extension LocalDocumentPanelRuntime {
 
         if currentAssetURL != entryURL {
             ensurePanelAppLoaded()
+            return
+        }
+
+        guard isPanelBridgeReady else {
             return
         }
 
@@ -1159,20 +1265,18 @@ private extension LocalDocumentPanelRuntime {
     }
 
     @discardableResult
-    private func performFind(query: String, backwards: Bool) -> Bool {
+    private func performSearch(_ command: LocalDocumentSearchCommand) -> Bool {
         guard let searchState = searchStateValue,
               searchState.isPresented,
+              let query = command.query,
               query.isEmpty == false else {
             return false
         }
 
         activeSearchRequestGeneration &+= 1
         let requestGeneration = activeSearchRequestGeneration
-        let configuration = WKFindConfiguration()
-        configuration.backwards = backwards
-        configuration.wraps = true
 
-        searchExecutor(webView, query, configuration) { [weak self] matchFound in
+        searchExecutor(webView, command) { [weak self] matchFound in
             guard let self,
                   requestGeneration == self.activeSearchRequestGeneration,
                   var currentSearchState = self.searchStateValue,
@@ -1180,10 +1284,21 @@ private extension LocalDocumentPanelRuntime {
                   currentSearchState.query == query else {
                 return
             }
+
+            guard let matchFound else {
+                self.shouldRefreshSearchAfterBootstrap = true
+                self.refreshSearchAfterBootstrapIfNeeded()
+                return
+            }
+
             currentSearchState.lastMatchFound = matchFound
             self.publishSearchState(currentSearchState)
         }
         return true
+    }
+
+    private func clearSearchHighlights() {
+        searchExecutor(webView, .clear) { _ in }
     }
 
     private func publishSearchState(_ nextState: LocalDocumentSearchState?) {
@@ -1196,6 +1311,17 @@ private extension LocalDocumentPanelRuntime {
 
     private func cancelPendingSearchResult() {
         activeSearchRequestGeneration &+= 1
+    }
+
+    private func refreshSearchForCurrentVisibleContentIfNeeded() {
+        guard shouldRefreshSearchForCurrentWebContent() == false,
+              let searchState = searchStateValue,
+              searchState.isPresented,
+              searchState.query.isEmpty == false else {
+            return
+        }
+
+        _ = performSearch(.setQuery(searchState.query))
     }
 
     private func markSearchRefreshAfterVisibleContentChangeIfNeeded() {
@@ -1211,22 +1337,29 @@ private extension LocalDocumentPanelRuntime {
         guard shouldRefreshSearchAfterBootstrap else {
             return
         }
-        shouldRefreshSearchAfterBootstrap = false
+        guard shouldRefreshSearchForCurrentWebContent() == false else {
+            return
+        }
 
         guard let searchState = searchStateValue,
               searchState.isPresented,
               searchState.query.isEmpty == false else {
+            shouldRefreshSearchAfterBootstrap = false
             return
         }
 
-        _ = performFind(query: searchState.query, backwards: false)
+        shouldRefreshSearchAfterBootstrap = false
+        _ = performSearch(.setQuery(searchState.query))
     }
 
     private func shouldRefreshSearchForCurrentWebContent() -> Bool {
         guard let entryURL else {
             return false
         }
-        return currentAssetURL != entryURL || pendingBootstrapScript != nil
+        return currentAssetURL != entryURL ||
+            pendingBootstrapScript != nil ||
+            isPanelBridgeReady == false ||
+            isSearchControllerReady == false
     }
 
     nonisolated static func readLocalDocument(

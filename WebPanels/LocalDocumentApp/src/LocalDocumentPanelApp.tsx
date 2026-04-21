@@ -17,6 +17,7 @@ import {
   LocalDocumentSyntaxLanguage
 } from "./bootstrap";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
+import { useLocalDocumentSearchController } from "./localDocumentSearch";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
 if (!hljs.getLanguage("yaml")) {
@@ -332,12 +333,11 @@ function ExternalOpenIcon() {
 function LocalDocumentEditor(props: {
   bootstrap: LocalDocumentPanelBootstrap;
   draftContent: string;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   updateDraftContent: (nextContent: string) => void;
 }) {
-  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
-
   React.useLayoutEffect(() => {
-    const textarea = textareaRef.current;
+    const textarea = props.textareaRef.current;
     if (!textarea) {
       return;
     }
@@ -363,7 +363,7 @@ function LocalDocumentEditor(props: {
         </div>
       )}
       <textarea
-        ref={textareaRef}
+        ref={props.textareaRef}
         className="local-document-editor"
         value={props.draftContent}
         onChange={(event) => props.updateDraftContent(event.target.value)}
@@ -458,7 +458,11 @@ function useDocumentHighlightHTML(
   return bootstrap.format === "markdown" ? markdownHighlight : syncHighlight;
 }
 
-function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
+function CodeDocumentView(props: {
+  bootstrap: LocalDocumentPanelBootstrap;
+  content: string;
+  previewRootRef: React.RefObject<HTMLElement | null>;
+}) {
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
   const language = props.bootstrap.syntaxLanguage;
@@ -485,7 +489,7 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         <pre className="local-document-code-gutter" aria-hidden="true">
           {lines.map((_, index) => String(index + 1)).join("\n")}
         </pre>
-        <pre className="local-document-code-scroll">
+        <pre ref={props.previewRootRef} className="local-document-code-scroll">
           {highlightedHTML ? (
             <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
           ) : (
@@ -524,6 +528,15 @@ export function LocalDocumentPanelApp() {
   }
 
   const renderedContent = bootstrap.isEditing ? draftContent : bootstrap.content;
+  const previewRootRef = React.useRef<HTMLElement | null>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement | null>(null);
+
+  useLocalDocumentSearchController({
+    content: renderedContent,
+    isEditing: bootstrap.isEditing,
+    previewRootRef,
+    textareaRef
+  });
 
   return (
     <main className="local-document-shell">
@@ -543,10 +556,15 @@ export function LocalDocumentPanelApp() {
         <LocalDocumentEditor
           bootstrap={bootstrap}
           draftContent={draftContent}
+          textareaRef={textareaRef}
           updateDraftContent={updateDraftContent}
         />
       ) : (
-        <CodeDocumentView bootstrap={bootstrap} content={renderedContent} />
+        <CodeDocumentView
+          bootstrap={bootstrap}
+          content={renderedContent}
+          previewRootRef={previewRootRef}
+        />
       )}
     </main>
   );

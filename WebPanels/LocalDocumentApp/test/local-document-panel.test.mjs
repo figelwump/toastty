@@ -35,9 +35,10 @@ test("editor mount focuses the textarea and moves the caret to the file start", 
   );
 
   assert.match(source, /React\.useLayoutEffect\(\(\) => \{/);
+  assert.match(source, /props\.textareaRef\.current/);
   assert.match(source, /textarea\.focus\(\)/);
   assert.match(source, /textarea\.setSelectionRange\(0, 0\)/);
-  assert.match(source, /ref=\{textareaRef\}/);
+  assert.match(source, /ref=\{props\.textareaRef\}/);
 });
 
 test("plain-code formats guard null highlight languages before touching highlight.js", async () => {
