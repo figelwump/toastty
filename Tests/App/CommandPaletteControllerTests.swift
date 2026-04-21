@@ -231,11 +231,66 @@ final class CommandPaletteControllerTests: XCTestCase {
         XCTAssertTrue(viewModel.results.contains(where: { $0.id == "terminal-profile.zmx.split-down" }))
     }
 
+    func testToggleReusesSharedFileIndexServiceAcrossPaletteSessions() async throws {
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        let originWindow = makeOriginWindow(windowID: windowID)
+        let runtimeRegistry = TerminalRuntimeRegistry()
+        runtimeRegistry.bind(store: store)
+        let actions = CommandPaletteActionSpy()
+        actions.fileSearchScopeValue = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let readmePath = "/tmp/toastty-worktree/README.md"
+        let fileIndexService = ControllerFileIndexServiceSpy(
+            resultsByScope: [
+                actions.fileSearchScopeValue!.rootPath: [
+                    PaletteFileResult(
+                        filePath: readmePath,
+                        fileName: "README.md",
+                        relativePath: "README.md",
+                        destination: .localDocument(filePath: readmePath)
+                    ),
+                ],
+            ]
+        )
+        let controller = makeController(
+            store: store,
+            runtimeRegistry: runtimeRegistry,
+            actions: actions,
+            catalogStores: try PaletteCatalogStoresFixture(),
+            fileIndexService: fileIndexService
+        )
+        defer {
+            controller.dismiss(reason: .cancelled)
+            originWindow.close()
+        }
+
+        XCTAssertTrue(controller.toggle(originWindowID: windowID))
+        controller.viewModel?.query = "@read"
+        try await waitUntil {
+            controller.viewModel?.results.map(\.id) == [readmePath]
+        }
+
+        controller.dismiss(reason: .cancelled)
+
+        XCTAssertTrue(controller.toggle(originWindowID: windowID))
+        controller.viewModel?.query = "@read"
+        try await waitUntil {
+            controller.viewModel?.results.map(\.id) == [readmePath]
+        }
+
+        let indexedFilesCallCount = await fileIndexService.indexedFilesCallCount()
+        XCTAssertEqual(indexedFilesCallCount, 1)
+    }
+
     private func makeController(
         store: AppStore,
         runtimeRegistry: TerminalRuntimeRegistry,
         actions: CommandPaletteActionHandling,
         catalogStores: PaletteCatalogStoresFixture,
+        fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         scheduleWorkspaceFocusRestore: (@MainActor (UUID, Bool) -> Void)? = nil
     ) -> CommandPaletteController {
         CommandPaletteController(
@@ -252,6 +307,7 @@ final class CommandPaletteControllerTests: XCTestCase {
                     agentProfilesFilePath: catalogStores.agentCatalogStore.fileURL.path
                 )
             },
+            fileIndexService: fileIndexService,
             scheduleWorkspaceFocusRestore: scheduleWorkspaceFocusRestore
         )
     }
@@ -314,6 +370,50 @@ final class CommandPaletteControllerTests: XCTestCase {
         window.identifier = NSUserInterfaceItemIdentifier(windowID.uuidString)
         window.makeKeyAndOrderFront(nil)
         return window
+    }
+}
+
+private actor ControllerFileIndexServiceSpy: CommandPaletteFileIndexing {
+    private let resultsByScope: [String: [PaletteFileResult]]
+    private var preparedScopes: Set<String> = []
+    private var indexedFileCalls = 0
+
+    init(resultsByScope: [String: [PaletteFileResult]]) {
+        self.resultsByScope = resultsByScope
+    }
+
+    func prepareIndex(in scope: PaletteFileSearchScope) async -> CommandPaletteFileIndexSnapshot {
+        let results = resultsByScope[scope.rootPath, default: []]
+        if preparedScopes.contains(scope.rootPath) {
+            return .ready(results: results)
+        }
+
+        preparedScopes.insert(scope.rootPath)
+        return .indexing(results: [])
+    }
+
+    func indexedFiles(in scope: PaletteFileSearchScope) async -> [PaletteFileResult] {
+        indexedFileCalls += 1
+        return resultsByScope[scope.rootPath, default: []]
+    }
+
+    func indexedFilesCallCount() -> Int {
+        indexedFileCalls
+    }
+}
+
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    pollIntervalNanoseconds: UInt64 = 10_000_000,
+    condition: @escaping @MainActor () -> Bool
+) async throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while await condition() == false {
+        if DispatchTime.now().uptimeNanoseconds >= deadline {
+            XCTFail("Timed out waiting for condition")
+            return
+        }
+        try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
     }
 }
 

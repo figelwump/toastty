@@ -27,6 +27,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
     private let agentCatalogStore: AgentCatalogStore
     private let terminalProfileStore: TerminalProfileStore
     private let profileShortcutRegistryProvider: @MainActor () -> ProfileShortcutRegistry
+    private let fileIndexService: any CommandPaletteFileIndexing
     private let usageTracker: CommandPaletteUsageTracking
     private let panelFactory: () -> CommandPalettePanel
     private let scheduleWorkspaceFocusRestore: @MainActor (UUID, Bool) -> Void
@@ -51,6 +52,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         agentCatalogStore: AgentCatalogStore,
         terminalProfileStore: TerminalProfileStore,
         profileShortcutRegistryProvider: @escaping @MainActor () -> ProfileShortcutRegistry,
+        fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         panelFactory: @escaping () -> CommandPalettePanel = { CommandPalettePanel() },
         scheduleWorkspaceFocusRestore: (@MainActor (UUID, Bool) -> Void)? = nil
@@ -60,6 +62,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
         self.agentCatalogStore = agentCatalogStore
         self.terminalProfileStore = terminalProfileStore
         self.profileShortcutRegistryProvider = profileShortcutRegistryProvider
+        self.fileIndexService = fileIndexService
         self.usageTracker = usageTracker
         self.panelFactory = panelFactory
         self.scheduleWorkspaceFocusRestore = scheduleWorkspaceFocusRestore ?? { [weak terminalRuntimeRegistry] workspaceID, avoidStealingKeyboardFocus in
@@ -171,6 +174,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             openFileResult: { [weak self] destination, commandOriginWindowID in
                 self?.actions.openFileResult(destination, originWindowID: commandOriginWindowID) ?? false
             },
+            fileIndexService: fileIndexService,
             usageTracker: usageTracker,
             onCancel: { [weak self] in
                 self?.dismiss(reason: .cancelled)

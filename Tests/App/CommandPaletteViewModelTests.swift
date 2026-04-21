@@ -316,23 +316,31 @@ final class CommandPaletteViewModelTests: XCTestCase {
             rootPath: "/tmp/toastty-worktree",
             kind: .workingDirectory
         )
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: "/tmp/toastty-worktree/README.md",
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: "/tmp/toastty-worktree/README.md")
+                            ),
+                            self.makeFileResult(
+                                filePath: "/tmp/toastty-worktree/package.json",
+                                relativePath: "package.json",
+                                destination: .localDocument(filePath: "/tmp/toastty-worktree/package.json")
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
         let viewModel = makeViewModel(
             commands: [makeCommand(id: "alpha", title: "Alpha")],
             resolveFileSearchScope: { _ in scope },
-            loadFileResults: { _ in
-                [
-                    self.makeFileResult(
-                        filePath: "/tmp/toastty-worktree/README.md",
-                        relativePath: "README.md",
-                        destination: .localDocument(filePath: "/tmp/toastty-worktree/README.md")
-                    ),
-                    self.makeFileResult(
-                        filePath: "/tmp/toastty-worktree/package.json",
-                        relativePath: "package.json",
-                        destination: .localDocument(filePath: "/tmp/toastty-worktree/package.json")
-                    ),
-                ]
-            }
+            fileIndexService: fileIndexService
         )
 
         viewModel.query = "@"
@@ -344,6 +352,8 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.results.isEmpty)
         XCTAssertEqual(viewModel.placeholder, "Open a local file...")
         XCTAssertEqual(viewModel.footerText, scope.label)
+        XCTAssertTrue(viewModel.emptyState.message.contains(".html"))
+        XCTAssertTrue(viewModel.emptyState.message.contains(".json"))
     }
 
     func testDeletingLeadingAtReturnsToCommandMode() async throws {
@@ -351,18 +361,26 @@ final class CommandPaletteViewModelTests: XCTestCase {
             rootPath: "/tmp/toastty-worktree",
             kind: .workingDirectory
         )
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: "/tmp/toastty-worktree/README.md",
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: "/tmp/toastty-worktree/README.md")
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
         let viewModel = makeViewModel(
             commands: [makeCommand(id: "alpha", title: "Alpha")],
             resolveFileSearchScope: { _ in scope },
-            loadFileResults: { _ in
-                [
-                    self.makeFileResult(
-                        filePath: "/tmp/toastty-worktree/README.md",
-                        relativePath: "README.md",
-                        destination: .localDocument(filePath: "/tmp/toastty-worktree/README.md")
-                    ),
-                ]
-            }
+            fileIndexService: fileIndexService
         )
 
         viewModel.query = "@read"
@@ -387,6 +405,29 @@ final class CommandPaletteViewModelTests: XCTestCase {
         let indexPath = "/tmp/toastty-worktree/index.html"
         let originWindowID = UUID()
         let actions = CommandPaletteActionSpy()
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: packagePath,
+                                relativePath: "package.json",
+                                destination: .localDocument(filePath: packagePath)
+                            ),
+                            self.makeFileResult(
+                                filePath: indexPath,
+                                relativePath: "index.html",
+                                destination: .browser(
+                                    fileURLString: URL(fileURLWithPath: indexPath).absoluteString
+                                )
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
         let viewModel = makeViewModel(
             originWindowID: originWindowID,
             commands: [],
@@ -394,22 +435,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             openFileResult: { destination, originWindowID in
                 actions.openFileResult(destination, originWindowID: originWindowID)
             },
-            loadFileResults: { _ in
-                [
-                    self.makeFileResult(
-                        filePath: packagePath,
-                        relativePath: "package.json",
-                        destination: .localDocument(filePath: packagePath)
-                    ),
-                    self.makeFileResult(
-                        filePath: indexPath,
-                        relativePath: "index.html",
-                        destination: .browser(
-                            fileURLString: URL(fileURLWithPath: indexPath).absoluteString
-                        )
-                    ),
-                ]
-            }
+            fileIndexService: fileIndexService
         )
 
         viewModel.query = "@package"
@@ -456,6 +482,89 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.emptyState.title, "No contextual file scope")
     }
 
+    func testFileModeShowsIndexingStateBeforeInitialIndexCompletes() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let readmePath = "/tmp/toastty-worktree/README.md"
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .indexing(results: []),
+                    ],
+                    indexedResults: [
+                        [
+                            self.makeFileResult(
+                                filePath: readmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: readmePath)
+                            ),
+                        ],
+                    ]
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService
+        )
+
+        viewModel.query = "@read"
+
+        XCTAssertEqual(viewModel.emptyState.title, "Indexing supported files")
+        try await waitUntil {
+            viewModel.results.map(\.id) == [readmePath]
+        }
+    }
+
+    func testFileModePrefersShallowerRelativePathsWhenMatchesTie() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let rootReadmePath = "/tmp/toastty-worktree/README.md"
+        let artifactsReadmePath = "/tmp/toastty-worktree/artifacts/tmp/README.md"
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: artifactsReadmePath,
+                                relativePath: "artifacts/tmp/README.md",
+                                destination: .localDocument(filePath: artifactsReadmePath)
+                            ),
+                            self.makeFileResult(
+                                filePath: rootReadmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: rootReadmePath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService
+        )
+
+        viewModel.query = "@read"
+        try await waitUntil {
+            viewModel.results.count == 2
+        }
+
+        XCTAssertEqual(
+            viewModel.results.map(\.id),
+            [rootReadmePath, artifactsReadmePath]
+        )
+    }
+
     func testDismissInvokesCancelCallback() {
         var cancelCount = 0
         let viewModel = makeViewModel(
@@ -475,8 +584,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
         commands: [PaletteCommandDescriptor] = [],
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
-        fileOpenProvider: CommandPaletteFileOpenProvider = CommandPaletteFileOpenProvider(),
-        loadFileResults: ((PaletteFileSearchScope) async -> [PaletteFileResult])? = nil,
+        fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
         onCancel: @escaping () -> Void = {},
@@ -487,8 +595,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             projectCommands: { commands },
             resolveFileSearchScope: resolveFileSearchScope,
             openFileResult: openFileResult,
-            fileOpenProvider: fileOpenProvider,
-            loadFileResults: loadFileResults,
+            fileIndexService: fileIndexService,
             usageTracker: usageTracker,
             executeCommand: executeCommand,
             onCancel: onCancel,
@@ -501,8 +608,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
         projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
-        fileOpenProvider: CommandPaletteFileOpenProvider = CommandPaletteFileOpenProvider(),
-        loadFileResults: ((PaletteFileSearchScope) async -> [PaletteFileResult])? = nil,
+        fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
         onCancel: @escaping () -> Void = {},
@@ -514,8 +620,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             executeCommand: executeCommand,
             resolveFileSearchScope: resolveFileSearchScope,
             openFileResult: openFileResult,
-            fileOpenProvider: fileOpenProvider,
-            loadFileResults: loadFileResults,
+            fileIndexService: fileIndexService,
             usageTracker: usageTracker,
             onCancel: onCancel,
             onSubmitted: onSubmitted
@@ -575,6 +680,46 @@ private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking 
     func recordSuccessfulExecution(of commandID: String) {
         recordedCommandIDs.append(commandID)
         counts[commandID, default: 0] += 1
+    }
+}
+
+private actor MockCommandPaletteFileIndexService: CommandPaletteFileIndexing {
+    struct ScopeState {
+        var prepareSnapshots: [CommandPaletteFileIndexSnapshot]
+        var indexedResults: [[PaletteFileResult]]
+        var lastResults: [PaletteFileResult] = []
+    }
+
+    private var states: [String: ScopeState]
+
+    init(states: [String: ScopeState] = [:]) {
+        self.states = states
+    }
+
+    func prepareIndex(in scope: PaletteFileSearchScope) async -> CommandPaletteFileIndexSnapshot {
+        var state = states[scope.rootPath] ?? ScopeState(
+            prepareSnapshots: [.ready(results: [])],
+            indexedResults: []
+        )
+        let snapshot = state.prepareSnapshots.isEmpty
+            ? .ready(results: state.lastResults)
+            : state.prepareSnapshots.removeFirst()
+        state.lastResults = snapshot.results
+        states[scope.rootPath] = state
+        return snapshot
+    }
+
+    func indexedFiles(in scope: PaletteFileSearchScope) async -> [PaletteFileResult] {
+        var state = states[scope.rootPath] ?? ScopeState(
+            prepareSnapshots: [],
+            indexedResults: [[]]
+        )
+        let results = state.indexedResults.isEmpty
+            ? state.lastResults
+            : state.indexedResults.removeFirst()
+        state.lastResults = results
+        states[scope.rootPath] = state
+        return results
     }
 }
 

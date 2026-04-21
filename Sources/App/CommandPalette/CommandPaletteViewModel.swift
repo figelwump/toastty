@@ -1,9 +1,15 @@
 import Foundation
 import SwiftUI
 
-struct PaletteEmptyState: Equatable {
+struct PaletteEmptyState: Equatable, Sendable {
     let title: String
     let message: String
+}
+
+private struct FileResultsPresentation: Sendable {
+    let results: [PaletteResult]
+    let footerText: String
+    let emptyState: PaletteEmptyState
 }
 
 @MainActor
@@ -17,6 +23,12 @@ final class CommandPaletteViewModel: ObservableObject {
         let mode: PaletteMode
         let searchText: String
     }
+
+    nonisolated private static let supportedFileExtensionList = CommandPaletteFileOpenRouting
+        .supportedPathExtensions
+        .sorted()
+        .map { ".\($0)" }
+        .joined(separator: ", ")
 
     @Published var query = "" {
         didSet {
@@ -42,7 +54,7 @@ final class CommandPaletteViewModel: ObservableObject {
     private let executeCommand: @MainActor (PaletteCommandInvocation, UUID) -> Bool
     private let resolveFileSearchScope: @MainActor (UUID) -> PaletteFileSearchScope?
     private let openFileResult: @MainActor (PaletteFileOpenDestination, UUID) -> Bool
-    private let loadFileResults: (PaletteFileSearchScope) async -> [PaletteFileResult]
+    private let fileIndexService: any CommandPaletteFileIndexing
     private let usageTracker: CommandPaletteUsageTracking
     private let onCancel: () -> Void
     private let onSubmitted: () -> Void
@@ -56,8 +68,7 @@ final class CommandPaletteViewModel: ObservableObject {
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool,
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in false },
-        fileOpenProvider: CommandPaletteFileOpenProvider = CommandPaletteFileOpenProvider(),
-        loadFileResults: ((PaletteFileSearchScope) async -> [PaletteFileResult])? = nil,
+        fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         onCancel: @escaping () -> Void,
         onSubmitted: @escaping () -> Void
@@ -67,13 +78,7 @@ final class CommandPaletteViewModel: ObservableObject {
         self.executeCommand = executeCommand
         self.resolveFileSearchScope = resolveFileSearchScope
         self.openFileResult = openFileResult
-        if let loadFileResults {
-            self.loadFileResults = loadFileResults
-        } else {
-            self.loadFileResults = { scope in
-                await fileOpenProvider.indexedFiles(in: scope)
-            }
-        }
+        self.fileIndexService = fileIndexService
         self.usageTracker = usageTracker
         self.onCancel = onCancel
         self.onSubmitted = onSubmitted
@@ -211,22 +216,53 @@ final class CommandPaletteViewModel: ObservableObject {
 
         results = []
         footerText = scope.label
-        emptyState = PaletteEmptyState(
-            title: "Scanning supported files",
-            message: "Searching \(scope.displayPath)..."
-        )
+        emptyState = Self.indexingEmptyState(for: scope)
         applySelectionBehavior(selectionBehavior, previouslySelectedID: previouslySelectedID)
 
-        let loadFileResults = self.loadFileResults
+        let fileIndexService = self.fileIndexService
         fileRefreshTask = Task { [weak self] in
-            let indexedFiles = await loadFileResults(scope)
+            let snapshot = await fileIndexService.prepareIndex(in: scope)
             guard Task.isCancelled == false else { return }
 
-            await MainActor.run {
-                self?.applyFileResults(
-                    indexedFiles,
-                    scope: scope,
-                    searchText: searchText,
+            let cachedUsageCounts = await MainActor.run { [weak self] in
+                self?.fileUsageCounts(for: snapshot.results) ?? [:]
+            }
+            let cachedPresentation = Self.makeFileResultsPresentation(
+                files: snapshot.results,
+                scope: scope,
+                searchText: searchText,
+                isIndexing: snapshot.isIndexing,
+                usageCounts: cachedUsageCounts
+            )
+
+            await MainActor.run { [weak self] in
+                self?.applyFilePresentation(
+                    cachedPresentation,
+                    selectionBehavior: selectionBehavior,
+                    previouslySelectedID: previouslySelectedID,
+                    generation: generation
+                )
+            }
+
+            guard snapshot.isIndexing else { return }
+
+            let indexedFiles = await fileIndexService.indexedFiles(in: scope)
+            guard Task.isCancelled == false else { return }
+
+            let refreshedUsageCounts = await MainActor.run { [weak self] in
+                self?.fileUsageCounts(for: indexedFiles) ?? [:]
+            }
+            let refreshedPresentation = Self.makeFileResultsPresentation(
+                files: indexedFiles,
+                scope: scope,
+                searchText: searchText,
+                isIndexing: false,
+                usageCounts: refreshedUsageCounts
+            )
+
+            await MainActor.run { [weak self] in
+                self?.applyFilePresentation(
+                    refreshedPresentation,
                     selectionBehavior: selectionBehavior,
                     previouslySelectedID: previouslySelectedID,
                     generation: generation
@@ -235,63 +271,29 @@ final class CommandPaletteViewModel: ObservableObject {
         }
     }
 
-    private func applyFileResults(
-        _ files: [PaletteFileResult],
-        scope: PaletteFileSearchScope,
-        searchText: String,
+    private func applyFilePresentation(
+        _ presentation: FileResultsPresentation,
         selectionBehavior: SelectionRefreshBehavior,
         previouslySelectedID: String?,
         generation: Int
     ) {
         guard generation == refreshGeneration else { return }
 
-        let normalizedQuery = searchText.normalizedPaletteQuery
-        if normalizedQuery.isEmpty {
-            results = []
-            emptyState = files.isEmpty
-                ? PaletteEmptyState(
-                    title: "No supported files in scope",
-                    message: "No supported local-document or HTML files were found under \(scope.displayPath)."
-                )
-                : PaletteEmptyState(
-                    title: "Type to search local files",
-                    message: "Search supported local-document and HTML files under \(scope.displayPath)."
-                )
-            applySelectionBehavior(selectionBehavior, previouslySelectedID: previouslySelectedID)
-            return
-        }
-
-        let matchedResults = files.enumerated().compactMap { index, file -> RankedPaletteResult? in
-            guard let match = Self.match(
-                title: file.fileName,
-                keywords: [file.relativePath],
-                query: normalizedQuery
-            ) else {
-                return nil
-            }
-
-            return RankedPaletteResult(
-                result: .file(file),
-                sourcePriority: match.source.priority,
-                matchScore: match.score,
-                usageScore: Self.usageScore(for: usageTracker.useCount(for: file.usageKey)),
-                catalogIndex: index
-            )
-        }
-
-        results = matchedResults
-            .sorted(by: Self.ranksHigher(_:_:))
-            .map(\.result)
-
-        emptyState = results.isEmpty
-            ? PaletteEmptyState(
-                title: files.isEmpty ? "No supported files in scope" : "No matching files",
-                message: files.isEmpty
-                    ? "No supported local-document or HTML files were found under \(scope.displayPath)."
-                    : "Try a broader file query inside \(scope.displayPath)."
-            )
-            : PaletteEmptyState(title: "", message: "")
+        results = presentation.results
+        footerText = presentation.footerText
+        emptyState = presentation.emptyState
         applySelectionBehavior(selectionBehavior, previouslySelectedID: previouslySelectedID)
+    }
+
+    private func fileUsageCounts(for files: [PaletteFileResult]) -> [String: Int] {
+        var usageCounts: [String: Int] = [:]
+        usageCounts.reserveCapacity(files.count)
+
+        for file in files {
+            usageCounts[file.usageKey] = usageTracker.useCount(for: file.usageKey)
+        }
+
+        return usageCounts
     }
 
     private func applySelectionBehavior(
@@ -323,7 +325,7 @@ final class CommandPaletteViewModel: ObservableObject {
         )
     }
 
-    private static func match(
+    nonisolated private static func match(
         title: String,
         keywords: [String],
         query: String
@@ -342,20 +344,126 @@ final class CommandPaletteViewModel: ObservableObject {
         return nil
     }
 
-    private static func usageScore(for useCount: Int?) -> Double {
+    nonisolated private static func indexingEmptyState(for scope: PaletteFileSearchScope) -> PaletteEmptyState {
+        PaletteEmptyState(
+            title: "Indexing supported files",
+            message: "Searching \(scope.displayPath) for \(supportedFileExtensionList)."
+        )
+    }
+
+    nonisolated private static func emptySearchPrompt(for scope: PaletteFileSearchScope) -> PaletteEmptyState {
+        PaletteEmptyState(
+            title: "Type to search local files",
+            message: "Supported extensions: \(supportedFileExtensionList). Search under \(scope.displayPath)."
+        )
+    }
+
+    nonisolated private static func noSupportedFilesState(for scope: PaletteFileSearchScope) -> PaletteEmptyState {
+        PaletteEmptyState(
+            title: "No supported files in scope",
+            message: "No files with supported extensions were found under \(scope.displayPath). Supported extensions: \(supportedFileExtensionList)."
+        )
+    }
+
+    nonisolated private static func noMatchingFilesState(for scope: PaletteFileSearchScope) -> PaletteEmptyState {
+        PaletteEmptyState(
+            title: "No matching files",
+            message: "Try a broader file query inside \(scope.displayPath)."
+        )
+    }
+
+    nonisolated private static func makeFileResultsPresentation(
+        files: [PaletteFileResult],
+        scope: PaletteFileSearchScope,
+        searchText: String,
+        isIndexing: Bool,
+        usageCounts: [String: Int]
+    ) -> FileResultsPresentation {
+        let normalizedQuery = searchText.normalizedPaletteQuery
+
+        if normalizedQuery.isEmpty {
+            let emptyState: PaletteEmptyState
+            if isIndexing && files.isEmpty {
+                emptyState = indexingEmptyState(for: scope)
+            } else if files.isEmpty {
+                emptyState = noSupportedFilesState(for: scope)
+            } else {
+                emptyState = emptySearchPrompt(for: scope)
+            }
+
+            return FileResultsPresentation(
+                results: [],
+                footerText: scope.label,
+                emptyState: emptyState
+            )
+        }
+
+        if isIndexing && files.isEmpty {
+            return FileResultsPresentation(
+                results: [],
+                footerText: scope.label,
+                emptyState: indexingEmptyState(for: scope)
+            )
+        }
+
+        let matchedResults = files.enumerated().compactMap { index, file -> RankedPaletteResult? in
+            guard let match = match(
+                title: file.fileName,
+                keywords: [file.relativePath],
+                query: normalizedQuery
+            ) else {
+                return nil
+            }
+
+            return RankedPaletteResult(
+                result: .file(file),
+                sourcePriority: match.source.priority,
+                matchScore: match.score,
+                usageScore: usageScore(for: usageCounts[file.usageKey]),
+                pathDepth: relativePathDepth(for: file.relativePath),
+                pathLength: file.relativePath.count,
+                catalogIndex: index
+            )
+        }
+
+        let results = matchedResults
+            .sorted(by: ranksHigher(_:_:))
+            .map(\.result)
+        let emptyState = results.isEmpty
+            ? (files.isEmpty ? noSupportedFilesState(for: scope) : noMatchingFilesState(for: scope))
+            : PaletteEmptyState(title: "", message: "")
+
+        return FileResultsPresentation(
+            results: results,
+            footerText: scope.label,
+            emptyState: emptyState
+        )
+    }
+
+    nonisolated private static func relativePathDepth(for relativePath: String) -> Int {
+        relativePath.split(separator: "/").count
+    }
+
+    nonisolated private static func usageScore(for useCount: Int?) -> Double {
         log1p(Double(max(0, useCount ?? 0)))
     }
 
-    private static func usageScore(for useCount: Int) -> Double {
+    nonisolated private static func usageScore(for useCount: Int) -> Double {
         log1p(Double(max(0, useCount)))
     }
 
-    private static func ranksHigher(_ lhs: RankedPaletteResult, _ rhs: RankedPaletteResult) -> Bool {
+    nonisolated private static func ranksHigher(_ lhs: RankedPaletteResult, _ rhs: RankedPaletteResult) -> Bool {
         if lhs.sourcePriority != rhs.sourcePriority {
             return lhs.sourcePriority > rhs.sourcePriority
         }
         if lhs.matchScore != rhs.matchScore {
             return lhs.matchScore > rhs.matchScore
+        }
+        if lhs.pathDepth != rhs.pathDepth {
+            return lhs.pathDepth < rhs.pathDepth
+        }
+        if lhs.pathLength != rhs.pathLength {
+            return lhs.pathLength < rhs.pathLength
         }
         if lhs.usageScore != rhs.usageScore {
             return lhs.usageScore > rhs.usageScore
@@ -369,7 +477,27 @@ private struct RankedPaletteResult {
     let sourcePriority: Int
     let matchScore: Int
     let usageScore: Double
+    let pathDepth: Int
+    let pathLength: Int
     let catalogIndex: Int
+
+    init(
+        result: PaletteResult,
+        sourcePriority: Int,
+        matchScore: Int,
+        usageScore: Double,
+        pathDepth: Int = .max,
+        pathLength: Int = .max,
+        catalogIndex: Int
+    ) {
+        self.result = result
+        self.sourcePriority = sourcePriority
+        self.matchScore = matchScore
+        self.usageScore = usageScore
+        self.pathDepth = pathDepth
+        self.pathLength = pathLength
+        self.catalogIndex = catalogIndex
+    }
 }
 
 private struct PaletteMatch {

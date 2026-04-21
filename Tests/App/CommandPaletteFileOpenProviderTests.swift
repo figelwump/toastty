@@ -62,6 +62,139 @@ final class CommandPaletteFileOpenProviderTests: XCTestCase {
             )
         )
     }
+
+    func testProviderReusesFreshCachedResultsWithoutRescanning() async {
+        let scope = PaletteFileSearchScope(rootPath: "/tmp/toastty-cache", kind: .workingDirectory)
+        let readme = makeFileResult(
+            filePath: "/tmp/toastty-cache/README.md",
+            relativePath: "README.md"
+        )
+        let scanSpy = ProviderScanSpy(responses: [[readme]])
+        let provider = CommandPaletteFileOpenProvider(
+            staleAfter: 60,
+            scanScope: { rootPath in
+                await scanSpy.scan(rootPath: rootPath)
+            }
+        )
+
+        let initialSnapshot = await provider.prepareIndex(in: scope)
+        XCTAssertTrue(initialSnapshot.isIndexing)
+
+        let firstResults = await provider.indexedFiles(in: scope)
+        let secondSnapshot = await provider.prepareIndex(in: scope)
+        let secondResults = await provider.indexedFiles(in: scope)
+        let totalInvocationCount = await scanSpy.invocationCount()
+
+        XCTAssertEqual(firstResults, [readme])
+        XCTAssertEqual(secondSnapshot, .ready(results: [readme]))
+        XCTAssertEqual(secondResults, [readme])
+        XCTAssertEqual(totalInvocationCount, 1)
+    }
+
+    func testProviderMaintainsSeparateCachesPerScope() async {
+        let firstScope = PaletteFileSearchScope(rootPath: "/tmp/toastty-first", kind: .workingDirectory)
+        let secondScope = PaletteFileSearchScope(rootPath: "/tmp/toastty-second", kind: .workingDirectory)
+        let firstReadme = makeFileResult(
+            filePath: "/tmp/toastty-first/README.md",
+            relativePath: "README.md"
+        )
+        let secondReadme = makeFileResult(
+            filePath: "/tmp/toastty-second/README.md",
+            relativePath: "README.md"
+        )
+        let scanSpy = ProviderScanSpy(
+            responsesByRootPath: [
+                firstScope.rootPath: [[firstReadme]],
+                secondScope.rootPath: [[secondReadme]],
+            ]
+        )
+        let provider = CommandPaletteFileOpenProvider(
+            staleAfter: 60,
+            scanScope: { rootPath in
+                await scanSpy.scan(rootPath: rootPath)
+            }
+        )
+
+        _ = await provider.prepareIndex(in: firstScope)
+        _ = await provider.prepareIndex(in: secondScope)
+        let firstResults = await provider.indexedFiles(in: firstScope)
+        let secondResults = await provider.indexedFiles(in: secondScope)
+        let firstScopeInvocationCount = await scanSpy.invocationCount(for: firstScope.rootPath)
+        let secondScopeInvocationCount = await scanSpy.invocationCount(for: secondScope.rootPath)
+
+        XCTAssertEqual(firstResults, [firstReadme])
+        XCTAssertEqual(secondResults, [secondReadme])
+        XCTAssertEqual(firstScopeInvocationCount, 1)
+        XCTAssertEqual(secondScopeInvocationCount, 1)
+    }
+
+    func testProviderReturnsCachedResultsWhileRefreshingStaleIndex() async {
+        let scope = PaletteFileSearchScope(rootPath: "/tmp/toastty-stale", kind: .workingDirectory)
+        let oldReadme = makeFileResult(
+            filePath: "/tmp/toastty-stale/README.md",
+            relativePath: "README.md"
+        )
+        let refreshedReadme = makeFileResult(
+            filePath: "/tmp/toastty-stale/docs/README.md",
+            relativePath: "docs/README.md"
+        )
+        let scanSpy = ProviderScanSpy(responses: [[oldReadme], [refreshedReadme]])
+        let provider = CommandPaletteFileOpenProvider(
+            staleAfter: 0,
+            scanScope: { rootPath in
+                await scanSpy.scan(rootPath: rootPath)
+            }
+        )
+
+        _ = await provider.prepareIndex(in: scope)
+        let firstResults = await provider.indexedFiles(in: scope)
+        let staleSnapshot = await provider.prepareIndex(in: scope)
+        let refreshedResults = await provider.indexedFiles(in: scope)
+        let totalInvocationCount = await scanSpy.invocationCount()
+
+        XCTAssertEqual(firstResults, [oldReadme])
+        XCTAssertEqual(staleSnapshot, .indexing(results: [oldReadme]))
+        XCTAssertEqual(refreshedResults, [refreshedReadme])
+        XCTAssertEqual(totalInvocationCount, 2)
+    }
+}
+
+private actor ProviderScanSpy {
+    private var defaultResponses: [[PaletteFileResult]]
+    private var responsesByRootPath: [String: [[PaletteFileResult]]]
+    private var invocationCounts: [String: Int] = [:]
+
+    init(
+        responses: [[PaletteFileResult]] = [],
+        responsesByRootPath: [String: [[PaletteFileResult]]] = [:]
+    ) {
+        self.defaultResponses = responses
+        self.responsesByRootPath = responsesByRootPath
+    }
+
+    func scan(rootPath: String) async -> [PaletteFileResult] {
+        invocationCounts[rootPath, default: 0] += 1
+
+        if var responses = responsesByRootPath[rootPath], responses.isEmpty == false {
+            let result = responses.removeFirst()
+            responsesByRootPath[rootPath] = responses
+            return result
+        }
+
+        if defaultResponses.isEmpty == false {
+            return defaultResponses.removeFirst()
+        }
+
+        return []
+    }
+
+    func invocationCount() -> Int {
+        invocationCounts.values.reduce(0, +)
+    }
+
+    func invocationCount(for rootPath: String) -> Int {
+        invocationCounts[rootPath, default: 0]
+    }
 }
 
 private struct TemporaryProviderFileScope {
@@ -89,4 +222,13 @@ private struct TemporaryProviderFileScope {
     func url(_ relativePath: String) -> URL {
         rootURL.appendingPathComponent(relativePath)
     }
+}
+
+private func makeFileResult(filePath: String, relativePath: String) -> PaletteFileResult {
+    PaletteFileResult(
+        filePath: filePath,
+        fileName: URL(fileURLWithPath: filePath).lastPathComponent,
+        relativePath: relativePath,
+        destination: .localDocument(filePath: filePath)
+    )
 }
