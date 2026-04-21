@@ -273,10 +273,12 @@ function Header(props: {
           <>
             {bootstrap.filePath && (
               <button
-                className="local-document-action-button local-document-action-button-secondary"
+                className="local-document-action-button local-document-action-button-secondary local-document-action-button-icon"
                 onClick={openInDefaultApp}
+                aria-label="Open in Default App"
+                title="Open in Default App"
               >
-                Open in Default App
+                <ExternalOpenIcon />
               </button>
             )}
             <button
@@ -290,6 +292,39 @@ function Header(props: {
         )}
       </div>
     </header>
+  );
+}
+
+function ExternalOpenIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="local-document-action-icon"
+      viewBox="0 0 16 16"
+      fill="none"
+    >
+      <path
+        d="M9.5 2.5H13.5V6.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7 9L13.5 2.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M13 9.5V11.5C13 12.6046 12.1046 13.5 11 13.5H4.5C3.39543 13.5 2.5 12.6046 2.5 11.5V5C2.5 3.89543 3.39543 3 4.5 3H6.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

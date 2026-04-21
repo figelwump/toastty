@@ -67,12 +67,20 @@ test("read mode exposes an Open in Default App action through the native bridge"
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
     "utf8"
   );
+  const stylesSource = await readFile(
+    resolve(packageRoot, "src/styles.css"),
+    "utf8"
+  );
   const bridgeSource = await readFile(
     resolve(packageRoot, "src/nativeBridge.ts"),
     "utf8"
   );
 
-  assert.match(source, /Open in Default App/);
+  assert.match(source, /aria-label="Open in Default App"/);
+  assert.match(source, /title="Open in Default App"/);
+  assert.match(source, /local-document-action-button-icon/);
+  assert.match(source, /<ExternalOpenIcon \/>/);
+  assert.match(stylesSource, /\.local-document-action-button-icon/);
   assert.match(bridgeSource, /type: "openInDefaultApp"/);
   assert.match(bridgeSource, /openInDefaultApp\(\)/);
 });
