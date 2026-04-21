@@ -89,6 +89,17 @@ Or open `toastty.xcworkspace` in Xcode and hit Run.
 # Keyboard shortcut tracing
 ./scripts/automation/shortcut-trace.sh
 
+# Remote xcodebuild test for AppKit-presenting or focus-stealing XCTest runs
+TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
+./scripts/remote/test.sh \
+  --scope working-tree \
+  -- \
+  -workspace toastty.xcworkspace \
+  -scheme ToasttyApp \
+  -configuration Debug \
+  -destination "platform=macOS,arch=arm64" \
+  -only-testing:ToasttyAppTests/CommandPaletteControllerTests
+
 # Remote smoke validation
 TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
 ./scripts/remote/validate.sh \
@@ -127,6 +138,8 @@ TOASTTY_REMOTE_GUI_HOST=mac-mini.local \
   --scope working-tree \
   --validation-command 'peekaboo menu list --pid "$TOASTTY_PID" --json | tee "$TOASTTY_ARTIFACTS_DIR/peekaboo-menu.json"'
 ```
+
+`scripts/remote/test.sh` is the preferred remote path for XCTest runs that may present real AppKit windows or panels on the host machine. It creates a disposable remote worktree, runs `xcodebuild test` there, and copies logs plus the `.xcresult` bundle back into `artifacts/remote-tests/<run-label>/`. Unlike `validate.sh`, it does not fall back to a local run.
 
 ## Dev and test runs
 
