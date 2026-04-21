@@ -105,10 +105,19 @@ final class WorktreeCreateSkillScriptTests: XCTestCase {
         XCTAssertTrue(result.stdout.contains("\"panel_id\": \"55555555-5555-5555-5555-555555555555\""))
 
         let invocations = try String(contentsOf: invocationLogURL, encoding: .utf8)
-        XCTAssertTrue(invocations.contains("query run terminal.state --panel 33333333-3333-3333-3333-333333333333"))
-        XCTAssertTrue(invocations.contains("action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke"))
-        XCTAssertTrue(invocations.contains("query run workspace.snapshot --window 11111111-1111-1111-1111-111111111111"))
-        XCTAssertTrue(invocations.contains("query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
+        let invocationLines = invocations
+            .split(whereSeparator: \.isNewline)
+            .map(String.init)
+
+        XCTAssertTrue(invocationLines.contains("--json query run terminal.state --panel 33333333-3333-3333-3333-333333333333"))
+        XCTAssertTrue(invocationLines.contains("action run workspace.create --window 11111111-1111-1111-1111-111111111111 title=smoke"))
+        XCTAssertTrue(invocationLines.contains("--json query run workspace.snapshot --window 11111111-1111-1111-1111-111111111111"))
+        XCTAssertTrue(invocationLines.contains("action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path) placement=splitRight"))
+        XCTAssertTrue(invocationLines.contains("--json query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
+
+        let splitIndex = try XCTUnwrap(invocationLines.firstIndex(of: "action run panel.create.local-document --workspace 44444444-4444-4444-4444-444444444444 filePath=\(handoffURL.path) placement=splitRight"))
+        let terminalStateIndex = try XCTUnwrap(invocationLines.lastIndex(of: "--json query run terminal.state --workspace 44444444-4444-4444-4444-444444444444"))
+        XCTAssertLessThan(splitIndex, terminalStateIndex)
     }
 
     private func skillScriptURL() -> URL {

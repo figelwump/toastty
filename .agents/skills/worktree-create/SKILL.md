@@ -28,6 +28,7 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
    - If the current thread already has a concrete plan/design file in the repo, reference that file explicitly in the handoff.
    - If there is no durable plan file yet, put a concise plan directly in `WORKTREE_HANDOFF.md`.
 6. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
+   - The helper creates the workspace, opens `WORKTREE_HANDOFF.md` in a right-hand local-document split, and starts the new terminal command in the left terminal pane.
 
 ```bash
 .agents/skills/worktree-create/scripts/open-toastty-worktree-session.sh \
@@ -56,6 +57,7 @@ Keep `WORKTREE_HANDOFF.md` concise and task-specific. Include:
 - The filesystem naming convention is a sibling repo path like `../toastty-<slug>`.
 - Always run `scripts/dev/bootstrap-worktree.sh` in the new worktree before handing it off.
 - The handoff file must exist before launching the new `cdx` session.
+- The default workspace layout is terminal on the left and the handoff markdown panel in a right split.
 - The default startup command should `cd` into the new worktree, export `TOASTTY_DEV_WORKTREE_ROOT`, and start `cdx` with a short prompt that points at `WORKTREE_HANDOFF.md`.
 - Prefer the helper scripts over ad-hoc `git worktree add` and `toastty action run ...` sequences.
 
@@ -68,7 +70,8 @@ Keep `WORKTREE_HANDOFF.md` concise and task-specific. Include:
 
 ## Validation
 
-- After launch, confirm the helper returned the new `workspaceID` and `panelID`.
+- After launch, confirm the helper returned the new `workspaceID` and terminal `panelID`.
+- Confirm the handoff document opened in a right split of the new workspace.
 - For validation or debugging, you can override the startup command:
 
 ```bash

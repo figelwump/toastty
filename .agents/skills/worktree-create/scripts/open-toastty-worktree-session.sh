@@ -208,6 +208,20 @@ if [[ -z "$workspace_id" ]]; then
   exit 1
 fi
 
+if [[ -f "$handoff_file" ]]; then
+  local_document_output=""
+  if ! local_document_output="$(
+    "$TOASTTY_CLI_PATH" action run panel.create.local-document \
+      --workspace "$workspace_id" \
+      "filePath=$handoff_file" \
+      placement=splitRight 2>&1
+  )"; then
+    echo "error: failed to open handoff document split for workspace $workspace_id" >&2
+    printf '%s\n' "$local_document_output" >&2
+    exit 1
+  fi
+fi
+
 panel_id="$(
   retry_json_result_field \
     40 \
