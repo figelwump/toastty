@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "node --test test/*.test.mjs"
+    "check-bundle-sync": "node scripts/check-bundle-sync.mjs",
+    "test": "node --test test/*.test.mjs && npm run check-bundle-sync"
   },
   "dependencies": {
     "@wooorm/starry-night": "^3.9.0",

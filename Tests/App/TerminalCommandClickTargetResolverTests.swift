@@ -298,6 +298,22 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         )
     }
 
+    func testResolveTreatsAbsolutePathTrailingLineNumberAsLocalDocumentRevealTarget() throws {
+        let fixture = try makeFixture()
+        let absolutePathURL = try XCTUnwrap(URL(string: "\(fixture.markdownPath):42"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: absolutePathURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .newTab)
+        )
+    }
+
     func testResolvePrefersExactColonFilenameOverTrailingLineParsing() throws {
         let fixture = try makeFixture(fileName: "command-palette.md:42")
 

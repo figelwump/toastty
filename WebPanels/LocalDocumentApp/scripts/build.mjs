@@ -4,7 +4,9 @@ import { createRequire } from "node:module";
 import { build } from "esbuild";
 
 const packageRoot = resolve(import.meta.dirname, "..");
-const outputDir = resolve(packageRoot, "../../Sources/App/Resources/WebPanels/local-document-panel");
+const outputDir = process.env.TOASTTY_LOCAL_DOCUMENT_PANEL_OUTPUT_DIR
+  ? resolve(packageRoot, process.env.TOASTTY_LOCAL_DOCUMENT_PANEL_OUTPUT_DIR)
+  : resolve(packageRoot, "../../Sources/App/Resources/WebPanels/local-document-panel");
 
 const require = createRequire(import.meta.url);
 const reactRoot = dirname(require.resolve("react/package.json", { paths: [packageRoot] }));

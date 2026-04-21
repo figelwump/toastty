@@ -96,3 +96,25 @@ test("build script copies onig.wasm into the panel output bundle", async () => {
   assert.match(source, /__TOASTTY_ONIG_WASM_DATA_URL__/);
   assert.match(source, /data:application\/wasm;base64/);
 });
+
+test("build script supports overriding the output directory for bundle sync checks", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "scripts/build.mjs"),
+    "utf8"
+  );
+
+  assert.match(source, /TOASTTY_LOCAL_DOCUMENT_PANEL_OUTPUT_DIR/);
+});
+
+test("bundle sync check rebuilds into a temporary output directory and compares the shipped assets", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "scripts/check-bundle-sync.mjs"),
+    "utf8"
+  );
+
+  assert.match(source, /TOASTTY_LOCAL_DOCUMENT_PANEL_OUTPUT_DIR/);
+  assert.match(source, /local-document-panel\.js/);
+  assert.match(source, /local-document-panel\.css/);
+  assert.match(source, /onig\.wasm/);
+  assert.match(source, /Checked-in local document panel assets are out of sync\./);
+});
