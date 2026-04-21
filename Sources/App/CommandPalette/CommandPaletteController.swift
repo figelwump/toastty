@@ -127,7 +127,7 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
 
         panel?.delegate = nil
         panel?.contentViewController = nil
-        panel?.orderOut(nil)
+        panel?.close()
 
         if shouldRestoreFocus(for: reason),
            let originWindowID {
@@ -164,6 +164,12 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             },
             executeCommand: { [weak self] invocation, commandOriginWindowID in
                 self?.actions.execute(invocation, originWindowID: commandOriginWindowID) ?? false
+            },
+            resolveFileSearchScope: { [weak self] commandOriginWindowID in
+                self?.actions.fileSearchScope(originWindowID: commandOriginWindowID)
+            },
+            openFileResult: { [weak self] destination, commandOriginWindowID in
+                self?.actions.openFileResult(destination, originWindowID: commandOriginWindowID) ?? false
             },
             usageTracker: usageTracker,
             onCancel: { [weak self] in

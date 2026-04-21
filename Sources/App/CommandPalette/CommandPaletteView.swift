@@ -18,7 +18,7 @@ struct CommandPaletteView: View {
 
                 PaletteSearchField(
                     text: $viewModel.query,
-                    placeholder: "Type a command...",
+                    placeholder: viewModel.placeholder,
                     focusRequestID: viewModel.focusRequestID,
                     accessibilityID: "command-palette.search",
                     onMoveUp: { viewModel.moveSelection(delta: -1) },
@@ -58,13 +58,14 @@ struct CommandPaletteView: View {
             Group {
                 if viewModel.results.isEmpty {
                     VStack(spacing: 10) {
-                        Text("No matching commands")
+                        Text(viewModel.emptyState.title)
                             .font(ToastyTheme.fontBody)
                             .foregroundStyle(ToastyTheme.inactiveText)
 
-                        Text("Try a broader query.")
+                        Text(viewModel.emptyState.message)
                             .font(ToastyTheme.fontSubtext)
                             .foregroundStyle(ToastyTheme.subtleText)
+                            .multilineTextAlignment(.center)
                     }
                     .padding(.top, 28)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -76,7 +77,8 @@ struct CommandPaletteView: View {
                                     ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
                                         CommandPaletteResultRow(
                                             title: result.title,
-                                            shortcut: result.command.shortcut?.symbolLabel,
+                                            subtitle: result.subtitle,
+                                            shortcut: result.shortcutSymbolLabel,
                                             isSelected: index == viewModel.selectedIndex
                                         )
                                         .id(result.id)
@@ -123,6 +125,12 @@ struct CommandPaletteView: View {
                 .overlay(Color.white.opacity(0.09))
 
             HStack(spacing: 16) {
+                Text(viewModel.footerText)
+                    .font(ToastyTheme.fontSubtext)
+                    .foregroundStyle(ToastyTheme.subtleText)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
                 Spacer()
 
                 CommandPaletteFooterHint(label: "Execute", shortcut: "\u{21A9}")
@@ -228,6 +236,7 @@ private struct CommandPaletteFooterHint: View {
 
 private struct CommandPaletteResultRow: View {
     let title: String
+    let subtitle: String?
     let shortcut: String?
     let isSelected: Bool
 
@@ -238,10 +247,20 @@ private struct CommandPaletteResultRow: View {
                 .frame(width: 3, height: 22)
                 .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
 
-            Text(title)
-                .font(ToastyTheme.fontBody)
-                .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: subtitle == nil ? 0 : 3) {
+                Text(title)
+                    .font(ToastyTheme.fontBody)
+                    .foregroundStyle(isSelected ? ToastyTheme.primaryText : ToastyTheme.inactiveText)
+
+                if let subtitle {
+                    Text(subtitle)
+                        .font(ToastyTheme.fontSubtext)
+                        .foregroundStyle(ToastyTheme.subtleText)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if let shortcut {
                 Text(shortcut)

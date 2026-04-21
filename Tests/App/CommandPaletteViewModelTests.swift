@@ -311,6 +311,151 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.selectedResult?.id, "beta")
     }
 
+    func testBareAtSwitchesToFileModeWithoutListingAllFiles() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let viewModel = makeViewModel(
+            commands: [makeCommand(id: "alpha", title: "Alpha")],
+            resolveFileSearchScope: { _ in scope },
+            loadFileResults: { _ in
+                [
+                    self.makeFileResult(
+                        filePath: "/tmp/toastty-worktree/README.md",
+                        relativePath: "README.md",
+                        destination: .localDocument(filePath: "/tmp/toastty-worktree/README.md")
+                    ),
+                    self.makeFileResult(
+                        filePath: "/tmp/toastty-worktree/package.json",
+                        relativePath: "package.json",
+                        destination: .localDocument(filePath: "/tmp/toastty-worktree/package.json")
+                    ),
+                ]
+            }
+        )
+
+        viewModel.query = "@"
+        try await waitUntil {
+            viewModel.mode == .fileOpen &&
+                viewModel.emptyState.title == "Type to search local files"
+        }
+
+        XCTAssertTrue(viewModel.results.isEmpty)
+        XCTAssertEqual(viewModel.placeholder, "Open a local file...")
+        XCTAssertEqual(viewModel.footerText, scope.label)
+    }
+
+    func testDeletingLeadingAtReturnsToCommandMode() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let viewModel = makeViewModel(
+            commands: [makeCommand(id: "alpha", title: "Alpha")],
+            resolveFileSearchScope: { _ in scope },
+            loadFileResults: { _ in
+                [
+                    self.makeFileResult(
+                        filePath: "/tmp/toastty-worktree/README.md",
+                        relativePath: "README.md",
+                        destination: .localDocument(filePath: "/tmp/toastty-worktree/README.md")
+                    ),
+                ]
+            }
+        )
+
+        viewModel.query = "@read"
+        try await waitUntil {
+            viewModel.mode == .fileOpen &&
+                viewModel.results.map(\.id) == ["/tmp/toastty-worktree/README.md"]
+        }
+
+        viewModel.query = ""
+
+        XCTAssertEqual(viewModel.mode, .commands)
+        XCTAssertEqual(viewModel.placeholder, "Type a command...")
+        XCTAssertEqual(viewModel.results.map(\.id), ["alpha"])
+    }
+
+    func testFileModeRoutesLocalDocumentAndHTMLResults() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let packagePath = "/tmp/toastty-worktree/package.json"
+        let indexPath = "/tmp/toastty-worktree/index.html"
+        let originWindowID = UUID()
+        let actions = CommandPaletteActionSpy()
+        let viewModel = makeViewModel(
+            originWindowID: originWindowID,
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            openFileResult: { destination, originWindowID in
+                actions.openFileResult(destination, originWindowID: originWindowID)
+            },
+            loadFileResults: { _ in
+                [
+                    self.makeFileResult(
+                        filePath: packagePath,
+                        relativePath: "package.json",
+                        destination: .localDocument(filePath: packagePath)
+                    ),
+                    self.makeFileResult(
+                        filePath: indexPath,
+                        relativePath: "index.html",
+                        destination: .browser(
+                            fileURLString: URL(fileURLWithPath: indexPath).absoluteString
+                        )
+                    ),
+                ]
+            }
+        )
+
+        viewModel.query = "@package"
+        try await waitUntil {
+            viewModel.results.count == 1 && viewModel.results.first?.title == "package.json"
+        }
+        viewModel.submitSelection()
+
+        viewModel.query = "@index"
+        try await waitUntil {
+            viewModel.results.count == 1 && viewModel.results.first?.title == "index.html"
+        }
+        viewModel.submitSelection()
+
+        XCTAssertEqual(
+            actions.openedFileResults,
+            [
+                RecordedPaletteFileOpenCall(
+                    destination: .localDocument(
+                        filePath: packagePath
+                    ),
+                    originWindowID: originWindowID
+                ),
+                RecordedPaletteFileOpenCall(
+                    destination: .browser(
+                        fileURLString: URL(fileURLWithPath: indexPath).absoluteString
+                    ),
+                    originWindowID: originWindowID
+                ),
+            ]
+        )
+    }
+
+    func testMissingFileScopeShowsFileModeEmptyState() {
+        let viewModel = makeViewModel(
+            commands: [makeCommand(id: "alpha", title: "Alpha")],
+            resolveFileSearchScope: { _ in nil }
+        )
+
+        viewModel.query = "@read"
+
+        XCTAssertEqual(viewModel.mode, .fileOpen)
+        XCTAssertTrue(viewModel.results.isEmpty)
+        XCTAssertEqual(viewModel.emptyState.title, "No contextual file scope")
+    }
+
     func testDismissInvokesCancelCallback() {
         var cancelCount = 0
         let viewModel = makeViewModel(
@@ -328,6 +473,10 @@ final class CommandPaletteViewModelTests: XCTestCase {
     private func makeViewModel(
         originWindowID: UUID = UUID(),
         commands: [PaletteCommandDescriptor] = [],
+        resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
+        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
+        fileOpenProvider: CommandPaletteFileOpenProvider = CommandPaletteFileOpenProvider(),
+        loadFileResults: ((PaletteFileSearchScope) async -> [PaletteFileResult])? = nil,
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
         onCancel: @escaping () -> Void = {},
@@ -336,6 +485,10 @@ final class CommandPaletteViewModelTests: XCTestCase {
         makeViewModel(
             originWindowID: originWindowID,
             projectCommands: { commands },
+            resolveFileSearchScope: resolveFileSearchScope,
+            openFileResult: openFileResult,
+            fileOpenProvider: fileOpenProvider,
+            loadFileResults: loadFileResults,
             usageTracker: usageTracker,
             executeCommand: executeCommand,
             onCancel: onCancel,
@@ -346,6 +499,10 @@ final class CommandPaletteViewModelTests: XCTestCase {
     private func makeViewModel(
         originWindowID: UUID = UUID(),
         projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
+        resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
+        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
+        fileOpenProvider: CommandPaletteFileOpenProvider = CommandPaletteFileOpenProvider(),
+        loadFileResults: ((PaletteFileSearchScope) async -> [PaletteFileResult])? = nil,
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
         onCancel: @escaping () -> Void = {},
@@ -355,9 +512,26 @@ final class CommandPaletteViewModelTests: XCTestCase {
             originWindowID: originWindowID,
             projectCommands: projectCommands,
             executeCommand: executeCommand,
+            resolveFileSearchScope: resolveFileSearchScope,
+            openFileResult: openFileResult,
+            fileOpenProvider: fileOpenProvider,
+            loadFileResults: loadFileResults,
             usageTracker: usageTracker,
             onCancel: onCancel,
             onSubmitted: onSubmitted
+        )
+    }
+
+    private func makeFileResult(
+        filePath: String,
+        relativePath: String,
+        destination: PaletteFileOpenDestination
+    ) -> PaletteFileResult {
+        PaletteFileResult(
+            filePath: filePath,
+            fileName: URL(fileURLWithPath: filePath).lastPathComponent,
+            relativePath: relativePath,
+            destination: destination
         )
     }
 
@@ -401,5 +575,20 @@ private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking 
     func recordSuccessfulExecution(of commandID: String) {
         recordedCommandIDs.append(commandID)
         counts[commandID, default: 0] += 1
+    }
+}
+
+private func waitUntil(
+    timeoutNanoseconds: UInt64 = 1_000_000_000,
+    pollIntervalNanoseconds: UInt64 = 10_000_000,
+    condition: @escaping @MainActor () -> Bool
+) async throws {
+    let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+    while await condition() == false {
+        if DispatchTime.now().uptimeNanoseconds >= deadline {
+            XCTFail("Timed out waiting for condition")
+            return
+        }
+        try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
     }
 }
