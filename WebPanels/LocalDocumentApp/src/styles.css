@@ -232,18 +232,37 @@ body {
   --local-document-code-line-height: calc(21.45px * var(--toastty-markdown-text-scale));
   flex: 1;
   min-height: 0;
-  display: flex;
-  align-items: stretch;
   background: var(--pre-bg);
   color: var(--pre-text);
+  overflow: hidden;
+}
+
+.local-document-code-scroll {
+  height: 100%;
+  overflow: auto;
+}
+
+.local-document-code-scroll-inner {
+  display: flex;
+  align-items: stretch;
+  position: relative;
+  width: max-content;
+  min-width: 100%;
+}
+
+.local-document-code-gutter-frame {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  background: rgba(255, 224, 191, 0.03);
+  border-right: 1px solid rgba(255, 224, 191, 0.08);
 }
 
 .local-document-code-gutter {
-  flex: 0 0 auto;
   margin: 0;
   padding: 20px 14px 28px 22px;
-  border-right: 1px solid rgba(255, 224, 191, 0.08);
-  background: rgba(255, 224, 191, 0.03);
+  background: transparent;
   color: #8a7566;
   font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
   font-size: calc(13px * var(--toastty-markdown-text-scale));
@@ -253,17 +272,14 @@ body {
   text-align: right;
   user-select: none;
   white-space: pre;
-}
-
-.local-document-code-scroll {
-  flex: 1;
-  overflow: auto;
-}
-
-.local-document-code-scroll-inner {
   position: relative;
-  min-width: 100%;
-  width: max-content;
+  z-index: 1;
+}
+
+.local-document-code-content-frame {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 20px 28px 28px;
 }
 
@@ -271,17 +287,21 @@ body {
   margin: 0;
 }
 
-.local-document-code-line-reveal {
+.local-document-code-line-reveal,
+.local-document-code-gutter-reveal {
   position: absolute;
   left: 0;
   right: 0;
   height: var(--local-document-code-line-height);
-  border: 1px solid var(--code-line-reveal-border);
-  border-radius: 8px;
   background: var(--code-line-reveal);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  box-shadow:
+    inset 0 1px 0 var(--code-line-reveal-border),
+    inset 0 -1px 0 var(--code-line-reveal-border);
   pointer-events: none;
-  animation: local-document-line-reveal 1.8s ease-out forwards;
+}
+
+.local-document-code-gutter-reveal {
+  z-index: 0;
 }
 
 .local-document-code-content code,

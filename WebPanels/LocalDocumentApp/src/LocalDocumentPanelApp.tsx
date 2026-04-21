@@ -12,9 +12,7 @@ import {
 } from "./bootstrap";
 import {
   clampRevealLineNumber,
-  clampScrollTop,
-  REVEAL_HIGHLIGHT_DURATION_MS,
-  revealScrollBehavior
+  clampScrollTop
 } from "./lineReveal.mjs";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
@@ -154,10 +152,6 @@ function useRevealRequest(): LocalDocumentLineRevealRequest | null {
   }, []);
 
   return revealRequest;
-}
-
-function prefersReducedMotion(): boolean {
-  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
 }
 
 function resolvedLineHeight(element: HTMLElement): number {
@@ -444,12 +438,19 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
   const revealRequest = useRevealRequest();
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
-  const scrollInnerRef = React.useRef<HTMLDivElement | null>(null);
-  const revealTimeoutRef = React.useRef<number | null>(null);
+  const contentFrameRef = React.useRef<HTMLDivElement | null>(null);
+  const revealScrollFrameRef = React.useRef<{
+    outer: number | null;
+    inner: number | null;
+  }>({ outer: null, inner: null });
+  const revealScrollSequenceRef = React.useRef(0);
   const [activeReveal, setActiveReveal] = React.useState<{
     lineNumber: number;
     requestID: number;
     top: number;
+    targetScrollTop: number;
+    filePath: string | null;
+    contentRevision: number;
   } | null>(null);
   const language = syntaxLanguage(props.bootstrap.format, props.bootstrap.filePath);
   const codeClassName = props.bootstrap.format === "markdown"
@@ -458,13 +459,23 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
       ? `hljs language-${language}`
       : "hljs";
 
+  const cancelScheduledRevealScroll = React.useCallback(() => {
+    revealScrollSequenceRef.current += 1;
+    if (revealScrollFrameRef.current.outer !== null) {
+      window.cancelAnimationFrame(revealScrollFrameRef.current.outer);
+      revealScrollFrameRef.current.outer = null;
+    }
+    if (revealScrollFrameRef.current.inner !== null) {
+      window.cancelAnimationFrame(revealScrollFrameRef.current.inner);
+      revealScrollFrameRef.current.inner = null;
+    }
+  }, []);
+
   React.useEffect(() => {
     return () => {
-      if (revealTimeoutRef.current !== null) {
-        window.clearTimeout(revealTimeoutRef.current);
-      }
+      cancelScheduledRevealScroll();
     };
-  }, []);
+  }, [cancelScheduledRevealScroll]);
 
   React.useEffect(() => {
     if (!revealRequest) {
@@ -472,14 +483,14 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     }
 
     const scrollElement = scrollRef.current;
-    const scrollInnerElement = scrollInnerRef.current;
-    if (!scrollElement || !scrollInnerElement) {
+    const contentFrameElement = contentFrameRef.current;
+    if (!scrollElement || !contentFrameElement || props.bootstrap.isEditing) {
       return;
     }
 
     const targetLineNumber = clampRevealLineNumber(revealRequest.lineNumber, lines.length);
-    const lineHeight = resolvedLineHeight(scrollElement);
-    const topPadding = resolvedTopPadding(scrollInnerElement);
+    const lineHeight = resolvedLineHeight(contentFrameElement);
+    const topPadding = resolvedTopPadding(contentFrameElement);
     const highlightTop = topPadding + (targetLineNumber - 1) * lineHeight;
     const maxScrollTop = scrollElement.scrollHeight - scrollElement.clientHeight;
     const targetScrollTop = clampScrollTop(
@@ -490,26 +501,87 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     setActiveReveal({
       lineNumber: targetLineNumber,
       requestID: revealRequest.requestID,
-      top: highlightTop
+      top: highlightTop,
+      targetScrollTop,
+      filePath: props.bootstrap.filePath,
+      contentRevision: props.bootstrap.contentRevision
     });
     window.ToasttyLocalDocumentPanel?.consumeRevealRequest(revealRequest.requestID);
+  }, [props.bootstrap.contentRevision, props.bootstrap.filePath, props.bootstrap.isEditing, revealRequest, lines.length]);
 
-    if (revealTimeoutRef.current !== null) {
-      window.clearTimeout(revealTimeoutRef.current);
+  React.useLayoutEffect(() => {
+    if (!activeReveal) {
+      return;
     }
 
-    scrollElement.scrollTo({
-      top: targetScrollTop,
-      behavior: revealScrollBehavior(prefersReducedMotion())
+    cancelScheduledRevealScroll();
+    const revealScrollSequence = revealScrollSequenceRef.current;
+    revealScrollFrameRef.current.outer = window.requestAnimationFrame(() => {
+      revealScrollFrameRef.current.outer = null;
+      if (revealScrollSequence !== revealScrollSequenceRef.current) {
+        return;
+      }
+
+      // WKWebView has been unreliable about applying immediate overflow
+      // scroll jumps during the same layout pass, so defer once for the new
+      // reveal render and once more for the settled layout before assigning.
+      revealScrollFrameRef.current.inner = window.requestAnimationFrame(() => {
+        revealScrollFrameRef.current.inner = null;
+        if (revealScrollSequence !== revealScrollSequenceRef.current) {
+          return;
+        }
+
+        const scrollElement = scrollRef.current;
+        if (!scrollElement) {
+          return;
+        }
+        scrollElement.scrollTop = activeReveal.targetScrollTop;
+      });
     });
 
-    revealTimeoutRef.current = window.setTimeout(() => {
-      setActiveReveal((currentReveal) =>
-        currentReveal?.requestID === revealRequest.requestID ? null : currentReveal
-      );
-      revealTimeoutRef.current = null;
-    }, REVEAL_HIGHLIGHT_DURATION_MS);
-  }, [revealRequest, lines.length]);
+    return () => {
+      cancelScheduledRevealScroll();
+    };
+  }, [activeReveal?.requestID, activeReveal?.targetScrollTop, cancelScheduledRevealScroll]);
+
+  React.useEffect(() => {
+    if (!activeReveal) {
+      return;
+    }
+
+    if (props.bootstrap.isEditing ||
+        props.bootstrap.filePath !== activeReveal.filePath ||
+        props.bootstrap.contentRevision !== activeReveal.contentRevision) {
+      cancelScheduledRevealScroll();
+      setActiveReveal(null);
+    }
+  }, [
+    activeReveal,
+    cancelScheduledRevealScroll,
+    props.bootstrap.contentRevision,
+    props.bootstrap.filePath,
+    props.bootstrap.isEditing
+  ]);
+
+  React.useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape" ||
+          activeReveal == null ||
+          props.bootstrap.isEditing) {
+        return;
+      }
+
+      cancelScheduledRevealScroll();
+      setActiveReveal(null);
+      event.preventDefault();
+      event.stopPropagation();
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeReveal, cancelScheduledRevealScroll, props.bootstrap.isEditing]);
 
   return (
     <section className="local-document-code-shell">
@@ -521,25 +593,36 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         </div>
       )}
       <div className="local-document-code-frame">
-        <pre className="local-document-code-gutter" aria-hidden="true">
-          {lines.map((_, index) => String(index + 1)).join("\n")}
-        </pre>
         <div className="local-document-code-scroll" ref={scrollRef}>
-          <div className="local-document-code-scroll-inner" ref={scrollInnerRef}>
-            {activeReveal ? (
-              <div
-                aria-hidden="true"
-                className="local-document-code-line-reveal"
-                style={{ top: `${activeReveal.top}px` }}
-              />
-            ) : null}
-            <pre className="local-document-code-content">
-              {highlightedHTML ? (
-                <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
-              ) : (
-                <code className="local-document-code-plain">{props.content}</code>
-              )}
-            </pre>
+          <div className="local-document-code-scroll-inner">
+            <div className="local-document-code-gutter-frame">
+              {activeReveal ? (
+                <div
+                  aria-hidden="true"
+                  className="local-document-code-gutter-reveal"
+                  style={{ top: `${activeReveal.top}px` }}
+                />
+              ) : null}
+              <pre className="local-document-code-gutter" aria-hidden="true">
+                {lines.map((_, index) => String(index + 1)).join("\n")}
+              </pre>
+            </div>
+            <div className="local-document-code-content-frame" ref={contentFrameRef}>
+              {activeReveal ? (
+                <div
+                  aria-hidden="true"
+                  className="local-document-code-line-reveal"
+                  style={{ top: `${activeReveal.top}px` }}
+                />
+              ) : null}
+              <pre className="local-document-code-content">
+                {highlightedHTML ? (
+                  <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
+                ) : (
+                  <code className="local-document-code-plain">{props.content}</code>
+                )}
+              </pre>
+            </div>
           </div>
         </div>
       </div>

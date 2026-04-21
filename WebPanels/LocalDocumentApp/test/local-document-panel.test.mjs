@@ -42,22 +42,17 @@ test("jsonc files opt out of json highlighting and keep a JSONC label", async ()
 
 test("line reveal helpers clamp requests and choose reduced-motion-safe scroll behavior", async () => {
   const {
-    REVEAL_HIGHLIGHT_DURATION_MS,
     clampRevealLineNumber,
-    clampScrollTop,
-    revealScrollBehavior
+    clampScrollTop
   } = await import(
     new URL("../src/lineReveal.mjs", import.meta.url).href
   );
 
-  assert.equal(REVEAL_HIGHLIGHT_DURATION_MS, 1800);
   assert.equal(clampRevealLineNumber(42, 12), 12);
   assert.equal(clampRevealLineNumber(0, 12), 1);
   assert.equal(clampRevealLineNumber(3, 0), 1);
   assert.equal(clampScrollTop(-40, 200), 0);
   assert.equal(clampScrollTop(400, 200), 200);
-  assert.equal(revealScrollBehavior(true), "auto");
-  assert.equal(revealScrollBehavior(false), "smooth");
 });
 
 test("bootstrap bridge exposes one-shot line reveal registration and consumption", async () => {
@@ -72,7 +67,7 @@ test("bootstrap bridge exposes one-shot line reveal registration and consumption
   assert.match(source, /subscribeReveal: \(listener: RevealListener\) => \(\) => void/);
 });
 
-test("code view consumes reveal requests, clamps the target line, and clears the highlight after a timeout", async () => {
+test("code view keeps reveal state sticky, clears it on escape, and scrolls with a direct layout-synchronized scrollTop assignment", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
     "utf8"
@@ -80,9 +75,18 @@ test("code view consumes reveal requests, clamps the target line, and clears the
 
   assert.match(source, /window\.ToasttyLocalDocumentPanel\?\.consumeRevealRequest\(revealRequest\.requestID\)/);
   assert.match(source, /const targetLineNumber = clampRevealLineNumber\(revealRequest\.lineNumber, lines\.length\)/);
+  assert.match(source, /targetScrollTop,/);
+  assert.match(source, /revealScrollSequenceRef/);
+  assert.match(source, /window\.requestAnimationFrame\(\(\) => \{/);
+  assert.match(source, /revealScrollSequence !== revealScrollSequenceRef\.current/);
+  assert.match(source, /scrollElement\.scrollTop = activeReveal\.targetScrollTop/);
+  assert.match(source, /event\.key !== "Escape"/);
+  assert.doesNotMatch(source, /document\.hasFocus/);
+  assert.match(source, /props\.bootstrap\.contentRevision !== activeReveal\.contentRevision/);
+  assert.match(source, /props\.bootstrap\.filePath !== activeReveal\.filePath/);
+  assert.match(source, /setActiveReveal\(null\)/);
   assert.match(source, /className="local-document-code-line-reveal"/);
-  assert.match(source, /window\.setTimeout\(\(\) => \{/);
-  assert.match(source, /REVEAL_HIGHLIGHT_DURATION_MS/);
+  assert.match(source, /className="local-document-code-gutter-reveal"/);
 });
 
 test("build script copies onig.wasm into the panel output bundle", async () => {
@@ -117,4 +121,17 @@ test("bundle sync check rebuilds into a temporary output directory and compares 
   assert.match(source, /local-document-panel\.css/);
   assert.match(source, /onig\.wasm/);
   assert.match(source, /Checked-in local document panel assets are out of sync\./);
+});
+
+test("styles keep the gutter sticky and use flat reveal highlights for both the gutter and content rows", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/styles.css"),
+    "utf8"
+  );
+
+  assert.match(source, /\.local-document-code-gutter-frame \{\s*position: sticky;/);
+  assert.match(source, /\.local-document-code-gutter-reveal \{/);
+  assert.match(source, /\.local-document-code-line-reveal,\s*\.local-document-code-gutter-reveal \{/);
+  assert.doesNotMatch(source, /animation: local-document-line-reveal/);
+  assert.doesNotMatch(source, /border-radius: 8px/);
 });
