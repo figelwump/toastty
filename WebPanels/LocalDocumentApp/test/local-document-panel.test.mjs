@@ -43,6 +43,14 @@ test("markdown gutter stays non-selectable while wrapped content stays continuou
   );
 
   assert.match(styles, /\.local-document-code-gutter-cell[\s\S]*user-select: none/);
+  assert.match(
+    styles,
+    /\.local-document-code-gutter-cell-markdown\s*\{[^}]*display: block/
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.local-document-code-gutter-cell-markdown\s*\{[^}]*display: flex/
+  );
   assert.match(styles, /\.local-document-code-markdown-surface/);
 });
 

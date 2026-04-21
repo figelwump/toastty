@@ -307,9 +307,9 @@ body {
 
 .local-document-code-gutter-cell-markdown {
   padding: 0 14px 0 22px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
+  box-sizing: border-box;
+  display: block;
+  white-space: pre;
 }
 
 .local-document-code-markdown-surface {
