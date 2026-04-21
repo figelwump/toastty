@@ -651,11 +651,106 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         "window.ToasttyLocalDocumentPanel?.setTextScale(\(String(format: "%.4f", textScale)));"
     }
 
+    nonisolated static var keyboardNavigationJavaScript: String {
+        """
+        (() => {
+          const installFlag = "__toasttyLocalDocumentKeyboardNavigationInstalled";
+          if (window[installFlag] === true) {
+            return;
+          }
+          window[installFlag] = true;
+
+          const scrollContainerSelector = ".local-document-code-scroll";
+          const handledKeys = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]);
+
+          const isInteractiveTarget = (element) => {
+            if (!(element instanceof Element)) {
+              return false;
+            }
+
+            if (element instanceof HTMLTextAreaElement ||
+                element instanceof HTMLInputElement ||
+                element instanceof HTMLSelectElement ||
+                element instanceof HTMLButtonElement ||
+                element instanceof HTMLAnchorElement) {
+              return true;
+            }
+
+            return element.isContentEditable ||
+              element.closest("textarea, input, select, button, a[href], [contenteditable='true'], [contenteditable='']");
+          };
+
+          const scrollStep = (container, axis) => {
+            const lineHeight = Number.parseFloat(window.getComputedStyle(container).lineHeight);
+            const baseStep = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 20;
+            return axis === "y" ? Math.max(baseStep * 3, 36) : Math.max(baseStep * 2, 32);
+          };
+
+          document.addEventListener("keydown", (event) => {
+            if (event.defaultPrevented ||
+                event.metaKey ||
+                event.ctrlKey ||
+                event.altKey ||
+                event.shiftKey ||
+                handledKeys.has(event.key) === false) {
+              return;
+            }
+
+            const eventTarget = event.target instanceof Element ? event.target : document.activeElement;
+            if (isInteractiveTarget(eventTarget)) {
+              return;
+            }
+
+            const container = document.querySelector(scrollContainerSelector);
+            if (!(container instanceof HTMLElement)) {
+              return;
+            }
+
+            let deltaLeft = 0;
+            let deltaTop = 0;
+            switch (event.key) {
+            case "ArrowUp":
+              deltaTop = -scrollStep(container, "y");
+              break;
+            case "ArrowDown":
+              deltaTop = scrollStep(container, "y");
+              break;
+            case "ArrowLeft":
+              deltaLeft = -scrollStep(container, "x");
+              break;
+            case "ArrowRight":
+              deltaLeft = scrollStep(container, "x");
+              break;
+            default:
+              return;
+            }
+
+            const canScrollVertically = container.scrollHeight > container.clientHeight + 1;
+            const canScrollHorizontally = container.scrollWidth > container.clientWidth + 1;
+            if ((deltaTop !== 0 && canScrollVertically === false) ||
+                (deltaLeft !== 0 && canScrollHorizontally === false)) {
+              return;
+            }
+
+            container.scrollBy({ left: deltaLeft, top: deltaTop, behavior: "auto" });
+            event.preventDefault();
+          }, { capture: true });
+        })();
+        """
+    }
+
     static func makeWebViewConfiguration(
         for capabilityProfile: WebPanelCapabilityProfile
     ) -> WKWebViewConfiguration {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.preferredContentMode = .desktop
+        configuration.userContentController.addUserScript(
+            WKUserScript(
+                source: keyboardNavigationJavaScript,
+                injectionTime: .atDocumentEnd,
+                forMainFrameOnly: true
+            )
+        )
         if capabilityProfile == .localOnly {
             configuration.websiteDataStore = .nonPersistent()
         }

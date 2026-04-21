@@ -11,6 +11,18 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertFalse(configuration.websiteDataStore.isPersistent)
     }
 
+    func testWebViewConfigurationInjectsArrowKeyNavigationScript() throws {
+        let configuration = LocalDocumentPanelRuntime.makeWebViewConfiguration(for: .localOnly)
+        let script = try XCTUnwrap(configuration.userContentController.userScripts.first)
+
+        XCTAssertEqual(script.injectionTime, .atDocumentEnd)
+        XCTAssertTrue(script.isForMainFrameOnly)
+        XCTAssertTrue(script.source.contains("__toasttyLocalDocumentKeyboardNavigationInstalled"))
+        XCTAssertTrue(script.source.contains(".local-document-code-scroll"))
+        XCTAssertTrue(script.source.contains("ArrowDown"))
+        XCTAssertTrue(script.source.contains("ArrowRight"))
+    }
+
     func testApplySkipsDuplicateReloadWhenWebStateIsUnchanged() async throws {
         let bootstrapRecorder = BootstrapRecorder()
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
