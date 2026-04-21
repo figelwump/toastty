@@ -196,6 +196,149 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(submitCount, 1)
     }
 
+    func testSubmitSelectionUsesDefaultPlacementForFileResults() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let filePath = "/tmp/toastty-worktree/README.md"
+        let actions = CommandPaletteActionSpy()
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: filePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: filePath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            openFileResult: { destination, placement, originWindowID in
+                actions.openFileResult(
+                    destination,
+                    placement: placement,
+                    originWindowID: originWindowID
+                )
+            },
+            fileIndexService: fileIndexService
+        )
+
+        viewModel.query = "@read"
+        try await waitUntil {
+            viewModel.results.map(\.id) == [filePath]
+        }
+
+        viewModel.submitSelection()
+
+        XCTAssertEqual(
+            actions.openedFileResults,
+            [
+                RecordedPaletteFileOpenCall(
+                    destination: .localDocument(filePath: filePath),
+                    placement: .default,
+                    originWindowID: viewModel.originWindowID
+                ),
+            ]
+        )
+    }
+
+    func testSubmitAlternateSelectionRoutesAlternatePlacementToFileOpen() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let filePath = "/tmp/toastty-worktree/docs/notes.md"
+        let actions = CommandPaletteActionSpy()
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: filePath,
+                                relativePath: "docs/notes.md",
+                                destination: .localDocument(filePath: filePath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            openFileResult: { destination, placement, originWindowID in
+                actions.openFileResult(
+                    destination,
+                    placement: placement,
+                    originWindowID: originWindowID
+                )
+            },
+            fileIndexService: fileIndexService
+        )
+
+        viewModel.query = "@notes"
+        try await waitUntil {
+            viewModel.results.map(\.id) == [filePath]
+        }
+
+        viewModel.submitAlternateSelection()
+
+        XCTAssertEqual(
+            actions.openedFileResults,
+            [
+                RecordedPaletteFileOpenCall(
+                    destination: .localDocument(filePath: filePath),
+                    placement: .alternate,
+                    originWindowID: viewModel.originWindowID
+                ),
+            ]
+        )
+    }
+
+    func testSubmitAlternateSelectionInCommandsModeStillExecutesCommand() {
+        let originWindowID = UUID()
+        var executedInvocations: [PaletteCommandInvocation] = []
+        let actions = CommandPaletteActionSpy()
+        let viewModel = makeViewModel(
+            originWindowID: originWindowID,
+            commands: [
+                makeCommand(
+                    id: "workspace.create",
+                    title: "New Workspace",
+                    invocation: .builtIn(.newWorkspace)
+                ),
+            ],
+            openFileResult: { destination, placement, commandOriginWindowID in
+                actions.openFileResult(
+                    destination,
+                    placement: placement,
+                    originWindowID: commandOriginWindowID
+                )
+            },
+            executeCommand: { invocation, commandOriginWindowID in
+                XCTAssertEqual(commandOriginWindowID, originWindowID)
+                executedInvocations.append(invocation)
+                return true
+            }
+        )
+
+        viewModel.submitAlternateSelection()
+
+        XCTAssertEqual(executedInvocations, [.builtIn(.newWorkspace)])
+        XCTAssertTrue(actions.openedFileResults.isEmpty)
+    }
+
     func testEmptyQueryKeepsCatalogOrderEvenWhenUsageCountsDiffer() {
         let usageTracker = MockCommandPaletteUsageTracker()
         usageTracker.counts = [
@@ -431,8 +574,12 @@ final class CommandPaletteViewModelTests: XCTestCase {
             originWindowID: originWindowID,
             commands: [],
             resolveFileSearchScope: { _ in scope },
-            openFileResult: { destination, originWindowID in
-                actions.openFileResult(destination, originWindowID: originWindowID)
+            openFileResult: { destination, placement, originWindowID in
+                actions.openFileResult(
+                    destination,
+                    placement: placement,
+                    originWindowID: originWindowID
+                )
             },
             fileIndexService: fileIndexService
         )
@@ -456,12 +603,14 @@ final class CommandPaletteViewModelTests: XCTestCase {
                     destination: .localDocument(
                         filePath: packagePath
                     ),
+                    placement: .default,
                     originWindowID: originWindowID
                 ),
                 RecordedPaletteFileOpenCall(
                     destination: .browser(
                         fileURLString: URL(fileURLWithPath: indexPath).absoluteString
                     ),
+                    placement: .default,
                     originWindowID: originWindowID
                 ),
             ]
@@ -832,7 +981,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
         originWindowID: UUID = UUID(),
         commands: [PaletteCommandDescriptor] = [],
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
-        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
+        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, PaletteFileOpenPlacement, UUID) -> Bool = { _, _, _ in true },
         fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         filePresentationBuilder: @escaping @Sendable (
@@ -863,7 +1012,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
         originWindowID: UUID = UUID(),
         projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
-        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
+        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, PaletteFileOpenPlacement, UUID) -> Bool = { _, _, _ in true },
         fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         filePresentationBuilder: @escaping @Sendable (

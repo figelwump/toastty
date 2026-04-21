@@ -336,10 +336,15 @@ class CommandPaletteActionSpy: CommandPaletteActionHandling {
         return reloadConfigurationResult
     }
 
-    func openFileResult(_ destination: PaletteFileOpenDestination, originWindowID: UUID) -> Bool {
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool {
         openedFileResults.append(
             RecordedPaletteFileOpenCall(
                 destination: destination,
+                placement: placement,
                 originWindowID: originWindowID
             )
         )
@@ -487,6 +492,7 @@ struct RecordedPaletteTerminalProfileSplitCall: Equatable {
 
 struct RecordedPaletteFileOpenCall: Equatable {
     let destination: PaletteFileOpenDestination
+    let placement: PaletteFileOpenPlacement
     let originWindowID: UUID
 }
 

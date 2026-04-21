@@ -48,7 +48,11 @@ protocol CommandPaletteActionHandling: AnyObject {
     func splitWithTerminalProfile(profileID: String, direction: SlotSplitDirection, originWindowID: UUID) -> Bool
     func canReloadConfiguration() -> Bool
     func reloadConfiguration() -> Bool
-    func openFileResult(_ destination: PaletteFileOpenDestination, originWindowID: UUID) -> Bool
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool
     func execute(_ invocation: PaletteCommandInvocation, originWindowID: UUID) -> Bool
 }
 
@@ -378,17 +382,29 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
         return true
     }
 
-    func openFileResult(_ destination: PaletteFileOpenDestination, originWindowID: UUID) -> Bool {
+    func openFileResult(
+        _ destination: PaletteFileOpenDestination,
+        placement: PaletteFileOpenPlacement,
+        originWindowID: UUID
+    ) -> Bool {
+        let placementOverride = paletteFilePlacementOverride(for: placement)
+
         switch destination {
         case .localDocument(let filePath):
             return store?.createLocalDocumentPanelFromCommand(
                 preferredWindowID: originWindowID,
-                request: LocalDocumentPanelCreateRequest(filePath: filePath)
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: filePath,
+                    placementOverride: placementOverride
+                )
             ) ?? false
         case .browser(let fileURLString):
             return store?.createBrowserPanelFromCommand(
                 preferredWindowID: originWindowID,
-                request: BrowserPanelCreateRequest(initialURL: fileURLString)
+                request: BrowserPanelCreateRequest(
+                    initialURL: fileURLString,
+                    placementOverride: placementOverride
+                )
             ) ?? false
         }
     }
@@ -497,6 +513,17 @@ final class CommandPaletteActionHandler: CommandPaletteActionHandling {
             preferringUnreadSessionPanelIn: sessionRuntimeStore
         )
         return true
+    }
+
+    private func paletteFilePlacementOverride(
+        for placement: PaletteFileOpenPlacement
+    ) -> WebPanelPlacement? {
+        switch placement {
+        case .default:
+            return nil
+        case .alternate:
+            return .newTab
+        }
     }
 
     private func paletteFileSearchScope(

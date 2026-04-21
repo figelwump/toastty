@@ -171,8 +171,12 @@ final class CommandPaletteController: NSObject, NSWindowDelegate {
             resolveFileSearchScope: { [weak self] commandOriginWindowID in
                 self?.actions.fileSearchScope(originWindowID: commandOriginWindowID)
             },
-            openFileResult: { [weak self] destination, commandOriginWindowID in
-                self?.actions.openFileResult(destination, originWindowID: commandOriginWindowID) ?? false
+            openFileResult: { [weak self] destination, placement, commandOriginWindowID in
+                self?.actions.openFileResult(
+                    destination,
+                    placement: placement,
+                    originWindowID: commandOriginWindowID
+                ) ?? false
             },
             fileIndexService: fileIndexService,
             usageTracker: usageTracker,

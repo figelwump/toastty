@@ -62,6 +62,7 @@ final class CommandPaletteFileOpenIntegrationTests: XCTestCase {
         XCTAssertTrue(
             actions.openFileResult(
                 .browser(fileURLString: fileURL.absoluteString),
+                placement: .default,
                 originWindowID: originWindowID
             )
         )
@@ -98,6 +99,7 @@ final class CommandPaletteFileOpenIntegrationTests: XCTestCase {
         XCTAssertTrue(
             actions.openFileResult(
                 .localDocument(filePath: fileURL.path),
+                placement: .default,
                 originWindowID: originWindowID
             )
         )
@@ -112,6 +114,7 @@ final class CommandPaletteFileOpenIntegrationTests: XCTestCase {
         XCTAssertTrue(
             actions.openFileResult(
                 .localDocument(filePath: fileURL.path),
+                placement: .default,
                 originWindowID: originWindowID
             )
         )
@@ -130,6 +133,120 @@ final class CommandPaletteFileOpenIntegrationTests: XCTestCase {
             webState.localDocument,
             LocalDocumentState(filePath: fileURL.path, format: .json)
         )
+    }
+
+    func testOpenFileResultAlternatePlacementOpensLocalDocumentInNewTab() throws {
+        let scopeURL = try makeDirectoryScope()
+        let fileURL = scopeURL.appendingPathComponent("README.md")
+        try writeFixtureFile(at: fileURL, contents: "# Toastty\n")
+
+        let state = makeStateWithFocusedTerminalCWD(scopeURL.path)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let actions = try makeLiveActions(store: store)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+
+        XCTAssertTrue(
+            actions.openFileResult(
+                .localDocument(filePath: fileURL.path),
+                placement: .alternate,
+                originWindowID: originWindowID
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 2)
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be local-document-backed")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .localDocument)
+        XCTAssertEqual(
+            webState.localDocument,
+            LocalDocumentState(filePath: fileURL.path, format: .markdown)
+        )
+    }
+
+    func testOpenFileResultAlternatePlacementOpensHTMLInNewTab() throws {
+        let scopeURL = try makeDirectoryScope()
+        let fileURL = scopeURL.appendingPathComponent("index.html")
+        try writeFixtureFile(at: fileURL, contents: "<html></html>\n")
+
+        let state = makeStateWithFocusedTerminalCWD(scopeURL.path)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let actions = try makeLiveActions(store: store)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+
+        XCTAssertTrue(
+            actions.openFileResult(
+                .browser(fileURLString: fileURL.absoluteString),
+                placement: .alternate,
+                originWindowID: originWindowID
+            )
+        )
+
+        let workspace = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspace.orderedTabs.count, 2)
+        let selectedTabID = try XCTUnwrap(workspace.resolvedSelectedTabID)
+        let selectedTab = try XCTUnwrap(workspace.tab(id: selectedTabID))
+        let panelID = try XCTUnwrap(selectedTab.focusedPanelID)
+        guard case .web(let webState) = selectedTab.panels[panelID] else {
+            XCTFail("expected selected tab panel to be browser-backed")
+            return
+        }
+
+        XCTAssertEqual(webState.definition, .browser)
+        XCTAssertEqual(webState.initialURL, fileURL.absoluteString)
+    }
+
+    func testOpenFileResultAlternatePlacementStillReusesExistingLocalDocumentPanel() throws {
+        let scopeURL = try makeDirectoryScope()
+        let fileURL = scopeURL.appendingPathComponent("package.json")
+        try writeFixtureFile(
+            at: fileURL,
+            contents: "{\n  \"name\": \"toastty\"\n}\n"
+        )
+
+        let state = makeStateWithFocusedTerminalCWD(scopeURL.path)
+        let store = AppStore(state: state, persistTerminalFontPreference: false)
+        let actions = try makeLiveActions(store: store)
+        let originWindowID = try XCTUnwrap(store.state.windows.first?.id)
+        let workspaceID = try XCTUnwrap(store.state.windows.first?.selectedWorkspaceID)
+
+        XCTAssertTrue(
+            actions.openFileResult(
+                .localDocument(filePath: fileURL.path),
+                placement: .alternate,
+                originWindowID: originWindowID
+            )
+        )
+
+        let workspaceAfterFirstOpen = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterFirstOpen.orderedTabs.count, 2)
+        let localDocumentTabID = try XCTUnwrap(workspaceAfterFirstOpen.resolvedSelectedTabID)
+        let localDocumentPanelID = try XCTUnwrap(workspaceAfterFirstOpen.focusedPanelID)
+        let originalTabID = try XCTUnwrap(workspaceAfterFirstOpen.tabIDs.first)
+
+        XCTAssertTrue(
+            store.send(.selectWorkspaceTab(workspaceID: workspaceID, tabID: originalTabID))
+        )
+        XCTAssertTrue(
+            actions.openFileResult(
+                .localDocument(filePath: fileURL.path),
+                placement: .alternate,
+                originWindowID: originWindowID
+            )
+        )
+
+        let workspaceAfterReuse = try XCTUnwrap(store.state.workspacesByID[workspaceID])
+        XCTAssertEqual(workspaceAfterReuse.orderedTabs.count, 2)
+        XCTAssertEqual(workspaceAfterReuse.resolvedSelectedTabID, localDocumentTabID)
+        XCTAssertEqual(workspaceAfterReuse.focusedPanelID, localDocumentPanelID)
     }
 
     private func makeLiveActions(store: AppStore) throws -> CommandPaletteActionHandler {

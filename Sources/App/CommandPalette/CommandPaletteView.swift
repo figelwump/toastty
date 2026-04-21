@@ -24,6 +24,7 @@ struct CommandPaletteView: View {
                     onMoveUp: { viewModel.moveSelection(delta: -1) },
                     onMoveDown: { viewModel.moveSelection(delta: 1) },
                     onSubmit: viewModel.submitSelection,
+                    onAlternateSubmit: viewModel.submitAlternateSelection,
                     onCancel: viewModel.dismiss
                 )
             }
@@ -51,6 +52,15 @@ struct CommandPaletteView: View {
         .clipShape(shape)
         .compositingGroup()
         .shadow(color: Color.black.opacity(0.5), radius: 28, y: 12)
+    }
+
+    private var submitHintLabel: String {
+        switch viewModel.mode {
+        case .commands:
+            return "Execute"
+        case .fileOpen:
+            return "Open"
+        }
     }
 
     private var resultsSection: some View {
@@ -104,8 +114,12 @@ struct CommandPaletteView: View {
                                 .padding(.top, 8)
                             }
                             .coordinateSpace(name: CommandPaletteResultsScrollSpace.name)
-                            .onChange(of: viewModel.selectedIndex) { _, _ in
-                                scrollSelectionIfNeeded(using: proxy, viewportHeight: geometry.size.height)
+                            .onChange(of: viewModel.selectedIndex) { oldValue, newValue in
+                                scrollSelectionIfNeeded(
+                                    using: proxy,
+                                    viewportHeight: geometry.size.height,
+                                    indexChange: (oldIndex: oldValue, newIndex: newValue)
+                                )
                             }
                             .onPreferenceChange(CommandPaletteResultFramePreferenceKey.self) { frames in
                                 resultFramesByID = frames
@@ -138,7 +152,10 @@ struct CommandPaletteView: View {
 
                 Spacer()
 
-                CommandPaletteFooterHint(label: "Execute", shortcut: "\u{21A9}")
+                CommandPaletteFooterHint(label: submitHintLabel, shortcut: "\u{21A9}")
+                if viewModel.mode == .fileOpen {
+                    CommandPaletteFooterHint(label: "Open in Tab", shortcut: "\u{21E7}\u{21A9}")
+                }
                 CommandPaletteFooterHint(label: "Cancel", shortcut: "Esc")
             }
             .padding(.horizontal, 16)
@@ -147,19 +164,33 @@ struct CommandPaletteView: View {
         }
     }
 
-    private func scrollSelectionIfNeeded(using proxy: ScrollViewProxy, viewportHeight: CGFloat) {
+    private func scrollSelectionIfNeeded(
+        using proxy: ScrollViewProxy,
+        viewportHeight: CGFloat,
+        indexChange: (oldIndex: Int, newIndex: Int)? = nil
+    ) {
         guard let selectedResultID = viewModel.selectedResult?.id else {
             return
         }
 
-        guard let scrollTarget = CommandPaletteScrollVisibility.scrollTarget(
-            for: resultFramesByID[selectedResultID],
-            viewportHeight: viewportHeight
-        ) else {
+        if let resultFrame = resultFramesByID[selectedResultID] {
+            guard let scrollTarget = CommandPaletteScrollVisibility.scrollTarget(
+                for: resultFrame,
+                viewportHeight: viewportHeight
+            ) else {
+                return
+            }
+            proxy.scrollTo(selectedResultID, anchor: scrollTarget.anchor)
             return
         }
 
-        proxy.scrollTo(selectedResultID, anchor: scrollTarget.anchor)
+        // LazyVStack has not materialized the selected row yet, so we have no
+        // frame to reason about. Force a scroll using the direction of the
+        // selection change so the selected row becomes visible and reports
+        // its frame on the next preference pass.
+        guard let indexChange else { return }
+        let anchor: UnitPoint = indexChange.newIndex >= indexChange.oldIndex ? .bottom : .top
+        proxy.scrollTo(selectedResultID, anchor: anchor)
     }
 }
 

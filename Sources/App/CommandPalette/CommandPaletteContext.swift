@@ -69,6 +69,11 @@ enum PaletteFileOpenDestination: Equatable, Sendable {
     }
 }
 
+enum PaletteFileOpenPlacement: Equatable, Sendable {
+    case `default`
+    case alternate
+}
+
 enum PaletteCommandInvocation: Equatable, Sendable {
     case builtIn(ToasttyBuiltInCommand)
     case workspaceSwitch(workspaceID: UUID)

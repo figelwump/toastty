@@ -54,7 +54,7 @@ final class CommandPaletteViewModel: ObservableObject {
     private let projectCommands: @MainActor () -> [PaletteCommandDescriptor]
     private let executeCommand: @MainActor (PaletteCommandInvocation, UUID) -> Bool
     private let resolveFileSearchScope: @MainActor (UUID) -> PaletteFileSearchScope?
-    private let openFileResult: @MainActor (PaletteFileOpenDestination, UUID) -> Bool
+    private let openFileResult: @MainActor (PaletteFileOpenDestination, PaletteFileOpenPlacement, UUID) -> Bool
     private let fileIndexService: any CommandPaletteFileIndexing
     private let usageTracker: CommandPaletteUsageTracking
     private let filePresentationBuilder: @Sendable (
@@ -77,7 +77,7 @@ final class CommandPaletteViewModel: ObservableObject {
         projectCommands: @escaping @MainActor () -> [PaletteCommandDescriptor],
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool,
         resolveFileSearchScope: @escaping @MainActor (UUID) -> PaletteFileSearchScope? = { _ in nil },
-        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in false },
+        openFileResult: @escaping @MainActor (PaletteFileOpenDestination, PaletteFileOpenPlacement, UUID) -> Bool = { _, _, _ in false },
         fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
         filePresentationBuilder: @escaping @Sendable (
@@ -126,6 +126,14 @@ final class CommandPaletteViewModel: ObservableObject {
     }
 
     func submitSelection() {
+        submit(placement: .default)
+    }
+
+    func submitAlternateSelection() {
+        submit(placement: .alternate)
+    }
+
+    private func submit(placement: PaletteFileOpenPlacement) {
         guard let result = selectedResult else { return }
 
         let didExecute: Bool
@@ -133,7 +141,7 @@ final class CommandPaletteViewModel: ObservableObject {
         case .command(let command):
             didExecute = executeCommand(command.command.invocation, originWindowID)
         case .file(let file):
-            didExecute = openFileResult(file.destination, originWindowID)
+            didExecute = openFileResult(file.destination, placement, originWindowID)
         }
 
         if didExecute, let usageKey = result.usageKey {
