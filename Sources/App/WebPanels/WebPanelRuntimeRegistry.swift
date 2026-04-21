@@ -28,6 +28,7 @@ final class WebPanelRuntimeRegistry: ObservableObject {
     private var browserRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
     private var localDocumentRuntimeByPanelID: [UUID: LocalDocumentPanelRuntime] = [:]
     private var localDocumentRuntimeObservationByPanelID: [UUID: AnyCancellable] = [:]
+    private var pendingLocalDocumentRevealLineByPanelID: [UUID: Int] = [:]
 
     func bind(store: AppStore) {
         if let existingStore = self.store {
@@ -102,6 +103,9 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         localDocumentRuntimeObservationByPanelID[panelID] = runtime.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
         }
+        if let pendingRevealLine = pendingLocalDocumentRevealLineByPanelID.removeValue(forKey: panelID) {
+            runtime.requestReveal(lineNumber: pendingRevealLine)
+        }
         return runtime
     }
 
@@ -167,6 +171,26 @@ final class WebPanelRuntimeRegistry: ObservableObject {
             firstSaveInProgressDisplayName: firstSaveInProgressDisplayName
         )
     }
+
+    @discardableResult
+    func requestLocalDocumentReveal(panelID: UUID, lineNumber: Int) -> Bool {
+        guard lineNumber > 0,
+              let store else {
+            return false
+        }
+
+        let liveLocalDocumentPanelIDs = liveLocalDocumentPanelIDs(in: store.state)
+        guard liveLocalDocumentPanelIDs.contains(panelID) else {
+            return false
+        }
+
+        if let runtime = localDocumentRuntimeByPanelID[panelID] {
+            runtime.requestReveal(lineNumber: lineNumber)
+        } else {
+            pendingLocalDocumentRevealLineByPanelID[panelID] = lineNumber
+        }
+        return true
+    }
 }
 
 private extension WebPanelRuntimeRegistry {
@@ -192,6 +216,9 @@ private extension WebPanelRuntimeRegistry {
             liveLocalDocumentPanelIDs.contains(panelID)
         }
         localDocumentRuntimeObservationByPanelID = localDocumentRuntimeObservationByPanelID.filter { panelID, _ in
+            liveLocalDocumentPanelIDs.contains(panelID)
+        }
+        pendingLocalDocumentRevealLineByPanelID = pendingLocalDocumentRevealLineByPanelID.filter { panelID, _ in
             liveLocalDocumentPanelIDs.contains(panelID)
         }
     }

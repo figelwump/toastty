@@ -14,6 +14,8 @@
   --accent: #b65c22;
   --accent-soft: rgba(182, 92, 34, 0.12);
   --code-bg: rgba(78, 53, 31, 0.08);
+  --code-line-reveal: rgba(182, 92, 34, 0.16);
+  --code-line-reveal-border: rgba(182, 92, 34, 0.34);
   --quote-bg: rgba(182, 92, 34, 0.06);
   --quote-text: #5f422b;
   --pre-bg: #21160f;
@@ -67,6 +69,8 @@
   --accent: #f0a25e;
   --accent-soft: rgba(240, 162, 94, 0.16);
   --code-bg: rgba(255, 224, 191, 0.08);
+  --code-line-reveal: rgba(240, 162, 94, 0.18);
+  --code-line-reveal-border: rgba(255, 212, 167, 0.34);
   --quote-bg: rgba(240, 162, 94, 0.1);
   --quote-text: #e3c6af;
   --pre-bg: #100b08;
@@ -253,12 +257,34 @@ body {
 
 .local-document-code-scroll {
   flex: 1;
-  margin: 0;
   overflow: auto;
+}
+
+.local-document-code-scroll-inner {
+  position: relative;
+  min-width: 100%;
+  width: max-content;
   padding: 20px 28px 28px;
 }
 
-.local-document-code-scroll code,
+.local-document-code-content {
+  margin: 0;
+}
+
+.local-document-code-line-reveal {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: var(--local-document-code-line-height);
+  border: 1px solid var(--code-line-reveal-border);
+  border-radius: 8px;
+  background: var(--code-line-reveal);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+  animation: local-document-line-reveal 1.8s ease-out forwards;
+}
+
+.local-document-code-content code,
 .local-document-code-plain {
   display: block;
   min-width: max-content;
@@ -449,6 +475,27 @@ body {
 
 .local-document-editor::placeholder {
   color: var(--muted);
+}
+
+@keyframes local-document-line-reveal {
+  0% {
+    opacity: 0;
+  }
+
+  10% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .local-document-code-line-reveal {
+    animation: none;
+    opacity: 0.92;
+  }
 }
 
 /* Themed scrollbar */

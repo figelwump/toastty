@@ -45,6 +45,12 @@ struct LocalDocumentClassifierTests {
         #expect(
             LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD") == .markdown
         )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD:42") == .markdown
+        )
+        #expect(
+            LocalDocumentClassifier.format(forFilePath: "/tmp/My Notes/README.MD:draft") == .markdown
+        )
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/config.yaml") == .yaml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/Toastty.toml") == .toml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/settings.JSON") == .json)
@@ -53,6 +59,7 @@ struct LocalDocumentClassifierTests {
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/data/report.csv") == .csv)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/layout.xml") == .xml)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/scripts/bootstrap.zsh") == .shell)
+        #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/config.txt:42") == nil)
         #expect(LocalDocumentClassifier.format(forFilePath: "/tmp/notes") == nil)
         #expect(LocalDocumentClassifier.format(forFilePath: "   ") == nil)
     }

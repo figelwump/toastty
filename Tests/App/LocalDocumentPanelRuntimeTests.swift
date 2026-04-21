@@ -250,6 +250,98 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.contentRevision, baseRevision)
     }
 
+    func testRequestRevealQueuesPendingLineBeforeBootstrapIsReady() {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Docs",
+                    diskRevision: nil
+                )
+            }
+        )
+
+        runtime.requestReveal(lineNumber: 12)
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 12)
+    }
+
+    func testRequestRevealSkipsEditingMode() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Draft",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+        runtime.enterEditMode()
+
+        runtime.requestReveal(lineNumber: 7)
+
+        XCTAssertNil(runtime.automationState().pendingRevealLine)
+    }
+
+    func testPendingRevealSurvivesReloadWhilePanelAppIsUnavailable() async throws {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in },
+            entryURL: nil,
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: webState.title,
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let originalState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+        let refreshedState = WebPanelState(
+            definition: .localDocument,
+            title: "README copy.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: originalState)
+        try await waitUntil { runtime.automationState().currentBootstrap?.displayName == "README.md" }
+        runtime.requestReveal(lineNumber: 5)
+
+        runtime.apply(webState: refreshedState)
+        try await waitUntil { runtime.automationState().currentBootstrap?.displayName == "README copy.md" }
+
+        XCTAssertEqual(runtime.automationState().pendingRevealLine, 5)
+    }
+
     func testCancelEditModeRestoresPreviewAndAdvancesRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 

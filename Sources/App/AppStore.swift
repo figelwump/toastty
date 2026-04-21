@@ -73,21 +73,36 @@ struct LocalDocumentPanelCreateRequest: Equatable, Sendable {
     static let defaultPlacement: WebPanelPlacement = .rootRight
 
     var filePath: String
+    var lineNumber: Int?
     var placementOverride: WebPanelPlacement?
     var formatOverride: LocalDocumentFormat?
 
     init(
         filePath: String,
+        lineNumber: Int? = nil,
         placementOverride: WebPanelPlacement? = nil,
         formatOverride: LocalDocumentFormat? = nil
     ) {
         self.filePath = filePath
+        self.lineNumber = lineNumber.flatMap { $0 > 0 ? $0 : nil }
         self.placementOverride = placementOverride
         self.formatOverride = formatOverride
     }
 
     var resolvedPlacement: WebPanelPlacement {
         placementOverride ?? Self.defaultPlacement
+    }
+}
+
+enum LocalDocumentPanelOpenOutcome: Equatable {
+    case opened(panelID: UUID)
+    case focusedExisting(panelID: UUID)
+
+    var panelID: UUID {
+        switch self {
+        case .opened(let panelID), .focusedExisting(let panelID):
+            return panelID
+        }
     }
 }
 
@@ -474,23 +489,37 @@ final class AppStore: ObservableObject {
         workspaceID: UUID,
         request: LocalDocumentPanelCreateRequest
     ) -> Bool {
+        createLocalDocumentPanelOutcome(
+            workspaceID: workspaceID,
+            request: request
+        ) != nil
+    }
+
+    func createLocalDocumentPanelOutcome(
+        workspaceID: UUID,
+        request: LocalDocumentPanelCreateRequest
+    ) -> LocalDocumentPanelOpenOutcome? {
         guard let workspace = state.workspacesByID[workspaceID],
               let resolvedLocalDocument = Self.resolvedLocalDocument(
                   request.filePath,
                   formatOverride: request.formatOverride
               ) else {
-            return false
+            return nil
         }
 
         if let existingPanelID = existingLocalDocumentPanelID(
             in: workspace,
             normalizedFilePath: resolvedLocalDocument.normalizedFilePath
         ) {
-            return focusPanel(containing: existingPanelID)
+            guard focusPanel(containing: existingPanelID) else {
+                return nil
+            }
+            return .focusedExisting(panelID: existingPanelID)
         }
 
+        let existingPanelIDs = Set(workspace.panels.keys)
         let displayName = Self.localDocumentDisplayName(for: resolvedLocalDocument.normalizedFilePath)
-        return send(
+        guard send(
             .createWebPanel(
                 workspaceID: workspaceID,
                 panel: WebPanelState(
@@ -503,7 +532,19 @@ final class AppStore: ObservableObject {
                 ),
                 placement: request.resolvedPlacement
             )
-        )
+        ) else {
+            return nil
+        }
+
+        guard let selection = state.workspaceSelection(containingWorkspaceID: workspaceID),
+              let panelID = createdLocalDocumentPanelID(
+                  in: selection.workspace,
+                  previousPanelIDs: existingPanelIDs
+              ) else {
+            return nil
+        }
+
+        return .opened(panelID: panelID)
     }
 
     @discardableResult
@@ -511,11 +552,21 @@ final class AppStore: ObservableObject {
         preferredWindowID: UUID?,
         request: LocalDocumentPanelCreateRequest
     ) -> Bool {
+        createLocalDocumentPanelFromCommandOutcome(
+            preferredWindowID: preferredWindowID,
+            request: request
+        ) != nil
+    }
+
+    func createLocalDocumentPanelFromCommandOutcome(
+        preferredWindowID: UUID?,
+        request: LocalDocumentPanelCreateRequest
+    ) -> LocalDocumentPanelOpenOutcome? {
         guard let selection = commandSelection(preferredWindowID: preferredWindowID) else {
-            return false
+            return nil
         }
 
-        return createLocalDocumentPanel(
+        return createLocalDocumentPanelOutcome(
             workspaceID: selection.workspace.id,
             request: request
         )
@@ -1060,6 +1111,27 @@ final class AppStore: ObservableObject {
         }
     }
 
+    private func createdLocalDocumentPanelID(
+        in workspace: WorkspaceState,
+        previousPanelIDs: Set<UUID>
+    ) -> UUID? {
+        let createdPanelIDs = Set(workspace.panels.keys).subtracting(previousPanelIDs)
+
+        if let focusedPanelID = workspace.focusedPanelID,
+           createdPanelIDs.contains(focusedPanelID),
+           case .web(let webState)? = workspace.panels[focusedPanelID],
+           webState.definition == .localDocument {
+            return focusedPanelID
+        }
+
+        return createdPanelIDs.first { panelID in
+            guard case .web(let webState)? = workspace.panels[panelID] else {
+                return false
+            }
+            return webState.definition == .localDocument
+        }
+    }
+
     private func requestSidebarFlashForExhaustedUnreadOrActiveJump(
         selection: WindowCommandSelection
     ) {
@@ -1176,9 +1248,7 @@ final class AppStore: ObservableObject {
         let url = URL(fileURLWithPath: trimmed).standardizedFileURL.resolvingSymlinksInPath()
         let normalizedFilePath = url.path
         guard normalizedFilePath.isEmpty == false,
-              let format = formatOverride ?? LocalDocumentClassifier.format(
-                  forPathExtension: url.pathExtension
-              ) else {
+              let format = formatOverride ?? LocalDocumentClassifier.format(forFilePath: normalizedFilePath) else {
             return nil
         }
 

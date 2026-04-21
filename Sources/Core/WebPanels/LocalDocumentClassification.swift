@@ -45,8 +45,25 @@ public enum LocalDocumentClassifier {
             return nil
         }
 
-        return format(
-            forPathExtension: URL(fileURLWithPath: normalizedFilePath).pathExtension
-        )
+        let fileURL = URL(fileURLWithPath: normalizedFilePath)
+        if let directFormat = format(forPathExtension: fileURL.pathExtension) {
+            return directFormat
+        }
+
+        return formatForColonSuffixedFileName(fileURL.lastPathComponent)
+    }
+
+    private static func formatForColonSuffixedFileName(_ fileName: String) -> LocalDocumentFormat? {
+        var candidateFileName = fileName
+        while let separatorIndex = candidateFileName.lastIndex(of: ":") {
+            candidateFileName.removeSubrange(separatorIndex...)
+            if let format = format(
+                forPathExtension: URL(fileURLWithPath: candidateFileName).pathExtension
+            ) {
+                return format
+            }
+        }
+
+        return nil
     }
 }

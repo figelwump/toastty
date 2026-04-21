@@ -2,12 +2,22 @@ import CoreState
 import Foundation
 
 enum TerminalCommandClickTarget: Equatable, Sendable {
-    case localDocumentFile(path: String, placement: WebPanelPlacement)
+    case localDocumentFile(path: String, lineNumber: Int?, placement: WebPanelPlacement)
     case localDirectory(path: String)
     case passthrough(URL)
 }
 
 enum TerminalCommandClickTargetResolver {
+    private struct LocalDocumentFileTarget: Equatable {
+        let path: String
+        let lineNumber: Int?
+    }
+
+    private struct ParsedTrailingLineNumberPath: Equatable {
+        let path: String
+        let lineNumber: Int
+    }
+
     private static let minimumRecoveredMalformedComponentLength = 3
     private static let trailingSentencePunctuation: Set<Character> = [
         ",",
@@ -34,9 +44,13 @@ enum TerminalCommandClickTargetResolver {
             return .passthrough(hoveredURL)
         }
 
-        if let localDocumentFilePath = normalizedLocalDocumentFilePath(localFilePath, fileManager: fileManager) {
+        if let localDocumentTarget = resolvedLocalDocumentFileTarget(localFilePath, fileManager: fileManager) {
             let placement: WebPanelPlacement = useAlternatePlacement ? .rootRight : .newTab
-            return .localDocumentFile(path: localDocumentFilePath, placement: placement)
+            return .localDocumentFile(
+                path: localDocumentTarget.path,
+                lineNumber: localDocumentTarget.lineNumber,
+                placement: placement
+            )
         }
 
         if let localDirectoryPath = normalizedLocalDirectoryPath(localFilePath, fileManager: fileManager) {
@@ -86,15 +100,27 @@ enum TerminalCommandClickTargetResolver {
         return path
     }
 
-    private static func normalizedLocalDocumentFilePath(
+    private static func resolvedLocalDocumentFileTarget(
         _ path: String,
         fileManager: FileManager
-    ) -> String? {
-        normalizedRecoveredPath(
-            for: path,
-            fileManager: fileManager,
-            exactMatcher: normalizedExistingLocalDocumentFilePath
-        )
+    ) -> LocalDocumentFileTarget? {
+        for candidate in recoveredPathCandidates(for: path, fileManager: fileManager) {
+            if let exactPath = normalizedExistingLocalDocumentFilePath(candidate, fileManager: fileManager) {
+                return LocalDocumentFileTarget(path: exactPath, lineNumber: nil)
+            }
+
+            guard let parsedPath = parsedTrailingLineNumberPath(candidate),
+                  let resolvedPath = normalizedExistingLocalDocumentFilePath(
+                      parsedPath.path,
+                      fileManager: fileManager
+                  ) else {
+                continue
+            }
+
+            return LocalDocumentFileTarget(path: resolvedPath, lineNumber: parsedPath.lineNumber)
+        }
+
+        return nil
     }
 
     private static func normalizedExistingLocalDocumentFilePath(
@@ -165,6 +191,31 @@ enum TerminalCommandClickTargetResolver {
         return nil
     }
 
+    private static func recoveredPathCandidates(
+        for path: String,
+        fileManager: FileManager
+    ) -> [String] {
+        var seen: Set<String> = []
+        var candidates: [String] = []
+
+        func appendCandidate(_ candidate: String) {
+            guard seen.insert(candidate).inserted else {
+                return
+            }
+            candidates.append(candidate)
+        }
+
+        appendCandidate(path)
+        for candidate in trailingPunctuationRecoveryCandidates(for: path) {
+            appendCandidate(candidate)
+        }
+        for candidate in malformedAbsolutePathRecoveryCandidates(for: path, fileManager: fileManager) {
+            appendCandidate(candidate)
+        }
+
+        return candidates
+    }
+
     private static func normalizedRecoveredPath(
         for path: String,
         fileManager: FileManager,
@@ -187,6 +238,24 @@ enum TerminalCommandClickTargetResolver {
         }
 
         return nil
+    }
+
+    private static func parsedTrailingLineNumberPath(_ path: String) -> ParsedTrailingLineNumberPath? {
+        guard let separatorIndex = path.lastIndex(of: ":") else {
+            return nil
+        }
+
+        let basePath = String(path[..<separatorIndex])
+        let lineNumberText = String(path[path.index(after: separatorIndex)...])
+        guard basePath.isEmpty == false,
+              lineNumberText.isEmpty == false,
+              lineNumberText.allSatisfy(\.isNumber),
+              let lineNumber = Int(lineNumberText),
+              lineNumber > 0 else {
+            return nil
+        }
+
+        return ParsedTrailingLineNumberPath(path: basePath, lineNumber: lineNumber)
     }
 
     private static func trailingPunctuationRecoveryCandidates(for path: String) -> [String] {

@@ -40,6 +40,51 @@ test("jsonc files opt out of json highlighting and keep a JSONC label", async ()
   assert.match(source, /return "JSONC"/);
 });
 
+test("line reveal helpers clamp requests and choose reduced-motion-safe scroll behavior", async () => {
+  const {
+    REVEAL_HIGHLIGHT_DURATION_MS,
+    clampRevealLineNumber,
+    clampScrollTop,
+    revealScrollBehavior
+  } = await import(
+    new URL("../src/lineReveal.mjs", import.meta.url).href
+  );
+
+  assert.equal(REVEAL_HIGHLIGHT_DURATION_MS, 1800);
+  assert.equal(clampRevealLineNumber(42, 12), 12);
+  assert.equal(clampRevealLineNumber(0, 12), 1);
+  assert.equal(clampRevealLineNumber(3, 0), 1);
+  assert.equal(clampScrollTop(-40, 200), 0);
+  assert.equal(clampScrollTop(400, 200), 200);
+  assert.equal(revealScrollBehavior(true), "auto");
+  assert.equal(revealScrollBehavior(false), "smooth");
+});
+
+test("bootstrap bridge exposes one-shot line reveal registration and consumption", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/bootstrap.ts"),
+    "utf8"
+  );
+
+  assert.match(source, /revealLine: \(lineNumber: number\) => void/);
+  assert.match(source, /getCurrentRevealRequest: \(\) => LocalDocumentLineRevealRequest \| null/);
+  assert.match(source, /consumeRevealRequest: \(requestID: number\) => void/);
+  assert.match(source, /subscribeReveal: \(listener: RevealListener\) => \(\) => void/);
+});
+
+test("code view consumes reveal requests, clamps the target line, and clears the highlight after a timeout", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /window\.ToasttyLocalDocumentPanel\?\.consumeRevealRequest\(revealRequest\.requestID\)/);
+  assert.match(source, /const targetLineNumber = clampRevealLineNumber\(revealRequest\.lineNumber, lines\.length\)/);
+  assert.match(source, /className="local-document-code-line-reveal"/);
+  assert.match(source, /window\.setTimeout\(\(\) => \{/);
+  assert.match(source, /REVEAL_HIGHLIGHT_DURATION_MS/);
+});
+
 test("build script copies onig.wasm into the panel output bundle", async () => {
   const source = await readFile(
     resolve(packageRoot, "scripts/build.mjs"),

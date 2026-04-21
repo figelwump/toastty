@@ -5,7 +5,17 @@ import json from "highlight.js/lib/languages/json";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
-import { LocalDocumentFormat, LocalDocumentPanelBootstrap } from "./bootstrap";
+import {
+  LocalDocumentFormat,
+  LocalDocumentLineRevealRequest,
+  LocalDocumentPanelBootstrap
+} from "./bootstrap";
+import {
+  clampRevealLineNumber,
+  clampScrollTop,
+  REVEAL_HIGHLIGHT_DURATION_MS,
+  revealScrollBehavior
+} from "./lineReveal.mjs";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
@@ -132,6 +142,33 @@ function useBootstrap(): LocalDocumentPanelBootstrap | null {
   }, [bootstrap]);
 
   return bootstrap;
+}
+
+function useRevealRequest(): LocalDocumentLineRevealRequest | null {
+  const [revealRequest, setRevealRequest] = React.useState<LocalDocumentLineRevealRequest | null>(
+    () => window.ToasttyLocalDocumentPanel?.getCurrentRevealRequest() ?? null
+  );
+
+  React.useEffect(() => {
+    return window.ToasttyLocalDocumentPanel?.subscribeReveal(setRevealRequest);
+  }, []);
+
+  return revealRequest;
+}
+
+function prefersReducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches ?? false;
+}
+
+function resolvedLineHeight(element: HTMLElement): number {
+  const rawValue = window.getComputedStyle(element).getPropertyValue("--local-document-code-line-height");
+  const parsed = Number.parseFloat(rawValue);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 21.45;
+}
+
+function resolvedTopPadding(element: HTMLElement): number {
+  const parsed = Number.parseFloat(window.getComputedStyle(element).paddingTop);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
 function useLocalDocumentPanelState(): {
@@ -405,12 +442,74 @@ function useDocumentHighlightHTML(
 function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
+  const revealRequest = useRevealRequest();
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const scrollInnerRef = React.useRef<HTMLDivElement | null>(null);
+  const revealTimeoutRef = React.useRef<number | null>(null);
+  const [activeReveal, setActiveReveal] = React.useState<{
+    lineNumber: number;
+    requestID: number;
+    top: number;
+  } | null>(null);
   const language = syntaxLanguage(props.bootstrap.format, props.bootstrap.filePath);
   const codeClassName = props.bootstrap.format === "markdown"
     ? "starry-night"
     : language
       ? `hljs language-${language}`
       : "hljs";
+
+  React.useEffect(() => {
+    return () => {
+      if (revealTimeoutRef.current !== null) {
+        window.clearTimeout(revealTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!revealRequest) {
+      return;
+    }
+
+    const scrollElement = scrollRef.current;
+    const scrollInnerElement = scrollInnerRef.current;
+    if (!scrollElement || !scrollInnerElement) {
+      return;
+    }
+
+    const targetLineNumber = clampRevealLineNumber(revealRequest.lineNumber, lines.length);
+    const lineHeight = resolvedLineHeight(scrollElement);
+    const topPadding = resolvedTopPadding(scrollInnerElement);
+    const highlightTop = topPadding + (targetLineNumber - 1) * lineHeight;
+    const maxScrollTop = scrollElement.scrollHeight - scrollElement.clientHeight;
+    const targetScrollTop = clampScrollTop(
+      highlightTop - scrollElement.clientHeight * 0.35 + lineHeight * 0.5,
+      maxScrollTop
+    );
+
+    setActiveReveal({
+      lineNumber: targetLineNumber,
+      requestID: revealRequest.requestID,
+      top: highlightTop
+    });
+    window.ToasttyLocalDocumentPanel?.consumeRevealRequest(revealRequest.requestID);
+
+    if (revealTimeoutRef.current !== null) {
+      window.clearTimeout(revealTimeoutRef.current);
+    }
+
+    scrollElement.scrollTo({
+      top: targetScrollTop,
+      behavior: revealScrollBehavior(prefersReducedMotion())
+    });
+
+    revealTimeoutRef.current = window.setTimeout(() => {
+      setActiveReveal((currentReveal) =>
+        currentReveal?.requestID === revealRequest.requestID ? null : currentReveal
+      );
+      revealTimeoutRef.current = null;
+    }, REVEAL_HIGHLIGHT_DURATION_MS);
+  }, [revealRequest, lines.length]);
 
   return (
     <section className="local-document-code-shell">
@@ -425,13 +524,24 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
         <pre className="local-document-code-gutter" aria-hidden="true">
           {lines.map((_, index) => String(index + 1)).join("\n")}
         </pre>
-        <pre className="local-document-code-scroll">
-          {highlightedHTML ? (
-            <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
-          ) : (
-            <code className="local-document-code-plain">{props.content}</code>
-          )}
-        </pre>
+        <div className="local-document-code-scroll" ref={scrollRef}>
+          <div className="local-document-code-scroll-inner" ref={scrollInnerRef}>
+            {activeReveal ? (
+              <div
+                aria-hidden="true"
+                className="local-document-code-line-reveal"
+                style={{ top: `${activeReveal.top}px` }}
+              />
+            ) : null}
+            <pre className="local-document-code-content">
+              {highlightedHTML ? (
+                <code className={codeClassName} dangerouslySetInnerHTML={{ __html: highlightedHTML }} />
+              ) : (
+                <code className="local-document-code-plain">{props.content}</code>
+              )}
+            </pre>
+          </div>
+        </div>
       </div>
     </section>
   );

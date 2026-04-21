@@ -1697,6 +1697,7 @@ struct ToasttyApp: App {
         )
         terminalRuntimeRegistry.bind(store: store)
         webPanelRuntimeRegistry.bind(store: store)
+        terminalRuntimeRegistry.bind(webPanelRuntimeRegistry: webPanelRuntimeRegistry)
         let systemNotificationResponseCoordinator = SystemNotificationResponseCoordinator(
             store: store,
             terminalRuntimeRegistry: terminalRuntimeRegistry

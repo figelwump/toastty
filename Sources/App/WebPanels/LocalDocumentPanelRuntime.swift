@@ -21,6 +21,7 @@ struct LocalDocumentPanelRuntimeAutomationState: Equatable, Sendable {
     let lifecycleState: PanelHostLifecycleState
     let currentTheme: LocalDocumentPanelTheme
     let hasPendingBootstrapScript: Bool
+    let pendingRevealLine: Int?
     let currentAssetPath: String?
     let currentBootstrap: LocalDocumentPanelBootstrap?
 }
@@ -311,6 +312,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private var activeSaveOperationID: UUID?
     private var reloadGeneration: UInt64 = 0
     private var pendingBootstrapScript: String?
+    private var pendingRevealLine: Int?
     private var currentAssetURL: URL?
     private var currentBootstrap: LocalDocumentPanelBootstrap?
     private var session: LocalDocumentEditingSession?
@@ -384,6 +386,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
             lifecycleState: lifecycleState,
             currentTheme: currentTheme,
             hasPendingBootstrapScript: pendingBootstrapScript != nil,
+            pendingRevealLine: pendingRevealLine,
             currentAssetPath: currentAssetURL?.path,
             currentBootstrap: currentBootstrap
         )
@@ -428,6 +431,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         guard session.beginEditing() else { return }
         objectWillChange.send()
         self.session = session
+        pendingRevealLine = nil
         updateCurrentBootstrap()
         pushPendingBootstrapIfPossible()
     }
@@ -541,6 +545,16 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         pushTextScaleUpdateIfPossible()
     }
 
+    func requestReveal(lineNumber: Int) {
+        guard lineNumber > 0 else {
+            pendingRevealLine = nil
+            return
+        }
+
+        pendingRevealLine = lineNumber
+        pushPendingRevealIfPossible()
+    }
+
     func applyEffectiveAppearance(_ appearance: NSAppearance?) {
         // Re-assigning the same appearance still invalidates WKWebView cursor
         // rects, which can briefly reset the cursor to AppKit's default arrow
@@ -624,6 +638,10 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
 
     nonisolated static func textScaleJavaScript(for textScale: Double) -> String {
         "window.ToasttyLocalDocumentPanel?.setTextScale(\(String(format: "%.4f", textScale)));"
+    }
+
+    nonisolated static func revealLineJavaScript(for lineNumber: Int) -> String {
+        "window.ToasttyLocalDocumentPanel?.revealLine(\(lineNumber));"
     }
 
     static func makeWebViewConfiguration(
@@ -940,6 +958,7 @@ private extension LocalDocumentPanelRuntime {
             guard let self else { return }
             if error == nil {
                 self.pendingBootstrapScript = nil
+                self.pushPendingRevealIfPossible()
             }
         }
     }
@@ -990,6 +1009,40 @@ private extension LocalDocumentPanelRuntime {
             guard let self, error != nil else { return }
             self.pendingBootstrapScript = nil
             self.pushPendingBootstrapIfPossible()
+        }
+    }
+
+    func pushPendingRevealIfPossible() {
+        guard let pendingRevealLine else { return }
+
+        if session?.isEditing == true {
+            self.pendingRevealLine = nil
+            return
+        }
+
+        guard let entryURL else {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        if currentAssetURL != entryURL {
+            ensurePanelAppLoaded()
+            return
+        }
+
+        guard currentBootstrap != nil,
+              pendingBootstrapScript == nil else {
+            return
+        }
+
+        let script = Self.revealLineJavaScript(for: pendingRevealLine)
+        webView.evaluateJavaScript(script) { [weak self] _, error in
+            guard let self else { return }
+            if error == nil {
+                self.pendingRevealLine = nil
+            } else {
+                self.pushPendingBootstrapIfPossible()
+            }
         }
     }
 
@@ -1159,6 +1212,7 @@ private extension LocalDocumentPanelRuntime {
 extension LocalDocumentPanelRuntime: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         pushPendingBootstrapIfPossible()
+        pushPendingRevealIfPossible()
     }
 
     func webView(
