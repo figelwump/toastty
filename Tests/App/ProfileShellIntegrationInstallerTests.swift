@@ -817,7 +817,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; print -s -- \"echo toastty-zsh\"; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "source \"$1\"; _toastty_preexec \"echo toastty-zsh\"; _toastty_append_pending_history_entry_to_journal; while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -830,6 +830,177 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertEqual(
             output.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
             "echo toastty-zsh"
+        )
+    }
+
+    func testManagedZshSnippetSkipsRestorePromptAppendWithoutPreexec() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-zsh.journal")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try paneJournalData(entries: ["echo pane-local-restore"]).write(
+            to: journalFileURL,
+            options: .atomic
+        )
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; print -s -- \"echo shared-history\"; _toastty_precmd; entries=(); while IFS= read -r -d '' entry; do entries+=(\"$entry\"); done < \"$TOASTTY_PANE_JOURNAL_FILE\"; print -r -- ${#entries}; print -r -- ${entries[-1]}",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            ["1", "echo pane-local-restore"]
+        )
+    }
+
+    func testManagedZshSnippetKeepsRestoredPaneJournalsIsolatedAcrossSharedHistory() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let historyDirectoryURL = snippetURL.deletingLastPathComponent().appendingPathComponent("history")
+        let sharedHistoryFileURL = historyDirectoryURL.appendingPathComponent("shared/zsh.history")
+        let firstJournalFileURL = historyDirectoryURL.appendingPathComponent("pane-journals/first.journal")
+        let secondJournalFileURL = historyDirectoryURL.appendingPathComponent("pane-journals/second.journal")
+        try FileManager.default.createDirectory(
+            at: firstJournalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: sharedHistoryFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try paneJournalData(entries: ["echo pane-one-restore"]).write(
+            to: firstJournalFileURL,
+            options: .atomic
+        )
+        try paneJournalData(entries: ["echo pane-two-restore"]).write(
+            to: secondJournalFileURL,
+            options: .atomic
+        )
+
+        let firstOutput = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; print -s -- \"echo shared-history\"; _toastty_precmd; _toastty_preexec \"echo pane-one\"; _toastty_precmd; while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "HISTFILE": sharedHistoryFileURL.path,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: firstJournalFileURL.path,
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        let secondOutput = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; print -s -- \"echo shared-history\"; _toastty_precmd; _toastty_preexec \"echo pane-two\"; _toastty_precmd; while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "HISTFILE": sharedHistoryFileURL.path,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: secondJournalFileURL.path,
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertEqual(
+            firstOutput.split(separator: "\n").map(String.init),
+            ["echo pane-one-restore", "echo pane-one"]
+        )
+        XCTAssertEqual(
+            secondOutput.split(separator: "\n").map(String.init),
+            ["echo pane-two-restore", "echo pane-two"]
+        )
+    }
+
+    func testManagedZshSnippetLeavesSharedHistoryFileUnchanged() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-zsh.journal")
+        let sharedHistoryFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/shared/zsh.history")
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; printf '%s\\n' \"$HISTFILE\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                "HISTFILE": sharedHistoryFileURL.path,
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertEqual(
+            output.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines),
+            sharedHistoryFileURL.path
+        )
+    }
+
+    func testManagedZshSnippetPreservesMultilineCommandsInPaneJournal() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-zsh.journal")
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; _toastty_preexec $'printf \"toastty-first\"\\nprintf \"toastty-second\"'; _toastty_append_pending_history_entry_to_journal; while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertEqual(
+            output,
+            "printf \"toastty-first\"\nprintf \"toastty-second\"\n"
         )
     }
 
@@ -895,7 +1066,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; _toastty_preexec \"echo toastty-zsh\"; print -s -- \"echo toastty-zsh\"; _toastty_append_last_history_entry_to_journal; cat \"$TOASTTY_PANE_HISTORY_DEBUG_LOG_FILE\"",
+                "source \"$1\"; _toastty_preexec \"echo toastty-zsh\"; _toastty_append_pending_history_entry_to_journal; cat \"$TOASTTY_PANE_HISTORY_DEBUG_LOG_FILE\"",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -909,6 +1080,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
 
         XCTAssertTrue(output.contains("event=preexec"))
         XCTAssertTrue(output.contains("preexec_command=echo toastty-zsh"))
+        XCTAssertTrue(output.contains("pending_entry_set=1"))
         XCTAssertTrue(output.contains("event=append"))
         XCTAssertTrue(output.contains("selected_history_entry=echo toastty-zsh"))
         XCTAssertTrue(output.contains("panel_id=\(panelID.uuidString)"))
@@ -927,7 +1099,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; print -s -- \"echo toastty-zsh\"; _toastty_append_last_history_entry_to_journal; _toastty_append_last_history_entry_to_journal; while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
+                "source \"$1\"; _toastty_preexec \"echo toastty-zsh\"; _toastty_append_pending_history_entry_to_journal; _toastty_append_pending_history_entry_to_journal; while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -938,6 +1110,33 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
 
         XCTAssertEqual(output.split(separator: "\n").map(String.init), ["echo toastty-zsh"])
+    }
+
+    func testManagedZshSnippetSkipsCommandsHiddenFromHistory() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-zsh.journal")
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "setopt histignorespace; source \"$1\"; _toastty_preexec ' echo hidden-zsh'; _toastty_append_pending_history_entry_to_journal; if [[ -r \"$TOASTTY_PANE_JOURNAL_FILE\" ]]; then while IFS= read -r -d '' entry; do print -r -- \"$entry\"; done < \"$TOASTTY_PANE_JOURNAL_FILE\"; fi",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertTrue(output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     func testManagedBashSnippetRestoresAgentShimPathToFront() throws {

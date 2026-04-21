@@ -191,11 +191,11 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \tif _toastty_ensure_pane_journal_directory; then
             \t\t_toastty_compact_pane_journal
             \t\t_toastty_import_pane_journal_if_needed
-            \t\ttypeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+            \t\t# Re-sourcing can leave shell-local state behind; clear it before hooks install.
+            \t\tunset _TOASTTY_PENDING_JOURNAL_ENTRY
             \t\t_toastty_log_pane_history_debug \
             \t\t\tinitialize \
-            \t\t\tcurrent_histcmd "${HISTCMD:-0}" \
-            \t\t\tlast_histcmd "${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}"
             \tfi
 
             \tif [[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]]; then
@@ -204,55 +204,46 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \ttypeset -g _TOASTTY_PANE_JOURNAL_INITIALIZED=1
             }
 
-            _toastty_append_last_history_entry_to_journal() {
+            _toastty_command_should_write_pane_journal() {
+            \tlocal cmd="$1"
+            \t[[ -n "$cmd" ]] || return 1
+
+            \tif [[ -o hist_ignore_space ]]; then
+            \t\tcase "$cmd" in
+            \t\t([[:space:]]*) return 1 ;;
+            \t\tesac
+            \tfi
+
+            \treturn 0
+            }
+
+            _toastty_append_pending_history_entry_to_journal() {
             \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
             \tif [[ -z "$pane_journal_file" ]]; then
             \t\t_toastty_log_pane_history_debug append_skip reason "missing_pane_journal_file"
             \t\treturn
             \tfi
 
-            \tlocal current_histcmd="${HISTCMD:-0}"
-            \tif [[ "$current_histcmd" != <-> ]]; then
-            \t\t_toastty_log_pane_history_debug append_skip reason "non_numeric_histcmd" current_histcmd "$current_histcmd"
-            \t\treturn
-            \tfi
-            \tlocal last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
-            \t[[ "$last_histcmd" == <-> ]] || last_histcmd=0
-            \tif (( current_histcmd <= last_histcmd )); then
-            \t\t_toastty_log_pane_history_debug \
-            \t\t\tappend_skip \
-            \t\t\treason "histcmd_not_advanced" \
-            \t\t\tcurrent_histcmd "$current_histcmd" \
-            \t\t\tlast_histcmd "$last_histcmd"
+            \tif (( ! ${+_TOASTTY_PENDING_JOURNAL_ENTRY} )); then
+            \t\t_toastty_log_pane_history_debug append_skip reason "missing_pending_entry"
             \t\treturn
             \tfi
 
-            \tlocal entry="$(fc -ln -1)"
-            \ttypeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
-            \tif [[ -z "$entry" ]]; then
-            \t\t_toastty_log_pane_history_debug \
-            \t\t\tappend_skip \
-            \t\t\treason "empty_history_entry" \
-            \t\t\tcurrent_histcmd "$current_histcmd" \
-            \t\t\tlast_histcmd "$last_histcmd"
-            \t\treturn
-            \tfi
+            \tlocal entry="${_TOASTTY_PENDING_JOURNAL_ENTRY}"
 
             \tif ! printf '%s\\0' "$entry" >> "$pane_journal_file" 2>/dev/null; then
             \t\t_toastty_log_pane_history_debug \
             \t\t\tappend_skip \
             \t\t\treason "write_failed" \
-            \t\t\tcurrent_histcmd "$current_histcmd" \
-            \t\t\tlast_histcmd "$last_histcmd" \
-            \t\t\tselected_history_entry "$entry"
+            \t\t\tselected_history_entry "$entry" \
+            \t\t\tpreexec_command "${_TOASTTY_LAST_PREEXEC_COMMAND:-}"
             \t\treturn
             \tfi
 
+            \tunset _TOASTTY_PENDING_JOURNAL_ENTRY
             \ttypeset -g _TOASTTY_PANE_JOURNAL_WRITE_COUNT="$(( ${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0} + 1 ))"
             \t_toastty_log_pane_history_debug \
             \t\tappend \
-            \t\tcurrent_histcmd "$current_histcmd" \
-            \t\tlast_histcmd "$last_histcmd" \
             \t\tselected_history_entry "$entry" \
             \t\tpreexec_command "${_TOASTTY_LAST_PREEXEC_COMMAND:-}" \
             \t\twrite_count "${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0}"
@@ -276,16 +267,28 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             _toastty_precmd() {
             \tif [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
-            \t\t_toastty_append_last_history_entry_to_journal
+            \t\t_toastty_append_pending_history_entry_to_journal
             \tfi
             \tlocal cwd="${PWD/#$HOME/~}"
             \t_toastty_emit_title "$cwd"
             }
 
             _toastty_preexec() {
-            \tlocal cmd="${1%%$'\\n'*}"
+            \tlocal entry="$1"
+            \t# Keep multiline commands intact in the journal; titles/debug logs use the first line.
+            \tlocal cmd="${entry%%$'\\n'*}"
+            \tlocal pending_entry_set=0
+
+            \tunset _TOASTTY_PENDING_JOURNAL_ENTRY
             \ttypeset -g _TOASTTY_LAST_PREEXEC_COMMAND="$cmd"
-            \t_toastty_log_pane_history_debug preexec preexec_command "$cmd"
+            \tif _toastty_command_should_write_pane_journal "$entry"; then
+            \t\ttypeset -g _TOASTTY_PENDING_JOURNAL_ENTRY="$entry"
+            \t\tpending_entry_set=1
+            \tfi
+            \t_toastty_log_pane_history_debug \
+            \t\tpreexec \
+            \t\tpreexec_command "$cmd" \
+            \t\tpending_entry_set "$pending_entry_set"
             \t_toastty_emit_title "$cmd"
             }
 

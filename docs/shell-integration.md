@@ -69,28 +69,34 @@ _toastty_initialize_pane_journal() {
 
 	if _toastty_ensure_pane_journal_directory; then
 		_toastty_import_pane_journal_if_needed
-		typeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="${HISTCMD:-0}"
+		unset _TOASTTY_PENDING_JOURNAL_ENTRY
 	fi
 
-	unset TOASTTY_LAUNCH_REASON
 	typeset -g _TOASTTY_PANE_JOURNAL_INITIALIZED=1
 }
 
-_toastty_append_last_history_entry_to_journal() {
+_toastty_command_should_write_pane_journal() {
+	local cmd="$1"
+	[[ -n "$cmd" ]] || return 1
+
+	if [[ -o hist_ignore_space ]]; then
+		case "$cmd" in
+		([[:space:]]*) return 1 ;;
+		esac
+	fi
+
+	return 0
+}
+
+_toastty_append_pending_history_entry_to_journal() {
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
 	[[ -n "$pane_journal_file" ]] || return
 
-	local current_histcmd="${HISTCMD:-0}"
-	[[ "$current_histcmd" == <-> ]] || return
-	local last_histcmd="${_TOASTTY_JOURNAL_LAST_HISTCMD:-0}"
-	[[ "$last_histcmd" == <-> ]] || last_histcmd=0
-	(( current_histcmd > last_histcmd )) || return
-
-	local entry="$(fc -ln -1)"
-	typeset -g _TOASTTY_JOURNAL_LAST_HISTCMD="$current_histcmd"
-	[[ -n "$entry" ]] || return
+	(( ${+_TOASTTY_PENDING_JOURNAL_ENTRY} )) || return
+	local entry="${_TOASTTY_PENDING_JOURNAL_ENTRY}"
 
 	printf '%s\0' "$entry" >> "$pane_journal_file" 2>/dev/null || return
+	unset _TOASTTY_PENDING_JOURNAL_ENTRY
 }
 
 _toastty_emit_title() {
@@ -108,14 +114,17 @@ _toastty_emit_title() {
 
 _toastty_precmd() {
 	if [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
-		_toastty_append_last_history_entry_to_journal
+		_toastty_append_pending_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"
 	_toastty_emit_title "$cwd"
 }
 
 _toastty_preexec() {
-	local cmd="${1%%$'\n'*}"
+	local entry="$1"
+	local cmd="${entry%%$'\n'*}"
+	unset _TOASTTY_PENDING_JOURNAL_ENTRY
+	_toastty_command_should_write_pane_journal "$entry" && typeset -g _TOASTTY_PENDING_JOURNAL_ENTRY="$entry"
 	_toastty_emit_title "$cmd"
 }
 
@@ -136,6 +145,9 @@ Then add this near the end of `~/.zshrc`:
 ```zsh
 source "$HOME/.toastty/shell/toastty-profile-shell-integration.zsh"
 ```
+
+When `setopt HIST_IGNORE_SPACE` is active, leading-space commands stay out of
+the pane journal too.
 
 ## Bash
 
