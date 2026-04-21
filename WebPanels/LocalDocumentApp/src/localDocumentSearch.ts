@@ -167,14 +167,56 @@ function rangeForMatch(segments: TextSegment[], match: TextMatch): Range | null 
   return range;
 }
 
-function scrollPreviewRangeIntoView(range: Range) {
-  const anchorNode = range.startContainer;
-  const anchorElement = anchorNode.nodeType === Node.TEXT_NODE
-    ? anchorNode.parentElement
-    : anchorNode as Element;
-  anchorElement?.scrollIntoView({
-    block: "center",
-    inline: "nearest"
+export function centeredPreviewScrollTop(options: {
+  containerHeight: number;
+  targetTop: number;
+  targetHeight: number;
+}): number {
+  const {
+    containerHeight,
+    targetTop,
+    targetHeight
+  } = options;
+  const nextScrollTop = targetTop - (containerHeight / 2) + (targetHeight / 2);
+  return Math.max(0, nextScrollTop);
+}
+
+export function previewLineIndexForOffset(textContent: string, offset: number): number {
+  const boundedOffset = Math.max(0, Math.min(offset, textContent.length));
+  return textContent.slice(0, boundedOffset).split("\n").length - 1;
+}
+
+function resolvedPreviewLineHeight(root: HTMLElement): number {
+  const codeElement = root.firstElementChild instanceof HTMLElement
+    ? root.firstElementChild
+    : root.querySelector("code");
+  const style = window.getComputedStyle(codeElement ?? root);
+  const explicitLineHeight = Number.parseFloat(style.lineHeight);
+  if (Number.isFinite(explicitLineHeight)) {
+    return explicitLineHeight;
+  }
+
+  const fontSize = Number.parseFloat(style.fontSize);
+  if (Number.isFinite(fontSize)) {
+    return fontSize * 1.65;
+  }
+
+  return 21.45;
+}
+
+function scrollPreviewMatchIntoView(root: HTMLElement, textContent: string, match: TextMatch) {
+  if (root.clientHeight === 0) {
+    return;
+  }
+
+  // The preview is a non-wrapping <pre><code> surface, so a match's visual
+  // position is fully determined by the newline count before its start offset.
+  const lineIndex = previewLineIndexForOffset(textContent, match.start);
+  const lineHeight = resolvedPreviewLineHeight(root);
+  root.scrollTop = centeredPreviewScrollTop({
+    containerHeight: root.clientHeight,
+    targetTop: lineIndex * lineHeight,
+    targetHeight: lineHeight
   });
 }
 
@@ -199,14 +241,22 @@ function applyPreviewSearch(
     return emptySearchState(query);
   }
 
-  const ranges = matches
-    .map((match) => rangeForMatch(segments, match))
-    .filter((range): range is Range => range !== null);
-  const resolvedActiveIndex = Math.min(activeMatchIndex, Math.max(ranges.length - 1, 0));
+  const rangedMatches = matches
+    .map((match) => {
+      const range = rangeForMatch(segments, match);
+      if (range === null) {
+        return null;
+      }
+      return { match, range };
+    })
+    .filter((entry): entry is { match: TextMatch; range: Range } => entry !== null);
+  const resolvedActiveIndex = Math.min(activeMatchIndex, Math.max(rangedMatches.length - 1, 0));
 
-  if (ranges.length == 0) {
+  if (rangedMatches.length == 0) {
     return emptySearchState(query);
   }
+
+  const ranges = rangedMatches.map((entry) => entry.range);
 
   const registry = highlightRegistry();
   const Highlight = highlightConstructor();
@@ -219,7 +269,7 @@ function applyPreviewSearch(
     selection?.addRange(ranges[resolvedActiveIndex]);
   }
 
-  scrollPreviewRangeIntoView(ranges[resolvedActiveIndex]);
+  scrollPreviewMatchIntoView(root, textContent, rangedMatches[resolvedActiveIndex].match);
   return {
     query,
     matchCount: ranges.length,
