@@ -125,6 +125,51 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t} >> "$debug_log_file" 2>/dev/null || return
             }
 
+            _toastty_history_debug_snapshot_lines() {
+            \tlocal debug_log_file="${TOASTTY_PANE_HISTORY_DEBUG_LOG_FILE:-}"
+            \t[[ -n "$debug_log_file" ]] || return 1
+
+            \tlocal limit="${1:-3}"
+            \tlocal history_output=""
+            \thistory_output="$(builtin fc -ln 1 2>/dev/null)"
+
+            \tlocal -a history_entries=()
+            \tif [[ -n "$history_output" ]]; then
+            \t\thistory_entries=("${(@f)history_output}")
+            \tfi
+
+            \tlocal total=${#history_entries[@]}
+            \tlocal last_entry=""
+            \tlocal previous_entry=""
+            \tlocal tail_summary=""
+
+            \tif (( total > 0 )); then
+            \t\tlast_entry="${history_entries[-1]}"
+            \t\tif (( total > 1 )); then
+            \t\t\tprevious_entry="${history_entries[-2]}"
+            \t\tfi
+
+            \t\tlocal start_index=$(( total - limit + 1 ))
+            \t\t(( start_index < 1 )) && start_index=1
+            \t\tlocal -a tail_entries=()
+            \t\tlocal index=0
+            \t\tlocal entry=""
+            \t\tfor (( index = start_index; index <= total; ++index )); do
+            \t\t\tentry="${history_entries[index]}"
+            \t\t\tentry="${entry//$'\\n'/\\\\n}"
+            \t\t\ttail_entries+=("$entry")
+            \t\tdone
+            \t\ttail_summary="${(j: || :)tail_entries}"
+            \t\tlast_entry="${last_entry//$'\\n'/\\\\n}"
+            \t\tprevious_entry="${previous_entry//$'\\n'/\\\\n}"
+            \tfi
+
+            \tprint -r -- "$total"
+            \tprint -r -- "$last_entry"
+            \tprint -r -- "$previous_entry"
+            \tprint -r -- "$tail_summary"
+            }
+
             _toastty_ensure_pane_journal_directory() {
             \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
             \t[[ -n "$pane_journal_file" ]] || return 1
@@ -179,10 +224,18 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\tlast_imported_entry="$entry"
             \tdone < "$pane_journal_file"
 
+            \tlocal -a history_snapshot=()
+            \thistory_snapshot=("${(@f)$(_toastty_history_debug_snapshot_lines 3)}")
+
             \t_toastty_log_pane_history_debug \
             \t\timport \
             \t\timported_entry_count "$imported_count" \
-            \t\tlast_imported_entry "$last_imported_entry"
+            \t\tlast_imported_entry "$last_imported_entry" \
+            \t\thistory_entry_count "${history_snapshot[1]:-0}" \
+            \t\thistory_last_entry "${history_snapshot[2]:-}" \
+            \t\thistory_previous_entry "${history_snapshot[3]:-}" \
+            \t\thistory_tail_summary "${history_snapshot[4]:-}" \
+            \t\tcurrent_histcmd "${HISTCMD:-0}"
             }
 
             _toastty_initialize_pane_journal() {
@@ -219,13 +272,29 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             _toastty_append_pending_history_entry_to_journal() {
             \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
+            \tlocal -a history_snapshot=()
+            \thistory_snapshot=("${(@f)$(_toastty_history_debug_snapshot_lines 3)}")
             \tif [[ -z "$pane_journal_file" ]]; then
-            \t\t_toastty_log_pane_history_debug append_skip reason "missing_pane_journal_file"
+            \t\t_toastty_log_pane_history_debug \
+            \t\t\tappend_skip \
+            \t\t\treason "missing_pane_journal_file" \
+            \t\t\thistory_entry_count "${history_snapshot[1]:-0}" \
+            \t\t\thistory_last_entry "${history_snapshot[2]:-}" \
+            \t\t\thistory_previous_entry "${history_snapshot[3]:-}" \
+            \t\t\thistory_tail_summary "${history_snapshot[4]:-}" \
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}"
             \t\treturn
             \tfi
 
             \tif (( ! ${+_TOASTTY_PENDING_JOURNAL_ENTRY} )); then
-            \t\t_toastty_log_pane_history_debug append_skip reason "missing_pending_entry"
+            \t\t_toastty_log_pane_history_debug \
+            \t\t\tappend_skip \
+            \t\t\treason "missing_pending_entry" \
+            \t\t\thistory_entry_count "${history_snapshot[1]:-0}" \
+            \t\t\thistory_last_entry "${history_snapshot[2]:-}" \
+            \t\t\thistory_previous_entry "${history_snapshot[3]:-}" \
+            \t\t\thistory_tail_summary "${history_snapshot[4]:-}" \
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}"
             \t\treturn
             \tfi
 
@@ -236,7 +305,12 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\t\tappend_skip \
             \t\t\treason "write_failed" \
             \t\t\tselected_history_entry "$entry" \
-            \t\t\tpreexec_command "${_TOASTTY_LAST_PREEXEC_COMMAND:-}"
+            \t\t\tpreexec_command "${_TOASTTY_LAST_PREEXEC_COMMAND:-}" \
+            \t\t\thistory_entry_count "${history_snapshot[1]:-0}" \
+            \t\t\thistory_last_entry "${history_snapshot[2]:-}" \
+            \t\t\thistory_previous_entry "${history_snapshot[3]:-}" \
+            \t\t\thistory_tail_summary "${history_snapshot[4]:-}" \
+            \t\t\tcurrent_histcmd "${HISTCMD:-0}"
             \t\treturn
             \tfi
 
@@ -246,7 +320,12 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t\tappend \
             \t\tselected_history_entry "$entry" \
             \t\tpreexec_command "${_TOASTTY_LAST_PREEXEC_COMMAND:-}" \
-            \t\twrite_count "${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0}"
+            \t\twrite_count "${_TOASTTY_PANE_JOURNAL_WRITE_COUNT:-0}" \
+            \t\thistory_entry_count "${history_snapshot[1]:-0}" \
+            \t\thistory_last_entry "${history_snapshot[2]:-}" \
+            \t\thistory_previous_entry "${history_snapshot[3]:-}" \
+            \t\thistory_tail_summary "${history_snapshot[4]:-}" \
+            \t\tcurrent_histcmd "${HISTCMD:-0}"
             \tif (( _TOASTTY_PANE_JOURNAL_WRITE_COUNT % \(Self.paneJournalCompactionInterval) == 0 )); then
             \t\t_toastty_compact_pane_journal
             \tfi
