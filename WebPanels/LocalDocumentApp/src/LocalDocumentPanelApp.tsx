@@ -244,10 +244,15 @@ function resolveComputedLineHeight(element: HTMLElement): number | null {
 // band is `lineHeight` tall and we want the rendered glyph for that line
 // visually centered in it.
 //
-// Both paths (direct measurement of line N, and empty-line fallback via
-// line 1's anchor + arithmetic) subtract the same `(lineHeight - glyphHeight)
-// / 2` offset so the content highlight and the gutter highlight stay at the
-// same y even when the content line is empty but the gutter isn't.
+// Empty-line targets can't be measured directly (no glyph to put a Range
+// over), so we scan outward for the nearest non-empty line and extrapolate
+// by the line delta. Extrapolating off the target's own neighbor dodges an
+// observed WKWebView quirk where `rects[0]` from
+// `selectNodeContents(element).getClientRects()` on a very large decorated
+// code block doesn't correspond to line 1 — the first-line anchor produced
+// off-by-many-lines reveals in long files whose requested line happened to
+// be blank. Using a neighbor keeps the base measurement close to the real
+// target and makes the formula robust to whatever rects[0] is doing.
 function measureHighlightTopRelativeToFrame(args: {
   element: HTMLElement;
   frameElement: HTMLElement;
@@ -255,11 +260,37 @@ function measureHighlightTopRelativeToFrame(args: {
   lineHeight: number;
 }): number | null {
   const frameTop = args.frameElement.getBoundingClientRect().top;
+
   const direct = measureDirectLineGlyph(args.element, args.lineNumber);
   if (direct !== null) {
     const verticalPadding = Math.max(0, (args.lineHeight - direct.height) / 2);
     return (direct.top - frameTop) - verticalPadding;
   }
+
+  const textContent = args.element.textContent ?? "";
+  const lines = textContent.split("\n");
+  // Scan outward ±N lines for the closest non-empty neighbor and extrapolate.
+  for (let distance = 1; distance <= 32; distance++) {
+    for (const offset of [distance, -distance]) {
+      const candidateLineNumber = args.lineNumber + offset;
+      if (candidateLineNumber < 1 || candidateLineNumber > lines.length) {
+        continue;
+      }
+      if (lines[candidateLineNumber - 1].length === 0) {
+        continue;
+      }
+      const candidate = measureDirectLineGlyph(args.element, candidateLineNumber);
+      if (candidate === null) {
+        continue;
+      }
+      const verticalPadding = Math.max(0, (args.lineHeight - candidate.height) / 2);
+      return (candidate.top - frameTop) - offset * args.lineHeight - verticalPadding;
+    }
+  }
+
+  // Last resort: first-line anchor. This path is only reached when the entire
+  // file is blank within ±32 lines of the target, which should be rare enough
+  // that the remaining WKWebView rects[0] drift doesn't matter in practice.
   const firstGlyph = measureFirstRenderedLineGlyph(args.element);
   if (firstGlyph === null) {
     return null;

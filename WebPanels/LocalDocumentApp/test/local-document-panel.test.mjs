@@ -178,6 +178,12 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   assert.match(source, /range\.getClientRects\(\)/);
   assert.match(source, /args\.lineHeight - direct\.height/);
   assert.match(source, /args\.lineHeight - firstGlyph\.height/);
+  // Empty-line fallback extrapolates from the nearest non-empty neighbor so
+  // we don't depend on rects[0] from selectNodeContents being line 1 (a long,
+  // decorated WKWebView code block has been seen to return a first rect that
+  // sits many lines below actual line 1).
+  assert.match(source, /args\.lineHeight - candidate\.height/);
+  assert.match(source, /args\.lineNumber \+ offset/);
   assert.match(source, /setRevealLayout\(null\);/);
   assert.match(source, /revealScrollSequenceRef/);
   assert.match(source, /window\.requestAnimationFrame\(\(\) => \{/);
