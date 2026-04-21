@@ -19,6 +19,12 @@ For any UI/runtime change, validate beyond unit tests — run automation and ins
 
 **Smoke automation:**
 ```bash
+# Agent default: remote smoke via the wrapper, with fallback handled by validate.sh
+sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui
+
+# Require the remote path itself when that is what you are validating
+sv exec -- scripts/remote/validate.sh --smoke-test smoke-ui --require-remote
+
 # Fallback (no Ghostty) first, then Ghostty-enabled
 TUIST_DISABLE_GHOSTTY=1 ./scripts/automation/smoke-ui.sh
 ./scripts/automation/smoke-ui.sh
@@ -29,8 +35,8 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 
 **Artifacts:** stored in `artifacts/` (gitignored). Manual captures go in `artifacts/manual/`.
 - Committed planning docs belong in `docs/plans/`, not under `artifacts/`.
-- When `TOASTTY_REMOTE_GUI_HOST` is available and the needed smoke test is supported there, prefer `scripts/remote/validate.sh --smoke-test ...` over running local smoke helpers directly from an agent. Use the local helpers directly when the user explicitly wants a local run, remote preflight is unavailable, or the check is local-only.
-- For remote `xcodebuild test` runs, especially when XCTest may present real AppKit windows or panels, prefer `scripts/remote/test.sh` over running the suite on the current desktop. It creates a disposable remote worktree, runs `xcodebuild test` there, and copies logs plus the `.xcresult` bundle back into `artifacts/remote-tests/<run-label>/`.
+- Agent-driven smoke validation should start with `sv exec -- scripts/remote/validate.sh --smoke-test ...`. Do not probe `TOASTTY_REMOTE_GUI_HOST` outside `sv exec`; the remote GUI env is injected there. Only run local smoke helpers directly when the user explicitly wants a local run, the check is local-only, or `validate.sh` has already fallen back or failed and you are intentionally continuing locally.
+- Agent-driven `xcodebuild test` runs should start with `sv exec -- scripts/remote/test.sh ...`, not direct local `xcodebuild test`. Use a local test run only when the user explicitly asks for local execution.
 - `scripts/automation/smoke-ui.sh` is the default local runtime-validation fallback when the change is covered by socket automation. It restores the previously frontmost app after Toastty reaches automation readiness, so prefer it before any foreground-only tooling when you are intentionally validating locally.
 - `scripts/automation/smoke-cli-live-control.sh` is the default local smoke path for the CLI's always-on live-control surface. It launches a normal runtime-isolated app instance, reads that run's `instance.json`, and validates the CLI against the matching live socket instead of automation mode.
 - `scripts/automation/shortcut-hints-smoke.sh` is the preferred local path for visual-only verification of workspace and panel shortcut badges or other always-visible shortcut hints. Use it before any `peekaboo` flow when a static screenshot artifact is enough.
@@ -38,7 +44,7 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - Use `peekaboo` for menus, shortcuts, focus, window state, and visual inspection of a running Toastty instance. Do not use it for build verification, log inspection, or checks that automation/unit tests already cover.
 - Before any required local `peekaboo` flow, run `peekaboo permissions --json` and inspect Accessibility. If Accessibility is missing, stop and ask the user to grant it before continuing locally. Do not keep trying local `peekaboo` or invent ad-hoc screenshot/menu workarounds after that failure. If the user does not want to grant local Accessibility, switch to `scripts/remote/validate.sh`.
 - If visual validation is taking several minutes or several turns and keeps failing due to flakiness in `peekaboo`, Accessibility, focus, or app targeting, pause instead of grinding indefinitely. Summarize to the user what you already validated, what is flaky or blocked, and the exact remaining manual checks they could perform quickly. Also review why validation took so long and suggest concrete workflow improvements for next time.
-- If a validation flow would steal focus locally, prefer the dedicated remote wrappers on the remote GUI machine instead of the current desktop: `scripts/remote/validate.sh` for smoke or foreground validation flows, and `scripts/remote/test.sh` for `xcodebuild test` runs.
+- Validation flows that can run through the remote GUI wrappers should do so by default via `sv exec -- scripts/remote/validate.sh ...` or `sv exec -- scripts/remote/test.sh ...`. Do not jump straight to local smoke or local `xcodebuild test` unless the user asked for local execution or the remote-wrapper path has already been tried and cannot satisfy the check.
 - When a change needs real shortcut tracing or only a screenshot/state artifact, prefer the remote wrapper variants (`--smoke-test shortcut-trace` or `--smoke-test shortcut-hints`) on the dedicated remote Mac before stealing focus locally.
 - In handoffs, say whether each validation ran remotely, locally, or via `validate.sh` with local fallback. Do not make the user infer where the checks actually ran.
 - For menu validation, target the exact built app instance by PID or full app bundle path. Multiple local `Toastty` builds may be running at once, and generic `osascript` checks can attach to the wrong process.
@@ -53,8 +59,8 @@ TUIST_DISABLE_GHOSTTY=0 TOASTTY_DISABLE_GHOSTTY=0 tuist generate
 - Before a Ghostty-backed build from a fresh worktree, run `./scripts/dev/bootstrap-worktree.sh`. The smoke, shortcut-trace, and check helpers already do this for you.
 - The automation helpers now default to `artifacts/dev-runs/<RUN_ID>/...` and set unique `TOASTTY_RUNTIME_HOME`, `DERIVED_PATH`, `ARTIFACTS_DIR`, and `SOCKET_PATH` for each run. Follow the same pattern for any custom launch flow.
 - For `shortcut-trace.sh` or other trace-style runs, also use a unique `TRACE_LOG_PATH` per instance instead of a shared log path.
-- For remote smoke or foreground validation, use `scripts/remote/validate.sh` with `TOASTTY_REMOTE_GUI_HOST`. It creates a disposable remote worktree, syncs the requested change scope into it, runs the requested smoke test or remote validation command there, and copies the artifacts back into `artifacts/remote-gui/<run-label>/`. Prefer this wrapper for agent-driven smoke validation when the requested smoke test is supported remotely. By default, smoke runs fall back to a local run if remote preflight fails; pass `--require-remote` when the remote path itself must be validated.
-- For remote XCTest runs, use `scripts/remote/test.sh` with `TOASTTY_REMOTE_GUI_HOST`. It creates a disposable remote worktree, syncs the requested change scope into it, runs `xcodebuild test` there, and copies the artifacts back into `artifacts/remote-tests/<run-label>/`. This wrapper does not fall back locally.
+- For agent-driven remote smoke or foreground validation, use `sv exec -- scripts/remote/validate.sh ...`. The remote GUI env (`TOASTTY_REMOTE_GUI_HOST`, `TOASTTY_REMOTE_GUI_REPO_ROOT`, `TOASTTY_REMOTE_GUI_ROOT`) is provided by `sv`, not guaranteed in the bare shell. This wrapper creates a disposable remote worktree, syncs the requested change scope into it, runs the requested smoke test or remote validation command there, and copies the artifacts back into `artifacts/remote-gui/<run-label>/`. Use local smoke helpers directly only after this wrapper has fallen back or failed, or when the user explicitly asked for a local run. Pass `--require-remote` when the remote path itself must be validated.
+- For agent-driven XCTest runs, use `sv exec -- scripts/remote/test.sh ...`. This wrapper creates a disposable remote worktree, syncs the requested change scope into it, runs `xcodebuild test` there, and copies the artifacts back into `artifacts/remote-tests/<run-label>/`. It does not fall back locally; if you need a local run instead, that should be an explicit choice.
 - For Ghostty-required remote smoke tests such as `shortcut-trace`, `validate.sh` copies the local `Dependencies/GhosttyKit*.xcframework` artifacts into the disposable remote worktree. Keep the local worktree bootstrapped before invoking that path.
 - Capture the launched app PID and use PID-targeted tooling for validation whenever possible. Prefer `peekaboo ... --pid <pid>` and avoid generic `osascript` or app-name-only targeting when more than one Toastty instance may be running.
 - When runtime isolation is enabled, Toastty writes `instance.json` inside that runtime home. Use it to find the exact sandbox, log path, socket path, derived path, and worktree root for the running instance you launched.
