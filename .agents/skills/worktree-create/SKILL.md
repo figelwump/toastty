@@ -26,7 +26,9 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
 5. Persist the handoff inside the new worktree before launching the next session.
    - Write `WORKTREE_HANDOFF.md` in the new worktree root.
    - If the current thread already has a concrete plan/design file in the repo, reference that file explicitly in the handoff.
-   - If there is no durable plan file yet, put a concise plan directly in `WORKTREE_HANDOFF.md`.
+   - If the current thread already produced a detailed implementation plan in-chat but that plan is not yet persisted in the repo, copy that plan into `WORKTREE_HANDOFF.md` with enough detail for the next session to execute directly.
+   - Do not compress an already-settled implementation plan into a lightweight summary just because it is being handed off.
+   - If there is no durable plan file yet and no detailed plan exists in-thread, put a concise task-specific plan directly in `WORKTREE_HANDOFF.md`.
 6. Open a new Toastty workspace for that worktree and launch the new terminal session with the bundled helper:
    - The helper creates the workspace, opens `WORKTREE_HANDOFF.md` in a right-hand local-document split, and starts the new terminal command in the left terminal pane.
 
@@ -42,14 +44,30 @@ Use this workflow when the current thread should continue in a fresh Toastty wor
 
 ## Handoff file contents
 
-Keep `WORKTREE_HANDOFF.md` concise and task-specific. Include:
+Keep `WORKTREE_HANDOFF.md` task-specific. The length should match the state of the thread:
+
+- If the thread only has a rough direction, a concise handoff is fine.
+- If the thread already has a concrete implementation plan, preserve that plan in enough detail for the next session to continue without reconstructing architecture decisions from scratch.
+- “Concise” does not mean dropping agreed design decisions, sequencing, file targets, validation, or accepted review corrections.
+
+Include:
 
 - the task goal
 - relevant user constraints or preferences from the current thread
 - current status
 - any existing plan/design file paths
+- any settled implementation decisions from the current thread
+- affected files or code areas when known
 - the next 2-5 concrete actions for the new session
 - any risks, open questions, or validation notes
+
+When the parent thread already has a full implementation plan, prefer the following extra detail in the handoff:
+
+- architecture and state-shape decisions that were already made
+- explicit sequencing when order matters
+- file-by-file implementation targets
+- validation and test expectations
+- review feedback that was accepted or intentionally rejected
 
 ## Important invariants
 
