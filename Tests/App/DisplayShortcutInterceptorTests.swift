@@ -281,6 +281,21 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         XCTAssertFalse(DisplayShortcutInterceptor.isSaveShortcut(repeatedEvent))
     }
 
+    func testEnterEditShortcutMatchesPlainCommandEOnly() throws {
+        let matchingEvent = try makeKeyEvent(characters: "e", modifiers: [.command], keyCode: UInt16(kVK_ANSI_E))
+        let shiftedEvent = try makeKeyEvent(characters: "E", modifiers: [.command, .shift], keyCode: UInt16(kVK_ANSI_E))
+        let repeatedEvent = try makeKeyEvent(
+            characters: "e",
+            modifiers: [.command],
+            keyCode: UInt16(kVK_ANSI_E),
+            isARepeat: true
+        )
+
+        XCTAssertTrue(DisplayShortcutInterceptor.isEnterEditShortcut(matchingEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isEnterEditShortcut(shiftedEvent))
+        XCTAssertFalse(DisplayShortcutInterceptor.isEnterEditShortcut(repeatedEvent))
+    }
+
     func testCancelEditShortcutMatchesBareEscapeOnly() throws {
         let matchingEvent = try makeKeyEvent(characters: "\u{1b}", modifiers: [], keyCode: UInt16(kVK_Escape))
         let modifiedEvent = try makeKeyEvent(
@@ -486,6 +501,72 @@ final class DisplayShortcutInterceptorTests: XCTestCase {
         )
         XCTAssertTrue(interceptor.handle(.saveLocalDocument, appOwnedWindowID: windowID))
         XCTAssertNil(interceptor.shortcutAction(for: saveEvent, appOwnedWindowID: nil))
+    }
+
+    func testLocalDocumentEnterEditShortcutRequiresPreviewMode() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("README.md")
+        try "# Preview\n".write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let store = AppStore(state: .bootstrap(), persistTerminalFontPreference: false)
+        let windowID = try XCTUnwrap(store.state.windows.first?.id)
+        XCTAssertTrue(
+            store.createLocalDocumentPanelFromCommand(
+                preferredWindowID: windowID,
+                request: LocalDocumentPanelCreateRequest(
+                    filePath: fileURL.path,
+                    placementOverride: .splitRight
+                )
+            )
+        )
+
+        let terminalRuntimeRegistry = TerminalRuntimeRegistry()
+        terminalRuntimeRegistry.bind(store: store)
+        let webPanelRuntimeRegistry = WebPanelRuntimeRegistry()
+        webPanelRuntimeRegistry.bind(store: store)
+        let sessionRuntimeStore = SessionRuntimeStore()
+        sessionRuntimeStore.bind(store: store)
+        let focusedPanelCommandController = FocusedPanelCommandController(
+            store: store,
+            runtimeRegistry: terminalRuntimeRegistry,
+            slotFocusRestoreCoordinator: SlotFocusRestoreCoordinator()
+        )
+        let interceptor = DisplayShortcutInterceptor(
+            store: store,
+            terminalRuntimeRegistry: terminalRuntimeRegistry,
+            webPanelRuntimeRegistry: webPanelRuntimeRegistry,
+            sessionRuntimeStore: sessionRuntimeStore,
+            focusedPanelCommandController: focusedPanelCommandController,
+            installEventMonitor: false
+        )
+
+        let selection = try XCTUnwrap(store.focusedLocalDocumentPanelSelection(preferredWindowID: windowID))
+        let workspace = try XCTUnwrap(store.state.workspacesByID[selection.workspaceID])
+        guard case .web(let webState) = workspace.panels[selection.panelID] else {
+            XCTFail("expected focused local-document panel")
+            return
+        }
+
+        let runtime = webPanelRuntimeRegistry.localDocumentRuntime(for: selection.panelID)
+        runtime.apply(webState: webState)
+        try await waitUntil { runtime.automationState().currentBootstrap != nil }
+
+        let editEvent = try makeKeyEvent(characters: "e", modifiers: [.command], keyCode: UInt16(kVK_ANSI_E))
+
+        XCTAssertEqual(
+            interceptor.shortcutAction(for: editEvent, appOwnedWindowID: windowID),
+            .enterLocalDocumentEdit
+        )
+        XCTAssertTrue(interceptor.handle(.enterLocalDocumentEdit, appOwnedWindowID: windowID))
+        XCTAssertNil(interceptor.shortcutAction(for: editEvent, appOwnedWindowID: nil))
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertNil(interceptor.shortcutAction(for: editEvent, appOwnedWindowID: windowID))
     }
 
     func testTextSizeShortcutTargetsFocusedTerminalMarkdownAndBrowser() throws {

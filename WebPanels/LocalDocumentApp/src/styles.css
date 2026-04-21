@@ -359,6 +359,7 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   padding: 9px 14px;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -375,6 +376,27 @@ body {
   letter-spacing: 0.01em;
   cursor: pointer;
   transition: transform 120ms ease, opacity 120ms ease, background 120ms ease;
+}
+
+.local-document-action-button-shortcut {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5em;
+  padding: 3px 6px;
+  border: 1px solid rgba(255, 248, 241, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 248, 241, 0.12);
+  color: inherit;
+  font:
+    600
+    calc(10px * var(--toastty-markdown-text-scale))
+    / 1
+    "IBM Plex Mono",
+    "SFMono-Regular",
+    Menlo,
+    monospace;
+  letter-spacing: 0.02em;
 }
 
 .local-document-action-button:hover:enabled {

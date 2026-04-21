@@ -397,6 +397,20 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         session?.canSaveFromCommand == true
     }
 
+    func canEnterEditFromCommand() -> Bool {
+        guard let session else { return false }
+        return session.filePath != nil && session.isEditing == false
+    }
+
+    @discardableResult
+    func enterEditFromCommand() -> Bool {
+        guard canEnterEditFromCommand() else {
+            return false
+        }
+        enterEditMode()
+        return true
+    }
+
     @discardableResult
     func saveFromCommand() -> Bool {
         guard let session else { return false }
@@ -407,7 +421,6 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         return true
     }
 
-    @discardableResult
     func canCancelEditFromCommand() -> Bool {
         guard let session else { return false }
         return session.isEditing && session.isSaving == false

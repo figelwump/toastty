@@ -172,6 +172,42 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.contentRevision, 1)
     }
 
+    func testEnterEditFromCommandRequiresPreviewState() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Draft",
+                    diskRevision: nil
+                )
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "README.md",
+            filePath: "/tmp/toastty/readme.md"
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        XCTAssertTrue(runtime.canEnterEditFromCommand())
+        XCTAssertTrue(runtime.enterEditFromCommand())
+
+        let bootstrap = try XCTUnwrap(runtime.automationState().currentBootstrap)
+        XCTAssertTrue(bootstrap.isEditing)
+        XCTAssertFalse(runtime.canEnterEditFromCommand())
+        XCTAssertFalse(runtime.enterEditFromCommand())
+    }
+
     func testDraftUpdateTracksEditingBufferWithoutAdvancingRevision() async throws {
         let metadataExpectation = expectation(description: "Initial metadata update arrives")
 

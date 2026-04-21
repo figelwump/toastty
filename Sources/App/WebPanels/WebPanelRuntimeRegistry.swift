@@ -109,12 +109,21 @@ final class WebPanelRuntimeRegistry: ObservableObject {
         localDocumentRuntimeByPanelID[panelID]
     }
 
+    func canEnterEditingLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.canEnterEditFromCommand() == true
+    }
+
     func canSaveLocalDocumentPanel(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.canSaveFromCommand() == true
     }
 
     func canCancelEditingLocalDocumentPanel(panelID: UUID) -> Bool {
         localDocumentRuntimeByPanelID[panelID]?.canCancelEditFromCommand() == true
+    }
+
+    @discardableResult
+    func enterEditingLocalDocumentPanel(panelID: UUID) -> Bool {
+        localDocumentRuntimeByPanelID[panelID]?.enterEditFromCommand() == true
     }
 
     @discardableResult

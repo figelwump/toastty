@@ -286,7 +286,8 @@ function Header(props: {
               onClick={enterEdit}
               disabled={!bootstrap.filePath}
             >
-              Edit
+              <span>Edit</span>
+              <span className="local-document-action-button-shortcut" aria-hidden="true">⌘E</span>
             </button>
           </>
         )}
