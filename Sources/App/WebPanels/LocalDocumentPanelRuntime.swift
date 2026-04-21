@@ -351,6 +351,12 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         )
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
+        #if DEBUG
+        // Expose the panel to Safari Web Inspector for debug builds so reveal
+        // measurements can be inspected directly in WKWebView rather than
+        // guessed at through Chromium approximations.
+        webView.isInspectable = true
+        #endif
         self.webView = webView
         self.bridgeScriptEvaluator = bridgeScriptEvaluator ?? { script, completion in
             webView.evaluateJavaScript(script, completionHandler: completion)
