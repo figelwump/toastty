@@ -79,7 +79,9 @@ test("local-document search keeps preview highlights in the DOM layer and editor
   assert.match(source, /textarea\.setSelectionRange/);
   assert.match(source, /scrollEditorMatchIntoView/);
   assert.match(source, /previewLineIndexForOffset/);
+  assert.match(source, /range\.getClientRects\(\)/);
   assert.match(source, /root\.scrollTop = centeredPreviewScrollTop/);
+  assert.match(source, /root\.scrollLeft = previewNearestScrollOffset/);
   assert.match(source, /MutationObserver/);
   assert.match(source, /localDocumentNativeBridge\.searchControllerReady\(\)/);
   assert.match(source, /localDocumentNativeBridge\.searchControllerUnavailable\(\)/);
@@ -128,6 +130,61 @@ test("preview line index tracks the top-to-bottom line ordering for match offset
   assert.equal(module.previewLineIndexForOffset(text, 5), 0);
   assert.equal(module.previewLineIndexForOffset(text, 6), 1);
   assert.equal(module.previewLineIndexForOffset(text, text.length), 2);
+});
+
+test("preview scroll offset converts viewport rect coordinates into scroll-space coordinates", async () => {
+  const { module } = await loadLocalDocumentSearchModule();
+
+  assert.equal(
+    module.previewScrollOffsetInScrollSpace({
+      currentScroll: 480,
+      containerStart: 100,
+      targetStart: 620
+    }),
+    1000
+  );
+});
+
+test("preview nearest scroll offset keeps already visible matches stable", async () => {
+  const { module } = await loadLocalDocumentSearchModule();
+
+  assert.equal(
+    module.previewNearestScrollOffset({
+      currentScroll: 80,
+      containerSize: 320,
+      targetStart: 120,
+      targetSize: 90
+    }),
+    80
+  );
+});
+
+test("preview nearest scroll offset reveals matches beyond the right edge", async () => {
+  const { module } = await loadLocalDocumentSearchModule();
+
+  assert.equal(
+    module.previewNearestScrollOffset({
+      currentScroll: 40,
+      containerSize: 300,
+      targetStart: 390,
+      targetSize: 60
+    }),
+    150
+  );
+});
+
+test("preview nearest scroll offset reveals matches before the left edge", async () => {
+  const { module } = await loadLocalDocumentSearchModule();
+
+  assert.equal(
+    module.previewNearestScrollOffset({
+      currentScroll: 120,
+      containerSize: 300,
+      targetStart: 45,
+      targetSize: 30
+    }),
+    45
+  );
 });
 
 test("search styles define distinct preview match and active-match highlights", async () => {

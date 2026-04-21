@@ -33,6 +33,13 @@ interface HighlightConstructor {
   new (...ranges: Range[]): object;
 }
 
+interface PreviewRevealRect {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
 function emptySearchState(query = ""): LocalDocumentPanelSearchState {
   return {
     query,
@@ -186,6 +193,42 @@ export function previewLineIndexForOffset(textContent: string, offset: number): 
   return textContent.slice(0, boundedOffset).split("\n").length - 1;
 }
 
+export function previewScrollOffsetInScrollSpace(options: {
+  currentScroll: number;
+  containerStart: number;
+  targetStart: number;
+}): number {
+  const {
+    currentScroll,
+    containerStart,
+    targetStart
+  } = options;
+  return currentScroll + (targetStart - containerStart);
+}
+
+export function previewNearestScrollOffset(options: {
+  currentScroll: number;
+  containerSize: number;
+  targetStart: number;
+  targetSize: number;
+}): number {
+  const {
+    currentScroll,
+    containerSize,
+    targetStart,
+    targetSize
+  } = options;
+  const viewportEnd = currentScroll + containerSize;
+  const targetEnd = targetStart + targetSize;
+  if (targetStart < currentScroll) {
+    return Math.max(0, targetStart);
+  }
+  if (targetEnd > viewportEnd) {
+    return Math.max(0, targetEnd - containerSize);
+  }
+  return currentScroll;
+}
+
 function resolvedPreviewLineHeight(root: HTMLElement): number {
   const codeElement = root.firstElementChild instanceof HTMLElement
     ? root.firstElementChild
@@ -204,18 +247,85 @@ function resolvedPreviewLineHeight(root: HTMLElement): number {
   return 21.45;
 }
 
-function scrollPreviewMatchIntoView(root: HTMLElement, textContent: string, match: TextMatch) {
-  if (root.clientHeight === 0) {
+function previewRectForRange(range: Range): PreviewRevealRect | null {
+  const clientRect = Array.from(range.getClientRects()).find((rect) => rect.width > 0 || rect.height > 0);
+  if (clientRect) {
+    return {
+      top: clientRect.top,
+      left: clientRect.left,
+      width: clientRect.width,
+      height: clientRect.height
+    };
+  }
+
+  const boundingRect = range.getBoundingClientRect();
+  if (boundingRect.width > 0 || boundingRect.height > 0) {
+    return {
+      top: boundingRect.top,
+      left: boundingRect.left,
+      width: boundingRect.width,
+      height: boundingRect.height
+    };
+  }
+
+  return null;
+}
+
+function scrollPreviewRectIntoView(root: HTMLElement, rect: PreviewRevealRect): boolean {
+  if (root.clientHeight === 0 || root.clientWidth === 0) {
+    return false;
+  }
+
+  const rootRect = root.getBoundingClientRect();
+  const targetTop = previewScrollOffsetInScrollSpace({
+    currentScroll: root.scrollTop,
+    containerStart: rootRect.top,
+    targetStart: rect.top
+  });
+  const targetLeft = previewScrollOffsetInScrollSpace({
+    currentScroll: root.scrollLeft,
+    containerStart: rootRect.left,
+    targetStart: rect.left
+  });
+  const targetHeight = rect.height > 0
+    ? rect.height
+    : resolvedPreviewLineHeight(root);
+  const targetWidth = Math.max(rect.width, 1);
+  root.scrollTop = centeredPreviewScrollTop({
+    containerHeight: root.clientHeight,
+    targetTop,
+    targetHeight
+  });
+  root.scrollLeft = previewNearestScrollOffset({
+    currentScroll: root.scrollLeft,
+    containerSize: root.clientWidth,
+    targetStart: targetLeft,
+    targetSize: targetWidth
+  });
+  return true;
+}
+
+function scrollPreviewMatchIntoView(
+  root: HTMLElement,
+  textContent: string,
+  rangedMatch: { match: TextMatch; range: Range }
+) {
+  const previewRect = previewRectForRange(rangedMatch.range);
+  if (previewRect && scrollPreviewRectIntoView(root, previewRect)) {
     return;
   }
 
   // The preview is a non-wrapping <pre><code> surface, so a match's visual
   // position is fully determined by the newline count before its start offset.
-  const lineIndex = previewLineIndexForOffset(textContent, match.start);
+  if (root.clientHeight === 0) {
+    return;
+  }
+  const lineIndex = previewLineIndexForOffset(textContent, rangedMatch.match.start);
   const lineHeight = resolvedPreviewLineHeight(root);
+  const paddingTop = Number.parseFloat(window.getComputedStyle(root).paddingTop);
   root.scrollTop = centeredPreviewScrollTop({
     containerHeight: root.clientHeight,
-    targetTop: lineIndex * lineHeight,
+    targetTop: (Number.isFinite(paddingTop) ? paddingTop : 0) + (lineIndex * lineHeight),
     targetHeight: lineHeight
   });
 }
@@ -269,7 +379,7 @@ function applyPreviewSearch(
     selection?.addRange(ranges[resolvedActiveIndex]);
   }
 
-  scrollPreviewMatchIntoView(root, textContent, rangedMatches[resolvedActiveIndex].match);
+  scrollPreviewMatchIntoView(root, textContent, rangedMatches[resolvedActiveIndex]);
   return {
     query,
     matchCount: ranges.length,
