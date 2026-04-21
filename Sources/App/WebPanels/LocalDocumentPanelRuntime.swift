@@ -553,6 +553,13 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         webView.isHidden = shouldHideWebView
     }
 
+    func focusWebView() -> Bool {
+        guard let window = webView.window else {
+            return false
+        }
+        return window.makeFirstResponder(webView)
+    }
+
     func applyTextScale(_ scale: Double) {
         let nextScale = AppState.clampedMarkdownTextScale(scale)
         guard abs(nextScale - currentTextScale) >= AppState.markdownTextScaleComparisonEpsilon else {

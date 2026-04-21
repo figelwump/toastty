@@ -1,6 +1,7 @@
 import AppKit
 @testable import ToasttyApp
 import CoreState
+import WebKit
 import XCTest
 
 @MainActor
@@ -21,6 +22,36 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertTrue(script.source.contains(".local-document-code-scroll"))
         XCTAssertTrue(script.source.contains("ArrowDown"))
         XCTAssertTrue(script.source.contains("ArrowRight"))
+    }
+
+    func testFocusWebViewReturnsFalseWithoutHostedWindow() {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+
+        XCTAssertFalse(runtime.focusWebView())
+    }
+
+    func testFocusWebViewMakesHostedWebViewFirstResponder() throws {
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in },
+            interactionDidRequestFocus: { _ in }
+        )
+        let window = LocalDocumentRuntimeFocusTestWindow()
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        let attachment = PanelHostAttachmentToken.next()
+
+        window.contentView?.addSubview(container)
+        runtime.attachHost(to: container, attachment: attachment)
+
+        XCTAssertTrue(runtime.focusWebView())
+
+        let webView = try XCTUnwrap(container.subviews.first as? WKWebView)
+        XCTAssertTrue(window.makeFirstResponderCalled)
+        XCTAssertTrue(window.firstResponder === webView)
     }
 
     func testApplySkipsDuplicateReloadWhenWebStateIsUnchanged() async throws {
@@ -1687,6 +1718,31 @@ private actor ControlledDocumentSaver {
     func resume() {
         continuation?.resume()
         continuation = nil
+    }
+}
+
+@MainActor
+private final class LocalDocumentRuntimeFocusTestWindow: NSWindow {
+    private(set) var makeFirstResponderCalled = false
+    private var storedFirstResponder: NSResponder?
+
+    override var firstResponder: NSResponder? {
+        storedFirstResponder
+    }
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+    }
+
+    override func makeFirstResponder(_ responder: NSResponder?) -> Bool {
+        makeFirstResponderCalled = true
+        storedFirstResponder = responder
+        return true
     }
 }
 
