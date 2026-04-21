@@ -52,23 +52,41 @@ _toastty_ensure_pane_journal_directory() {
 	return 0
 }
 
-_toastty_import_pane_journal_if_needed() {
+_toastty_schedule_pane_journal_import_if_needed() {
 	[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+	[[ "${TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED:-}" == "1" ]] && return
+
+	typeset -g _TOASTTY_PANE_JOURNAL_IMPORT_PENDING=1
+	export TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED=1
+}
+
+_toastty_import_pane_journal_if_needed() {
+	[[ "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" == "1" ]] || return
 
 	local pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
-	[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+	if [[ -z "$pane_journal_file" || ! -r "$pane_journal_file" ]]; then
+		unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+		unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+		export TOASTTY_PANE_JOURNAL_IMPORTED=1
+		return
+	fi
 
 	local entry=""
 	while IFS= read -r -d '' entry; do
 		print -sr -- "$entry"
 	done < "$pane_journal_file"
+
+	unset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+	unset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+	export TOASTTY_PANE_JOURNAL_IMPORTED=1
 }
 
 _toastty_initialize_pane_journal() {
 	[[ -z ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]] || return
 
 	if _toastty_ensure_pane_journal_directory; then
-		_toastty_import_pane_journal_if_needed
+		_toastty_schedule_pane_journal_import_if_needed
 		unset _TOASTTY_PENDING_JOURNAL_ENTRY
 	fi
 
@@ -114,6 +132,7 @@ _toastty_emit_title() {
 
 _toastty_precmd() {
 	if [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
+		_toastty_import_pane_journal_if_needed
 		_toastty_append_pending_history_entry_to_journal
 	fi
 	local cwd="${PWD/#$HOME/~}"

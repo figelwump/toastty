@@ -208,12 +208,27 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
             \t/bin/mv -f -- "$temp_file" "$pane_journal_file" 2>/dev/null || /bin/rm -f -- "$temp_file"
             }
 
-            _toastty_import_pane_journal_if_needed() {
+            _toastty_schedule_pane_journal_import_if_needed() {
             \t[[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]] || return
             \t[[ "${TOASTTY_PANE_JOURNAL_IMPORTED:-}" == "1" ]] && return
+            \t[[ "${TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED:-}" == "1" ]] && return
+
+            \ttypeset -g _TOASTTY_PANE_JOURNAL_IMPORT_PENDING=1
+            \t# Export the scheduled state so nested restore shells spawned before the first
+            \t# prompt do not re-import the same pane journal ahead of the parent shell.
+            \texport TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED=1
+            }
+
+            _toastty_import_pane_journal_if_needed() {
+            \t[[ "${_TOASTTY_PANE_JOURNAL_IMPORT_PENDING:-}" == "1" ]] || return
 
             \tlocal pane_journal_file="${TOASTTY_PANE_JOURNAL_FILE:-}"
-            \t[[ -n "$pane_journal_file" && -r "$pane_journal_file" ]] || return
+            \tif [[ -z "$pane_journal_file" || ! -r "$pane_journal_file" ]]; then
+            \t\tunset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+            \t\tunset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+            \t\texport TOASTTY_PANE_JOURNAL_IMPORTED=1
+            \t\treturn
+            \tfi
 
             \tlocal entry=""
             \tlocal imported_count=0
@@ -226,6 +241,9 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             \tlocal -a history_snapshot=()
             \thistory_snapshot=("${(@f)$(_toastty_history_debug_snapshot_lines 3)}")
+            \tunset _TOASTTY_PANE_JOURNAL_IMPORT_PENDING
+            \tunset TOASTTY_PANE_JOURNAL_IMPORT_SCHEDULED
+            \texport TOASTTY_PANE_JOURNAL_IMPORTED=1
 
             \t_toastty_log_pane_history_debug \
             \t\timport \
@@ -243,16 +261,12 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             \tif _toastty_ensure_pane_journal_directory; then
             \t\t_toastty_compact_pane_journal
-            \t\t_toastty_import_pane_journal_if_needed
+            \t\t_toastty_schedule_pane_journal_import_if_needed
             \t\t# Re-sourcing can leave shell-local state behind; clear it before hooks install.
             \t\tunset _TOASTTY_PENDING_JOURNAL_ENTRY
             \t\t_toastty_log_pane_history_debug \
             \t\t\tinitialize \
             \t\t\tcurrent_histcmd "${HISTCMD:-0}"
-            \tfi
-
-            \tif [[ "${TOASTTY_LAUNCH_REASON:-}" == "restore" ]]; then
-            \t\texport TOASTTY_PANE_JOURNAL_IMPORTED=1
             \tfi
             \ttypeset -g _TOASTTY_PANE_JOURNAL_INITIALIZED=1
             }
@@ -346,6 +360,7 @@ enum ProfileShellIntegrationShell: CaseIterable, Equatable, Sendable {
 
             _toastty_precmd() {
             \tif [[ -n ${_TOASTTY_PANE_JOURNAL_INITIALIZED:-} ]]; then
+            \t\t_toastty_import_pane_journal_if_needed
             \t\t_toastty_append_pending_history_entry_to_journal
             \tfi
             \tlocal cwd="${PWD/#$HOME/~}"

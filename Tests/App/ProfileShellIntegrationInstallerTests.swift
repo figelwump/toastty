@@ -626,7 +626,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; fc -ln 1 2>/dev/null || true",
+                "source \"$1\"; print -s -- \"echo shared-history\"; _toastty_precmd; lines=(\"${(@f)$(fc -ln 1 2>/dev/null || true)}\"); print -r -- ${lines[-3]}; print -r -- ${lines[-2]}; print -r -- ${lines[-1]}",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -637,8 +637,10 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             ]
         )
 
-        XCTAssertTrue(output.contains("echo toastty-zsh"))
-        XCTAssertTrue(output.contains("git status"))
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            ["echo shared-history", "echo toastty-zsh", "git status"]
+        )
     }
 
     func testManagedZshSnippetSkipsPaneJournalImportForCreateLaunches() throws {
@@ -660,7 +662,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; fc -ln 1 2>/dev/null || true",
+                "source \"$1\"; print -s -- \"echo shared-history\"; _toastty_precmd; fc -ln 1 2>/dev/null || true",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -720,7 +722,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; TOASTTY_TEST_SNIPPET=\"$1\" zsh -fic 'source \"$TOASTTY_TEST_SNIPPET\"; fc -ln 1 2>/dev/null || true'",
+                "source \"$1\"; TOASTTY_TEST_SNIPPET=\"$1\" zsh -fic 'source \"$TOASTTY_TEST_SNIPPET\"; _toastty_precmd; fc -ln 1 2>/dev/null || true'",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -732,6 +734,42 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         )
 
         XCTAssertFalse(output.contains("echo toastty-zsh"))
+    }
+
+    func testManagedZshSnippetImportsPaneJournalOnlyOnceAcrossRepeatedPrecmd() throws {
+        let snippetURL = try writeStandaloneSnippet(
+            ProfileShellIntegrationShell.zsh.managedSnippetContents + "\n",
+            fileName: "toastty-profile-shell-integration.zsh"
+        )
+        defer { try? FileManager.default.removeItem(at: snippetURL.deletingLastPathComponent()) }
+
+        let journalFileURL = snippetURL.deletingLastPathComponent()
+            .appendingPathComponent("history/pane-journals/test-zsh.journal")
+        try FileManager.default.createDirectory(
+            at: journalFileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("echo toastty-zsh\0git status\0".utf8).write(to: journalFileURL, options: .atomic)
+
+        let output = try runProcess(
+            executableURL: URL(fileURLWithPath: "/bin/zsh"),
+            arguments: [
+                "-fic",
+                "source \"$1\"; print -s -- \"echo shared-history\"; _toastty_precmd; _toastty_precmd; lines=(\"${(@f)$(fc -ln 1 2>/dev/null || true)}\"); print -r -- ${lines[-3]}; print -r -- ${lines[-2]}; print -r -- ${lines[-1]}",
+                "toastty-zsh-test",
+                snippetURL.path,
+            ],
+            environment: [
+                ToasttyLaunchContextEnvironment.paneJournalFileKey: journalFileURL.path,
+                ToasttyLaunchContextEnvironment.launchReasonKey: "restore",
+                "ZDOTDIR": snippetURL.deletingLastPathComponent().path,
+            ]
+        )
+
+        XCTAssertEqual(
+            output.split(separator: "\n").map(String.init),
+            ["echo shared-history", "echo toastty-zsh", "git status"]
+        )
     }
 
     func testManagedZshSnippetSkipsIncompleteTrailingPaneJournalEntry() throws {
@@ -753,7 +791,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; fc -ln 1 2>/dev/null || true",
+                "source \"$1\"; _toastty_precmd; fc -ln 1 2>/dev/null || true",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -1029,7 +1067,7 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
             executableURL: URL(fileURLWithPath: "/bin/zsh"),
             arguments: [
                 "-fic",
-                "source \"$1\"; cat \"$TOASTTY_PANE_HISTORY_DEBUG_LOG_FILE\"",
+                "source \"$1\"; print -s -- \"echo shared-history\"; _toastty_precmd; cat \"$TOASTTY_PANE_HISTORY_DEBUG_LOG_FILE\"",
                 "toastty-zsh-test",
                 snippetURL.path,
             ],
@@ -1047,10 +1085,10 @@ final class ProfileShellIntegrationInstallerTests: XCTestCase {
         XCTAssertTrue(output.contains("panel_id=\(panelID.uuidString)"))
         XCTAssertTrue(output.contains("imported_entry_count=2"))
         XCTAssertTrue(output.contains("last_imported_entry=git status"))
-        XCTAssertTrue(output.contains("history_entry_count=2"))
+        XCTAssertTrue(output.contains("history_entry_count=3"))
         XCTAssertTrue(output.contains("history_last_entry=git status"))
         XCTAssertTrue(output.contains("history_previous_entry=echo toastty-zsh"))
-        XCTAssertTrue(output.contains("history_tail_summary=echo toastty-zsh || git status"))
+        XCTAssertTrue(output.contains("history_tail_summary=echo shared-history || echo toastty-zsh || git status"))
     }
 
     func testManagedZshSnippetWritesPaneHistoryDebugRecordsForPreexecAndAppend() throws {
