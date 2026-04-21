@@ -15,7 +15,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -30,7 +30,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .rootRight)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .rootRight)
         )
     }
 
@@ -57,7 +57,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -72,7 +72,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -87,7 +87,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -102,7 +102,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -117,7 +117,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -144,7 +144,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .newTab)
         )
     }
 
@@ -159,7 +159,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            .localDocumentFile(path: fixture.markdownPath, lineNumber: nil, placement: .newTab)
         )
     }
 
@@ -231,7 +231,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -246,7 +246,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -261,7 +261,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -279,7 +279,7 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
     }
 
@@ -294,8 +294,95 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
 
         XCTAssertEqual(
             target,
-            .localDocumentFile(path: fixture.markdownPath, placement: .newTab)
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
         )
+    }
+
+    func testResolveTreatsTrailingLineNumberAsLocalDocumentRevealTarget() throws {
+        let fixture = try makeFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/command-palette.md:42")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .newTab)
+        )
+    }
+
+    func testResolveRecoversTrailingPunctuationAfterLineNumberRevealTarget() throws {
+        let fixture = try makeFixture()
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: try XCTUnwrap(URL(string: "docs/command-palette.md:42.")),
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .newTab)
+        )
+    }
+
+    func testResolveTreatsAbsolutePathTrailingLineNumberAsLocalDocumentRevealTarget() throws {
+        let fixture = try makeFixture()
+        let absolutePathURL = try XCTUnwrap(URL(string: "\(fixture.markdownPath):42"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: absolutePathURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, lineNumber: 42, placement: .newTab)
+        )
+    }
+
+    func testResolvePrefersExactColonFilenameOverTrailingLineParsing() throws {
+        let fixture = try makeFixture(fileName: "command-palette.md:42")
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: fixture.markdownURL,
+            cwd: nil,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(
+            target,
+            expectedLocalDocumentTarget(path: fixture.markdownPath, placement: .newTab)
+        )
+    }
+
+    func testResolveIgnoresZeroLineSuffixForSupportedLocalDocumentPaths() throws {
+        let fixture = try makeFixture()
+        let url = try XCTUnwrap(URL(string: "docs/command-palette.md:0"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(url))
+    }
+
+    func testResolveDoesNotTreatUnsupportedFileNumericSuffixAsLocalDocumentReveal() throws {
+        let fixture = try makeFixture(fileName: "config.txt")
+        let url = try XCTUnwrap(URL(string: "docs/config.txt:42"))
+
+        let target = TerminalCommandClickTargetResolver.resolve(
+            hoveredURL: url,
+            cwd: fixture.rootPath,
+            useAlternatePlacement: false
+        )
+
+        XCTAssertEqual(target, .passthrough(url))
     }
 
     func testResolveRecoversMalformedAbsoluteDirectoryPathWithAppendedProse() throws {
@@ -472,6 +559,18 @@ final class TerminalCommandClickTargetResolverTests: XCTestCase {
         return (
             symlinkPath: symlinkURL.standardizedFileURL.path,
             symlinkURL: symlinkURL
+        )
+    }
+
+    private func expectedLocalDocumentTarget(
+        path: String,
+        lineNumber: Int? = nil,
+        placement: WebPanelPlacement
+    ) -> TerminalCommandClickTarget {
+        .localDocumentFile(
+            path: path,
+            lineNumber: lineNumber,
+            placement: placement
         )
     }
 }

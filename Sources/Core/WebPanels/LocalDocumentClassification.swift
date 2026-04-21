@@ -105,9 +105,30 @@ public enum LocalDocumentClassifier {
             return nil
         }
 
-        return classification(
-            forPathExtension: URL(fileURLWithPath: normalizedFilePath).pathExtension
-        )
+        let fileURL = URL(fileURLWithPath: normalizedFilePath)
+        if let directClassification = classification(forPathExtension: fileURL.pathExtension) {
+            return directClassification
+        }
+
+        // Only the filename itself participates in `path:line` recovery.
+        // Directory components may legally contain colons and should not
+        // affect the file's classification.
+        return classificationForColonSuffixedFileName(fileURL.lastPathComponent)
+    }
+
+    private static func classificationForColonSuffixedFileName(
+        _ fileName: String
+    ) -> LocalDocumentClassification? {
+        var candidateFileName = fileName
+        while let separatorIndex = candidateFileName.lastIndex(of: ":") {
+            candidateFileName.removeSubrange(separatorIndex...)
+            let pathExtension = (candidateFileName as NSString).pathExtension
+            if let classification = classification(forPathExtension: pathExtension) {
+                return classification
+            }
+        }
+
+        return nil
     }
 
     public static func classification(

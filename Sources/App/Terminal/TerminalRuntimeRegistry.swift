@@ -59,6 +59,7 @@ final class TerminalRuntimeRegistry: ObservableObject {
     private let activateApp: @MainActor () -> Void
     private let runtimeStore = TerminalWindowRuntimeStore()
     private weak var store: AppStore?
+    private weak var webPanelRuntimeRegistry: WebPanelRuntimeRegistry?
     private var sessionLifecycleTracker: (any TerminalSessionLifecycleTracking)?
     private weak var terminalProfileProvider: (any TerminalProfileProviding)?
     private var stateObservation: AnyCancellable?
@@ -147,6 +148,10 @@ final class TerminalRuntimeRegistry: ObservableObject {
         #endif
         configureGhosttyActionHandler()
         bindStateObservation(to: store)
+    }
+
+    func bind(webPanelRuntimeRegistry: WebPanelRuntimeRegistry) {
+        self.webPanelRuntimeRegistry = webPanelRuntimeRegistry
     }
 
     func bind(sessionLifecycleTracker: any TerminalSessionLifecycleTracking) {
@@ -931,14 +936,23 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
 
         let result: Bool
         switch target {
-        case .localDocumentFile(let path, let placement):
-            result = store.createLocalDocumentPanelFromCommand(
+        case .localDocumentFile(let path, let lineNumber, let placement):
+            let outcome = store.createLocalDocumentPanelFromCommandOutcome(
                 preferredWindowID: preferredWindowID,
                 request: LocalDocumentPanelCreateRequest(
                     filePath: path,
+                    lineNumber: lineNumber,
                     placementOverride: placement
                 )
             )
+            result = outcome != nil
+            if let lineNumber,
+               let panelID = outcome?.panelID {
+                _ = webPanelRuntimeRegistry?.requestLocalDocumentReveal(
+                    panelID: panelID,
+                    lineNumber: lineNumber
+                )
+            }
         case .localDirectory(let path):
             guard let workspaceID = selection?.workspaceID else {
                 ToasttyLog.warning(
@@ -971,10 +985,11 @@ extension TerminalRuntimeRegistry: TerminalSurfaceControllerDelegate {
         let targetMetadata: [String: String]
         let targetKind: String
         switch target {
-        case .localDocumentFile(let path, let placement):
+        case .localDocumentFile(let path, let lineNumber, let placement):
             targetKind = "local_document"
             targetMetadata = [
                 "resolved_path": path,
+                "line_number": lineNumber.map(String.init) ?? "none",
                 "placement": placement.rawValue,
             ]
         case .localDirectory(let path):
