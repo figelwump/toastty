@@ -98,9 +98,15 @@ enum AppURLRouter {
         openExternally: (URL) -> Bool = { NSWorkspace.shared.open($0) }
     ) -> Bool {
         let resolvedPreferences = preferences ?? appStore.urlRoutingPreferences
-        switch route(for: url, preferences: resolvedPreferences, useAlternatePlacement: useAlternatePlacement) {
+        let resolvedRoute = route(
+            for: url,
+            preferences: resolvedPreferences,
+            useAlternatePlacement: useAlternatePlacement
+        )
+        switch resolvedRoute {
         case .external:
-            return openExternally(externalOpenTarget(for: url))
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget)
         case .localDocument(let request):
             if let outcome = appStore.createLocalDocumentPanelFromCommandOutcome(
                 preferredWindowID: preferredWindowID,
@@ -111,7 +117,8 @@ enum AppURLRouter {
                 }
                 return true
             }
-            return openExternally(externalOpenTarget(for: url))
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget)
         case .toasttyBrowser(let placement):
             if appStore.openURLInBrowser(
                 preferredWindowID: preferredWindowID,
@@ -120,7 +127,8 @@ enum AppURLRouter {
             ) {
                 return true
             }
-            return openExternally(externalOpenTarget(for: url))
+            let externalTarget = externalOpenTarget(for: url)
+            return openExternally(externalTarget)
         }
     }
 }

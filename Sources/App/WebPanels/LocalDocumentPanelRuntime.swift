@@ -290,6 +290,8 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     typealias DocumentSaver = @Sendable (String, String) async throws -> Void
     typealias SavedDocumentReader = @Sendable (String, String, LocalDocumentFormat) async throws -> LocalDocumentPanelDocumentSnapshot
     typealias ExternalFileOpener = @Sendable (URL) -> Bool
+    typealias BridgeScriptCompletion = @MainActor @Sendable (Any?, Error?) -> Void
+    typealias BridgeScriptEvaluator = @MainActor (String, @escaping BridgeScriptCompletion) -> Void
     private static let scriptMessageHandlerName = "toasttyLocalDocumentPanel"
     nonisolated private static let syntaxHighlightThresholdBytes = 524_288
 
@@ -302,6 +304,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
     private let documentSaver: DocumentSaver
     private let savedDocumentReader: SavedDocumentReader
     private let externalFileOpener: ExternalFileOpener
+    private let bridgeScriptEvaluator: BridgeScriptEvaluator
     private let reloadDebounceNanoseconds: UInt64
     private weak var activeSourceContainer: NSView?
     private var activeAttachment: PanelHostAttachmentToken?
@@ -331,6 +334,7 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         documentSaver: @escaping DocumentSaver = { try await LocalDocumentPanelRuntime.writeLocalDocument(at: $0, content: $1) },
         savedDocumentReader: @escaping SavedDocumentReader = { try await LocalDocumentPanelRuntime.readLocalDocument(at: $0, displayName: $1, format: $2) },
         externalFileOpener: @escaping ExternalFileOpener = { NSWorkspace.shared.open($0) },
+        bridgeScriptEvaluator: BridgeScriptEvaluator? = nil,
         reloadDebounceNanoseconds: UInt64 = 150_000_000
     ) {
         self.panelID = panelID
@@ -341,7 +345,6 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         self.documentSaver = documentSaver
         self.savedDocumentReader = savedDocumentReader
         self.externalFileOpener = externalFileOpener
-        self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         let configuration = Self.makeWebViewConfiguration(
             for: WebPanelDefinition.localDocument.capabilityProfile
@@ -349,6 +352,10 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         let webView = FocusAwareWKWebView(frame: .zero, configuration: configuration)
         webView.setValue(false, forKey: "drawsBackground")
         self.webView = webView
+        self.bridgeScriptEvaluator = bridgeScriptEvaluator ?? { script, completion in
+            webView.evaluateJavaScript(script, completionHandler: completion)
+        }
+        self.reloadDebounceNanoseconds = reloadDebounceNanoseconds
 
         super.init()
 
@@ -658,15 +665,40 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
               let json = String(data: data, encoding: .utf8) else {
             return nil
         }
-        return "window.ToasttyLocalDocumentPanel?.receiveBootstrap(\(json));"
+        return bridgeCommandJavaScript(command: "bridge.receiveBootstrap(\(json));")
     }
 
     nonisolated static func textScaleJavaScript(for textScale: Double) -> String {
-        "window.ToasttyLocalDocumentPanel?.setTextScale(\(String(format: "%.4f", textScale)));"
+        bridgeCommandJavaScript(
+            command: "bridge.setTextScale(\(String(format: "%.4f", textScale)));"
+        )
     }
 
     nonisolated static func revealLineJavaScript(for lineNumber: Int) -> String {
-        "window.ToasttyLocalDocumentPanel?.revealLine(\(lineNumber));"
+        bridgeCommandJavaScript(command: "bridge.revealLine(\(lineNumber));")
+    }
+
+    nonisolated static func bridgeCommandJavaScript(command: String) -> String {
+        """
+        (() => {
+            const bridge = window.ToasttyLocalDocumentPanel;
+            if (!bridge) {
+                return false;
+            }
+            \(command)
+            return true;
+        })();
+        """
+    }
+
+    nonisolated static func bridgeCommandWasDelivered(_ result: Any?) -> Bool {
+        if let result = result as? Bool {
+            return result
+        }
+        if let result = result as? NSNumber {
+            return result.boolValue
+        }
+        return false
     }
 
     static func makeWebViewConfiguration(
@@ -992,9 +1024,9 @@ private extension LocalDocumentPanelRuntime {
             stageCurrentBootstrapScript()
         }
         guard let pendingBootstrapScript else { return }
-        webView.evaluateJavaScript(pendingBootstrapScript) { [weak self] _, error in
+        bridgeScriptEvaluator(pendingBootstrapScript) { [weak self] result, error in
             guard let self else { return }
-            if error == nil {
+            if error == nil, Self.bridgeCommandWasDelivered(result) {
                 self.pendingBootstrapScript = nil
                 self.pushPendingRevealIfPossible()
             }
@@ -1043,10 +1075,13 @@ private extension LocalDocumentPanelRuntime {
         }
 
         let script = Self.textScaleJavaScript(for: currentTextScale)
-        webView.evaluateJavaScript(script) { [weak self] _, error in
-            guard let self, error != nil else { return }
-            self.pendingBootstrapScript = nil
-            self.pushPendingBootstrapIfPossible()
+        bridgeScriptEvaluator(script) { [weak self] result, error in
+            guard let self else { return }
+            guard error == nil, Self.bridgeCommandWasDelivered(result) else {
+                self.pendingBootstrapScript = nil
+                self.pushPendingBootstrapIfPossible()
+                return
+            }
         }
     }
 
@@ -1074,11 +1109,13 @@ private extension LocalDocumentPanelRuntime {
         }
 
         let script = Self.revealLineJavaScript(for: pendingRevealLine)
-        webView.evaluateJavaScript(script) { [weak self] _, error in
+        bridgeScriptEvaluator(script) { [weak self] result, error in
             guard let self else { return }
-            if error == nil {
+            if error == nil, Self.bridgeCommandWasDelivered(result) {
                 self.pendingRevealLine = nil
-            } else {
+                return
+            }
+            if error != nil {
                 self.pushPendingBootstrapIfPossible()
             }
         }
