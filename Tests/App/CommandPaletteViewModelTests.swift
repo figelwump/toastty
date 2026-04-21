@@ -352,8 +352,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertTrue(viewModel.results.isEmpty)
         XCTAssertEqual(viewModel.placeholder, "Open a local file...")
         XCTAssertEqual(viewModel.footerText, scope.label)
-        XCTAssertTrue(viewModel.emptyState.message.contains(".html"))
-        XCTAssertTrue(viewModel.emptyState.message.contains(".json"))
+        XCTAssertEqual(viewModel.emptyState.message, scope.label)
     }
 
     func testDeletingLeadingAtReturnsToCommandMode() async throws {
@@ -494,6 +493,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
                     prepareSnapshots: [
                         .indexing(results: []),
                     ],
+                    indexedFilesDelayNanoseconds: 100_000_000,
                     indexedResults: [
                         [
                             self.makeFileResult(
@@ -514,10 +514,108 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
         viewModel.query = "@read"
 
-        XCTAssertEqual(viewModel.emptyState.title, "Indexing supported files")
+        try await waitUntil {
+            viewModel.emptyState.title == "Indexing local files"
+        }
         try await waitUntil {
             viewModel.results.map(\.id) == [readmePath]
         }
+    }
+
+    func testBareAtShowsRecentFilesOrderedByRecency() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let usageTracker = MockCommandPaletteUsageTracker()
+        let readmePath = "/tmp/toastty-worktree/README.md"
+        let notesPath = "/tmp/toastty-worktree/docs/notes.md"
+        usageTracker.counts = [
+            "file-open:\(readmePath)": 1,
+            "file-open:\(notesPath)": 4,
+        ]
+        usageTracker.lastUsedAtByID = [
+            "file-open:\(readmePath)": Date(timeIntervalSinceReferenceDate: 100),
+            "file-open:\(notesPath)": Date(timeIntervalSinceReferenceDate: 200),
+        ]
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: readmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: readmePath)
+                            ),
+                            self.makeFileResult(
+                                filePath: notesPath,
+                                relativePath: "docs/notes.md",
+                                destination: .localDocument(filePath: notesPath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService,
+            usageTracker: usageTracker
+        )
+
+        viewModel.query = "@"
+        try await waitUntil {
+            viewModel.results.map(\.id) == [notesPath, readmePath]
+        }
+
+        XCTAssertEqual(viewModel.emptyState.title, "")
+        XCTAssertEqual(viewModel.emptyState.message, "")
+        XCTAssertEqual(viewModel.footerText, scope.label)
+    }
+
+    func testTypingWithinSameScopeReusesCurrentIndexSnapshot() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let readmePath = "/tmp/toastty-worktree/README.md"
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: readmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: readmePath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService
+        )
+
+        viewModel.query = "@r"
+        try await waitUntil {
+            viewModel.results.map(\.id) == [readmePath]
+        }
+
+        viewModel.query = "@re"
+        try await waitUntil {
+            viewModel.results.map(\.id) == [readmePath]
+        }
+
+        let prepareCallCount = await fileIndexService.prepareCallCount(for: scope.rootPath)
+        XCTAssertEqual(prepareCallCount, 1)
     }
 
     func testFileModePrefersShallowerRelativePathsWhenMatchesTie() async throws {
@@ -671,32 +769,41 @@ private final class ProjectedCommandsBox {
 @MainActor
 private final class MockCommandPaletteUsageTracker: CommandPaletteUsageTracking {
     var counts: [String: Int] = [:]
+    var lastUsedAtByID: [String: Date] = [:]
     var recordedCommandIDs: [String] = []
 
     func useCount(for commandID: String) -> Int {
         counts[commandID, default: 0]
     }
 
+    func lastUsedAt(for commandID: String) -> Date? {
+        lastUsedAtByID[commandID]
+    }
+
     func recordSuccessfulExecution(of commandID: String) {
         recordedCommandIDs.append(commandID)
         counts[commandID, default: 0] += 1
+        lastUsedAtByID[commandID] = lastUsedAtByID[commandID] ?? Date(timeIntervalSinceReferenceDate: 0)
     }
 }
 
-private actor MockCommandPaletteFileIndexService: CommandPaletteFileIndexing {
-    struct ScopeState {
-        var prepareSnapshots: [CommandPaletteFileIndexSnapshot]
-        var indexedResults: [[PaletteFileResult]]
-        var lastResults: [PaletteFileResult] = []
-    }
+    private actor MockCommandPaletteFileIndexService: CommandPaletteFileIndexing {
+        struct ScopeState {
+            var prepareSnapshots: [CommandPaletteFileIndexSnapshot]
+            var indexedFilesDelayNanoseconds: UInt64 = 0
+            var indexedResults: [[PaletteFileResult]]
+            var lastResults: [PaletteFileResult] = []
+        }
 
     private var states: [String: ScopeState]
+    private var prepareCallCounts: [String: Int] = [:]
 
     init(states: [String: ScopeState] = [:]) {
         self.states = states
     }
 
     func prepareIndex(in scope: PaletteFileSearchScope) async -> CommandPaletteFileIndexSnapshot {
+        prepareCallCounts[scope.rootPath, default: 0] += 1
         var state = states[scope.rootPath] ?? ScopeState(
             prepareSnapshots: [.ready(results: [])],
             indexedResults: []
@@ -714,12 +821,20 @@ private actor MockCommandPaletteFileIndexService: CommandPaletteFileIndexing {
             prepareSnapshots: [],
             indexedResults: [[]]
         )
+        let delayNanoseconds = state.indexedFilesDelayNanoseconds
         let results = state.indexedResults.isEmpty
             ? state.lastResults
             : state.indexedResults.removeFirst()
         state.lastResults = results
         states[scope.rootPath] = state
+        if delayNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: delayNanoseconds)
+        }
         return results
+    }
+
+    func prepareCallCount(for scopeRootPath: String) -> Int {
+        prepareCallCounts[scopeRootPath, default: 0]
     }
 }
 

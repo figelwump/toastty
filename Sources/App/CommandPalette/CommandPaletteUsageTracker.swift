@@ -3,11 +3,13 @@ import Foundation
 
 struct CommandPaletteUsageRecord: Codable, Equatable, Sendable {
     var count: Int
+    var lastUsedAt: Date?
 }
 
 @MainActor
 protocol CommandPaletteUsageTracking: AnyObject {
     func useCount(for commandID: String) -> Int
+    func lastUsedAt(for commandID: String) -> Date?
     func recordSuccessfulExecution(of commandID: String)
 }
 
@@ -22,6 +24,11 @@ final class NoOpCommandPaletteUsageTracker: CommandPaletteUsageTracking {
         return 0
     }
 
+    func lastUsedAt(for commandID: String) -> Date? {
+        _ = commandID
+        return nil
+    }
+
     func recordSuccessfulExecution(of commandID: String) {
         _ = commandID
     }
@@ -33,18 +40,21 @@ final class CommandPaletteUsageTracker: CommandPaletteUsageTracking {
 
     private let usageFileURL: URL
     private let fileManager: FileManager
+    private let dateProvider: () -> Date
 
     private var records: [String: CommandPaletteUsageRecord]
 
     init(
         runtimePaths: ToasttyRuntimePaths = .resolve(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        dateProvider: @escaping () -> Date = Date.init
     ) {
         self.usageFileURL = runtimePaths.configDirectoryURL.appending(
             path: Self.usageFileName,
             directoryHint: .notDirectory
         )
         self.fileManager = fileManager
+        self.dateProvider = dateProvider
         self.records = Self.loadRecords(from: usageFileURL, fileManager: fileManager)
     }
 
@@ -52,9 +62,14 @@ final class CommandPaletteUsageTracker: CommandPaletteUsageTracking {
         records[commandID]?.count ?? 0
     }
 
+    func lastUsedAt(for commandID: String) -> Date? {
+        records[commandID]?.lastUsedAt
+    }
+
     func recordSuccessfulExecution(of commandID: String) {
         let updatedRecord = CommandPaletteUsageRecord(
-            count: (records[commandID]?.count ?? 0) + 1
+            count: (records[commandID]?.count ?? 0) + 1,
+            lastUsedAt: dateProvider()
         )
         records[commandID] = updatedRecord
         persistRecords()
