@@ -420,6 +420,97 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertNotNil(bootstrap.saveErrorMessage)
     }
 
+    func testOpenInDefaultAppUsesCurrentBackingFileURL() async throws {
+        let filePath = "/tmp/toastty/App.swift"
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let openExpectation = expectation(description: "External open request arrives")
+        let capturedURL = LockedBox<URL?>(nil)
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    format: .code,
+                    content: "struct App {}\n",
+                    diskRevision: LocalDocumentPanelDiskRevision(
+                        fileNumber: 1,
+                        modificationDate: Date(),
+                        size: 13
+                    )
+                )
+            },
+            externalFileOpener: { url in
+                Task {
+                    await capturedURL.set(url)
+                    openExpectation.fulfill()
+                }
+                return true
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "App.swift",
+            localDocument: LocalDocumentState(
+                filePath: filePath,
+                format: .code
+            )
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.openInDefaultApp()
+        await fulfillment(of: [openExpectation], timeout: 1)
+
+        let openedURL = await capturedURL.snapshot()
+        XCTAssertEqual(openedURL, URL(filePath: filePath))
+    }
+
+    func testOpenInDefaultAppIgnoresPanelsWithoutBackingFile() async throws {
+        let metadataExpectation = expectation(description: "Initial metadata update arrives")
+        let openExpectation = expectation(description: "No external open request should arrive")
+        openExpectation.isInverted = true
+
+        let runtime = LocalDocumentPanelRuntime(
+            panelID: UUID(),
+            metadataDidChange: { _, _, _ in
+                metadataExpectation.fulfill()
+            },
+            interactionDidRequestFocus: { _ in },
+            documentLoader: { webState in
+                LocalDocumentPanelDocumentSnapshot(
+                    filePath: webState.filePath,
+                    displayName: webState.title,
+                    content: "# Notes",
+                    diskRevision: nil
+                )
+            },
+            externalFileOpener: { _ in
+                openExpectation.fulfill()
+                return true
+            },
+            reloadDebounceNanoseconds: 10_000_000
+        )
+        let webState = WebPanelState(
+            definition: .localDocument,
+            title: "Untitled",
+            localDocument: LocalDocumentState(filePath: nil, format: .markdown)
+        )
+
+        runtime.apply(webState: webState)
+        await fulfillment(of: [metadataExpectation], timeout: 1)
+
+        runtime.openInDefaultApp()
+        await fulfillment(of: [openExpectation], timeout: 0.1)
+    }
+
     func testExternalModificationWhileDirtyPreservesDraftAndRaisesConflict() async throws {
         let tempDirectoryURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -727,10 +818,12 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 5)
+        XCTAssertEqual(bootstrap.contractVersion, 6)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .markdown)
+        XCTAssertNil(bootstrap.syntaxLanguage)
+        XCTAssertEqual(bootstrap.formatLabel, "Markdown")
         XCTAssertTrue(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content, "# Hello Toastty\n\nA local markdown panel.")
@@ -773,6 +866,43 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.displayName, "package.json")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .json)
+        XCTAssertEqual(bootstrap.syntaxLanguage, .json)
+        XCTAssertEqual(bootstrap.formatLabel, "JSON")
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsSwiftFileContentsAsCodeDocument() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("App.swift")
+        let content = """
+        struct ToasttyApp {
+            let panelCount = 1
+        }
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "App.swift",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .code
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "App.swift")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .code)
+        XCTAssertEqual(bootstrap.syntaxLanguage, .swift)
+        XCTAssertEqual(bootstrap.formatLabel, "Swift")
         XCTAssertTrue(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content, content)
@@ -838,6 +968,8 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.displayName, "bootstrap.sh")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .shell)
+        XCTAssertEqual(bootstrap.syntaxLanguage, .bash)
+        XCTAssertEqual(bootstrap.formatLabel, "Shell Script")
         XCTAssertTrue(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content, content)
@@ -1001,6 +1133,8 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         )
 
         XCTAssertEqual(bootstrap.format, .json)
+        XCTAssertNil(bootstrap.syntaxLanguage)
+        XCTAssertEqual(bootstrap.formatLabel, "JSONC")
         XCTAssertFalse(bootstrap.shouldHighlight)
         XCTAssertEqual(bootstrap.highlightState, .unsupportedFormat)
         XCTAssertEqual(bootstrap.content, content)
@@ -1051,9 +1185,10 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let script = try XCTUnwrap(LocalDocumentPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
         XCTAssertTrue(script.contains("window.ToasttyLocalDocumentPanel?.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":5"))
+        XCTAssertTrue(script.contains("\"contractVersion\":6"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
         XCTAssertTrue(script.contains("\"format\":\"markdown\""))
+        XCTAssertTrue(script.contains("\"formatLabel\":\"Markdown\""))
         XCTAssertTrue(script.contains("\"shouldHighlight\":true"))
         XCTAssertTrue(script.contains("\"highlightState\":\"enabled\""))
         XCTAssertTrue(script.contains("\"content\":\"# Docs\""))

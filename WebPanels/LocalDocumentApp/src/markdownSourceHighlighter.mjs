@@ -1,10 +1,13 @@
 import {createStarryNight} from "@wooorm/starry-night";
 import sourceCss from "@wooorm/starry-night/source.css";
+import sourceGo from "@wooorm/starry-night/source.go";
 import sourceIni from "@wooorm/starry-night/source.ini";
 import sourceJs from "@wooorm/starry-night/source.js";
 import sourceJson from "@wooorm/starry-night/source.json";
 import sourcePython from "@wooorm/starry-night/source.python";
+import sourceRust from "@wooorm/starry-night/source.rust";
 import sourceShell from "@wooorm/starry-night/source.shell";
+import sourceSwift from "@wooorm/starry-night/source.swift";
 import sourceTs from "@wooorm/starry-night/source.ts";
 import sourceToml from "@wooorm/starry-night/source.toml";
 import sourceYaml from "@wooorm/starry-night/source.yaml";
@@ -17,11 +20,14 @@ import {toHtml} from "hast-util-to-html";
 const MARKDOWN_GRAMMARS = [
   textMd,
   sourceCss,
+  sourceGo,
   sourceIni,
   sourceJs,
   sourceJson,
   sourcePython,
+  sourceRust,
   sourceShell,
+  sourceSwift,
   sourceToml,
   sourceTs,
   sourceYaml,

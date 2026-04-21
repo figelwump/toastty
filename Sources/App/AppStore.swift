@@ -1177,7 +1177,7 @@ final class AppStore: ObservableObject {
         let normalizedFilePath = url.path
         guard normalizedFilePath.isEmpty == false,
               let format = formatOverride ?? LocalDocumentClassifier.format(
-                  forPathExtension: url.pathExtension
+                  forFilePath: normalizedFilePath
               ) else {
             return nil
         }

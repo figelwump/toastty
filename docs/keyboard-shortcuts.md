@@ -94,7 +94,7 @@ These shortcuts are available when the focused panel is a browser panel:
 
 ## Local documents
 
-These shortcuts are available when the focused panel is a local document in edit mode. Supported local documents currently include Markdown, YAML, TOML, JSON, JSON Lines, config/property files, CSV/TSV, XML, and shell scripts.
+These shortcuts are available when the focused panel is a local document in edit mode. Supported local documents currently include Markdown, YAML/TOML/JSON/config files, CSV/TSV/XML, shell scripts, and common source files such as Swift, JavaScript/TypeScript, Python, Go, and Rust. Read mode also exposes `Open in Default App` in the panel header for backed local documents.
 
 | Shortcut | Action |
 |---|---|

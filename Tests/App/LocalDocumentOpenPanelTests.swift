@@ -8,7 +8,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
     func testSupportedFilenameExtensionsResolveToContentTypes() {
         for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
             XCTAssertNotNil(
-                UTType(filenameExtension: fileExtension),
+                LocalDocumentOpenPanel.contentType(forFileExtension: fileExtension),
                 "expected \(fileExtension) to resolve to a UTType"
             )
         }
@@ -17,7 +17,7 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
     func testAllowedContentTypesMatchSharedSupportedExtensions() {
         let expectedTypeIdentifiers = Set(
             LocalDocumentClassifier.supportedFilenameExtensions.compactMap {
-                UTType(filenameExtension: $0)?.identifier
+                LocalDocumentOpenPanel.contentType(forFileExtension: $0)?.identifier
             }
         )
         let actualTypeIdentifiers = Set(
@@ -28,62 +28,31 @@ final class LocalDocumentOpenPanelTests: XCTestCase {
         XCTAssertEqual(actualTypeIdentifiers, expectedTypeIdentifiers)
     }
 
-    func testAllowedContentTypesAcceptFilesystemReportedTypesForSupportedFiles() throws {
-        let allowedContentTypes = Set(LocalDocumentOpenPanel.allowedContentTypes())
-        let temporaryDirectoryURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: temporaryDirectoryURL,
-            withIntermediateDirectories: true
-        )
-        defer {
-            try? FileManager.default.removeItem(at: temporaryDirectoryURL)
-        }
-
+    func testAllowedContentTypesPreferTextCompatibleTypesForSupportedExtensions() throws {
         for fileExtension in LocalDocumentClassifier.supportedFilenameExtensions {
-            let fileURL = temporaryDirectoryURL.appendingPathComponent(
-                "sample.\(fileExtension)",
-                isDirectory: false
-            )
-            try sampleContent(for: fileExtension).write(
-                to: fileURL,
-                atomically: true,
-                encoding: .utf8
-            )
-
             let contentType = try XCTUnwrap(
-                try fileURL.resourceValues(forKeys: [.contentTypeKey]).contentType,
-                "expected filesystem content type for \(fileExtension)"
+                LocalDocumentOpenPanel.contentType(forFileExtension: fileExtension),
+                "expected content type for \(fileExtension)"
             )
             XCTAssertTrue(
-                allowedContentTypes.contains(contentType),
-                "expected picker types to accept filesystem content type \(contentType.identifier) for \(fileExtension)"
+                contentType.conforms(to: .text) || contentType.conforms(to: .sourceCode),
+                "expected picker type \(contentType.identifier) for \(fileExtension) to stay text-compatible"
             )
         }
     }
 
-    private func sampleContent(for fileExtension: String) -> String {
-        switch fileExtension.lowercased() {
-        case "yaml", "yml":
-            return "key: value\n"
-        case "toml":
-            return "key = \"value\"\n"
-        case "json", "jsonc":
-            return "{\n  \"key\": \"value\"\n}\n"
-        case "jsonl":
-            return "{\"event\":\"open\"}\n{\"event\":\"save\"}\n"
-        case "ini", "conf", "cfg", "properties":
-            return "key=value\n"
-        case "csv":
-            return "name,value\nToastty,1\n"
-        case "tsv":
-            return "name\tvalue\nToastty\t1\n"
-        case "xml":
-            return "<root><item>Toastty</item></root>\n"
-        case "sh", "bash", "zsh":
-            return "#!/usr/bin/env bash\necho toastty\n"
-        default:
-            return "# Sample\n"
-        }
+    func testTypeScriptExtensionsAvoidTransportStreamUTTypeFallbacks() {
+        XCTAssertEqual(
+            LocalDocumentOpenPanel.contentType(forFileExtension: "ts")?.identifier,
+            "com.microsoft.typescript"
+        )
+        XCTAssertNotEqual(
+            LocalDocumentOpenPanel.contentType(forFileExtension: "ts")?.identifier,
+            "public.mpeg-2-transport-stream"
+        )
+        XCTAssertNotEqual(
+            LocalDocumentOpenPanel.contentType(forFileExtension: "mts")?.identifier,
+            "public.avchd-mpeg-2-transport-stream"
+        )
     }
 }

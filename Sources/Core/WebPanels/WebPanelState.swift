@@ -77,6 +77,7 @@ public enum LocalDocumentFormat: String, Codable, Equatable, Sendable {
     case tsv
     case xml
     case shell
+    case code
 }
 
 public struct LocalDocumentState: Codable, Equatable, Sendable {
