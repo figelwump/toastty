@@ -137,16 +137,11 @@ type RevealLayout = {
 };
 
 // Measure the rendered top of the first line of `element` relative to its viewport
-// position. We rely on Range geometry rather than computing
-// `padding-top + (N-1) * line-height` because the gutter `<pre>` and the content
-// `<code>` distribute padding differently (the gutter pre has its own top
-// padding while the content pre's padding lives on the surrounding frame), and
-// previous formula-based attempts kept producing a one-line offset for the
-// gutter highlight as a result.
-//
-// A blank first line still produces `rects[0]` at the blank line's own y (not
-// skipped to the first non-empty line) in WebKit/Chromium, so
-// `(N - 1) * line-height` from this anchor lands on the right line for any N.
+// position. Used as the fallback anchor when a direct Range over line N fails
+// (e.g. line N is empty and produces no rect). The gutter `<pre>` and the
+// content `<code>` distribute padding differently — the gutter pre has its own
+// top padding, while the content pre's padding lives on the surrounding frame
+// — so anchoring on rendered geometry is safer than anchoring on element rects.
 function measureFirstRenderedLineTop(element: HTMLElement): number | null {
   const range = document.createRange();
   range.selectNodeContents(element);
@@ -158,12 +153,86 @@ function measureFirstRenderedLineTop(element: HTMLElement): number | null {
   return Number.isFinite(top) ? top : null;
 }
 
+// Directly measure the rendered top of line `lineNumber` by walking text nodes
+// to the matching character offset and reading back a Range over that spot.
+// Preferred over `(N - 1) * line-height` extrapolation because WebKit with
+// hljs-decorated content has been observed returning `rects[0]` from
+// `Range.selectNodeContents(element)` that does not correspond to line 1
+// (first-rect in document order differs from first-rendered line when inline
+// decorations shift the rect collection). Measuring the target line itself
+// sidesteps that entirely. Returns `null` on empty lines or when the element
+// is not laid out yet.
+function measureDirectLineTop(element: HTMLElement, lineNumber: number): number | null {
+  const textContent = element.textContent;
+  if (textContent === null || textContent.length === 0) {
+    return null;
+  }
+  const lines = textContent.split("\n");
+  if (lineNumber < 1 || lineNumber > lines.length) {
+    return null;
+  }
+  const targetLineLength = lines[lineNumber - 1].length;
+  if (targetLineLength === 0) {
+    return null;
+  }
+
+  let charOffset = 0;
+  for (let i = 0; i < lineNumber - 1; i++) {
+    charOffset += lines[i].length + 1;
+  }
+
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let accumulated = 0;
+  let node = walker.nextNode();
+  while (node !== null) {
+    const nodeLength = node.textContent?.length ?? 0;
+    if (accumulated + nodeLength > charOffset) {
+      const localOffset = charOffset - accumulated;
+      const endOffset = Math.min(localOffset + 1, nodeLength);
+      if (endOffset <= localOffset) {
+        return null;
+      }
+      const range = document.createRange();
+      range.setStart(node, localOffset);
+      range.setEnd(node, endOffset);
+      const rect = range.getBoundingClientRect();
+      if (!Number.isFinite(rect.top) || rect.height <= 0) {
+        return null;
+      }
+      return rect.top;
+    }
+    accumulated += nodeLength;
+    node = walker.nextNode();
+  }
+  return null;
+}
+
 function resolveComputedLineHeight(element: HTMLElement): number | null {
   const parsed = Number.parseFloat(window.getComputedStyle(element).lineHeight);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return null;
   }
   return parsed;
+}
+
+function measureLineTopRelativeToFrame(args: {
+  element: HTMLElement;
+  frameElement: HTMLElement;
+  lineNumber: number;
+  lineHeight: number;
+}): number | null {
+  const frameTop = args.frameElement.getBoundingClientRect().top;
+  const direct = measureDirectLineTop(args.element, args.lineNumber);
+  if (direct !== null) {
+    return direct - frameTop;
+  }
+  // Empty-line fallback: anchor on the first rendered line and step forward
+  // with the computed line-height.
+  const firstLineTop = measureFirstRenderedLineTop(args.element);
+  if (firstLineTop === null) {
+    return null;
+  }
+  return (firstLineTop - frameTop) + (args.lineNumber - 1) * args.lineHeight;
 }
 
 function measureRevealLayout(args: {
@@ -175,25 +244,37 @@ function measureRevealLayout(args: {
   contentElement: HTMLElement;
   gutterElement: HTMLElement;
 }): RevealLayout | null {
-  const contentFirstLineViewportTop = measureFirstRenderedLineTop(args.contentElement);
-  const gutterFirstLineViewportTop = measureFirstRenderedLineTop(args.gutterElement);
   const contentLineHeight = resolveComputedLineHeight(args.contentElement);
   const gutterLineHeight = resolveComputedLineHeight(args.gutterElement);
-  if (contentFirstLineViewportTop === null
-      || gutterFirstLineViewportTop === null
-      || contentLineHeight === null
-      || gutterLineHeight === null) {
+  if (contentLineHeight === null || gutterLineHeight === null) {
     return null;
   }
 
-  const contentFrameRect = args.contentFrameElement.getBoundingClientRect();
-  const gutterFrameRect = args.gutterFrameElement.getBoundingClientRect();
-
-  return computeRevealLayout({
+  const contentTopBase = measureLineTopRelativeToFrame({
+    element: args.contentElement,
+    frameElement: args.contentFrameElement,
     lineNumber: args.lineNumber,
+    lineHeight: contentLineHeight
+  });
+  const gutterTopBase = measureLineTopRelativeToFrame({
+    element: args.gutterElement,
+    frameElement: args.gutterFrameElement,
+    lineNumber: args.lineNumber,
+    lineHeight: gutterLineHeight
+  });
+  if (contentTopBase === null || gutterTopBase === null) {
+    return null;
+  }
+
+  // `computeRevealLayout` still takes a `contentTopBase`/`gutterTopBase` + a
+  // `(lineNumber - 1) * line-height` step, so to reuse it we pass the
+  // already-measured line-N top as the base and force `lineNumber: 1`. That
+  // keeps the pure helper and its test unchanged.
+  return computeRevealLayout({
+    lineNumber: 1,
     lineCount: args.lineCount,
-    contentTopBase: contentFirstLineViewportTop - contentFrameRect.top,
-    gutterTopBase: gutterFirstLineViewportTop - gutterFrameRect.top,
+    contentTopBase,
+    gutterTopBase,
     contentLineHeight,
     gutterLineHeight,
     contentFrameOffsetTop: args.contentFrameElement.offsetTop,

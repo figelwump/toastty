@@ -168,8 +168,11 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   assert.match(source, /window\.ToasttyLocalDocumentPanel\?\.consumeRevealRequest\(revealRequest\.requestID\)/);
   assert.match(source, /const targetLineNumber = clampRevealLineNumber\(revealRequest\.lineNumber, lines\.length\)/);
   assert.match(source, /measureRevealLayout\(\{/);
-  // Reveal positioning anchors on the actual rendered first-line geometry so
-  // the gutter and content highlights line up regardless of pre/code padding.
+  // Reveal positioning directly measures line N's rendered top via a Range
+  // over the text-offset of that line. First-line geometry is retained as an
+  // empty-line fallback.
+  assert.match(source, /measureDirectLineTop\(/);
+  assert.match(source, /createTreeWalker\(element, NodeFilter\.SHOW_TEXT\)/);
   assert.match(source, /measureFirstRenderedLineTop\(/);
   assert.match(source, /range\.selectNodeContents\(element\)/);
   assert.match(source, /range\.getClientRects\(\)/);
