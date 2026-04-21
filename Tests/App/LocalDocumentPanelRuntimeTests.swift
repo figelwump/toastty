@@ -727,11 +727,12 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(bootstrap.contractVersion, 4)
+        XCTAssertEqual(bootstrap.contractVersion, 5)
         XCTAssertEqual(bootstrap.displayName, "README.md")
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .markdown)
         XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content, "# Hello Toastty\n\nA local markdown panel.")
         XCTAssertEqual(bootstrap.contentRevision, 1)
         XCTAssertFalse(bootstrap.isEditing)
@@ -773,6 +774,39 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .json)
         XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
+        XCTAssertEqual(bootstrap.content, content)
+    }
+
+    func testBootstrapReadsJSONLinesFileContents() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("events.jsonl")
+        let content = """
+        {"event":"toastty","kind":"launch"}
+        {"event":"toastty","kind":"focus"}
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "events.jsonl",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .jsonl
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.displayName, "events.jsonl")
+        XCTAssertEqual(bootstrap.filePath, fileURL.path)
+        XCTAssertEqual(bootstrap.format, .jsonl)
+        XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content, content)
     }
 
@@ -805,6 +839,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.filePath, fileURL.path)
         XCTAssertEqual(bootstrap.format, .shell)
         XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content, content)
     }
 
@@ -825,6 +860,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         XCTAssertEqual(bootstrap.displayName, "missing.md")
         XCTAssertEqual(bootstrap.filePath, filePath)
         XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .unavailable)
         XCTAssertTrue(bootstrap.content.contains("Toastty could not load this document."))
         XCTAssertTrue(bootstrap.content.contains(filePath))
         XCTAssertTrue(bootstrap.content.contains("Path:\n\(filePath)"))
@@ -849,6 +885,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.format, .yaml)
         XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .unavailable)
         XCTAssertTrue(bootstrap.content.hasPrefix("Toastty could not load this document."))
         XCTAssertTrue(bootstrap.content.contains("Path:\n\(filePath)"))
         XCTAssertTrue(bootstrap.content.contains("\n\nReason:\n"))
@@ -879,6 +916,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.format, .toml)
         XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .disabledForLargeFile)
         XCTAssertEqual(bootstrap.content, largeContent)
     }
 
@@ -905,6 +943,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.format, .markdown)
         XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .disabledForLargeFile)
         XCTAssertEqual(bootstrap.content, largeContent)
     }
 
@@ -931,7 +970,40 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.format, .jsonl)
         XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .disabledForLargeFile)
         XCTAssertEqual(bootstrap.content, largeContent)
+    }
+
+    func testBootstrapLeavesJSONCHighlightingDisabled() async throws {
+        let tempDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectoryURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDirectoryURL) }
+
+        let fileURL = tempDirectoryURL.appendingPathComponent("settings.jsonc")
+        let content = """
+        {
+          // toastty
+          "mode": "jsonc"
+        }
+        """
+        try content.write(to: fileURL, atomically: true, encoding: .utf8)
+
+        let bootstrap = await LocalDocumentPanelRuntime.bootstrap(
+            for: WebPanelState(
+                definition: .localDocument,
+                title: "settings.jsonc",
+                localDocument: LocalDocumentState(
+                    filePath: fileURL.path,
+                    format: .json
+                )
+            )
+        )
+
+        XCTAssertEqual(bootstrap.format, .json)
+        XCTAssertFalse(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .unsupportedFormat)
+        XCTAssertEqual(bootstrap.content, content)
     }
 
     func testBootstrapKeepsHighlightingAtExactCodeThreshold() async throws {
@@ -957,6 +1029,7 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
 
         XCTAssertEqual(bootstrap.format, .xml)
         XCTAssertTrue(bootstrap.shouldHighlight)
+        XCTAssertEqual(bootstrap.highlightState, .enabled)
         XCTAssertEqual(bootstrap.content.utf8.count, 524_288)
     }
 
@@ -978,10 +1051,11 @@ final class LocalDocumentPanelRuntimeTests: XCTestCase {
         let script = try XCTUnwrap(LocalDocumentPanelRuntime.bootstrapJavaScript(for: bootstrap))
 
         XCTAssertTrue(script.contains("window.ToasttyLocalDocumentPanel?.receiveBootstrap("))
-        XCTAssertTrue(script.contains("\"contractVersion\":4"))
+        XCTAssertTrue(script.contains("\"contractVersion\":5"))
         XCTAssertTrue(script.contains("\"displayName\":\"readme.md\""))
         XCTAssertTrue(script.contains("\"format\":\"markdown\""))
         XCTAssertTrue(script.contains("\"shouldHighlight\":true"))
+        XCTAssertTrue(script.contains("\"highlightState\":\"enabled\""))
         XCTAssertTrue(script.contains("\"content\":\"# Docs\""))
         XCTAssertTrue(script.contains("\"contentRevision\":7"))
         XCTAssertTrue(script.contains("\"isEditing\":true"))

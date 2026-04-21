@@ -40,6 +40,27 @@ test("jsonc files opt out of json highlighting and keep a JSONC label", async ()
   assert.match(source, /return "JSONC"/);
 });
 
+test("jsonl files reuse the json grammar", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /case "jsonl":\s+return "json";/);
+});
+
+test("highlight status copy distinguishes large files from unsupported formats", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /case "disabledForLargeFile":/);
+  assert.match(source, /case "unsupportedFormat":/);
+  assert.match(source, /JSONC files yet/);
+  assert.match(source, /this format yet/);
+});
+
 test("build script copies onig.wasm into the panel output bundle", async () => {
   const source = await readFile(
     resolve(packageRoot, "scripts/build.mjs"),

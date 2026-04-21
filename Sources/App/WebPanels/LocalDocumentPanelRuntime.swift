@@ -642,15 +642,18 @@ final class LocalDocumentPanelRuntime: NSObject, ObservableObject, PanelHostLife
         theme: LocalDocumentPanelTheme,
         textScale: Double
     ) -> LocalDocumentPanelBootstrap {
-        LocalDocumentPanelBootstrap(
+        let highlightState = highlightState(
+            format: session.format,
+            filePath: session.filePath,
+            content: session.visibleContent,
+            diskRevision: session.diskRevision
+        )
+        return LocalDocumentPanelBootstrap(
             filePath: session.filePath,
             displayName: session.displayName,
             format: session.format,
-            shouldHighlight: shouldHighlight(
-                format: session.format,
-                content: session.visibleContent,
-                diskRevision: session.diskRevision
-            ),
+            highlightState: highlightState,
+            shouldHighlight: shouldHighlight(highlightState: highlightState),
             content: session.visibleContent,
             contentRevision: session.contentRevision,
             isEditing: session.isEditing,
@@ -1073,17 +1076,45 @@ private extension LocalDocumentPanelRuntime {
         webState.localDocument?.format ?? .markdown
     }
 
-    nonisolated static func shouldHighlight(
-        format _: LocalDocumentFormat,
+    nonisolated static func highlightState(
+        format: LocalDocumentFormat,
+        filePath: String?,
         content: String,
         diskRevision: LocalDocumentPanelDiskRevision?
-    ) -> Bool {
+    ) -> LocalDocumentHighlightState {
         // Experiment: markdown is rendered as code, so it now follows the same
         // size threshold as yaml/toml instead of always highlighting.
         guard diskRevision != nil else {
+            return .unavailable
+        }
+
+        guard supportsHighlighting(format: format, filePath: filePath) else {
+            return .unsupportedFormat
+        }
+
+        if content.utf8.count > syntaxHighlightThresholdBytes {
+            return .disabledForLargeFile
+        }
+
+        return .enabled
+    }
+
+    nonisolated static func shouldHighlight(highlightState: LocalDocumentHighlightState) -> Bool {
+        highlightState == .enabled
+    }
+
+    nonisolated static func supportsHighlighting(
+        format: LocalDocumentFormat,
+        filePath: String?
+    ) -> Bool {
+        switch format {
+        case .markdown, .yaml, .toml, .xml, .shell, .jsonl:
+            return true
+        case .json:
+            return filePath?.lowercased().hasSuffix(".jsonc") != true
+        case .config, .csv, .tsv:
             return false
         }
-        return content.utf8.count <= syntaxHighlightThresholdBytes
     }
 
     nonisolated static func missingFileDocument(

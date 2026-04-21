@@ -5,7 +5,11 @@ import json from "highlight.js/lib/languages/json";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import React from "react";
-import { LocalDocumentFormat, LocalDocumentPanelBootstrap } from "./bootstrap";
+import {
+  LocalDocumentFormat,
+  LocalDocumentHighlightState,
+  LocalDocumentPanelBootstrap
+} from "./bootstrap";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
@@ -49,6 +53,7 @@ function syntaxLanguage(
     case "shell":
       return "bash";
     case "jsonl":
+      return "json";
     case "config":
     case "csv":
     case "tsv":
@@ -354,6 +359,25 @@ function highlightedCodeHTML(
   }
 }
 
+function highlightStatusMessage(
+  highlightState: LocalDocumentHighlightState,
+  format: LocalDocumentFormat,
+  filePath: string | null
+): string | null {
+  switch (highlightState) {
+    case "enabled":
+    case "unavailable":
+      return null;
+    case "disabledForLargeFile":
+      return "Syntax highlighting is disabled for large files. Editing remains available, but performance may still degrade on very large documents.";
+    case "unsupportedFormat":
+      if (format === "json" && filePath?.toLowerCase().endsWith(".jsonc")) {
+        return "Syntax highlighting is not available for JSONC files yet.";
+      }
+      return "Syntax highlighting is not available for this format yet.";
+  }
+}
+
 function useDocumentHighlightHTML(
   bootstrap: LocalDocumentPanelBootstrap,
   content: string
@@ -406,6 +430,11 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
   const language = syntaxLanguage(props.bootstrap.format, props.bootstrap.filePath);
+  const statusMessage = highlightStatusMessage(
+    props.bootstrap.highlightState,
+    props.bootstrap.format,
+    props.bootstrap.filePath
+  );
   const codeClassName = props.bootstrap.format === "markdown"
     ? "starry-night"
     : language
@@ -414,10 +443,10 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
 
   return (
     <section className="local-document-code-shell">
-      {!props.bootstrap.shouldHighlight && (
+      {statusMessage && (
         <div className="local-document-code-status-strip">
           <p className="local-document-code-status">
-            Syntax highlighting is disabled for large files. Editing remains available, but performance may still degrade on very large documents.
+            {statusMessage}
           </p>
         </div>
       )}
