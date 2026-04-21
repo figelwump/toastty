@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   MARKDOWN_LINE_START_CLASS,
+  computeMarkdownLineBlockHeights,
   createMarkdownLineStartMarker,
-  trimMarkdownLineBoundaryNewlines
+  renderPlainMarkdownSourceHtml
 } from "../src/markdownSoftWrap.mjs";
 
 test("markdown soft-wrap markers use a stable hidden span", () => {
@@ -19,17 +20,28 @@ test("markdown soft-wrap markers use a stable hidden span", () => {
   });
 });
 
-test("markdown soft-wrap trimming removes only boundary newlines", () => {
+test("plain markdown source HTML keeps line-start markers in one continuous surface", () => {
   assert.equal(
-    trimMarkdownLineBoundaryNewlines("\n<span class=\"pl-ml\">-</span> item\n"),
-    "<span class=\"pl-ml\">-</span> item"
+    renderPlainMarkdownSourceHtml("- alpha\n\nbeta <tag> & more"),
+    `<span class="${MARKDOWN_LINE_START_CLASS}" aria-hidden="true" data-source-line="1"></span>- alpha\n` +
+      `<span class="${MARKDOWN_LINE_START_CLASS}" aria-hidden="true" data-source-line="2"></span>\n` +
+      `<span class="${MARKDOWN_LINE_START_CLASS}" aria-hidden="true" data-source-line="3"></span>beta &lt;tag&gt; &amp; more`
   );
   assert.equal(
-    trimMarkdownLineBoundaryNewlines("\nalpha\nbeta\n"),
-    "alpha\nbeta"
-  );
-  assert.equal(
-    trimMarkdownLineBoundaryNewlines(""),
+    renderPlainMarkdownSourceHtml(""),
     ""
+  );
+});
+
+test("markdown soft-wrap line heights expand wrapped rows without inventing extra gaps", () => {
+  const heights = computeMarkdownLineBlockHeights([0, 42.9, 64.35, 107.25], 128.7, 21.45, 4);
+
+  assert.deepEqual(
+    heights.map((value) => Number(value.toFixed(2))),
+    [42.9, 21.45, 42.9, 21.45]
+  );
+  assert.deepEqual(
+    computeMarkdownLineBlockHeights([], 0, 21.45, 3),
+    [21.45, 21.45, 21.45]
   );
 });
