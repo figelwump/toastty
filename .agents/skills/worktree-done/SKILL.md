@@ -25,6 +25,8 @@ Use this workflow when a task is complete in a Toastty worktree and the next ste
    - Perform the merge from the `main` checkout, not from inside the feature worktree.
    - Keep the feature worktree intact until validation passes.
    - If the merge conflicts, resolve them deliberately and continue only once `main` is coherent again.
+   - Inspect the landed diff for worktree-only artifacts before validation.
+   - In Toastty, `WORKTREE_HANDOFF.md` is a handoff artifact and should not stay on `main` unless the user explicitly wants it committed there.
 5. Validate the merged result on `main`.
    - Use the repo’s normal full validation gate.
    - In Toastty, the default baseline is `./scripts/automation/check.sh`.
@@ -48,6 +50,7 @@ Use this workflow when a task is complete in a Toastty worktree and the next ste
 - Do not delete the worktree automatically after a successful merge. The user must opt in.
 - If validation fails, leave both the worktree and branch in place so the user can continue from the same context.
 - Prefer a clean `main` landing path over clever shortcuts.
+- Do not leave `WORKTREE_HANDOFF.md` on `main` as part of routine worktree cleanup.
 
 ## Toastty-specific validation
 
