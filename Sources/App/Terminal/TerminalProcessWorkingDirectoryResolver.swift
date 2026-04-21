@@ -27,6 +27,18 @@ final class TerminalProcessWorkingDirectoryResolver {
         let microseconds: UInt64
     }
 
+    struct ObservedLaunchContextSnapshot: Equatable, Sendable {
+        let panelID: String?
+        let paneJournalFile: String?
+        let paneJournalPanelID: String?
+        let launchReason: String?
+        let commandSample: String
+
+        var containsLaunchContext: Bool {
+            panelID != nil || paneJournalFile != nil || launchReason != nil
+        }
+    }
+
     private struct CachedProcessEntry {
         let pid: pid_t
         let startSignature: ProcessStartSignature
@@ -39,6 +51,12 @@ final class TerminalProcessWorkingDirectoryResolver {
     }
 
     private let appPID: pid_t
+    private static let launchContextProbeRetryDelaysNanoseconds: [UInt64] = [
+        0,
+        75_000_000,
+        150_000_000,
+        300_000_000,
+    ]
     private var cachedProcessByPanelID: [UUID: CachedProcessEntry] = [:]
     /// Panels that failed initial PID snapshot diff (child not visible yet).
     /// The poll loop will attempt deferred registration by scanning app children.
@@ -205,6 +223,7 @@ final class TerminalProcessWorkingDirectoryResolver {
         allowProvisionalLoginBinding: Bool
     ) {
         let loginPID = selectedCandidate.loginPID
+        let shouldProbeObservedLaunchContext = restoredLaunchPanelIDs.contains(panelID)
         pendingDeferredRegistrationOrdinalByPanelID.removeValue(forKey: panelID)
 
         if let shellPID = selectedCandidate.shellPID ?? resolvedShellPID(forLoginPID: loginPID),
@@ -225,6 +244,13 @@ final class TerminalProcessWorkingDirectoryResolver {
                     "source": source,
                 ]
             )
+            if shouldProbeObservedLaunchContext {
+                Self.scheduleObservedLaunchContextProbe(
+                    panelID: panelID,
+                    shellPID: shellPID,
+                    source: source
+                )
+            }
             return
         }
 
@@ -600,6 +626,199 @@ final class TerminalProcessWorkingDirectoryResolver {
             return String(standardizedPath.dropLast())
         }
         return standardizedPath
+    }
+
+    static func observedLaunchContextSnapshot(
+        fromProcessCommandOutput commandOutput: String
+    ) -> ObservedLaunchContextSnapshot? {
+        let trimmedOutput = commandOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmedOutput.isEmpty == false else {
+            return nil
+        }
+
+        let panelID = launchContextValue(
+            forKey: "TOASTTY_PANEL_ID",
+            in: trimmedOutput
+        )
+        let paneJournalFile = launchContextValue(
+            forKey: "TOASTTY_PANE_JOURNAL_FILE",
+            in: trimmedOutput
+        )
+        let paneJournalPanelID = paneJournalFile.flatMap { paneJournalFile in
+            let panelIDComponent = URL(fileURLWithPath: paneJournalFile)
+                .deletingPathExtension()
+                .lastPathComponent
+            return UUID(uuidString: panelIDComponent)?.uuidString
+        }
+        let launchReason = launchContextValue(
+            forKey: "TOASTTY_LAUNCH_REASON",
+            in: trimmedOutput
+        )
+
+        return ObservedLaunchContextSnapshot(
+            panelID: panelID,
+            paneJournalFile: paneJournalFile,
+            paneJournalPanelID: paneJournalPanelID,
+            launchReason: launchReason,
+            commandSample: truncatedCommandSample(trimmedOutput)
+        )
+    }
+
+    private static func scheduleObservedLaunchContextProbe(
+        panelID: UUID,
+        shellPID: pid_t,
+        source: String
+    ) {
+        // Probe the actual shell process environment on restored launches so
+        // history-restore bugs can distinguish "Toastty prepared the wrong env"
+        // from "the shell received the wrong env after launch".
+        Task.detached(priority: .utility) {
+            for (attemptIndex, delayNanoseconds) in launchContextProbeRetryDelaysNanoseconds.enumerated() {
+                if delayNanoseconds > 0 {
+                    try? await Task.sleep(nanoseconds: delayNanoseconds)
+                }
+
+                do {
+                    let commandOutput = try observedLaunchContextCommandOutput(for: shellPID)
+                    guard let snapshot = observedLaunchContextSnapshot(
+                        fromProcessCommandOutput: commandOutput
+                    ) else {
+                        continue
+                    }
+                    guard snapshot.containsLaunchContext else {
+                        if attemptIndex < launchContextProbeRetryDelaysNanoseconds.count - 1 {
+                            continue
+                        }
+                        ToasttyLog.warning(
+                            "Observed restored shell process without Toastty launch context environment",
+                            category: .terminal,
+                            metadata: [
+                                "panel_id": panelID.uuidString,
+                                "shell_pid": String(shellPID),
+                                "source": source,
+                                "attempt_count": String(attemptIndex + 1),
+                                "command_sample": snapshot.commandSample,
+                            ]
+                        )
+                        return
+                    }
+
+                    let observedPanelMatchesExpected = snapshot.panelID == panelID.uuidString
+                    let observedJournalPanelMatchesExpected = snapshot.paneJournalPanelID == panelID.uuidString
+                    ToasttyLog.info(
+                        "Observed restored shell launch context environment",
+                        category: .terminal,
+                        metadata: [
+                            "panel_id": panelID.uuidString,
+                            "shell_pid": String(shellPID),
+                            "source": source,
+                            "attempt_count": String(attemptIndex + 1),
+                            "observed_panel_id": snapshot.panelID ?? "none",
+                            "observed_panel_matches_expected": observedPanelMatchesExpected ? "true" : "false",
+                            "observed_launch_reason": snapshot.launchReason ?? "none",
+                            "observed_pane_journal_file": snapshot.paneJournalFile ?? "none",
+                            "observed_pane_journal_panel_id": snapshot.paneJournalPanelID ?? "none",
+                            "observed_journal_panel_matches_expected": observedJournalPanelMatchesExpected ? "true" : "false",
+                        ]
+                    )
+                    return
+                } catch {
+                    if attemptIndex < launchContextProbeRetryDelaysNanoseconds.count - 1 {
+                        continue
+                    }
+                    ToasttyLog.warning(
+                        "Failed to observe restored shell launch context environment",
+                        category: .terminal,
+                        metadata: [
+                            "panel_id": panelID.uuidString,
+                            "shell_pid": String(shellPID),
+                            "source": source,
+                            "attempt_count": String(attemptIndex + 1),
+                            "error": error.localizedDescription,
+                        ]
+                    )
+                }
+            }
+        }
+    }
+
+    private static func observedLaunchContextCommandOutput(for pid: pid_t) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = [
+            "-eww",
+            "-p", String(pid),
+            "-o", "command=",
+        ]
+
+        let stdoutPipe = Pipe()
+        let stderrPipe = Pipe()
+        process.standardOutput = stdoutPipe
+        process.standardError = stderrPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let stdout = String(
+            data: stdoutPipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+        let stderr = String(
+            data: stderrPipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+
+        guard process.terminationStatus == 0 else {
+            throw LaunchContextProbeError.commandFailed(
+                status: process.terminationStatus,
+                stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+        }
+
+        return stdout
+    }
+
+    private static func launchContextValue(
+        forKey key: String,
+        in commandOutput: String
+    ) -> String? {
+        let pattern = "(?:^|\\s)\(NSRegularExpression.escapedPattern(for: key))=([^\\s]+)"
+        guard let regularExpression = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+        let commandOutputRange = NSRange(
+            commandOutput.startIndex..<commandOutput.endIndex,
+            in: commandOutput
+        )
+        guard let match = regularExpression.firstMatch(in: commandOutput, range: commandOutputRange),
+              match.numberOfRanges >= 2,
+              let valueRange = Range(match.range(at: 1), in: commandOutput) else {
+            return nil
+        }
+        return String(commandOutput[valueRange])
+    }
+
+    private static func truncatedCommandSample(_ commandOutput: String) -> String {
+        let collapsedWhitespace = commandOutput.replacingOccurrences(
+            of: "\\s+",
+            with: " ",
+            options: .regularExpression
+        )
+        return String(collapsedWhitespace.prefix(160))
+    }
+
+    private enum LaunchContextProbeError: LocalizedError {
+        case commandFailed(status: Int32, stderr: String)
+
+        var errorDescription: String? {
+            switch self {
+            case .commandFailed(let status, let stderr):
+                if stderr.isEmpty {
+                    return "ps exited with status \(status)"
+                }
+                return "ps exited with status \(status): \(stderr)"
+            }
+        }
     }
 
     private func resolvedShellPID(forLoginPID loginPID: pid_t) -> pid_t? {
