@@ -154,14 +154,19 @@ function measureFirstRenderedLineTop(element: HTMLElement): number | null {
 }
 
 // Directly measure the rendered top of line `lineNumber` by walking text nodes
-// to the matching character offset and reading back a Range over that spot.
-// Preferred over `(N - 1) * line-height` extrapolation because WebKit with
-// hljs-decorated content has been observed returning `rects[0]` from
-// `Range.selectNodeContents(element)` that does not correspond to line 1
-// (first-rect in document order differs from first-rendered line when inline
-// decorations shift the rect collection). Measuring the target line itself
-// sidesteps that entirely. Returns `null` on empty lines or when the element
-// is not laid out yet.
+// to the matching character offset and reading back a Range over a character
+// on that line. Returns `null` on empty lines or when the element is not laid
+// out yet. Two WebKit quirks drive the precise slice we select:
+//
+//   1. When `localOffset` falls immediately after a `\n` (which always happens
+//      for the first char of every line), the range's start caret can be
+//      interpreted as "end of the previous visual line". Over an empty
+//      preceding line that makes the bounding rect span both lines, and
+//      `rect.top` lands on the previous line. Skipping one character forward
+//      so the range sits mid-line sidesteps the ambiguity.
+//   2. Even with the mid-line start, we prefer the last entry from
+//      `getClientRects()` over the bounding rect because `getBoundingClientRect`
+//      still unions any phantom zero-width start rect that WebKit emits.
 function measureDirectLineTop(element: HTMLElement, lineNumber: number): number | null {
   const textContent = element.textContent;
   if (textContent === null || textContent.length === 0) {
@@ -188,14 +193,31 @@ function measureDirectLineTop(element: HTMLElement, lineNumber: number): number 
     const nodeLength = node.textContent?.length ?? 0;
     if (accumulated + nodeLength > charOffset) {
       const localOffset = charOffset - accumulated;
-      const endOffset = Math.min(localOffset + 1, nodeLength);
-      if (endOffset <= localOffset) {
+      // Default to the first char of the line.
+      let startOffset = localOffset;
+      let endOffset = Math.min(localOffset + 1, nodeLength);
+      // Prefer the second char when both it and its neighbor live in the same
+      // text node — that moves the start caret away from the post-newline
+      // boundary where WebKit is ambiguous.
+      if (targetLineLength >= 2 && localOffset + 2 <= nodeLength) {
+        startOffset = localOffset + 1;
+        endOffset = localOffset + 2;
+      }
+      if (endOffset <= startOffset) {
         return null;
       }
+
       const range = document.createRange();
-      range.setStart(node, localOffset);
+      range.setStart(node, startOffset);
       range.setEnd(node, endOffset);
-      const rect = range.getBoundingClientRect();
+      const rects = range.getClientRects();
+      if (rects.length === 0) {
+        return null;
+      }
+      // Take the last rect: it's always on line N. `rects[0]` can belong to a
+      // zero-width phantom at the previous line-box boundary when the start
+      // caret is post-newline.
+      const rect = rects[rects.length - 1];
       if (!Number.isFinite(rect.top) || rect.height <= 0) {
         return null;
       }
