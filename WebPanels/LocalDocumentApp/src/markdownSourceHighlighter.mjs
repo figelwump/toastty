@@ -15,6 +15,7 @@ import textHtmlBasic from "@wooorm/starry-night/text.html.basic";
 import textMd from "@wooorm/starry-night/text.md";
 import textXml from "@wooorm/starry-night/text.xml";
 import {toHtml} from "hast-util-to-html";
+import { createMarkdownLineStartMarker } from "./markdownSoftWrap.mjs";
 
 // Markdown itself plus the code-fence languages we expect most often in local docs.
 const MARKDOWN_GRAMMARS = [
@@ -125,6 +126,13 @@ function createSpan(className, valueOrChildren) {
   };
 }
 
+function createTextNode(value) {
+  return {
+    type: "text",
+    value
+  };
+}
+
 function isLineBoundary(children, index) {
   if (index === 0) {
     return true;
@@ -212,6 +220,75 @@ function normalizeMarkdownTree(node) {
   return node;
 }
 
+function instrumentTextNodeWithLineStarts(value, state) {
+  const instrumented = [];
+  const segments = String(value).split("\n");
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const hasTrailingNewline = index < segments.length - 1;
+
+    if (state.needsLineStartMarker && (segment.length > 0 || hasTrailingNewline)) {
+      instrumented.push(createMarkdownLineStartMarker(state.nextLineNumber));
+      state.nextLineNumber += 1;
+      state.needsLineStartMarker = false;
+    }
+
+    if (segment.length > 0) {
+      instrumented.push(createTextNode(segment));
+    }
+
+    if (hasTrailingNewline) {
+      instrumented.push(createTextNode("\n"));
+      state.needsLineStartMarker = true;
+    }
+  }
+
+  return instrumented;
+}
+
+function instrumentMarkdownChildrenWithLineStarts(children, state) {
+  const instrumented = [];
+
+  for (const child of children) {
+    if (!child) {
+      continue;
+    }
+
+    if (child.type === "text") {
+      instrumented.push(...instrumentTextNodeWithLineStarts(child.value, state));
+      continue;
+    }
+
+    if (state.needsLineStartMarker) {
+      instrumented.push(createMarkdownLineStartMarker(state.nextLineNumber));
+      state.nextLineNumber += 1;
+      state.needsLineStartMarker = false;
+    }
+
+    if (Array.isArray(child.children)) {
+      child.children = instrumentMarkdownChildrenWithLineStarts(child.children, state);
+    }
+
+    instrumented.push(child);
+  }
+
+  return instrumented;
+}
+
+function addMarkdownLineStartMarkers(node) {
+  if (!node || !Array.isArray(node.children)) {
+    return node;
+  }
+
+  const state = {
+    nextLineNumber: 1,
+    needsLineStartMarker: true
+  };
+  node.children = instrumentMarkdownChildrenWithLineStarts(node.children, state);
+  return node;
+}
+
 export async function highlightMarkdownSourceToHtml(content) {
   const starryNight = await loadMarkdownHighlighter();
   const scope = starryNight.flagToScope("markdown");
@@ -220,5 +297,9 @@ export async function highlightMarkdownSourceToHtml(content) {
     return null;
   }
 
-  return toHtml(normalizeMarkdownTree(starryNight.highlight(String(content), scope)));
+  return toHtml(
+    addMarkdownLineStartMarkers(
+      normalizeMarkdownTree(starryNight.highlight(String(content), scope))
+    )
+  );
 }

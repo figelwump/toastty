@@ -40,6 +40,47 @@ test("editor mount focuses the textarea and moves the caret to the file start", 
   assert.match(source, /ref=\{textareaRef\}/);
 });
 
+test("markdown read-only code view uses a dedicated wrapped source layout", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),
+    "utf8"
+  );
+
+  assert.match(source, /if \(props\.bootstrap\.format === "markdown"\)/);
+  assert.match(source, /className="local-document-code-frame local-document-code-frame-markdown"/);
+  assert.match(source, /renderPlainMarkdownSourceHtml\(props\.content\)/);
+  assert.match(source, /useMarkdownLogicalLineLayout\(/);
+  assert.match(source, /className="local-document-code-markdown-gutter"/);
+  assert.match(source, /className="local-document-code-markdown-gutter-inner"/);
+  assert.match(source, /className="local-document-code-markdown-surface"/);
+  assert.match(source, /\? "starry-night local-document-code-markdown"/);
+  assert.match(source, /: "local-document-code-plain local-document-code-plain-markdown"/);
+  assert.match(source, /MARKDOWN_LINE_START_SELECTOR/);
+  assert.match(source, /style=\{\{\s*top: `\$\{lineLayout\.lineOffsets\[index\]/);
+  assert.doesNotMatch(source, /splitHighlightedMarkdownIntoLogicalLines/);
+});
+
+test("markdown gutter stays non-selectable while wrapped content stays continuous", async () => {
+  const styles = await readFile(
+    resolve(packageRoot, "src/styles.css"),
+    "utf8"
+  );
+
+  assert.match(styles, /\.local-document-code-gutter-cell[\s\S]*user-select: none/);
+  assert.match(styles, /\.local-document-code-markdown-gutter\s*\{[^}]*--local-document-code-gutter-padding-left: 22px/);
+  assert.match(styles, /\.local-document-code-markdown-gutter\s*\{[^}]*min-width: calc\(/);
+  assert.match(styles, /\.local-document-code-markdown-gutter-inner\s*\{[^}]*position: relative/);
+  assert.match(
+    styles,
+    /\.local-document-code-gutter-cell-markdown\s*\{[^}]*position: absolute/
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.local-document-code-markdown-gutter\s*\{[^}]*display: flex/
+  );
+  assert.match(styles, /\.local-document-code-markdown-surface/);
+});
+
 test("plain-code formats guard null highlight languages before touching highlight.js", async () => {
   const source = await readFile(
     resolve(packageRoot, "src/LocalDocumentPanelApp.tsx"),

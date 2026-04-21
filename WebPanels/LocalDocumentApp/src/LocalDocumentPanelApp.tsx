@@ -17,6 +17,11 @@ import {
   LocalDocumentSyntaxLanguage
 } from "./bootstrap";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
+import {
+  MARKDOWN_LINE_START_SELECTOR,
+  normalizeMarkdownLineTopOffsets,
+  renderPlainMarkdownSourceHtml,
+} from "./markdownSoftWrap.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
 
 if (!hljs.getLanguage("yaml")) {
@@ -458,6 +463,190 @@ function useDocumentHighlightHTML(
   return bootstrap.format === "markdown" ? markdownHighlight : syncHighlight;
 }
 
+const DEFAULT_MARKDOWN_LINE_HEIGHT = 21.45;
+
+type MarkdownLineLayout = {
+  contentHeight: number;
+  lineOffsets: number[];
+};
+
+function fallbackMarkdownLineOffsets(
+  lineCount: number,
+  lineHeight = DEFAULT_MARKDOWN_LINE_HEIGHT
+): number[] {
+  return Array.from({ length: lineCount }, (_, index) => index * lineHeight);
+}
+
+function fallbackMarkdownLineLayout(
+  lineCount: number,
+  lineHeight = DEFAULT_MARKDOWN_LINE_HEIGHT
+): MarkdownLineLayout {
+  return {
+    contentHeight: Math.max(lineCount * lineHeight, lineHeight),
+    lineOffsets: fallbackMarkdownLineOffsets(lineCount, lineHeight),
+  };
+}
+
+function sameMarkdownLineLayout(previous: MarkdownLineLayout, next: MarkdownLineLayout): boolean {
+  if (Math.abs(previous.contentHeight - next.contentHeight) > 0.25) {
+    return false;
+  }
+
+  if (previous.lineOffsets.length !== next.lineOffsets.length) {
+    return false;
+  }
+
+  for (let index = 0; index < previous.lineOffsets.length; index += 1) {
+    if (Math.abs(previous.lineOffsets[index] - next.lineOffsets[index]) > 0.25) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function useMarkdownLogicalLineLayout(
+  lineCount: number,
+  sourceHTML: string
+): {
+  contentRef: React.RefObject<HTMLElement | null>;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  lineLayout: MarkdownLineLayout;
+} {
+  const contentRef = React.useRef<HTMLElement | null>(null);
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const [lineLayout, setLineLayout] = React.useState<MarkdownLineLayout>(
+    () => fallbackMarkdownLineLayout(lineCount)
+  );
+
+  React.useEffect(() => {
+    setLineLayout((current) => (
+      current.lineOffsets.length === lineCount ? current : fallbackMarkdownLineLayout(lineCount)
+    ));
+  }, [lineCount]);
+
+  React.useLayoutEffect(() => {
+    const contentNode = contentRef.current;
+    if (!contentNode) {
+      return;
+    }
+
+    let frameID = 0;
+    const measure = () => {
+      const currentContentNode = contentRef.current;
+      if (!currentContentNode) {
+        return;
+      }
+
+      const computedStyles = window.getComputedStyle(currentContentNode);
+      const computedLineHeight = Number.parseFloat(computedStyles.lineHeight);
+      const fallbackLineHeight = Number.isFinite(computedLineHeight) && computedLineHeight > 0
+        ? computedLineHeight
+        : DEFAULT_MARKDOWN_LINE_HEIGHT;
+      const contentRect = currentContentNode.getBoundingClientRect();
+      const markerOffsets = Array.from(
+        currentContentNode.querySelectorAll<HTMLElement>(MARKDOWN_LINE_START_SELECTOR)
+      ).map((marker) => marker.getBoundingClientRect().top - contentRect.top);
+      const nextLineOffsets = normalizeMarkdownLineTopOffsets(
+        markerOffsets,
+        fallbackLineHeight,
+        lineCount
+      );
+      const nextContentHeight = Math.max(
+        contentRect.height,
+        fallbackLineHeight,
+        nextLineOffsets.length > 0
+          ? nextLineOffsets[nextLineOffsets.length - 1] + fallbackLineHeight
+          : fallbackLineHeight
+      );
+      const nextLineLayout = {
+        contentHeight: nextContentHeight,
+        lineOffsets: nextLineOffsets,
+      };
+
+      setLineLayout((current) => (
+        sameMarkdownLineLayout(current, nextLineLayout) ? current : nextLineLayout
+      ));
+    };
+    const scheduleMeasure = () => {
+      window.cancelAnimationFrame(frameID);
+      frameID = window.requestAnimationFrame(measure);
+    };
+
+    scheduleMeasure();
+
+    const resizeObserver = typeof ResizeObserver === "function"
+      ? new ResizeObserver(() => {
+        scheduleMeasure();
+      })
+      : null;
+
+    resizeObserver?.observe(contentNode);
+    if (scrollRef.current) {
+      resizeObserver?.observe(scrollRef.current);
+    }
+
+    return () => {
+      window.cancelAnimationFrame(frameID);
+      resizeObserver?.disconnect();
+    };
+  }, [lineCount, sourceHTML]);
+
+  return { contentRef, scrollRef, lineLayout };
+}
+
+function MarkdownCodeDocumentView(props: {
+  content: string;
+  highlightedHTML: string | null;
+  lines: string[];
+}) {
+  const sourceHTML = React.useMemo(
+    () => props.highlightedHTML ?? renderPlainMarkdownSourceHtml(props.content),
+    [props.content, props.highlightedHTML]
+  );
+  const { contentRef, scrollRef, lineLayout } = useMarkdownLogicalLineLayout(
+    props.lines.length,
+    sourceHTML
+  );
+  const codeClassName = props.highlightedHTML
+    ? "starry-night local-document-code-markdown"
+    : "local-document-code-plain local-document-code-plain-markdown";
+
+  return (
+    <div className="local-document-code-frame local-document-code-frame-markdown">
+      <div className="local-document-code-scroll local-document-code-scroll-markdown" ref={scrollRef}>
+        <div className="local-document-code-markdown-grid">
+          <div className="local-document-code-markdown-gutter" aria-hidden="true">
+            <div
+              className="local-document-code-markdown-gutter-inner"
+              style={{ height: `${lineLayout.contentHeight}px` }}
+            >
+              {props.lines.map((_, index) => (
+                <div
+                  key={index}
+                  className="local-document-code-gutter-cell local-document-code-gutter-cell-markdown"
+                  style={{
+                    top: `${lineLayout.lineOffsets[index] ?? (index * DEFAULT_MARKDOWN_LINE_HEIGHT)}px`
+                  }}
+                >
+                  {index + 1}
+                </div>
+              ))}
+            </div>
+          </div>
+          <pre className="local-document-code-markdown-surface">
+            <code
+              ref={contentRef}
+              className={codeClassName}
+              dangerouslySetInnerHTML={{ __html: sourceHTML }}
+            />
+          </pre>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; content: string }) {
   const lines = React.useMemo(() => contentLines(props.content), [props.content]);
   const highlightedHTML = useDocumentHighlightHTML(props.bootstrap, props.content);
@@ -471,6 +660,25 @@ function CodeDocumentView(props: { bootstrap: LocalDocumentPanelBootstrap; conte
     : language
       ? `hljs language-${language}`
       : "hljs";
+
+  if (props.bootstrap.format === "markdown") {
+    return (
+      <section className="local-document-code-shell">
+        {statusMessage && (
+          <div className="local-document-code-status-strip">
+            <p className="local-document-code-status">
+              {statusMessage}
+            </p>
+          </div>
+        )}
+        <MarkdownCodeDocumentView
+          content={props.content}
+          highlightedHTML={highlightedHTML}
+          lines={lines}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="local-document-code-shell">
