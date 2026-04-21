@@ -576,6 +576,50 @@ final class CommandPaletteViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.footerText, scope.label)
     }
 
+    func testWhitespaceOnlyFileQueryStillShowsRecentFiles() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let usageTracker = MockCommandPaletteUsageTracker()
+        let readmePath = "/tmp/toastty-worktree/README.md"
+        usageTracker.counts = [
+            "file-open:\(readmePath)": 2,
+        ]
+        usageTracker.lastUsedAtByID = [
+            "file-open:\(readmePath)": Date(timeIntervalSinceReferenceDate: 100),
+        ]
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: readmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: readmePath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService,
+            usageTracker: usageTracker
+        )
+
+        viewModel.query = "@   "
+
+        try await waitUntil {
+            viewModel.results.map(\.id) == [readmePath]
+        }
+        XCTAssertEqual(viewModel.footerText, scope.label)
+    }
+
     func testTypingWithinSameScopeReusesCurrentIndexSnapshot() async throws {
         let scope = PaletteFileSearchScope(
             rootPath: "/tmp/toastty-worktree",
@@ -616,6 +660,113 @@ final class CommandPaletteViewModelTests: XCTestCase {
 
         let prepareCallCount = await fileIndexService.prepareCallCount(for: scope.rootPath)
         XCTAssertEqual(prepareCallCount, 1)
+    }
+
+    func testFileModeMatchesWhitespaceSeparatedTermsAcrossTitleAndPath() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .repositoryRoot
+        )
+        let releaseNotesPath = "/tmp/toastty-worktree/artifacts/release-notes.md"
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: releaseNotesPath,
+                                relativePath: "artifacts/releases/1.2.3/release-notes.md",
+                                destination: .localDocument(filePath: releaseNotesPath)
+                            ),
+                            self.makeFileResult(
+                                filePath: "/tmp/toastty-worktree/docs/release-process.md",
+                                relativePath: "docs/release-process.md",
+                                destination: .localDocument(
+                                    filePath: "/tmp/toastty-worktree/docs/release-process.md"
+                                )
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService
+        )
+
+        viewModel.query = "@rel 1.2.3"
+
+        try await waitUntil {
+            viewModel.results.map(\.id) == [releaseNotesPath]
+        }
+    }
+
+    func testLatestFileQueryPresentationWinsWhenOlderSearchFinishesLater() async throws {
+        let scope = PaletteFileSearchScope(
+            rootPath: "/tmp/toastty-worktree",
+            kind: .workingDirectory
+        )
+        let readmePath = "/tmp/toastty-worktree/README.md"
+        let releasePath = "/tmp/toastty-worktree/release-notes.md"
+        let fileIndexService = MockCommandPaletteFileIndexService(
+            states: [
+                scope.rootPath: .init(
+                    prepareSnapshots: [
+                        .ready(results: [
+                            self.makeFileResult(
+                                filePath: readmePath,
+                                relativePath: "README.md",
+                                destination: .localDocument(filePath: readmePath)
+                            ),
+                            self.makeFileResult(
+                                filePath: releasePath,
+                                relativePath: "artifacts/releases/1.2.3/release-notes.md",
+                                destination: .localDocument(filePath: releasePath)
+                            ),
+                        ]),
+                    ],
+                    indexedResults: []
+                ),
+            ]
+        )
+        let viewModel = makeViewModel(
+            commands: [],
+            resolveFileSearchScope: { _ in scope },
+            fileIndexService: fileIndexService,
+            filePresentationBuilder: { snapshot, searchText, isIndexing, hasLoadedSnapshot in
+                if searchText == "read" {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+
+                let results = CommandPaletteFileSearchEngine.search(
+                    snapshot: snapshot,
+                    query: searchText
+                )
+                let emptyState = results.isEmpty
+                    ? PaletteEmptyState(title: "No matching files", message: "Try again.")
+                    : PaletteEmptyState(title: "", message: "")
+                return FileResultsPresentation(
+                    results: results,
+                    footerText: snapshot.scope.label,
+                    emptyState: isIndexing && snapshot.documents.isEmpty && hasLoadedSnapshot == false
+                        ? PaletteEmptyState(title: "Indexing local files", message: snapshot.scope.label)
+                        : emptyState
+                )
+            }
+        )
+
+        viewModel.query = "@read"
+        viewModel.query = "@rel"
+
+        try await waitUntil {
+            viewModel.results.map(\.id) == [releasePath]
+        }
+        try await Task.sleep(nanoseconds: 150_000_000)
+
+        XCTAssertEqual(viewModel.results.map(\.id), [releasePath])
     }
 
     func testFileModePrefersShallowerRelativePathsWhenMatchesTie() async throws {
@@ -684,6 +835,12 @@ final class CommandPaletteViewModelTests: XCTestCase {
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
         fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
+        filePresentationBuilder: @escaping @Sendable (
+            CommandPaletteFileSearchSnapshot,
+            String,
+            Bool,
+            Bool
+        ) async -> FileResultsPresentation = CommandPaletteViewModel.buildFileResultsPresentationOffMain,
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
         onCancel: @escaping () -> Void = {},
         onSubmitted: @escaping () -> Void = {}
@@ -695,6 +852,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             openFileResult: openFileResult,
             fileIndexService: fileIndexService,
             usageTracker: usageTracker,
+            filePresentationBuilder: filePresentationBuilder,
             executeCommand: executeCommand,
             onCancel: onCancel,
             onSubmitted: onSubmitted
@@ -708,6 +866,12 @@ final class CommandPaletteViewModelTests: XCTestCase {
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in true },
         fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
+        filePresentationBuilder: @escaping @Sendable (
+            CommandPaletteFileSearchSnapshot,
+            String,
+            Bool,
+            Bool
+        ) async -> FileResultsPresentation = CommandPaletteViewModel.buildFileResultsPresentationOffMain,
         executeCommand: @escaping @MainActor (PaletteCommandInvocation, UUID) -> Bool = { _, _ in true },
         onCancel: @escaping () -> Void = {},
         onSubmitted: @escaping () -> Void = {}
@@ -720,6 +884,7 @@ final class CommandPaletteViewModelTests: XCTestCase {
             openFileResult: openFileResult,
             fileIndexService: fileIndexService,
             usageTracker: usageTracker,
+            filePresentationBuilder: filePresentationBuilder,
             onCancel: onCancel,
             onSubmitted: onSubmitted
         )

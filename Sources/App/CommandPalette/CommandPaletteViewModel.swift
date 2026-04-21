@@ -6,32 +6,17 @@ struct PaletteEmptyState: Equatable, Sendable {
     let message: String
 }
 
-private struct FileResultsPresentation: Sendable {
+struct FileResultsPresentation: Sendable {
     let results: [PaletteResult]
     let footerText: String
     let emptyState: PaletteEmptyState
 }
 
-private struct FileUsageMetrics: Sendable {
-    let useCount: Int
-    let lastUsedAt: Date?
-}
-
 private struct ActiveFileResultsState: Sendable {
     let scope: PaletteFileSearchScope
-    var files: [PaletteFileResult]
-    var usageMetrics: [String: FileUsageMetrics]
+    var snapshot: CommandPaletteFileSearchSnapshot
     var isIndexing: Bool
     var hasLoadedSnapshot: Bool
-}
-
-private struct RecentFileResult: Sendable {
-    let result: PaletteResult
-    let lastUsedAt: Date
-    let usageScore: Double
-    let pathDepth: Int
-    let pathLength: Int
-    let catalogIndex: Int
 }
 
 @MainActor
@@ -72,6 +57,12 @@ final class CommandPaletteViewModel: ObservableObject {
     private let openFileResult: @MainActor (PaletteFileOpenDestination, UUID) -> Bool
     private let fileIndexService: any CommandPaletteFileIndexing
     private let usageTracker: CommandPaletteUsageTracking
+    private let filePresentationBuilder: @Sendable (
+        CommandPaletteFileSearchSnapshot,
+        String,
+        Bool,
+        Bool
+    ) async -> FileResultsPresentation
     private let onCancel: () -> Void
     private let onSubmitted: () -> Void
 
@@ -89,6 +80,12 @@ final class CommandPaletteViewModel: ObservableObject {
         openFileResult: @escaping @MainActor (PaletteFileOpenDestination, UUID) -> Bool = { _, _ in false },
         fileIndexService: any CommandPaletteFileIndexing = CommandPaletteFileOpenProvider(),
         usageTracker: CommandPaletteUsageTracking = NoOpCommandPaletteUsageTracker.shared,
+        filePresentationBuilder: @escaping @Sendable (
+            CommandPaletteFileSearchSnapshot,
+            String,
+            Bool,
+            Bool
+        ) async -> FileResultsPresentation = CommandPaletteViewModel.buildFileResultsPresentationOffMain,
         onCancel: @escaping () -> Void,
         onSubmitted: @escaping () -> Void
     ) {
@@ -99,6 +96,7 @@ final class CommandPaletteViewModel: ObservableObject {
         self.openFileResult = openFileResult
         self.fileIndexService = fileIndexService
         self.usageTracker = usageTracker
+        self.filePresentationBuilder = filePresentationBuilder
         self.onCancel = onCancel
         self.onSubmitted = onSubmitted
         refreshResults(selectionBehavior: .preserveCurrent)
@@ -242,8 +240,7 @@ final class CommandPaletteViewModel: ObservableObject {
         guard activeFileResultsState?.scope != scope else { return }
         activeFileResultsState = ActiveFileResultsState(
             scope: scope,
-            files: [],
-            usageMetrics: [:],
+            snapshot: .empty(scope: scope),
             isIndexing: false,
             hasLoadedSnapshot: false
         )
@@ -316,7 +313,7 @@ final class CommandPaletteViewModel: ObservableObject {
 
     private func applyFileIndexUpdate(
         files: [PaletteFileResult],
-        usageMetrics: [String: FileUsageMetrics],
+        usageMetrics: [String: CommandPaletteFileUsageMetrics],
         isIndexing: Bool,
         hasLoadedSnapshot: Bool,
         for scope: PaletteFileSearchScope
@@ -326,8 +323,11 @@ final class CommandPaletteViewModel: ObservableObject {
             return
         }
 
-        state.files = files
-        state.usageMetrics = usageMetrics
+        state.snapshot = CommandPaletteFileSearchEngine.makeSnapshot(
+            scope: scope,
+            files: files,
+            usageMetrics: usageMetrics
+        )
         state.isIndexing = isIndexing
         state.hasLoadedSnapshot = hasLoadedSnapshot
         activeFileResultsState = state
@@ -361,30 +361,31 @@ final class CommandPaletteViewModel: ObservableObject {
         }
 
         let searchText = Self.parse(query: query).searchText
+        let snapshot = state.snapshot
+        let isIndexing = state.isIndexing
+        let hasLoadedSnapshot = state.hasLoadedSnapshot
+        let filePresentationBuilder = self.filePresentationBuilder
         filePresentationGeneration += 1
         let generation = filePresentationGeneration
 
         fileQueryTask?.cancel()
-        fileQueryTask = Task(priority: .userInitiated) {
-            let presentation = Self.makeFileResultsPresentation(
-                files: state.files,
-                scope: scope,
-                searchText: searchText,
-                isIndexing: state.isIndexing,
-                hasLoadedSnapshot: state.hasLoadedSnapshot,
-                usageMetrics: state.usageMetrics
+        // Search work runs from an immutable snapshot. Only the latest generation for the
+        // still-active scope may publish back into the palette state.
+        fileQueryTask = Task { [weak self] in
+            let presentation = await filePresentationBuilder(
+                snapshot,
+                searchText,
+                isIndexing,
+                hasLoadedSnapshot
             )
             guard Task.isCancelled == false else { return }
-
-            await MainActor.run { [weak self] in
-                self?.applyFilePresentation(
-                    presentation,
-                    selectionBehavior: selectionBehavior,
-                    previouslySelectedID: previouslySelectedID,
-                    generation: generation,
-                    expectedScope: scope
-                )
-            }
+            self?.applyFilePresentation(
+                presentation,
+                selectionBehavior: selectionBehavior,
+                previouslySelectedID: previouslySelectedID,
+                generation: generation,
+                expectedScope: scope
+            )
         }
     }
 
@@ -407,12 +408,12 @@ final class CommandPaletteViewModel: ObservableObject {
         applySelectionBehavior(selectionBehavior, previouslySelectedID: previouslySelectedID)
     }
 
-    private func fileUsageMetrics(for files: [PaletteFileResult]) -> [String: FileUsageMetrics] {
-        var usageMetrics: [String: FileUsageMetrics] = [:]
+    private func fileUsageMetrics(for files: [PaletteFileResult]) -> [String: CommandPaletteFileUsageMetrics] {
+        var usageMetrics: [String: CommandPaletteFileUsageMetrics] = [:]
         usageMetrics.reserveCapacity(files.count)
 
         for file in files {
-            usageMetrics[file.usageKey] = FileUsageMetrics(
+            usageMetrics[file.usageKey] = CommandPaletteFileUsageMetrics(
                 useCount: usageTracker.useCount(for: file.usageKey),
                 lastUsedAt: usageTracker.lastUsedAt(for: file.usageKey)
             )
@@ -497,123 +498,79 @@ final class CommandPaletteViewModel: ObservableObject {
         )
     }
 
-    nonisolated private static func makeFileResultsPresentation(
-        files: [PaletteFileResult],
-        scope: PaletteFileSearchScope,
+    nonisolated static func buildFileResultsPresentationOffMain(
+        snapshot: CommandPaletteFileSearchSnapshot,
         searchText: String,
         isIndexing: Bool,
-        hasLoadedSnapshot: Bool,
-        usageMetrics: [String: FileUsageMetrics]
-    ) -> FileResultsPresentation {
-        let normalizedQuery = searchText.normalizedPaletteQuery
+        hasLoadedSnapshot: Bool
+    ) async -> FileResultsPresentation {
+        let task = Task.detached(priority: .userInitiated) {
+            Self.makeFileResultsPresentation(
+                snapshot: snapshot,
+                searchText: searchText,
+                isIndexing: isIndexing,
+                hasLoadedSnapshot: hasLoadedSnapshot
+            )
+        }
 
-        if normalizedQuery.isEmpty {
-            let recentResults = recentFileResults(files: files, usageMetrics: usageMetrics)
+        return await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
+    }
+
+    nonisolated private static func makeFileResultsPresentation(
+        snapshot: CommandPaletteFileSearchSnapshot,
+        searchText: String,
+        isIndexing: Bool,
+        hasLoadedSnapshot: Bool
+    ) -> FileResultsPresentation {
+        let searchTerms = searchText.normalizedPaletteSearchTerms
+
+        if searchTerms.isEmpty {
+            let recentResults = CommandPaletteFileSearchEngine.recentResults(in: snapshot)
             if recentResults.isEmpty == false {
                 return FileResultsPresentation(
-                    results: recentResults.map(\.result),
-                    footerText: scope.label,
+                    results: recentResults,
+                    footerText: snapshot.scope.label,
                     emptyState: PaletteEmptyState(title: "", message: "")
                 )
             }
 
             return FileResultsPresentation(
                 results: [],
-                footerText: scope.label,
-                emptyState: emptySearchPrompt(for: scope)
+                footerText: snapshot.scope.label,
+                emptyState: emptySearchPrompt(for: snapshot.scope)
             )
         }
 
-        if isIndexing && files.isEmpty {
+        if isIndexing && snapshot.documents.isEmpty {
             return FileResultsPresentation(
                 results: [],
-                footerText: scope.label,
-                emptyState: indexingEmptyState(for: scope)
+                footerText: snapshot.scope.label,
+                emptyState: indexingEmptyState(for: snapshot.scope)
             )
         }
 
-        let matchedResults = files.enumerated().compactMap { index, file -> RankedPaletteResult? in
-            guard let match = match(
-                title: file.fileName,
-                keywords: [file.relativePath],
-                query: normalizedQuery
-            ) else {
-                return nil
-            }
-
-            return RankedPaletteResult(
-                result: .file(file),
-                sourcePriority: match.source.priority,
-                matchScore: match.score,
-                usageScore: usageScore(for: usageMetrics[file.usageKey]?.useCount),
-                pathDepth: relativePathDepth(for: file.relativePath),
-                pathLength: file.relativePath.count,
-                catalogIndex: index
-            )
-        }
-
-        let results = matchedResults
-            .sorted(by: ranksHigher(_:_:))
-            .map(\.result)
+        let results = CommandPaletteFileSearchEngine.search(snapshot: snapshot, query: searchText)
         let emptyState = results.isEmpty
-            ? (files.isEmpty && hasLoadedSnapshot ? noSupportedFilesState(for: scope) : noMatchingFilesState(for: scope))
+            ? (
+                snapshot.documents.isEmpty && hasLoadedSnapshot
+                    ? noSupportedFilesState(for: snapshot.scope)
+                    : noMatchingFilesState(for: snapshot.scope)
+            )
             : PaletteEmptyState(title: "", message: "")
 
         return FileResultsPresentation(
             results: results,
-            footerText: scope.label,
+            footerText: snapshot.scope.label,
             emptyState: emptyState
         )
     }
 
-    nonisolated private static func recentFileResults(
-        files: [PaletteFileResult],
-        usageMetrics: [String: FileUsageMetrics]
-    ) -> [RecentFileResult] {
-        files.enumerated().compactMap { index, file in
-            guard let metrics = usageMetrics[file.usageKey],
-                  let lastUsedAt = metrics.lastUsedAt else {
-                return nil
-            }
-
-            return RecentFileResult(
-                result: .file(file),
-                lastUsedAt: lastUsedAt,
-                usageScore: usageScore(for: metrics.useCount),
-                pathDepth: relativePathDepth(for: file.relativePath),
-                pathLength: file.relativePath.count,
-                catalogIndex: index
-            )
-        }
-        .sorted(by: recentFilesRankHigher(_:_:))
-    }
-
-    nonisolated private static func recentFilesRankHigher(_ lhs: RecentFileResult, _ rhs: RecentFileResult) -> Bool {
-        if lhs.lastUsedAt != rhs.lastUsedAt {
-            return lhs.lastUsedAt > rhs.lastUsedAt
-        }
-        if lhs.usageScore != rhs.usageScore {
-            return lhs.usageScore > rhs.usageScore
-        }
-        if lhs.pathDepth != rhs.pathDepth {
-            return lhs.pathDepth < rhs.pathDepth
-        }
-        if lhs.pathLength != rhs.pathLength {
-            return lhs.pathLength < rhs.pathLength
-        }
-        return lhs.catalogIndex < rhs.catalogIndex
-    }
-
-    nonisolated private static func relativePathDepth(for relativePath: String) -> Int {
-        relativePath.split(separator: "/").count
-    }
-
     nonisolated private static func usageScore(for useCount: Int?) -> Double {
         log1p(Double(max(0, useCount ?? 0)))
-    }
-
-    nonisolated private static func usageScore(for useCount: Int) -> Double {
-        log1p(Double(max(0, useCount)))
     }
 
     nonisolated private static func ranksHigher(_ lhs: RankedPaletteResult, _ rhs: RankedPaletteResult) -> Bool {

@@ -73,7 +73,7 @@ struct CommandPaletteView: View {
                     GeometryReader { geometry in
                         ScrollViewReader { proxy in
                             ScrollView(.vertical, showsIndicators: false) {
-                                VStack(spacing: 0) {
+                                LazyVStack(spacing: 0) {
                                     ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
                                         CommandPaletteResultRow(
                                             title: result.title,
