@@ -109,23 +109,21 @@ test("highlight.js registers the first-slice source-code grammars", async () => 
   assert.match(source, /highlight\.js\/lib\/languages\/rust/);
 });
 
-test("line reveal helpers clamp requests and choose reduced-motion-safe scroll behavior", async () => {
-  const {
-    clampRevealLineNumber,
-    clampScrollTop,
-    computeRevealLayout,
-    resolveMeasuredLineHeight
-  } = await import(
+test("line reveal helpers clamp requests and compute layout from measured base offsets", async () => {
+  const lineRevealModule = await import(
     new URL("../src/lineReveal.mjs", import.meta.url).href
   );
+  const { clampRevealLineNumber, clampScrollTop, computeRevealLayout } = lineRevealModule;
 
   assert.equal(clampRevealLineNumber(42, 12), 12);
   assert.equal(clampRevealLineNumber(0, 12), 1);
   assert.equal(clampRevealLineNumber(3, 0), 1);
   assert.equal(clampScrollTop(-40, 200), 0);
   assert.equal(clampScrollTop(400, 200), 200);
-  assert.equal(resolveMeasuredLineHeight(Number.NaN, 288, 12, 24), 22);
-  assert.equal(resolveMeasuredLineHeight(24, 264, 12), 24);
+  // Measurement-driven helpers replaced the previous fallback-from-block-height
+  // line-height resolver — keep it removed so callers cannot accidentally rely
+  // on that brittle path again.
+  assert.equal(lineRevealModule.resolveMeasuredLineHeight, undefined);
   assert.deepEqual(
     computeRevealLayout({
       lineNumber: 120,
@@ -170,6 +168,11 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   assert.match(source, /window\.ToasttyLocalDocumentPanel\?\.consumeRevealRequest\(revealRequest\.requestID\)/);
   assert.match(source, /const targetLineNumber = clampRevealLineNumber\(revealRequest\.lineNumber, lines\.length\)/);
   assert.match(source, /measureRevealLayout\(\{/);
+  // Reveal positioning anchors on the actual rendered first-line geometry so
+  // the gutter and content highlights line up regardless of pre/code padding.
+  assert.match(source, /measureFirstRenderedLineTop\(/);
+  assert.match(source, /range\.selectNodeContents\(element\)/);
+  assert.match(source, /range\.getClientRects\(\)/);
   assert.match(source, /setRevealLayout\(null\);/);
   assert.match(source, /revealScrollSequenceRef/);
   assert.match(source, /window\.requestAnimationFrame\(\(\) => \{/);
@@ -179,6 +182,7 @@ test("code view keeps reveal state sticky, clears it on escape, and scrolls with
   assert.doesNotMatch(source, /document\.hasFocus/);
   assert.doesNotMatch(source, /getPropertyValue\("--local-document-code-line-height"\)/);
   assert.doesNotMatch(source, /resolvedLineHeight\(/);
+  assert.doesNotMatch(source, /resolveMeasuredLineHeight\(/);
   assert.match(source, /props\.bootstrap\.contentRevision !== activeReveal\.contentRevision/);
   assert.match(source, /props\.bootstrap\.filePath !== activeReveal\.filePath/);
   assert.match(source, /setActiveReveal\(null\)/);
@@ -235,4 +239,20 @@ test("styles keep the gutter sticky and use flat reveal highlights for both the 
   assert.match(source, /\.local-document-code-line-reveal,\s*\.local-document-code-gutter-reveal \{/);
   assert.doesNotMatch(source, /animation: local-document-line-reveal/);
   assert.doesNotMatch(source, /border-radius: 8px/);
+});
+
+test("styles bound the panel to the viewport so .local-document-code-scroll is the actual reveal scroller", async () => {
+  const source = await readFile(
+    resolve(packageRoot, "src/styles.css"),
+    "utf8"
+  );
+
+  // The reveal handler assigns scrollTop on .local-document-code-scroll. That
+  // only scrolls when the document chain is bounded — otherwise the page
+  // itself becomes the scroller and the reveal jump is a no-op.
+  assert.match(source, /html,\s*body \{\s*height: 100%;/);
+  assert.match(source, /body \{[^}]*overflow: hidden;/);
+  assert.match(source, /#root \{\s*height: 100%;/);
+  assert.match(source, /\.local-document-shell \{\s*height: 100%;/);
+  assert.doesNotMatch(source, /\.local-document-shell \{\s*min-height: 100vh;/);
 });

@@ -20,27 +20,6 @@ export function clampScrollTop(scrollTop, maxScrollTop) {
   return Math.min(Math.max(scrollTop, 0), normalizedMaxScrollTop);
 }
 
-export function resolveMeasuredLineHeight(lineHeight, blockHeight, lineCount, verticalPadding = 0) {
-  if (Number.isFinite(lineHeight) && lineHeight > 0) {
-    return lineHeight;
-  }
-
-  const normalizedLineCount = Number.isFinite(lineCount)
-    ? Math.max(1, Math.floor(lineCount))
-    : 1;
-  const normalizedVerticalPadding = Number.isFinite(verticalPadding) && verticalPadding > 0
-    ? verticalPadding
-    : 0;
-  const contentHeight = Number.isFinite(blockHeight)
-    ? blockHeight - normalizedVerticalPadding
-    : Number.NaN;
-  if (Number.isFinite(contentHeight) && contentHeight > 0) {
-    return contentHeight / normalizedLineCount;
-  }
-
-  return 21.45;
-}
-
 export function computeRevealLayout({
   lineNumber,
   lineCount,

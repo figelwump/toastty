@@ -19,8 +19,7 @@ import {
 } from "./bootstrap";
 import {
   clampRevealLineNumber,
-  computeRevealLayout,
-  resolveMeasuredLineHeight
+  computeRevealLayout
 } from "./lineReveal.mjs";
 import { highlightMarkdownSourceToHtml } from "./markdownSourceHighlighter.mjs";
 import { localDocumentNativeBridge } from "./nativeBridge";
@@ -137,6 +136,31 @@ type RevealLayout = {
   targetScrollTop: number;
 };
 
+// Measure the rendered top of the first line of `element` relative to its viewport
+// position. We rely on Range geometry rather than computing
+// `padding-top + (N-1) * line-height` because the gutter `<pre>` and the content
+// `<code>` distribute padding differently (the gutter pre has its own top
+// padding while the content pre's padding lives on the surrounding frame), and
+// previous formula-based attempts kept producing a one-line offset for the
+// gutter highlight as a result.
+function measureFirstRenderedLineTop(element: HTMLElement): number | null {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const rects = range.getClientRects();
+  if (rects.length === 0) {
+    return null;
+  }
+  return rects[0].top;
+}
+
+function resolveComputedLineHeight(element: HTMLElement): number | null {
+  const parsed = Number.parseFloat(window.getComputedStyle(element).lineHeight);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
 function measureRevealLayout(args: {
   lineNumber: number;
   lineCount: number;
@@ -146,34 +170,25 @@ function measureRevealLayout(args: {
   contentElement: HTMLElement;
   gutterElement: HTMLElement;
 }): RevealLayout | null {
-  const contentFrameRect = args.contentFrameElement.getBoundingClientRect();
-  const gutterFrameRect = args.gutterFrameElement.getBoundingClientRect();
-  const contentRect = args.contentElement.getBoundingClientRect();
-  const gutterRect = args.gutterElement.getBoundingClientRect();
-  const contentStyle = window.getComputedStyle(args.contentElement);
-  const gutterStyle = window.getComputedStyle(args.gutterElement);
-  const contentLineHeight = resolveMeasuredLineHeight(
-    Number.parseFloat(contentStyle.lineHeight),
-    contentRect.height,
-    args.lineCount,
-    Number.parseFloat(contentStyle.paddingTop) + Number.parseFloat(contentStyle.paddingBottom)
-  );
-  const gutterLineHeight = resolveMeasuredLineHeight(
-    Number.parseFloat(gutterStyle.lineHeight),
-    gutterRect.height,
-    args.lineCount,
-    Number.parseFloat(gutterStyle.paddingTop) + Number.parseFloat(gutterStyle.paddingBottom)
-  );
-
-  if (contentLineHeight <= 0 || gutterLineHeight <= 0) {
+  const contentFirstLineViewportTop = measureFirstRenderedLineTop(args.contentElement);
+  const gutterFirstLineViewportTop = measureFirstRenderedLineTop(args.gutterElement);
+  const contentLineHeight = resolveComputedLineHeight(args.contentElement);
+  const gutterLineHeight = resolveComputedLineHeight(args.gutterElement);
+  if (contentFirstLineViewportTop === null
+      || gutterFirstLineViewportTop === null
+      || contentLineHeight === null
+      || gutterLineHeight === null) {
     return null;
   }
+
+  const contentFrameRect = args.contentFrameElement.getBoundingClientRect();
+  const gutterFrameRect = args.gutterFrameElement.getBoundingClientRect();
 
   return computeRevealLayout({
     lineNumber: args.lineNumber,
     lineCount: args.lineCount,
-    contentTopBase: contentRect.top - contentFrameRect.top,
-    gutterTopBase: gutterRect.top - gutterFrameRect.top,
+    contentTopBase: contentFirstLineViewportTop - contentFrameRect.top,
+    gutterTopBase: gutterFirstLineViewportTop - gutterFrameRect.top,
     contentLineHeight,
     gutterLineHeight,
     contentFrameOffsetTop: args.contentFrameElement.offsetTop,
